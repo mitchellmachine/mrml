@@ -111,40 +111,66 @@ fn serve(
     let mut response_payload = vec![0u8; MAX_CERTD_CHANNEL_PAYLOAD_BYTES];
     for _ in 0..request_limit {
         let mut session = listener.accept().map_err(|_| ())?;
-        let received = session.read_frame(&mut frame).map_err(|_| ())?;
-        let request = decode_certd_channel_request(
-            &frame[..received],
-            session.observed_peer(),
-            CertdChannelPolicy {
-                role: CertdChannelRole::Gitd,
-                peer: client,
-            },
+        let result = serve_session(
+            &mut session,
             capability,
-            &mut replay,
-        )
-        .map_err(|_| ())?;
-        let length = dispatch(
+            client,
+            fixture,
             identity,
-            request.operation,
-            request.payload,
-            &mut response_payload,
-        )?;
-        let written = encode_certd_channel_request(
-            CertdChannelRequest {
-                role: CertdChannelRole::Gitd,
-                operation: request.operation,
-                request_id: request.request_id,
-                peer: fixture,
-                payload: &response_payload[..length],
-            },
-            capability,
+            &mut replay,
             &mut frame,
-        )
-        .map_err(|_| ())?;
-        session.write_frame(&frame[..written]).map_err(|_| ())?;
-        response_payload[..length].fill(0);
+            &mut response_payload,
+        );
+        response_payload.fill(0);
+        frame.fill(0);
+        // Authentication, framing, dispatch, and disconnect failures reject
+        // this bounded session; they do not terminate the fixture service.
+        let _ = result;
     }
     Ok(())
+}
+
+fn serve_session(
+    session: &mut mrml_certificate::UnixCertdSession,
+    capability: &CertdChannelCapability,
+    client: CertdPeerIdentity,
+    fixture: CertdPeerIdentity,
+    identity: &FixtureIdentity,
+    replay: &mut CertdReplayWindow,
+    frame: &mut [u8],
+    response_payload: &mut [u8],
+) -> Result<(), ()> {
+    let received = session.read_frame(frame).map_err(|_| ())?;
+    let request = decode_certd_channel_request(
+        &frame[..received],
+        session.observed_peer(),
+        CertdChannelPolicy {
+            role: CertdChannelRole::Gitd,
+            peer: client,
+        },
+        capability,
+        replay,
+    )
+    .map_err(|_| ())?;
+    let length = dispatch(
+        identity,
+        request.operation,
+        request.payload,
+        response_payload,
+    )?;
+    let written = encode_certd_channel_request(
+        CertdChannelRequest {
+            role: CertdChannelRole::Gitd,
+            operation: request.operation,
+            request_id: request.request_id,
+            peer: fixture,
+            payload: &response_payload[..length],
+        },
+        capability,
+        frame,
+    )
+    .map_err(|_| ())?;
+    session.write_frame(&frame[..written]).map_err(|_| ())
 }
 
 fn dispatch(
