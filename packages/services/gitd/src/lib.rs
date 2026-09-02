@@ -7,6 +7,7 @@ mod composition;
 mod config;
 mod http2_stream;
 mod http2_workers;
+mod http3_stream;
 mod identity;
 mod listener;
 mod startup;
@@ -28,6 +29,10 @@ pub use http2_stream::{
     serve_smart_git_http2,
 };
 pub use http2_workers::{GitdHttp2WorkerError, GitdHttp2WorkerMetrics, GitdHttp2WorkerPool};
+pub use http3_stream::{
+    GitdHttp3StreamError, serve_gitd_http3_connection, serve_gitd_http3_connection_with_drain,
+    serve_smart_git_http3,
+};
 pub use identity::{
     GitdIdentityValidationError, ValidatedGitdIdentity, prove_identity_signing_route,
     validate_identity_snapshot,
