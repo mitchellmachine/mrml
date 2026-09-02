@@ -22,10 +22,10 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=21003,gid=21003,mode=0700
     volumes:
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/certd/state:/var/lib/mrml/certd:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/certd/publications:/var/lib/mrml/publications:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/certd-gitd:/run/mrml/certd-gitd:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/certd-acmed:/run/mrml/certd-acmed:rw"
+      - "mrml-certd-state:/var/lib/mrml/certd:rw"
+      - "mrml-certd-publications:/var/lib/mrml/publications:rw"
+      - "mrml-runtime-certd-gitd:/run/mrml/certd-gitd:rw"
+      - "mrml-runtime-certd-acmed:/run/mrml/certd-acmed:rw"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/certd/certd-unlock.key:/run/secrets/certd-unlock.key:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-gitd.cap.certd:/run/secrets/certd-gitd.cap:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-acmed.cap.certd:/run/secrets/certd-acmed.cap:ro"
@@ -61,9 +61,9 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=21004,gid=21004,mode=0700
     volumes:
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/acmed/state:/var/lib/mrml/acmed:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/acmed/challenges:/var/lib/mrml/challenges:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/certd-acmed:/run/mrml/certd-acmed:rw"
+      - "mrml-acmed-state:/var/lib/mrml/acmed:rw"
+      - "mrml-acmed-challenges:/var/lib/mrml/challenges:rw"
+      - "mrml-runtime-certd-acmed:/run/mrml/certd-acmed:rw"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/acmed/acmed-state.key:/run/secrets/acmed-state.key:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/acmed/cloudflare-api-token:/run/secrets/cloudflare-api-token:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-acmed.cap.acmed:/run/secrets/certd-acmed.cap:ro"
@@ -79,3 +79,17 @@ networks:
   acme-egress:
     driver: bridge
     internal: false
+
+volumes:
+  mrml-certd-state:
+    name: mrml-certd-state
+  mrml-certd-publications:
+    name: mrml-certd-publications
+  mrml-acmed-state:
+    name: mrml-acmed-state
+  mrml-acmed-challenges:
+    name: mrml-acmed-challenges
+  mrml-runtime-certd-gitd:
+    name: mrml-runtime-certd-gitd
+  mrml-runtime-certd-acmed:
+    name: mrml-runtime-certd-acmed

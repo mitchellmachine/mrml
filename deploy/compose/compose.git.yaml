@@ -22,9 +22,9 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=21002,gid=21002,mode=0700
     volumes:
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/authority/state:/var/lib/mrml/authority:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/policies:/var/lib/mrml/git-policies:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/git-authority:/run/mrml/git-authority:rw"
+      - "mrml-authority-state:/var/lib/mrml/authority:rw"
+      - "mrml-gitd-policies:/var/lib/mrml/git-policies:ro"
+      - "mrml-runtime-git-authority:/run/mrml/git-authority:rw"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/git-authority.cap.authority:/run/secrets/git-authority-channel:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/git-authority/receipt.key:/run/secrets/receipt.key:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/git-authority/openpgp-public.asc:/etc/mrml/authority/openpgp-public.asc:ro"
@@ -87,14 +87,14 @@ services:
       certd: {condition: service_healthy}
     networks: [git-public]
     volumes:
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/repos:/mnt/mrml/gitd/repos:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/state:/mnt/mrml/gitd/state:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/quarantine:/mnt/mrml/gitd/quarantine:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/cache:/mnt/mrml/gitd/cache:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/receipts:/mnt/mrml/gitd/receipts:rw"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/policies:/mnt/mrml/gitd/policies:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/git-authority:/run/mrml/git-authority:ro"
-      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/certd-gitd:/run/mrml/certd-gitd:ro"
+      - "mrml-gitd-repos:/mnt/mrml/gitd/repos:rw"
+      - "mrml-gitd-state:/mnt/mrml/gitd/state:rw"
+      - "mrml-gitd-quarantine:/mnt/mrml/gitd/quarantine:rw"
+      - "mrml-gitd-cache:/mnt/mrml/gitd/cache:rw"
+      - "mrml-gitd-receipts:/mnt/mrml/gitd/receipts:rw"
+      - "mrml-gitd-policies:/mnt/mrml/gitd/policies:ro"
+      - "mrml-runtime-git-authority:/run/mrml/git-authority:ro"
+      - "mrml-runtime-certd-gitd:/run/mrml/certd-gitd:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/git-authority.cap.gitd:/run/secrets/git-authority-channel:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-gitd.cap.gitd:/run/secrets/certd-gitd-channel:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/gitd/token-pepper.key:/run/secrets/gitd-token-pepper:ro"
@@ -112,3 +112,23 @@ networks:
   git-public:
     driver: bridge
     internal: false
+
+volumes:
+  mrml-authority-state:
+    name: mrml-authority-state
+  mrml-gitd-repos:
+    name: mrml-gitd-repos
+  mrml-gitd-state:
+    name: mrml-gitd-state
+  mrml-gitd-quarantine:
+    name: mrml-gitd-quarantine
+  mrml-gitd-cache:
+    name: mrml-gitd-cache
+  mrml-gitd-receipts:
+    name: mrml-gitd-receipts
+  mrml-gitd-policies:
+    name: mrml-gitd-policies
+  mrml-runtime-git-authority:
+    name: mrml-runtime-git-authority
+  mrml-runtime-certd-gitd:
+    name: mrml-runtime-certd-gitd

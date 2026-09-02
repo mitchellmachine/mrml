@@ -30,7 +30,13 @@ make_dir() {
   path=$1 uid=$2 gid=$3 mode=$4
   displayed_mode=${mode#0}
   require_no_symlink_path "$path"
-  install -d -o "$uid" -g "$gid" -m "$mode" "$path"
+  if [ -e "$path" ]; then
+    [ -d "$path" ] && [ ! -L "$path" ] || exit 1
+  else
+    mkdir "$path"
+    chown "$uid:$gid" "$path"
+    chmod "$mode" "$path"
+  fi
   [ "$(stat -c %u:%g "$path")" = "$uid:$gid" ] || exit 1
   [ "$(stat -c %a "$path")" = "$displayed_mode" ] || exit 1
 }
@@ -55,15 +61,6 @@ make_secret() {
 }
 
 make_dir "$root" 0 0 0755
-make_dir "$root/certd" 21003 21003 0700
-make_dir "$root/certd/state" 21003 21003 0700
-make_dir "$root/certd/publications" 21003 21003 0750
-make_dir "$root/acmed" 21004 21004 0700
-make_dir "$root/acmed/state" 21004 21004 0700
-make_dir "$root/acmed/challenges" 21004 21004 0700
-make_dir "$root/runtime" 0 0 0755
-make_dir "$root/runtime/certd-gitd" 21003 21902 2770
-make_dir "$root/runtime/certd-acmed" 21003 21903 2770
 make_dir "$root/secrets" 0 0 0700
 make_dir "$root/secrets/certd" 21003 21003 0700
 make_dir "$root/secrets/acmed" 21004 21004 0700
@@ -73,6 +70,34 @@ make_dir "$root/config" 0 0 0750
 make_dir "$root/backups" 21005 21005 0711
 make_dir "$root/backups/certd" 21003 21005 0750
 make_dir "$root/backups/acmed" 21004 21005 0750
+
+command -v docker >/dev/null 2>&1 || { echo "docker is required to provision managed volumes" >&2; exit 1; }
+
+make_volume() {
+  name=$1 uid=$2 gid=$3 mode=$4
+  displayed_mode=${mode#0}
+  created=false
+  if ! docker volume inspect "$name" >/dev/null 2>&1; then
+    docker volume create --label org.mrml.managed=true "$name" >/dev/null
+    created=true
+  fi
+  mountpoint=$(docker volume inspect --format '{{.Mountpoint}}' "$name")
+  case $mountpoint in /*/_data) ;; *) echo "unsafe Docker volume mountpoint: $name" >&2; exit 1 ;; esac
+  [ ! -L "$mountpoint" ] && [ -d "$mountpoint" ] || exit 1
+  if [ "$created" = true ]; then
+    chown "$uid:$gid" "$mountpoint"
+    chmod "$mode" "$mountpoint"
+  fi
+  [ "$(stat -c %u:%g "$mountpoint")" = "$uid:$gid" ] || exit 1
+  [ "$(stat -c %a "$mountpoint")" = "$displayed_mode" ] || exit 1
+}
+
+make_volume mrml-certd-state 21003 21003 0700
+make_volume mrml-certd-publications 21003 21003 0750
+make_volume mrml-acmed-state 21004 21004 0700
+make_volume mrml-acmed-challenges 21004 21004 0700
+make_volume mrml-runtime-certd-gitd 21003 21902 2770
+make_volume mrml-runtime-certd-acmed 21003 21903 2770
 
 make_secret "$root/secrets/certd/certd-unlock.key" 21003 21003
 make_secret "$root/secrets/acmed/acmed-state.key" 21004 21004
@@ -99,10 +124,14 @@ create_backup_key_copies() {
     exit 1
   fi
   if [ ! -e "$certd_copy" ]; then
-    install -o 21003 -g 21003 -m 0400 "$admin_copy" "$certd_copy"
+    cp "$admin_copy" "$certd_copy"
+    chown 21003:21003 "$certd_copy"
+    chmod 0400 "$certd_copy"
   fi
   if [ ! -e "$acmed_copy" ]; then
-    install -o 21004 -g 21004 -m 0400 "$admin_copy" "$acmed_copy"
+    cp "$admin_copy" "$acmed_copy"
+    chown 21004:21004 "$acmed_copy"
+    chmod 0400 "$acmed_copy"
   fi
   make_secret "$admin_copy" 21005 21005
   make_secret "$certd_copy" 21003 21003
@@ -126,8 +155,12 @@ create_channel_pair() {
     seed=$root/secrets/channels/$name.seed.$$
     umask 077
     dd if=/dev/urandom of="$seed" bs=32 count=1 status=none
-    install -o 21003 -g 21003 -m 0400 "$seed" "$certd_copy"
-    install -o "$peer_uid" -g "$peer_gid" -m 0400 "$seed" "$peer_copy"
+    cp "$seed" "$certd_copy"
+    chown 21003:21003 "$certd_copy"
+    chmod 0400 "$certd_copy"
+    cp "$seed" "$peer_copy"
+    chown "$peer_uid:$peer_gid" "$peer_copy"
+    chmod 0400 "$peer_copy"
     rm -f "$seed"
   fi
   make_secret "$certd_copy" 21003 21003
@@ -170,11 +203,12 @@ verify_config "$root/config/acmed.json"
 available_kib=$(df -Pk "$root" | awk 'NR==2 {print $4}')
 [ "$available_kib" -ge "$minimum_kib" ] || { echo "insufficient free space" >&2; exit 1; }
 
-probe=$root/certd/state/.fs-probe.$$
+certd_state=$(docker volume inspect --format '{{.Mountpoint}}' mrml-certd-state)
+probe=$certd_state/.fs-probe.$$
 printf x > "$probe"
 sync "$probe"
 ln "$probe" "$probe.link"
 [ "$(stat -c %h "$probe")" = 2 ] || { rm -f "$probe" "$probe.link"; exit 1; }
 rm -f "$probe" "$probe.link"
 
-echo "MRML ACME host paths verified at $root"
+echo "MRML ACME host files and managed volumes verified at $root"

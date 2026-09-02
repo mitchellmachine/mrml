@@ -27,8 +27,10 @@ require 'pull_policy: never' "$compose"
 require 'network_mode: none' "$compose"
 require 'read_only: true' "$compose"
 require 'no-new-privileges:true' "$compose"
-require '/mnt/mrml}/runtime/certd-gitd' "$compose"
-require '/mnt/mrml}/runtime/certd-acmed' "$compose"
+require 'mrml-runtime-certd-gitd:/run/mrml/certd-gitd:rw' "$compose"
+require 'mrml-runtime-certd-acmed:/run/mrml/certd-acmed:rw' "$compose"
+require 'mrml-certd-state:/var/lib/mrml/certd:rw' "$compose"
+require 'mrml-acmed-state:/var/lib/mrml/acmed:rw' "$compose"
 require 'certd-gitd.cap.certd' "$compose"
 require 'certd-acmed.cap.certd' "$compose"
 require 'certd-acmed.cap.acmed' "$compose"
@@ -36,6 +38,8 @@ reject 'build:' "$compose"
 reject 'ports:' "$compose"
 reject '/var/run/docker.sock' "$compose"
 reject '/run/secrets/cloudflare-api-token' "$certd_dockerfile"
+reject '/certd/state:/var/lib/mrml/certd' "$compose"
+reject '/acmed/state:/var/lib/mrml/acmed' "$compose"
 
 for dockerfile in "$certd_dockerfile" "$acmed_dockerfile"; do
   require 'FROM docker.io/library/debian@sha256:' "$dockerfile"
@@ -45,6 +49,11 @@ for dockerfile in "$certd_dockerfile" "$acmed_dockerfile"; do
   reject 'curl' "$dockerfile"
   reject 'wget' "$dockerfile"
 done
+require '/payload/dirs/state /var/lib/mrml/certd' "$certd_dockerfile"
+require '/payload/dirs/state /var/lib/mrml/acmed' "$acmed_dockerfile"
+require 'docker volume create --label org.mrml.managed=true' deploy/compose/provision-acme-host.sh
+require 'unsafe Docker volume mountpoint' deploy/compose/provision-acme-host.sh
+require 'mrml-runtime-certd-gitd' deploy/compose/provision-acme-host.sh
 
 echo "ACME Compose static invariants PASS"
 

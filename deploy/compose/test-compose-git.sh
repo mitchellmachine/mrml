@@ -37,8 +37,10 @@ require 'cap_drop: [ALL]' "$compose"
 require 'no-new-privileges:true' "$compose"
 require '443:8443/tcp' "$compose"
 require '443:8443/udp' "$compose"
-require 'certd-gitd:/run/mrml/certd-gitd:ro' "$compose"
-require 'gitd/policies:/var/lib/mrml/git-policies:ro' "$compose"
+require 'mrml-runtime-certd-gitd:/run/mrml/certd-gitd:ro' "$compose"
+require 'mrml-gitd-policies:/var/lib/mrml/git-policies:ro' "$compose"
+require 'mrml-gitd-repos:/mnt/mrml/gitd/repos:rw' "$compose"
+require 'name: mrml-gitd-repos' "$compose"
 require 'MRML_PROTECTED_REPOSITORY:?set MRML_PROTECTED_REPOSITORY' "$compose"
 require 'git-authority.cap.gitd' "$compose"
 require 'certd-gitd.cap.gitd' "$compose"
@@ -53,7 +55,9 @@ reject 'privileged:' "$compose"
 reject 'pid: host' "$compose"
 reject 'ipc: host' "$compose"
 reject 'userns_mode: host' "$compose"
-reject 'name:' "$compose"
+reject 'container_name:' "$compose"
+reject '/gitd/repos:/mnt/mrml/gitd/repos' "$compose"
+reject '/runtime/git-authority:/run/mrml/git-authority' "$compose"
 
 published=$(grep -c '443:8443/' "$compose")
 [ "$published" -eq 2 ] || {
@@ -70,6 +74,11 @@ for dockerfile in "$gitd_dockerfile" "$authority_dockerfile"; do
   reject 'wget' "$dockerfile"
   reject 'COPY . ' "$dockerfile"
 done
+require '/payload/dirs/repos /mnt/mrml/gitd/repos' "$gitd_dockerfile"
+require '/payload/dirs/authority /var/lib/mrml/authority' "$authority_dockerfile"
+require 'docker volume create --label org.mrml.managed=true' deploy/compose/provision-git-host.sh
+require 'wrong owner on Docker volume' deploy/compose/provision-git-host.sh
+require 'mrml-runtime-certd-gitd' deploy/compose/provision-git-host.sh
 
 for operator in deploy/compose/initialize-git.sh deploy/compose/initialize-git-repository.sh deploy/compose/initialize-git-protected-policy.sh deploy/compose/token-git.sh deploy/compose/recovery-git.sh deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh deploy/compose/load-offline-git-images.sh; do
   [ -x "$operator" ] || {

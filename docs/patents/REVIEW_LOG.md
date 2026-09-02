@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-09-02: Docker-managed Git/certificate deployment volumes
+
+- Result: **NOT_TRIGGERED**.
+- Scope: replacing persistent and Unix-socket directory bind mounts with named
+  Docker volumes, exact numeric ownership/mode provisioning, and first-use image
+  directory metadata.
+- Reason: this is conventional container storage and filesystem provisioning;
+  it introduces no new protocol, cryptographic construction, compression
+  mechanism, or specialized storage algorithm.
+
 ## 2026-09-02 — Gitd durable receive-pack limit correction
 
 Patent review: **NOT_TRIGGERED**.

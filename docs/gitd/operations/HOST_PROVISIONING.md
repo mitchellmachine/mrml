@@ -1,24 +1,30 @@
 # Git host provisioning
 
-Status: **PARTIALLY IMPLEMENTED**. Git-owned directories and shared Gitd socket
-directories have an idempotent host provisioner. Image-only Compose validation,
+Status: **PARTIALLY IMPLEMENTED**. Git-owned Docker-managed volumes, shared Gitd
+socket volumes, and the narrowly mounted host secret/configuration files have
+an idempotent host provisioner. Image-only Compose validation,
 offline image bundling, cold backup/restore, and immutable image
 upgrade/rollback are separate implemented operators. Native one-shot repository
 and initial protected-policy creation, token administration, and bounded recovery
 operations exist. Authenticated normal and emergency trust-transition
 administration remains incomplete.
 
-Run `deploy/compose/provision-git-host.sh` as root. The deployment root defaults
-to `/mnt/mrml`; fixed production identities and socket groups default to the
-values in the Gitd deployment contract and can be overridden with the named
-numeric environment variables in the script.
+Run `deploy/compose/provision-git-host.sh` as root with Docker available. The
+deployment root defaults to `/mnt/mrml` and now contains only narrowly mounted
+secret/configuration files and operator backup outputs. Durable Git/authority
+data and Unix-socket directories are explicit `mrml-*` Docker volumes. Fixed
+production identities and socket groups default to the values in the Gitd
+deployment contract and can be overridden with the named numeric environment
+variables in the script.
 
-The provisioner creates only Gitd, Git authority, shared Gitd socket, channel
-secret-parent, and backup paths. Existing paths are never silently re-owned or
-re-moded: type, symlink absence, exact owner, and exact mode must already match.
-Unsafe writable non-sticky ancestors fail. A final probe requires file and
-directory sync, hard links, and same-filesystem atomic rename before the host is
-accepted. The probe contains no secret or repository data and is removed.
+The provisioner creates only the declared Gitd, Git authority, and shared socket
+volumes plus Git-owned channel-secret parents and backup/configuration paths.
+New volumes receive their exact numeric owner and mode through the Docker volume
+mountpoint; an existing volume is only inspected and is never silently re-owned
+or re-moded. Unsafe volume names/mountpoints, paths, types, symlinks, owners, or
+modes fail closed. A final probe requires file and directory sync, hard links,
+and same-filesystem atomic rename before the host is accepted. The probe contains
+no secret or repository data and is removed.
 
 On a new root the script creates paired Gitd/authority and Gitd/certd channel
 capabilities, a receipt key, token pepper, and QUIC Retry key exactly once, then
@@ -81,11 +87,12 @@ the authenticated journal stays present for the same completion operation at
 startup. Recovery likewise removes only an exact re-read recognized journal
 after its receipt has been recovered and verified.
 
-Hosted evidence is limited to shell syntax, static invariants, and negative
-argument tests because the current runner is neither root nor Docker-enabled.
-It does not establish a successful production-host provision, image run,
-backup/restore cycle, or filesystem behavior on the target VPS.
+On 2026-09-02 the provisioners ran twice, unchanged, through rootful Docker
+29.6.1 on the authorized `mrml.ca` Ubuntu x86_64 VPS. Both passes succeeded and
+the second pass proved idempotence across all 14 declared managed volumes. This
+is real VPS provisioning/filesystem evidence; it is not yet a successful image
+start, backup/restore cycle, public TLS exchange, or application transaction.
 
-Patent review: **NOT_TRIGGERED**. Directory provisioning, ownership/mode checks,
-hard-link and rename probes, and filesystem sync are conventional deployment
-mechanisms. See `docs/patents/REVIEW_LOG.md`.
+Patent review: **NOT_TRIGGERED**. Docker volume provisioning, ownership/mode
+checks, hard-link and rename probes, and filesystem sync are conventional
+deployment mechanisms. See `docs/patents/REVIEW_LOG.md`.
