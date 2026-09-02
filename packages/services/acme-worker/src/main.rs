@@ -238,6 +238,7 @@ fn serve(
         }
         if order.state == mrml_acme::OrderState::Valid {
             retrieve_and_stage_certificate(&config, &account, &order, &mut envelope_writer)?;
+            cleanup_dns_challenges(&config, &mut provider, &mut state, &mut state_authenticator)?;
         }
         if envelope_writer.next_request_id > reservation.last {
             return Err("certd channel request ID reservation exhausted");
@@ -352,6 +353,57 @@ fn retrieve_and_stage_certificate(
         return Err("certd activation receipt mismatch");
     }
     Ok(chain_digest)
+}
+
+fn cleanup_dns_challenges(
+    config: &AcmedConfig,
+    provider: &mut impl Dns01Provider,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<(), &'static str> {
+    for index in 0..usize::from(config.identifier_count) {
+        let identifier = config.identifiers[index].ok_or("missing configured identifier")?;
+        let (record, mut durable_generation) =
+            load_challenge_record(config, index as u8, identifier, state, authenticator)?
+                .ok_or("missing DNS-01 challenge state during cleanup")?;
+        let pending = match record.phase {
+            AcmedChallengePhase::Accepted => {
+                let pending = AcmedChallengeRecord {
+                    phase: AcmedChallengePhase::CleanupPending,
+                    ..record
+                };
+                durable_generation = persist_challenge_record(
+                    config,
+                    state,
+                    authenticator,
+                    durable_generation,
+                    &pending,
+                )?;
+                pending
+            }
+            AcmedChallengePhase::CleanupPending => record,
+            AcmedChallengePhase::Complete => continue,
+            _ => return Err("DNS-01 cleanup attempted before challenge acceptance"),
+        };
+        let receipt = pending
+            .publication_receipt()
+            .map_err(|_| "invalid persisted DNS-01 cleanup receipt")?
+            .ok_or("missing persisted DNS-01 cleanup receipt")?;
+        provider
+            .cleanup(receipt)
+            .map_err(|_| "DNS-01 provider cleanup failed")?;
+        persist_challenge_record(
+            config,
+            state,
+            authenticator,
+            durable_generation,
+            &AcmedChallengeRecord {
+                phase: AcmedChallengePhase::Complete,
+                ..pending
+            },
+        )?;
+    }
+    Ok(())
 }
 
 fn reserve_channel_request_ids(
