@@ -288,3 +288,95 @@ body/2 GiB pack-limit case.
 Patent review: **NOT_TRIGGERED**. This is a conservative resource-limit
 composition correction and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.
+
+## Protected wire, shutdown, and large-transfer completion follow-up
+
+Local-only signed commits through `1aaf5c1d` were validated from the clean
+detached worktree `/tmp/mrml-protected-743e2b11`; unrelated changes in the
+shared checkout were excluded from binaries and images. The native client
+completed authenticated H2 clone, fetch, pull, and protected push against the
+rootless Podman stack. Two protected pushes advanced the repository from
+generation 1 through generation 3; the second completed with `Pushed
+7e1cf1c7f312 to origin/main`. A following authenticated fetch installed eight
+objects and one branch ref, and native status reported zero ahead and zero
+behind. Each activation produced a 329-byte authenticated receipt.
+
+The sequence found and corrected hybrid-only policy admission (`694b72ce`),
+one-generation receive response matching (`09b754cb`), selected arrival-pack
+startup composition (`0e171cac`), and container-directed SIGTERM handling
+(`388758b8`). The exact `388758b8` image stopped in less than one second with
+exit code 0, emitted `shutdown_signal_received` and `shutdown_complete`, and
+was not escalated to SIGKILL.
+
+The 256 MiB gate used four independent 64 MiB incompressible blobs. It exposed
+an H2 upload stall at the initial 65,535-byte window; `47eeadfd` retains a
+non-final early response head while continuing window updates. A failed receive
+also left pending proofs in the long-lived authority adapter; `55fac822` makes
+each explicit serialized receive boundary replace only stale in-memory proof
+state. Unit tests cover both repairs.
+
+Gitd then received and validated a 268,456,731-byte pack, installed immutable
+arrival `885e8e7c47bff6a3bbcb1befc7436401`, advanced generation 3 to 4, and wrote
+a third 329-byte authenticated receipt. Podman's cgroup observation remained
+below the 2 GiB limit (approximately 616 MB observed during validation), while
+authority remained about 1.7 MB. The original `/proc` sampler crossed a
+rootless PID namespace and is not authoritative RSS evidence. The client timed
+out while waiting for CPU-bound validation after the full pack arrived;
+`1aaf5c1d` retains the 30-second handshake timeout and applies a bounded
+15-minute timeout only to established H2 application I/O. A subsequent large
+clone still ended with a generic H2 transport failure, so no successful large
+clone is claimed. The successful server-side receive, immutable arrival,
+generation advance, authenticated receipt, and cgroup ceiling are the evidence
+for this large-transfer gate.
+
+Exact final test results:
+
+```text
+./target/debug/mrml test org.mrml.service.gitd --target linux
+  PASS: 32 library, 4 binary tests
+./target/debug/mrml test org.mrml.tool.git --target linux
+  PASS: 224 library, 4 CLI, 3 protected-signer tests
+./target/debug/mrml test org.mrml.library.http --target linux
+  PASS: 75 tests
+./target/debug/mrml test org.mrml.library.tls --target linux
+  PASS: 34 tests
+deploy/compose/test-git-images.sh
+  PASS
+deploy/compose/test-compose-git.sh deploy/compose/compose.git.yaml
+  PASS
+```
+
+Final network-disabled images and exports at `1aaf5c1d`:
+
+```text
+mrml-gitd binary sha256:0952cdeb32612a1100deb9ca888af368adf3881f65beb96aced340dccb2bdf55
+mrml-git-authority binary sha256:63426fb1d7e22fee0204387bfa3026678f3c82514b90198f2cd7414d18fae54e
+mrml-git client binary sha256:d15efe88b04c434524d972a7f706a627a64938060025dc4ba35ff5c31e20c8e7
+mrml/gitd:1aaf5c1d image id sha256:c49b05c893f4b2badf35a244f133fad31875daeaf358d41084dba07e95124b39
+mrml/gitd:1aaf5c1d manifest sha256:c90b622ca16c8bfeb629abb18c5129fbb3430cdaf37a3dbb4b833167a9617644
+mrml/git-authority:1aaf5c1d image id sha256:ad4bd633a1ab4c377fd139d84b932ca9d6ab46f1350d99b40d2d91cd2b7c6193
+mrml/git-authority:1aaf5c1d manifest sha256:d1ed5e040116e739ce9b838ce41339c3f6b7b7c3701a82aa60a459b39e04dea6
+Gitd archive sha256:3695ac16988c246713d82c1b3f98e9b046d1d761168d7ef63d98c5632852acb8
+authority archive sha256:8fe5982e5889acb8d17ab9f0390c1277ea3ceac02aded2be94ad2df8a71677df
+Gitd SPDX JSON sha256:1ad34fc068a1890b38e83d24873ca8fdc0edd7267b6f7c989f6f409861e103f4
+authority SPDX JSON sha256:df90d4198790f58928031d311371234c1a88f121d432caa3c2e13a1e05ea6c36
+```
+
+Inspection reported Linux/amd64, users `21001:21001` and `21002:21002`, and
+only the intended exec-form entrypoints. Syft 1.51.0 scanned each exact
+Docker-format archive into valid SPDX 2.3 JSON with 12 package records. The
+inventories contain the distroless runtime packages and no Rust toolchain,
+Git, OpenSSH, GnuPG, curl, wget, Python, Perl, or package manager.
+
+This remains hosted local-loopback rootless-Podman evidence. The certificate
+service was the explicitly test-only fixture and was not included in either
+production image or production Compose file. It is not evidence for a real
+certd deployment, public network, VPS, physical host, power loss, H3 large
+transfer, or independent security review.
+
+Patent review: **NOT_TRIGGERED**. The corrections use conventional bounded
+protocol state, generation matching, startup composition, POSIX termination,
+per-operation timeouts, and in-memory transaction cleanup. They introduce no
+new cryptographic primitive, compression selection, similarity mechanism,
+cache policy, or storage-selection mechanism. See
+`docs/patents/REVIEW_LOG.md`.

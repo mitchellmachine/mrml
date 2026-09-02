@@ -12228,6 +12228,17 @@ The existing triggered Git compression/cache/compaction screen and its
 guardrails remain controlling; see
 [`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).
 
+# 2026-09-02 — Git production wire and lifecycle corrections
+
+Patent review: **NOT_TRIGGERED**. These increments correct conventional hybrid
+policy composition, exact generation response matching, immutable arrival-pack
+startup selection, POSIX container termination, HTTP/2 flow-control state,
+bounded established-channel timeouts, and stale in-memory receive-proof cleanup.
+They introduce no cryptographic primitive, compression or delta selection,
+similarity mechanism, cache policy, or storage-selection mechanism. Existing
+Git patent-screen guardrails remain controlling; see
+[`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).
+
 # 2026-09-02 — Protected Git proof carriage and capability signer composition
 
 Patent review: **NOT_TRIGGERED**. This increment carries existing exact-context
