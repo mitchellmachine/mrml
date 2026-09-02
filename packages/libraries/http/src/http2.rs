@@ -652,8 +652,10 @@ fn map_tls_read_error(error: TlsError) -> HttpError {
     match error {
         TlsError::InvalidRecord | TlsError::SequenceExhausted => HttpError::TlsRecord,
         TlsError::AuthenticationFailed => HttpError::TlsAuthentication,
+        TlsError::Handshake => HttpError::TlsHandshake,
+        TlsError::Certificate => HttpError::TlsCertificate,
         TlsError::Io => HttpError::TlsTransport,
-        _ => HttpError::Tls,
+        TlsError::AllocationFailed => HttpError::Allocation,
     }
 }
 fn tls_read_exact_server(stream: &mut TlsServerStream, out: &mut [u8]) -> Result<(), HttpError> {
