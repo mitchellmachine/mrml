@@ -2,21 +2,22 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use mrml_certificate::{CertdChannelCapability, CertdPeerIdentity};
 use mrml_crypto::erase_secret_bytes;
 use mrml_git::RemoteProtectedReceiveAuthority;
 use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
 use mrml_gitd::{
-    GitAuthorityChannelClient, GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute,
-    GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
     admit_catalog_repository, build_certd_tls_server_config_with_route, compose_gitd_service,
-    initialize_empty_token_store, inspect_admitted_repository_recovery, issue_access_token,
-    load_deployment_catalog, load_gitd_authentication, load_gitd_config, load_quic_retry_key,
-    prove_identity_signing_route, recover_admitted_repository, refresh_certd_tls_config,
-    revoke_access_token, validate_identity_snapshot, validate_storage_layout,
+    initialize_catalog_repository, initialize_empty_token_store,
+    inspect_admitted_repository_recovery, issue_access_token, load_deployment_catalog,
+    load_gitd_authentication, load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
+    recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
+    validate_identity_snapshot, validate_storage_layout, GitAuthorityChannelClient,
+    GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute, GitdHttp2WorkerPool,
+    GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
 };
 use mrml_http::{AccessScopes, RepositoryIdentity};
 
@@ -127,19 +128,8 @@ fn run() -> Result<(), ()> {
         }
         return Err(());
     }
-    if let [
-        _,
-        command,
-        token_store,
-        pepper,
-        expected_uid,
-        repository,
-        scopes,
-        valid_from,
-        expires_at,
-        revocation_generation,
-        label,
-    ] = arguments.as_slice()
+    if let [_, command, token_store, pepper, expected_uid, repository, scopes, valid_from, expires_at, revocation_generation, label] =
+        arguments.as_slice()
     {
         if command != "issue-token" {
             return Err(());
@@ -160,6 +150,25 @@ fn run() -> Result<(), ()> {
         return Ok(());
     }
     if let [_, command, config_path, signer_identity] = arguments.as_slice() {
+        if command == "initialize-repository" {
+            let config = load_gitd_config(Path::new(config_path)).map_err(|_| ())?;
+            let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
+            let entry = catalog
+                .repositories
+                .iter()
+                .find(|entry| entry.repository.as_str() == signer_identity)
+                .ok_or(())?;
+            let tip = initialize_catalog_repository(&config, entry).map_err(|_| ())?;
+            println!(
+                "repository={} initial_tip={} repository_generation={} trust_generation={} revocation_generation={}",
+                entry.repository.as_str(),
+                tip.to_hex(),
+                entry.repository_generation.0,
+                entry.trust_generation.0,
+                entry.revocation_generation.0
+            );
+            return Ok(());
+        }
         if command == "serve" {
             return serve(Path::new(config_path), signer_identity);
         }
@@ -229,21 +238,11 @@ fn run() -> Result<(), ()> {
         );
         return Ok(());
     }
-    let [
-        _,
-        command,
-        socket,
-        capability_path,
-        own_uid,
-        own_gid,
-        authority_uid,
-        authority_gid,
-        signer_identity,
-        request_id,
-    ] = arguments.as_slice()
+    let [_, command, socket, capability_path, own_uid, own_gid, authority_uid, authority_gid, signer_identity, request_id] =
+        arguments.as_slice()
     else {
         eprintln!(
-            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | recovery-status CONFIG | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | recover-safe CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
+            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | recovery-status CONFIG | initialize-repository CONFIG REPOSITORY | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | recover-safe CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
         );
         std::process::exit(64);
     };

@@ -1,5 +1,5 @@
 use std::fs;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use mrml_git::{
@@ -8,7 +8,7 @@ use mrml_git::{
 };
 
 use crate::{
-    DeploymentRepository, DeploymentRepositoryProfile, GitdConfig, verify_repository_admission,
+    verify_repository_admission, DeploymentRepository, DeploymentRepositoryProfile, GitdConfig,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +40,104 @@ pub enum RepositoryAdmissionError {
     Layout(StartupValidationError),
     Open,
     Generation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepositoryInitializationError {
+    Identity,
+    Layout,
+    Exists,
+    Create,
+    Initialize,
+    Verify,
+}
+
+/// Initializes one exact catalog entry and no other repository. All derived
+/// paths are preflighted before creation; a definite failure removes only leaf
+/// directories created by this invocation.
+pub fn initialize_catalog_repository(
+    config: &GitdConfig,
+    entry: &DeploymentRepository,
+) -> Result<mrml_git::ObjectId, RepositoryInitializationError> {
+    validate_storage_layout(config).map_err(|_| RepositoryInitializationError::Layout)?;
+    let (owner, repository) = entry
+        .repository
+        .as_str()
+        .split_once('/')
+        .ok_or(RepositoryInitializationError::Identity)?;
+    if owner.is_empty() || repository.is_empty() || repository.contains('/') {
+        return Err(RepositoryInitializationError::Identity);
+    }
+    let roots = [
+        &config.repository_root,
+        &config.state_root,
+        &config.quarantine_root,
+        &config.cache_root,
+        &config.receipt_root,
+    ];
+    let mut leaves = Vec::new();
+    for root in roots {
+        let owner_path = root.join(owner);
+        if owner_path.exists() {
+            validate_directory(&owner_path, config.gitd_uid, config.gitd_gid, true)
+                .map_err(|_| RepositoryInitializationError::Layout)?;
+        } else {
+            fs::create_dir(&owner_path).map_err(|_| RepositoryInitializationError::Create)?;
+            fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o700))
+                .map_err(|_| RepositoryInitializationError::Create)?;
+        }
+        let leaf = owner_path.join(repository);
+        if leaf.exists() || leaf.symlink_metadata().is_ok() {
+            return Err(RepositoryInitializationError::Exists);
+        }
+        leaves.push(leaf);
+    }
+    for leaf in &leaves {
+        if fs::create_dir(leaf).is_err()
+            || fs::set_permissions(leaf, fs::Permissions::from_mode(0o700)).is_err()
+        {
+            for created in leaves.iter().filter(|path| path.exists()) {
+                let _ = fs::remove_dir_all(created);
+            }
+            return Err(RepositoryInitializationError::Create);
+        }
+    }
+    let initialized = mrml_git::FilesystemRepositoryView::initialize_sha256(
+        entry.repository.clone(),
+        leaves[0]
+            .to_str()
+            .ok_or(RepositoryInitializationError::Identity)?,
+        leaves[1]
+            .to_str()
+            .ok_or(RepositoryInitializationError::Identity)?,
+        entry.repository_generation,
+        entry.trust_generation,
+        entry.revocation_generation,
+    );
+    if initialized.is_err() {
+        for leaf in &leaves {
+            let _ = fs::remove_dir_all(leaf);
+        }
+        return Err(RepositoryInitializationError::Initialize);
+    }
+    drop(initialized);
+    let admitted = admit_catalog_repository(config, entry).map_err(|_| {
+        for leaf in &leaves {
+            let _ = fs::remove_dir_all(leaf);
+        }
+        RepositoryInitializationError::Verify
+    })?;
+    let tip = admitted
+        .view
+        .resolve_ref(&entry.repository, "refs/heads/main")
+        .map_err(|_| RepositoryInitializationError::Verify);
+    if tip.is_err() {
+        drop(admitted);
+        for leaf in &leaves {
+            let _ = fs::remove_dir_all(leaf);
+        }
+    }
+    tip
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -301,12 +399,10 @@ fn validate_components(path: &Path) -> Result<(), StartupValidationError> {
 mod tests {
     use super::*;
     use mrml_git::{
-        ActiveRefFile, ActiveRefState, FullRefName, ObjectFormat, ObjectKind, PackGeneration,
-        Repository, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
-        TrustGeneration,
+        RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
     };
     use mrml_http::GitdBackend;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
     struct TestReceiptAuthority;
 
@@ -407,43 +503,7 @@ mod tests {
             fs::create_dir(storage_root).unwrap();
             fs::set_permissions(storage_root, fs::Permissions::from_mode(0o700)).unwrap();
         }
-        for storage_root in [
-            &config.repository_root,
-            &config.state_root,
-            &config.quarantine_root,
-            &config.cache_root,
-            &config.receipt_root,
-        ] {
-            let owner = storage_root.join("owner");
-            fs::create_dir(&owner).unwrap();
-            fs::set_permissions(&owner, fs::Permissions::from_mode(0o700)).unwrap();
-            if storage_root != &config.repository_root {
-                let leaf = owner.join("project");
-                fs::create_dir(&leaf).unwrap();
-                fs::set_permissions(&leaf, fs::Permissions::from_mode(0o700)).unwrap();
-            }
-        }
-        let objects = config.repository_root.join("owner/project");
-        let repository =
-            Repository::init_with_format(objects.to_str().unwrap(), ObjectFormat::Sha256).unwrap();
-        fs::set_permissions(&objects, fs::Permissions::from_mode(0o700)).unwrap();
-        let tip = repository.write_object(ObjectKind::Blob, b"tip").unwrap();
         let identity = RepositoryIdentity::parse("owner/project").unwrap();
-        ActiveRefFile::initialize(
-            config.state_root.join("owner/project").to_str().unwrap(),
-            &ActiveRefState {
-                repository: identity.clone(),
-                repository_generation: RepositoryGeneration(4),
-                trust_generation: TrustGeneration(6),
-                revocation_generation: RevocationGeneration(8),
-                pack_generation: PackGeneration(1),
-                pack_set_digest: [1u8; 32],
-                object_format: ObjectFormat::Sha256,
-                default_branch: FullRefName::parse("refs/heads/main").unwrap(),
-                refs: [(FullRefName::parse("refs/heads/main").unwrap(), tip)].into(),
-            },
-        )
-        .unwrap();
         let entry = crate::DeploymentRepository {
             repository: identity,
             profile: crate::DeploymentProfile {
@@ -455,6 +515,16 @@ mod tests {
             trust_generation: TrustGeneration(6),
             revocation_generation: RevocationGeneration(8),
         };
+        let tip = initialize_catalog_repository(&config, &entry).unwrap();
+        assert_ne!(
+            tip,
+            mrml_git::ObjectId::zero(mrml_git::ObjectFormat::Sha256)
+        );
+        assert_eq!(
+            initialize_catalog_repository(&config, &entry),
+            Err(RepositoryInitializationError::Exists)
+        );
+        let objects = config.repository_root.join("owner/project");
         let admitted = admit_catalog_repository(&config, &entry).unwrap();
         assert_eq!(admitted.paths.objects, objects);
         assert_eq!(

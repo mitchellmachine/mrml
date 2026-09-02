@@ -3,17 +3,17 @@
 use mrml_runtime::Vector;
 
 use crate::{
+    encode_pack_with_format, parse_tree_with_format, read_v2_request, write_pkt_line,
     ActiveRefFile, AnnotatedTagDetails, AnnotatedTagPage, ArrivalPackStore, BlobPage, BoundedRead,
     BoundedWrite, Commit, CommitDetails, CommitPage, FullRefName, GitdCoreBackend, GitdCoreError,
-    ImmutablePackCacheDirectory, ImmutablePackDescriptor, Index, IndexEntry, ObjectId, ObjectKind,
-    PackCacheFileError, PackCacheKey, PackError, PackObject, PackSetLimits, PackSetManifest,
-    PackStreamEncoder, PackStreamOutput, PktLine, ProtocolBudget, ProtocolV2Request, QueryLimits,
-    ReadmeCandidate, Repository, RepositoryEvent, RepositoryEventCursor, RepositoryEventPage,
-    RepositoryGeneration, RepositoryIdentity, RepositoryPath, RepositorySummary,
-    RevocationGeneration, SmartGitOperation, SmartGitRequest, SmartGitResponse, TreePage,
-    TrustGeneration, VerificationSummary, VerifiedCommitProof, VerifiedGitObjectProof,
-    VerifiedMetadataDescriptor, WorkBudget, encode_pack_with_format, parse_tree_with_format,
-    read_v2_request, write_pkt_line,
+    ImmutablePackCacheDirectory, ImmutablePackDescriptor, Index, IndexEntry, ObjectFormat,
+    ObjectId, ObjectKind, PackCacheFileError, PackCacheKey, PackError, PackGeneration, PackObject,
+    PackSetLimits, PackSetManifest, PackStreamEncoder, PackStreamOutput, PktLine, ProtocolBudget,
+    ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
+    RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
+    RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest,
+    SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedCommitProof,
+    VerifiedGitObjectProof, VerifiedMetadataDescriptor, WorkBudget,
 };
 
 pub const MAX_VERIFICATION_SUMMARY_EVIDENCE: usize = 5_000;
@@ -444,6 +444,61 @@ impl GitdCoreBackend for FilesystemRepositoryView {
 }
 
 impl FilesystemRepositoryView {
+    /// Creates the canonical empty SHA-256 state used by a deployment-owned
+    /// repository catalog. The initial root commit is deterministic and carries
+    /// no authorization; protected policy activation remains a separate gate.
+    pub fn initialize_sha256(
+        identity: RepositoryIdentity,
+        objects_path: &str,
+        state_path: &str,
+        repository_generation: RepositoryGeneration,
+        trust_generation: TrustGeneration,
+        revocation_generation: RevocationGeneration,
+    ) -> Result<Self, GitdCoreError> {
+        if repository_generation.0 == 0 || trust_generation.0 == 0 || revocation_generation.0 == 0 {
+            return Err(GitdCoreError::Policy);
+        }
+        let repository = Repository::init_with_format(objects_path, ObjectFormat::Sha256)
+            .map_err(|_| GitdCoreError::Storage)?;
+        let tree = repository
+            .write_object(ObjectKind::Tree, &[])
+            .map_err(|_| GitdCoreError::Storage)?;
+        let contents = mrml_runtime::mrml_format!(
+            "tree {}\nauthor MRML Deployment <deployment@mrml.invalid> 1 +0000\ncommitter MRML Deployment <deployment@mrml.invalid> 1 +0000\n\nMRML repository initialization\n",
+            tree.to_hex()
+        );
+        let tip = repository
+            .write_object(ObjectKind::Commit, contents.as_bytes())
+            .map_err(|_| GitdCoreError::Storage)?;
+        let manifest = crate::pack_set::build_pack_set_manifest(
+            identity.clone(),
+            repository_generation,
+            PackGeneration(1),
+            ObjectFormat::Sha256,
+            Vector::new(),
+            SELECTED_PACK_SET_LIMITS,
+        )
+        .map_err(|_| GitdCoreError::Storage)?;
+        let pack_set_digest = manifest.digest().map_err(|_| GitdCoreError::Storage)?;
+        ActiveRefFile::initialize_with_pack_set(
+            state_path,
+            &crate::ActiveRefState {
+                repository: identity.clone(),
+                repository_generation,
+                trust_generation,
+                revocation_generation,
+                pack_generation: PackGeneration(1),
+                pack_set_digest,
+                object_format: ObjectFormat::Sha256,
+                default_branch: FullRefName::parse("refs/heads/main")?,
+                refs: [(FullRefName::parse("refs/heads/main")?, tip)].into(),
+            },
+            &manifest,
+        )
+        .map_err(|_| GitdCoreError::Storage)?;
+        Self::open(identity, objects_path, state_path)
+    }
+
     /// Executes one conventional fast-forward receive against the same
     /// authenticated object and ref stores used by reads. Edge authentication
     /// and profile authorization must already have succeeded.
@@ -2014,17 +2069,15 @@ mod tests {
             }
         });
         let evidence_store = VerificationSummaryStore::new(evidence_records).unwrap();
-        assert!(
-            evidence_store
-                .exact(
-                    &identity,
-                    RepositoryGeneration(3),
-                    commit,
-                    TrustGeneration(5),
-                    RevocationGeneration(6),
-                )
-                .is_none()
-        );
+        assert!(evidence_store
+            .exact(
+                &identity,
+                RepositoryGeneration(3),
+                commit,
+                TrustGeneration(5),
+                RevocationGeneration(6),
+            )
+            .is_none());
         view = view.with_verification_evidence(evidence_store);
         let limits = QueryLimits {
             max_entries: 8,

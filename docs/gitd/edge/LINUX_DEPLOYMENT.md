@@ -88,6 +88,19 @@ the activated version atomically. Rollback changes images only; it never
 silently rolls repository data or security generations backward. Root/Docker
 execution of these workflows remains unperformed in the current evidence.
 
+Repository creation is an explicit stopped-service administration operation.
+`initialize-git-repository.sh owner/repository` runs a one-shot Gitd container,
+requires the exact identity to already exist in the authenticated deployment
+catalog, derives all five storage paths from that identity, and creates a
+SHA-256 repository with a deterministic empty root commit and authenticated
+generation-1 pack-set/ref state. It refuses existing repository leaves and
+removes leaves created by the failed invocation when initialization or final
+admission verification fails. The initial commit carries no authority;
+protected-branch policy and authority state remain separate deployment gates.
+Hosted package tests exercise initialization, reopen/admission, exact generation
+matching, and repeat-initialization refusal. They are not crash-recovery or
+physical-storage evidence.
+
 Patent review: **NOT_TRIGGERED**. Digest-pinned multistage containers,
 unprivileged users, minimal copied artifacts, and static image-policy checks are
 conventional deployment hardening. See `docs/patents/REVIEW_LOG.md`.
