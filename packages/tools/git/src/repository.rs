@@ -521,6 +521,45 @@ impl Repository {
         wants: &[ObjectId],
         haves: &[ObjectId],
     ) -> Result<Vector<u8>, RepositoryError> {
+        let ids = self.negotiated_object_ids(wants, haves)?;
+        let mut objects = Vector::new();
+        for id in ids {
+            let object = self.read_object(id)?;
+            objects.push(PackObject {
+                id,
+                kind: object.kind,
+                contents: object.contents,
+            });
+        }
+        encode_pack_with_format(&objects, self.object_format).map_err(Into::into)
+    }
+
+    pub fn write_negotiated_pack(
+        &self,
+        wants: &[ObjectId],
+        haves: &[ObjectId],
+        output: &mut dyn crate::PackStreamOutput,
+    ) -> Result<usize, RepositoryError> {
+        let ids = self.negotiated_object_ids(wants, haves)?;
+        let count = ids.len();
+        let mut encoder = crate::PackStreamEncoder::new(count, self.object_format, output)?;
+        for id in ids {
+            let object = self.read_object(id)?;
+            encoder.write_object(&PackObject {
+                id,
+                kind: object.kind,
+                contents: object.contents,
+            })?;
+        }
+        encoder.finish()?;
+        Ok(count)
+    }
+
+    fn negotiated_object_ids(
+        &self,
+        wants: &[ObjectId],
+        haves: &[ObjectId],
+    ) -> Result<Vector<ObjectId>, RepositoryError> {
         if wants.is_empty()
             || wants
                 .iter()
@@ -545,7 +584,6 @@ impl Repository {
 
         let mut pending: Vector<ObjectId> = wants.iter().copied().collect();
         let mut seen = Vector::new();
-        let mut objects = Vector::new();
         while let Some(id) = pending.pop() {
             if excluded.contains(&id) || seen.contains(&id) {
                 continue;
@@ -556,13 +594,8 @@ impl Repository {
             let object = self.read_object(id)?;
             append_reachable_children(&object, self.object_format, &mut pending)?;
             seen.push(id);
-            objects.push(PackObject {
-                id,
-                kind: object.kind,
-                contents: object.contents,
-            });
         }
-        encode_pack_with_format(&objects, self.object_format).map_err(Into::into)
+        Ok(seen)
     }
 
     pub fn validate_commit_tips(&self, tips: &[ObjectId]) -> Result<(), RepositoryError> {
@@ -4625,6 +4658,18 @@ mod tests {
 
     #[test]
     fn negotiated_pack_subtracts_complete_have_closure() {
+        struct Sink {
+            bytes: Vector<u8>,
+            maximum_write: usize,
+        }
+        impl crate::PackStreamOutput for Sink {
+            fn write(&mut self, bytes: &[u8]) -> Result<(), PackError> {
+                self.maximum_write = self.maximum_write.max(bytes.len());
+                self.bytes
+                    .try_extend_from_slice(bytes)
+                    .map_err(|_| PackError::TooLarge)
+            }
+        }
         let path = root("negotiated-pack");
         let repository = Repository::init_with_format(&path, ObjectFormat::Sha256).unwrap();
         let tracked = join_path(&path, "tracked");
@@ -4650,6 +4695,19 @@ mod tests {
         .unwrap();
         assert!(incremental.iter().any(|object| object.id == second));
         assert!(!incremental.iter().any(|object| object.id == first));
+        let mut streamed = Sink {
+            bytes: Vector::new(),
+            maximum_write: 0,
+        };
+        let streamed_count = repository
+            .write_negotiated_pack(&[second], &[first], &mut streamed)
+            .unwrap();
+        let streamed_objects =
+            parse_pack_with_format(&streamed.bytes, ObjectFormat::Sha256).unwrap();
+        assert_eq!(streamed_count, streamed_objects.len());
+        assert!(streamed_objects.iter().any(|object| object.id == second));
+        assert!(!streamed_objects.iter().any(|object| object.id == first));
+        assert!(streamed.maximum_write <= u16::MAX as usize);
         let empty = parse_pack_with_format(
             &repository.pack_negotiated(&[second], &[second]).unwrap(),
             ObjectFormat::Sha256,
