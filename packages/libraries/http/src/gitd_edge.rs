@@ -1084,7 +1084,19 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         let result = self
             .backend
             .smart_git(prepared.request, input, output, prepared.budget)?;
-        if result.generation != generation
+        let expected_generation = if operation == SmartGitOperation::ReceivePack
+            && result.refs_activated
+        {
+            RepositoryGeneration(
+                generation
+                    .0
+                    .checked_add(1)
+                    .ok_or(BackendError::StaleGeneration)?,
+            )
+        } else {
+            generation
+        };
+        if result.generation != expected_generation
             || (operation != SmartGitOperation::ReceivePack && result.refs_activated)
         {
             return Err(BackendError::StaleGeneration);
@@ -2257,7 +2269,11 @@ mod tests {
             };
             output.write(bytes)?;
             Ok(SmartGitResponse {
-                generation: request.generation,
+                generation: if request.operation == SmartGitOperation::ReceivePack {
+                    RepositoryGeneration(request.generation.0 + 1)
+                } else {
+                    request.generation
+                },
                 bytes_read: 0,
                 bytes_written: bytes.len() as u64,
                 refs_activated: request.operation == SmartGitOperation::ReceivePack,
