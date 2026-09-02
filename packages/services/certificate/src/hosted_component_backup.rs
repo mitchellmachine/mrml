@@ -1,10 +1,10 @@
 extern crate std;
 
-use mrml_crypto::{Sha256, aes128_gcm_open, aes128_gcm_seal, erase_secret_bytes, hmac_sha256};
+use mrml_crypto::{aes128_gcm_open, aes128_gcm_seal, erase_secret_bytes, hmac_sha256, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Component, Path};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::path::{Component, Path, PathBuf};
 use std::string::{String, ToString};
 use std::vec;
 use std::vec::Vec;
@@ -51,6 +51,8 @@ pub enum HostedBackupError {
     RoleMismatch,
     GenerationMismatch,
     ManifestMismatch,
+    TargetNotEmpty,
+    RestoreFailed,
 }
 
 pub fn create_hosted_backup_manifest(
@@ -180,6 +182,19 @@ struct Entry {
     bytes: Vec<u8>,
 }
 
+struct SecretBytes(Vec<u8>);
+
+impl Drop for SecretBytes {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+struct OpenedComponent {
+    descriptor: HostedBackupDescriptor,
+    plaintext: SecretBytes,
+}
+
 impl Drop for Entry {
     fn drop(&mut self) {
         self.bytes.fill(0);
@@ -302,6 +317,113 @@ pub fn verify_hosted_component_backup(
     backup_key: &[u8; 32],
     input: &Path,
 ) -> Result<HostedBackupDescriptor, HostedBackupError> {
+    Ok(open_hosted_component(expected_role, backup_key, input)?.descriptor)
+}
+
+pub fn restore_hosted_component_backup(
+    expected_role: HostedBackupRole,
+    expected_generation: u64,
+    owner_uid: u32,
+    backup_key: &[u8; 32],
+    input: &Path,
+    target: &Path,
+) -> Result<[u8; 32], HostedBackupError> {
+    if expected_generation == 0 || !target.is_absolute() {
+        return Err(HostedBackupError::InvalidGeneration);
+    }
+    let target_metadata =
+        fs::symlink_metadata(target).map_err(|_| HostedBackupError::InvalidSource)?;
+    if !target_metadata.is_dir()
+        || target_metadata.file_type().is_symlink()
+        || target_metadata.uid() != owner_uid
+        || target_metadata.permissions().mode() & 0o777 != 0o700
+    {
+        return Err(HostedBackupError::UnsafeEntry);
+    }
+    if fs::read_dir(target)
+        .map_err(|_| HostedBackupError::Io)?
+        .next()
+        .is_some()
+    {
+        return Err(HostedBackupError::TargetNotEmpty);
+    }
+    let opened = open_hosted_component(expected_role, backup_key, input)?;
+    if opened.descriptor.generation != expected_generation {
+        return Err(HostedBackupError::GenerationMismatch);
+    }
+    let mut offset = 0usize;
+    let mut restored = 0u16;
+    while offset < opened.plaintext.0.len() {
+        let name_length =
+            u16::from_be_bytes(opened.plaintext.0[offset..offset + 2].try_into().unwrap()) as usize;
+        let mode = u16::from_be_bytes(
+            opened.plaintext.0[offset + 2..offset + 4]
+                .try_into()
+                .unwrap(),
+        );
+        let length = u32::from_be_bytes(
+            opened.plaintext.0[offset + 4..offset + 8]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let expected_digest: [u8; 32] = opened.plaintext.0[offset + 8..offset + 40]
+            .try_into()
+            .unwrap();
+        offset += ENTRY_HEADER_BYTES;
+        let name = core::str::from_utf8(&opened.plaintext.0[offset..offset + name_length])
+            .map_err(|_| HostedBackupError::Malformed)?;
+        offset += name_length;
+        let bytes = &opened.plaintext.0[offset..offset + length];
+        offset += length;
+        let relative = Path::new(name);
+        ensure_restore_parents(target, relative, owner_uid)?;
+        let output = target.join(relative);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(LINUX_O_NOFOLLOW)
+            .open(&output)
+            .map_err(|_| HostedBackupError::RestoreFailed)?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| HostedBackupError::RestoreFailed)?;
+        if bounded_restored_file_digest(&output, length, owner_uid)? != expected_digest {
+            return Err(HostedBackupError::RestoreFailed);
+        }
+        fs::set_permissions(&output, fs::Permissions::from_mode(u32::from(mode)))
+            .map_err(|_| HostedBackupError::RestoreFailed)?;
+        file.sync_all()
+            .map_err(|_| HostedBackupError::RestoreFailed)?;
+        drop(file);
+        sync_parent(&output)?;
+        restored = restored
+            .checked_add(1)
+            .ok_or(HostedBackupError::TooManyFiles)?;
+    }
+    if restored != opened.descriptor.file_count {
+        return Err(HostedBackupError::RestoreFailed);
+    }
+    sync_restored_directories(target, owner_uid)?;
+    let mut receipt_key = hmac_sha256(backup_key, &[b"mrml-hosted-component-restore-receipt-v1"]);
+    let receipt = hmac_sha256(
+        &receipt_key,
+        &[
+            &[expected_role as u8],
+            &expected_generation.to_be_bytes(),
+            &opened.descriptor.file_count.to_be_bytes(),
+            &opened.descriptor.plaintext_digest,
+        ],
+    );
+    erase_secret_bytes(&mut receipt_key);
+    Ok(receipt)
+}
+
+fn open_hosted_component(
+    expected_role: HostedBackupRole,
+    backup_key: &[u8; 32],
+    input: &Path,
+) -> Result<OpenedComponent, HostedBackupError> {
     if backup_key == &[0; 32] || !input.is_absolute() {
         return Err(HostedBackupError::Malformed);
     }
@@ -379,7 +501,7 @@ pub fn verify_hosted_component_backup(
     let mut key = [0u8; 16];
     key.copy_from_slice(&derived[..16]);
     erase_secret_bytes(&mut derived);
-    let mut plaintext = vec![0u8; payload_length];
+    let mut plaintext = SecretBytes(vec![0u8; payload_length]);
     let tag: [u8; TAG_BYTES] = encoded[length - TAG_BYTES..]
         .try_into()
         .map_err(|_| HostedBackupError::Malformed)?;
@@ -389,28 +511,30 @@ pub fn verify_hosted_component_backup(
         &header,
         &encoded[HEADER_BYTES..length - TAG_BYTES],
         &tag,
-        &mut plaintext,
+        &mut plaintext.0,
     );
     erase_secret_bytes(&mut key);
     encoded.fill(0);
-    let validation = if !opened || Sha256::digest(&plaintext) != expected_digest {
+    let validation = if !opened || Sha256::digest(&plaintext.0) != expected_digest {
         Err(HostedBackupError::AuthenticationFailed)
     } else {
-        count_entries(&plaintext).and_then(|count| {
+        count_entries(&plaintext.0).and_then(|count| {
             if count != file_count {
                 Err(HostedBackupError::AuthenticationFailed)
             } else {
-                validate_plaintext_entries(&plaintext)
+                validate_plaintext_entries(&plaintext.0)
             }
         })
     };
-    plaintext.fill(0);
     validation?;
-    Ok(HostedBackupDescriptor {
-        role,
-        generation,
-        file_count,
-        plaintext_digest: expected_digest,
+    Ok(OpenedComponent {
+        descriptor: HostedBackupDescriptor {
+            role,
+            generation,
+            file_count,
+            plaintext_digest: expected_digest,
+        },
+        plaintext,
     })
 }
 
@@ -570,6 +694,119 @@ fn validate_archive_name(name: &str) -> Result<(), HostedBackupError> {
     Ok(())
 }
 
+fn ensure_restore_parents(
+    target: &Path,
+    relative: &Path,
+    owner_uid: u32,
+) -> Result<(), HostedBackupError> {
+    let parent = relative.parent().ok_or(HostedBackupError::UnsafeEntry)?;
+    let mut current = PathBuf::from(target);
+    for component in parent.components() {
+        let Component::Normal(component) = component else {
+            return Err(HostedBackupError::UnsafeEntry);
+        };
+        current.push(component);
+        if !current.exists() {
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder
+                .create(&current)
+                .map_err(|_| HostedBackupError::RestoreFailed)?;
+        }
+        let metadata =
+            fs::symlink_metadata(&current).map_err(|_| HostedBackupError::RestoreFailed)?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != owner_uid
+            || metadata.permissions().mode() & 0o777 != 0o700
+        {
+            return Err(HostedBackupError::UnsafeEntry);
+        }
+    }
+    Ok(())
+}
+
+fn bounded_restored_file_digest(
+    path: &Path,
+    expected_length: usize,
+    owner_uid: u32,
+) -> Result<[u8; 32], HostedBackupError> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| HostedBackupError::RestoreFailed)?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() != 1
+        || metadata.uid() != owner_uid
+        || metadata.len() != expected_length as u64
+    {
+        return Err(HostedBackupError::RestoreFailed);
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(LINUX_O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| HostedBackupError::RestoreFailed)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 16 * 1024];
+    let mut total = 0usize;
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| HostedBackupError::RestoreFailed)?;
+        if read == 0 {
+            break;
+        }
+        total = total.checked_add(read).ok_or(HostedBackupError::TooLarge)?;
+        if total > expected_length {
+            return Err(HostedBackupError::RestoreFailed);
+        }
+        digest.update(&buffer[..read]);
+    }
+    if total != expected_length {
+        return Err(HostedBackupError::RestoreFailed);
+    }
+    Ok(digest.finalize())
+}
+
+fn sync_restored_directories(root: &Path, owner_uid: u32) -> Result<(), HostedBackupError> {
+    let mut pending = vec![PathBuf::from(root)];
+    let mut directories = Vec::new();
+    while let Some(path) = pending.pop() {
+        if directories.len() >= MAX_HOSTED_BACKUP_FILES {
+            return Err(HostedBackupError::TooManyFiles);
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|_| HostedBackupError::RestoreFailed)?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != owner_uid
+            || metadata.permissions().mode() & 0o777 != 0o700
+        {
+            return Err(HostedBackupError::UnsafeEntry);
+        }
+        for entry in fs::read_dir(&path).map_err(|_| HostedBackupError::RestoreFailed)? {
+            let entry = entry.map_err(|_| HostedBackupError::RestoreFailed)?;
+            let file_type = entry
+                .file_type()
+                .map_err(|_| HostedBackupError::RestoreFailed)?;
+            if file_type.is_symlink() {
+                return Err(HostedBackupError::UnsafeEntry);
+            }
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+        directories.push(path);
+    }
+    for directory in directories.into_iter().rev() {
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(LINUX_O_NOFOLLOW)
+            .open(directory)
+            .and_then(|file| file.sync_all())
+            .map_err(|_| HostedBackupError::RestoreFailed)?;
+    }
+    Ok(())
+}
+
 fn bounded_file_digest(path: &Path) -> Result<[u8; 32], HostedBackupError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| HostedBackupError::Io)?;
     if !metadata.is_file()
@@ -700,11 +937,9 @@ mod tests {
             Err(HostedBackupError::AuthenticationFailed)
         ));
         let encoded = fs::read(&output).unwrap();
-        assert!(
-            !encoded
-                .windows(b"encrypted private key bytes".len())
-                .any(|window| window == b"encrypted private key bytes")
-        );
+        assert!(!encoded
+            .windows(b"encrypted private key bytes".len())
+            .any(|window| window == b"encrypted private key bytes"));
         let changed = root.0.join("changed.mrb");
         let mut mutated = encoded;
         mutated[HEADER_BYTES + 1] ^= 1;
@@ -855,6 +1090,104 @@ mod tests {
             verify_hosted_backup_manifest(12, &[0x51; 32], &certd, &acmed, &changed),
             Err(HostedBackupError::AuthenticationFailed)
         ));
+    }
+
+    #[test]
+    fn restore_requires_empty_owned_target_reopens_every_file_and_binds_receipt() {
+        let root = TestRoot::new();
+        let source = root.0.join("source");
+        let nested = source.join("certd/state");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            nested.join("active.record"),
+            b"authenticated active generation",
+        )
+        .unwrap();
+        fs::set_permissions(
+            nested.join("active.record"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::write(source.join("public.txt"), b"public certificate bytes").unwrap();
+        let component = root.0.join("component.mrb");
+        let owner = metadata_uid(&source);
+        create_hosted_component_backup(
+            HostedBackupRole::Certd,
+            19,
+            owner,
+            &[HostedBackupSource {
+                source: &source,
+                archive_name: "restored",
+            }],
+            &[0x61; 32],
+            &component,
+        )
+        .unwrap();
+        let target = root.0.join("target");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+        let receipt = restore_hosted_component_backup(
+            HostedBackupRole::Certd,
+            19,
+            owner,
+            &[0x61; 32],
+            &component,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(target.join("restored/certd/state/active.record")).unwrap(),
+            b"authenticated active generation"
+        );
+        assert_eq!(
+            fs::metadata(target.join("restored/certd/state/active.record"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let second = root.0.join("second");
+        fs::create_dir(&second).unwrap();
+        fs::set_permissions(&second, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            restore_hosted_component_backup(
+                HostedBackupRole::Certd,
+                19,
+                owner,
+                &[0x61; 32],
+                &component,
+                &second,
+            )
+            .unwrap(),
+            receipt
+        );
+        assert!(matches!(
+            restore_hosted_component_backup(
+                HostedBackupRole::Certd,
+                19,
+                owner,
+                &[0x61; 32],
+                &component,
+                &second,
+            ),
+            Err(HostedBackupError::TargetNotEmpty)
+        ));
+        let wrong_generation = root.0.join("wrong-generation");
+        fs::create_dir(&wrong_generation).unwrap();
+        fs::set_permissions(&wrong_generation, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(
+            restore_hosted_component_backup(
+                HostedBackupRole::Certd,
+                20,
+                owner,
+                &[0x61; 32],
+                &component,
+                &wrong_generation,
+            ),
+            Err(HostedBackupError::GenerationMismatch)
+        ));
+        assert_eq!(fs::read_dir(&wrong_generation).unwrap().count(), 0);
     }
 
     fn metadata_uid(path: &Path) -> u32 {

@@ -1,41 +1,41 @@
 use mrml_acme::{
-    AccountCreateBuffers, AccountLifecycle, AccountPolicy, AccountRecoveryError, AcmeExchange,
-    AcmeIdentifier, AcmeJwsEnvelopeWriter, AcmeUrl, AuthorizationResource, AuthorizationState,
-    CaClass, ChallengeKind, Dns01ActivationEvidence, HostedAcmeTransport, JoseError,
-    MAX_ACME_PAYLOAD_BYTES, MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES,
-    MAX_JWS_REQUEST_BYTES, MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk,
-    ParsedAccountStatus, ProtectedKey, ReplayNonce, RevocationOutcome, account_contacts_digest,
-    dns01_txt_digest, execute_prepared_account_create, execute_prepared_finalize,
-    execute_prepared_order_create, fetch_authorization, fetch_directory, fetch_renewal_info,
-    parse_account_response, poll_order, post_jws, prepare_order_creation,
+    account_contacts_digest, dns01_txt_digest, execute_prepared_account_create,
+    execute_prepared_finalize, execute_prepared_order_create, fetch_authorization, fetch_directory,
+    fetch_renewal_info, parse_account_response, poll_order, post_jws, prepare_order_creation,
     recover_uncertain_account_creation, resolve_uncertain_account_action, revoke_certificate,
-    trigger_propagated_dns01_challenge, write_key_authorization,
+    trigger_propagated_dns01_challenge, write_key_authorization, AccountCreateBuffers,
+    AccountLifecycle, AccountPolicy, AccountRecoveryError, AcmeExchange, AcmeIdentifier,
+    AcmeJwsEnvelopeWriter, AcmeUrl, AuthorizationResource, AuthorizationState, CaClass,
+    ChallengeKind, Dns01ActivationEvidence, HostedAcmeTransport, JoseError, OrderCreateBuffers,
+    OrderLifecycle, P256Jwk, ParsedAccountStatus, ProtectedKey, ReplayNonce, RevocationOutcome,
+    MAX_ACME_PAYLOAD_BYTES, MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES,
+    MAX_JWS_REQUEST_BYTES, MAX_KEY_AUTHORIZATION,
 };
 use mrml_acmed::{
+    challenge_object_id, finalization_object_id, parse_acmed_config, renew_now_approval_digest,
     AcmeDirectoryClass, AcmedAccountPhase, AcmedAccountRecord, AcmedChallengePhase,
     AcmedChallengeRecord, AcmedChannelRequestCounter, AcmedConfig, AcmedFinalizationPhase,
     AcmedFinalizationRecord, AcmedOrderPhase, AcmedOrderRecord, AcmedRequestIdReservation,
-    AcmedRevocationPhase, AcmedRevocationRecord, MAX_ACMED_CONFIG_BYTES, challenge_object_id,
-    finalization_object_id, parse_acmed_config, renew_now_approval_digest,
+    AcmedRevocationPhase, AcmedRevocationRecord, MAX_ACMED_CONFIG_BYTES,
 };
 use mrml_certificate::{
-    AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES,
-    CERTD_TLS_KEY_RESPONSE_BYTES, CertdAccountKeyRequest, CertdActivationRequest,
-    CertdCandidateRequest, CertdCandidateStage, CertdCandidateState, CertdChannelCapability,
-    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole,
-    CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest, CloudflareDns01Provider,
-    ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest, DnsObservationClass,
-    DnsObservationRoute, DnsPropagationObserver, DnsPropagationPolicy, DurableAuthenticator,
-    DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
-    HostedBackupRole, HostedBackupSource, HostedDnsObservationEndpoint, HostedDnsPropagationQuery,
-    HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
+    create_hosted_component_backup, decode_certd_candidate_request, decode_certd_channel_request,
+    encode_certd_account_key_request, encode_certd_candidate_request, encode_certd_channel_request,
+    encode_certd_jws_request, encode_certd_tls_key_request, load_durable_authenticator,
+    p256_public_key_is_valid, restore_hosted_component_backup, retrieve_certificate_chain,
+    verify_hosted_component_backup, AcmeJwsOperation, CertdAccountKeyRequest,
+    CertdActivationRequest, CertdCandidateRequest, CertdCandidateStage, CertdCandidateState,
+    CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
+    CertdChannelRole, CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest,
+    CloudflareDns01Provider, ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest,
+    DnsObservationClass, DnsObservationRoute, DnsPropagationObserver, DnsPropagationPolicy,
+    DurableAuthenticator, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
+    DurableStateStore, HostedBackupRole, HostedBackupSource, HostedDnsObservationEndpoint,
+    HostedDnsPropagationQuery, HostedDurableStateStore, HostedSecret, RenewalEntropy,
+    RenewalSchedule, SchedulerError, TlsIdentityId, UnixCertdSession, CERTD_CHANNEL_HEADER_BYTES,
+    CERTD_P256_PUBLIC_KEY_BYTES, CERTD_TLS_KEY_RESPONSE_BYTES, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
     MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES,
-    PRODUCTION_SECRET_MODE, RENEWAL_SCHEDULE_BYTES, RenewalEntropy, RenewalSchedule,
-    SchedulerError, TlsIdentityId, UnixCertdSession, create_hosted_component_backup,
-    decode_certd_candidate_request, decode_certd_channel_request, encode_certd_account_key_request,
-    encode_certd_candidate_request, encode_certd_channel_request, encode_certd_jws_request,
-    encode_certd_tls_key_request, load_durable_authenticator, p256_public_key_is_valid,
-    retrieve_certificate_chain, verify_hosted_component_backup,
+    PRODUCTION_SECRET_MODE, RENEWAL_SCHEDULE_BYTES,
 };
 use std::io::Read;
 use std::path::Path;
@@ -183,6 +183,7 @@ fn application_main() -> Result<(), &'static str> {
         }
         "backup-create" => backup_component_command(true),
         "backup-verify" => backup_component_command(false),
+        "backup-restore" => backup_restore_command(),
         "health" => acmed_health(config, capability, state_authenticator),
         "status" => acmed_status(config, state_authenticator),
         "renew-now-preview" => renew_now_command(config, state_authenticator, false),
@@ -197,9 +198,52 @@ fn application_main() -> Result<(), &'static str> {
         "revoke-preview" => revoke_command(config, capability, state_authenticator, false),
         "revoke" => revoke_command(config, capability, state_authenticator, true),
         _ => Err(
-            "usage: mrml-acmed [serve|check-config|config-status|health|status|backup-create GENERATION|backup-verify GENERATION|renew-now-preview|renew-now APPROVAL_SHA256|dns-cleanup confirm-exact-records|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
+            "usage: mrml-acmed [serve|check-config|config-status|health|status|backup-create GENERATION|backup-verify GENERATION|backup-restore GENERATION|renew-now-preview|renew-now APPROVAL_SHA256|dns-cleanup confirm-exact-records|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
         ),
     }
+}
+
+fn backup_restore_command() -> Result<(), &'static str> {
+    if std::env::var("MRML_ACMED_OFFLINE_BACKUP").as_deref() != Ok("1") {
+        return Err("backup operation requires the stopped-acmed one-shot context");
+    }
+    let generation = std::env::args()
+        .nth(2)
+        .ok_or("backup generation is required")?
+        .parse::<u64>()
+        .map_err(|_| "backup generation must be a nonzero decimal integer")?;
+    if generation == 0 || std::env::args().nth(3).is_some() {
+        return Err("backup generation must be a nonzero decimal integer");
+    }
+    let secret = HostedSecret::open(
+        Path::new(BACKUP_CAPABILITY),
+        ACMED_UID,
+        PRODUCTION_SECRET_MODE,
+        32,
+    )
+    .map_err(|_| "invalid acmed backup capability")?;
+    let mut key: [u8; 32] = secret
+        .expose()
+        .try_into()
+        .map_err(|_| "invalid acmed backup capability")?;
+    let component =
+        std::path::PathBuf::from(std::format!("{}/acmed-{}.mrb", BACKUP_ROOT, generation));
+    let result = restore_hosted_component_backup(
+        HostedBackupRole::Acmed,
+        generation,
+        ACMED_UID,
+        &key,
+        &component,
+        Path::new("/restore"),
+    );
+    mrml_crypto::erase_secret_bytes(&mut key);
+    let receipt = result.map_err(|_| "acmed clean-target restore failed")?;
+    println!(
+        "role=acmed generation={} restore_receipt={}",
+        generation,
+        hex(&receipt)
+    );
+    Ok(())
 }
 
 fn backup_component_command(create: bool) -> Result<(), &'static str> {

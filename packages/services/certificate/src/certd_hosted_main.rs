@@ -1,26 +1,26 @@
-use mrml_acme::{AcmeIdentifier, CaClass, write_key_change_inner_jws};
+use mrml_acme::{write_key_change_inner_jws, AcmeIdentifier, CaClass};
 use mrml_certificate::{
-    AccountP256SigningKey, AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
-    CertdActivationRequest, CertdCandidateStage, CertdCandidateState, CertdChannelCapability,
-    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole, CertdConfig,
-    CertdDirectoryClass, CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest,
-    CertificateChainVerifier, CertificateP256SigningKey, CertificateValidationPolicy,
-    ConstrainedAcmeJwsPolicy, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
-    DurableStateStore, HmacSha256DurableAuthenticator, HostedBackupRole, HostedBackupSource,
-    HostedCertificateChainVerifier, HostedDurableStateStore, HostedP256KeyDescriptor,
-    HostedP256KeyError, HostedP256KeyRole, HostedP256KeyStore, HostedSecret,
-    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES, MAX_CERTIFICATE_CHAIN_BYTES,
-    MAX_CERTIFICATES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, PRODUCTION_SECRET_MODE,
-    PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute,
-    UnixCertdListener, create_hosted_backup_manifest, create_hosted_component_backup,
+    create_hosted_backup_manifest, create_hosted_component_backup,
     decode_certd_account_key_request, decode_certd_candidate_request, decode_certd_channel_request,
     decode_certd_jws_request, decode_certd_tls_key_request, encode_certd_candidate_request,
     encode_certd_channel_request, encode_certd_tls_key_response, parse_certd_config,
-    verify_hosted_backup_manifest, verify_hosted_component_backup, write_constrained_acme_jws,
-    write_pkcs10_csr,
+    restore_hosted_component_backup, verify_hosted_backup_manifest, verify_hosted_component_backup,
+    write_constrained_acme_jws, write_pkcs10_csr, AccountP256SigningKey, AcmeJwsOperation,
+    CertdAccountKeyRequest, CertdActivationRequest, CertdCandidateStage, CertdCandidateState,
+    CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
+    CertdChannelRole, CertdConfig, CertdDirectoryClass, CertdPeerIdentity, CertdReplayWindow,
+    CertdTlsKeyRequest, CertificateChainVerifier, CertificateP256SigningKey,
+    CertificateValidationPolicy, ConstrainedAcmeJwsPolicy, DurableNamespace, DurableObjectId,
+    DurableRecord, DurableRecordKind, DurableStateStore, HmacSha256DurableAuthenticator,
+    HostedBackupRole, HostedBackupSource, HostedCertificateChainVerifier, HostedDurableStateStore,
+    HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole, HostedP256KeyStore,
+    HostedSecret, PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId, TlsKeyIdentity,
+    TlsSigningRoute, UnixCertdListener, CERTD_CHANNEL_HEADER_BYTES,
+    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES, MAX_CERTIFICATES,
+    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, PRODUCTION_SECRET_MODE,
 };
-use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 use mrml_crypto::{ecdsa_p256_digest_verify_raw, encode_der_signature};
+use mrml_crypto::{erase_secret_bytes, hmac_sha256, Sha256};
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
@@ -114,14 +114,51 @@ fn application_main() -> Result<(), &'static str> {
         }
         "backup-create" => backup_component_command(true),
         "backup-verify" => backup_component_command(false),
+        "backup-restore" => backup_restore_command(),
         "backup-manifest-create" => backup_manifest_command(true),
         "backup-manifest-verify" => backup_manifest_command(false),
         "health" => check_hosted_health(config),
         "serve" => serve(config),
         _ => Err(
-            "usage: mrml-certd [serve|check-config|config-status|health|backup-create GENERATION|backup-verify GENERATION|backup-manifest-create GENERATION|backup-manifest-verify GENERATION]",
+            "usage: mrml-certd [serve|check-config|config-status|health|backup-create GENERATION|backup-verify GENERATION|backup-restore GENERATION|backup-manifest-create GENERATION|backup-manifest-verify GENERATION]",
         ),
     }
+}
+
+fn backup_restore_command() -> Result<(), &'static str> {
+    if std::env::var("MRML_CERTD_OFFLINE_BACKUP").as_deref() != Ok("1") {
+        return Err("backup operation requires the stopped-certd one-shot context");
+    }
+    let generation = backup_generation_argument()?;
+    let secret = HostedSecret::open(
+        Path::new(BACKUP_CAPABILITY),
+        CERTD_UID,
+        PRODUCTION_SECRET_MODE,
+        32,
+    )
+    .map_err(|_| "invalid certd backup capability")?;
+    let mut key: [u8; 32] = secret
+        .expose()
+        .try_into()
+        .map_err(|_| "invalid certd backup capability")?;
+    let component =
+        std::path::PathBuf::from(std::format!("{}/certd-{}.mrb", BACKUP_ROOT, generation));
+    let result = restore_hosted_component_backup(
+        HostedBackupRole::Certd,
+        generation,
+        CERTD_UID,
+        &key,
+        &component,
+        Path::new("/restore"),
+    );
+    erase_secret_bytes(&mut key);
+    let receipt = result.map_err(|_| "certd clean-target restore failed")?;
+    println!(
+        "role=certd generation={} restore_receipt={}",
+        generation,
+        hex(&receipt)
+    );
+    Ok(())
 }
 
 fn backup_manifest_command(create: bool) -> Result<(), &'static str> {
