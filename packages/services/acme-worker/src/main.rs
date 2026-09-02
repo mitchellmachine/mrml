@@ -168,6 +168,7 @@ fn application_main() -> Result<(), &'static str> {
             println!("mrml-acmed configuration valid");
             Ok(())
         }
+        "health" => acmed_health(config, capability, state_authenticator),
         "serve" => serve(
             config,
             capability,
@@ -177,9 +178,27 @@ fn application_main() -> Result<(), &'static str> {
         "revoke-preview" => revoke_command(config, capability, state_authenticator, false),
         "revoke" => revoke_command(config, capability, state_authenticator, true),
         _ => Err(
-            "usage: mrml-acmed [serve|check-config|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
+            "usage: mrml-acmed [serve|check-config|health|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
         ),
     }
+}
+
+fn acmed_health(
+    config: AcmedConfig,
+    capability: CertdChannelCapability,
+    mut authenticator: impl DurableAuthenticator,
+) -> Result<(), &'static str> {
+    let executable = std::fs::read_link("/proc/1/exe").map_err(|_| "cannot inspect acmed pid 1")?;
+    if executable.file_name().and_then(|name| name.to_str()) != Some("mrml-acmed") {
+        return Err("mrml-acmed is not container pid 1");
+    }
+    let _provider = load_dns_provider(&config)?;
+    let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
+        .map_err(|_| "cannot open acmed durable state")?;
+    let reservation = reserve_channel_request_ids(&config, &mut state, &mut authenticator)?;
+    certd_health(&capability, reservation.next)?;
+    println!("mrml-acmed ready");
+    Ok(())
 }
 
 fn load_dns_provider(config: &AcmedConfig) -> Result<CloudflareDns01Provider, &'static str> {

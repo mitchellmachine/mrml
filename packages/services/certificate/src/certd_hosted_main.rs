@@ -98,9 +98,96 @@ fn application_main() -> Result<(), &'static str> {
             println!("mrml-certd configuration valid");
             Ok(())
         }
+        "health" => check_hosted_health(config),
         "serve" => serve(config),
-        _ => Err("usage: mrml-certd [serve|check-config]"),
+        _ => Err("usage: mrml-certd [serve|check-config|health]"),
     }
+}
+
+fn check_hosted_health(config: CertdConfig) -> Result<(), &'static str> {
+    let executable = std::fs::read_link("/proc/1/exe").map_err(|_| "cannot inspect certd pid 1")?;
+    if executable.file_name().and_then(|name| name.to_str()) != Some("mrml-certd") {
+        return Err("mrml-certd is not container pid 1");
+    }
+    let (mut authenticator, key_store) = load_certd_storage()?;
+    key_store
+        .load_account(HostedP256KeyDescriptor {
+            role: HostedP256KeyRole::AcmeAccount,
+            object_id: config.account_identity,
+            key_generation: config.account_generation,
+            binding_generation: config.directory_generation,
+            binding_digest: directory_binding(config),
+        })
+        .map_err(|_| "configured ACME account key is unavailable")?;
+    key_store
+        .load_certificate(
+            HostedP256KeyDescriptor {
+                role: HostedP256KeyRole::TlsIdentity,
+                object_id: config.identity,
+                key_generation: config.key_generation,
+                binding_generation: config.policy_generation,
+                binding_digest: config.identifier_set_digest,
+            },
+            TlsSigningRoute {
+                identity: TlsIdentityId(config.identity),
+                identity_generation: config.key_generation,
+                key_identity: TlsKeyIdentity([0; 32]),
+                route_generation: config.policy_generation,
+                capability_id: route_capability(config, config.key_generation),
+            },
+        )
+        .map_err(|_| "configured TLS key is unavailable")?;
+    let state = HostedDurableStateStore::open(Path::new(CANDIDATE_STATE_ROOT))
+        .map_err(|_| "cannot open certd candidate state")?;
+    let object = DurableObjectId(config.identity);
+    let mut encoded = [0u8; mrml_certificate::MAX_DURABLE_RECORD_BYTES];
+    let length = state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot load active certificate state")?
+        .ok_or("active certificate state is absent")?;
+    let durable = DurableRecord::decode(&encoded[..length], &mut authenticator)
+        .map_err(|_| "active certificate state authentication failed")?;
+    let active = CertdCandidateState::decode(durable.payload())
+        .map_err(|_| "invalid active certificate state")?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "system time precedes Unix epoch")?
+        .as_secs();
+    if durable.kind != DurableRecordKind::Certificate
+        || durable.object != object
+        || active.stage != CertdCandidateStage::Active
+        || active.identity != config.identity
+        || now < active.not_before
+        || now >= active.not_after
+    {
+        return Err("no valid active certificate identity");
+    }
+    if active.key_generation != config.key_generation {
+        key_store
+            .load_certificate(
+                HostedP256KeyDescriptor {
+                    role: HostedP256KeyRole::TlsIdentity,
+                    object_id: config.identity,
+                    key_generation: active.key_generation,
+                    binding_generation: config.policy_generation,
+                    binding_digest: config.identifier_set_digest,
+                },
+                TlsSigningRoute {
+                    identity: TlsIdentityId(config.identity),
+                    identity_generation: active.key_generation,
+                    key_identity: TlsKeyIdentity([0; 32]),
+                    route_generation: config.policy_generation,
+                    capability_id: route_capability(config, active.key_generation),
+                },
+            )
+            .map_err(|_| "active TLS key is unavailable")?;
+    }
+    let publication = read_owned_publication(ACTIVE_PATH)?;
+    if Sha256::digest(&publication) != active.request_digest {
+        return Err("active certificate publication mismatch");
+    }
+    println!("mrml-certd ready generation={}", active.identity_generation);
+    Ok(())
 }
 
 fn serve(config: CertdConfig) -> Result<(), &'static str> {

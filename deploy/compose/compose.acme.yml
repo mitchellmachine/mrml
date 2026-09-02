@@ -37,7 +37,7 @@ services:
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/certd.json:/etc/mrml/certd/config.json:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/acme-trust-roots.pem:/etc/mrml/certd/acme-trust-roots.pem:ro"
     healthcheck:
-      test: [CMD, /usr/bin/mrml-certd, check-config]
+      test: [CMD, /usr/bin/mrml-certd, health]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -80,7 +80,7 @@ services:
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-acmed.cap.acmed:/run/secrets/certd-acmed.cap:ro"
       - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/acmed.json:/etc/mrml/acmed/config.json:ro"
     healthcheck:
-      test: [CMD, /usr/bin/mrml-acmed, check-config]
+      test: [CMD, /usr/bin/mrml-acmed, health]
       interval: 30s
       timeout: 5s
       retries: 3
