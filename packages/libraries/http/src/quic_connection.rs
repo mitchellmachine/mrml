@@ -236,8 +236,11 @@ impl QuicConnection {
         let mut payload = Vector::new();
         let mut ack_eliciting = false;
         for frame in frames {
-            if let QuicFrame::Stream { data, .. } = frame {
-                self.state.authorize_stream_send(data.len())?;
+            if let QuicFrame::Stream {
+                id, offset, data, ..
+            } = frame
+            {
+                self.state.authorize_stream_send(*id, *offset, data.len())?;
             }
             ack_eliciting |= !matches!(frame, QuicFrame::Padding | QuicFrame::Ack { .. });
             frame.encode(&mut payload)?;
@@ -247,6 +250,17 @@ impl QuicConnection {
 
     fn now_micros(&self) -> u64 {
         self.epoch.elapsed().as_micros().min(u64::MAX as u128) as u64
+    }
+
+    pub fn release_receive_credit(&mut self, id: u64, amount: usize) -> Result<(), QuicError> {
+        let (connection, stream) = self.receive_flow.release(id, amount)?;
+        self.send_frames(&[
+            QuicFrame::MaxData(connection),
+            QuicFrame::MaxStreamData {
+                id,
+                maximum: stream,
+            },
+        ])
     }
 
     fn send_payload(
@@ -486,6 +500,13 @@ impl QuicConnection {
                     self.recovery
                         .on_ack(acknowledged.metadata, self.now_micros(), ack_delay)?;
                 }
+            }
+            match frame {
+                QuicFrame::MaxData(maximum) => self.state.on_max_data(*maximum)?,
+                QuicFrame::MaxStreamData { id, maximum } => {
+                    self.state.on_max_stream_data(*id, *maximum)?
+                }
+                _ => {}
             }
         }
         if let Some(challenge) = frames.iter().find_map(|frame| match frame {

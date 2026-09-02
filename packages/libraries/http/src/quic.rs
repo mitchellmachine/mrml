@@ -337,15 +337,25 @@ pub struct QuicConnectionState {
     bytes_received: u64,
     bytes_sent: u64,
     peer_max_data: u64,
-    peer_max_stream_data: u64,
+    peer_max_bidi_local: u64,
+    peer_max_bidi_remote: u64,
+    peer_max_uni: u64,
     peer_max_streams_bidi: u64,
     peer_max_streams_uni: u64,
     sent_stream_data: u64,
+    sent_streams: Vector<SendStreamState>,
     opened_bidi: u64,
     next_bidi_stream: u64,
     opened_uni: u64,
     next_uni_stream: u64,
     pending_path_challenge: Option<[u8; 8]>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SendStreamState {
+    id: u64,
+    highest: u64,
+    maximum: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -366,6 +376,7 @@ struct ReceiveStreamState {
     id: u64,
     highest: u64,
     final_size: Option<u64>,
+    maximum: u64,
 }
 
 const MAX_TRACKED_RECEIVE_STREAMS: usize = 256;
@@ -415,17 +426,13 @@ impl QuicReceiveFlowController {
                 return Err(QuicError::FlowControl);
             }
         }
-        let per_stream = if unidirectional {
+        let initial_maximum = if unidirectional {
             self.max_uni
         } else if initiator == peer_initiator {
             self.max_bidi_remote
         } else {
             self.max_bidi_local
         };
-        if end > per_stream {
-            return Err(QuicError::FlowControl);
-        }
-
         let index = if let Some(index) = self.streams.iter().position(|stream| stream.id == id) {
             index
         } else {
@@ -437,11 +444,15 @@ impl QuicReceiveFlowController {
                     id,
                     highest: 0,
                     final_size: None,
+                    maximum: initial_maximum,
                 })
                 .map_err(|_| QuicError::Allocation)?;
             self.streams.len() - 1
         };
         let stream = &mut self.streams[index];
+        if end > stream.maximum {
+            return Err(QuicError::FlowControl);
+        }
         if stream.final_size.is_some_and(|size| end > size) {
             return Err(QuicError::InvalidFrame);
         }
@@ -463,6 +474,29 @@ impl QuicReceiveFlowController {
         }
         Ok(())
     }
+
+    pub(crate) fn release(&mut self, id: u64, amount: usize) -> Result<(u64, u64), QuicError> {
+        let amount = amount as u64;
+        if amount == 0 {
+            return Err(QuicError::FlowControl);
+        }
+        let stream = self
+            .streams
+            .iter_mut()
+            .find(|stream| stream.id == id)
+            .ok_or(QuicError::InvalidFrame)?;
+        self.max_data = self
+            .max_data
+            .checked_add(amount)
+            .filter(|value| *value < (1 << 62))
+            .ok_or(QuicError::FlowControl)?;
+        stream.maximum = stream
+            .maximum
+            .checked_add(amount)
+            .filter(|value| *value < (1 << 62))
+            .ok_or(QuicError::FlowControl)?;
+        Ok((self.max_data, stream.maximum))
+    }
 }
 
 impl QuicConnectionState {
@@ -474,10 +508,13 @@ impl QuicConnectionState {
             bytes_received: 0,
             bytes_sent: 0,
             peer_max_data: peer.initial_max_data,
-            peer_max_stream_data: peer.initial_max_stream_data_bidi_remote,
+            peer_max_bidi_local: peer.initial_max_stream_data_bidi_local,
+            peer_max_bidi_remote: peer.initial_max_stream_data_bidi_remote,
+            peer_max_uni: peer.initial_max_stream_data_uni,
             peer_max_streams_bidi: peer.initial_max_streams_bidi,
             peer_max_streams_uni: peer.initial_max_streams_uni,
             sent_stream_data: 0,
+            sent_streams: Vector::new(),
             opened_bidi: 0,
             next_bidi_stream: if role == QuicRole::Client { 0 } else { 1 },
             opened_uni: 0,
@@ -533,16 +570,73 @@ impl QuicConnectionState {
         self.opened_bidi += 1;
         Ok(id)
     }
-    pub fn authorize_stream_send(&mut self, amount: usize) -> Result<(), QuicError> {
-        let amount = amount as u64;
+    pub fn authorize_stream_send(
+        &mut self,
+        id: u64,
+        offset: u64,
+        amount: usize,
+    ) -> Result<(), QuicError> {
+        let end = offset
+            .checked_add(amount as u64)
+            .filter(|value| *value < (1 << 62))
+            .ok_or(QuicError::FlowControl)?;
+        let local_initiator = if self.role == QuicRole::Client { 0 } else { 1 };
+        let maximum = if id & 2 != 0 {
+            if id & 1 != local_initiator {
+                return Err(QuicError::ProtocolViolation);
+            }
+            self.peer_max_uni
+        } else if id & 1 == local_initiator {
+            self.peer_max_bidi_remote
+        } else {
+            self.peer_max_bidi_local
+        };
+        let index = if let Some(index) = self.sent_streams.iter().position(|stream| stream.id == id)
+        {
+            index
+        } else {
+            self.sent_streams
+                .try_push(SendStreamState {
+                    id,
+                    highest: 0,
+                    maximum,
+                })
+                .map_err(|_| QuicError::Allocation)?;
+            self.sent_streams.len() - 1
+        };
+        let stream = &self.sent_streams[index];
+        if end > stream.maximum {
+            return Err(QuicError::FlowControl);
+        }
+        let added = end.saturating_sub(stream.highest);
         let total = self
             .sent_stream_data
-            .checked_add(amount)
+            .checked_add(added)
             .ok_or(QuicError::Limit)?;
-        if total > self.peer_max_data || amount > self.peer_max_stream_data {
+        if total > self.peer_max_data {
             return Err(QuicError::FlowControl);
         }
         self.sent_stream_data = total;
+        self.sent_streams[index].highest = self.sent_streams[index].highest.max(end);
+        Ok(())
+    }
+    pub fn on_max_data(&mut self, maximum: u64) -> Result<(), QuicError> {
+        if maximum >= (1 << 62) {
+            return Err(QuicError::FlowControl);
+        }
+        self.peer_max_data = self.peer_max_data.max(maximum);
+        Ok(())
+    }
+    pub fn on_max_stream_data(&mut self, id: u64, maximum: u64) -> Result<(), QuicError> {
+        if maximum >= (1 << 62) {
+            return Err(QuicError::FlowControl);
+        }
+        let stream = self
+            .sent_streams
+            .iter_mut()
+            .find(|stream| stream.id == id)
+            .ok_or(QuicError::ProtocolViolation)?;
+        stream.maximum = stream.maximum.max(maximum);
         Ok(())
     }
     pub fn open_uni_stream(&mut self) -> Result<u64, QuicError> {
@@ -2548,8 +2642,15 @@ mod tests {
         server.activate().unwrap();
         assert_eq!(server.open_bidi_stream().unwrap(), 1);
         assert_eq!(server.open_bidi_stream(), Err(QuicError::FlowControl));
-        server.authorize_stream_send(4).unwrap();
-        assert_eq!(server.authorize_stream_send(5), Err(QuicError::FlowControl));
+        server.authorize_stream_send(1, 0, 4).unwrap();
+        server.authorize_stream_send(1, 0, 4).unwrap();
+        assert_eq!(
+            server.authorize_stream_send(1, 4, 1),
+            Err(QuicError::FlowControl)
+        );
+        server.on_max_stream_data(1, 5).unwrap();
+        server.on_max_data(9).unwrap();
+        server.authorize_stream_send(1, 4, 1).unwrap();
     }
     #[test]
     fn receive_flow_control_enforces_stream_connection_count_and_final_size() {
@@ -2584,6 +2685,8 @@ mod tests {
             server.on_stream(0, 4, 1, false),
             Err(QuicError::FlowControl)
         );
+        assert_eq!(server.release(0, 4).unwrap(), (12, 10));
+        server.on_stream(0, 4, 1, false).unwrap();
 
         let mut client = QuicReceiveFlowController::new(QuicRole::Client, &limits);
         client.on_stream(0, 0, 5, true).unwrap();

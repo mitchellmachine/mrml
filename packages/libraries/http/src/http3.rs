@@ -896,6 +896,9 @@ impl Http3ClientConnection {
                     _ => return Err(HttpError::InvalidResponse),
                 }
                 stream.consume(used).map_err(quic_error)?;
+                self.connection
+                    .release_receive_credit(id, used)
+                    .map_err(quic_error)?;
             }
             if stream.is_finished() {
                 if !stream.contiguous().is_empty() {
