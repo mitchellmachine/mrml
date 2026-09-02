@@ -90,7 +90,7 @@ ensure_dir "$deployment_root/gitd/state" "$gitd_uid" "$gitd_gid" 700
 ensure_dir "$deployment_root/gitd/quarantine" "$gitd_uid" "$gitd_gid" 700
 ensure_dir "$deployment_root/gitd/cache" "$gitd_uid" "$gitd_gid" 700
 ensure_dir "$deployment_root/gitd/receipts" "$gitd_uid" "$gitd_gid" 700
-ensure_dir "$deployment_root/gitd/policies" "$gitd_uid" "$gitd_gid" 700
+ensure_dir "$deployment_root/gitd/policies" "$gitd_uid" "$gitd_gid" 755
 ensure_dir "$deployment_root/authority" 0 0 755
 ensure_dir "$deployment_root/authority/state" "$authority_uid" "$authority_gid" 700
 ensure_dir "$deployment_root/authority/state/policies" "$authority_uid" "$authority_gid" 700

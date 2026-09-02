@@ -46,7 +46,10 @@ mode-`0444` regular files, then run
 The second one-shot command requires the repository to equal
 `MRML_PROTECTED_REPOSITORY`, reopens and admits its exact catalog generations,
 binds `refs/heads/main` and the admitted initial tip as the hybrid cutover, and
-creates the policy beneath a Gitd-owned mode-`0700` path. It permits SHA-256 and
+creates the policy beneath a Gitd-owned mode-`0755` path. Policy state contains
+public verification material and is non-writable to other identities so the
+networkless authority can read the same authenticated bytes; repositories,
+proofs, tokens, receipts, and secrets remain private. It permits SHA-256 and
 requires the exact hybrid pair; it neither reads nor creates private signing
 keys. Existing policy state is never overwritten. An ambiguous storage failure
 is retained for inspection instead of being represented as safely retryable.

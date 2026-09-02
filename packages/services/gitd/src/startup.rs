@@ -120,11 +120,11 @@ pub fn initialize_catalog_protected_policy(
         .ok_or(ProtectedPolicyInitializationError::Path)?;
     let owner_path = config.policy_root.join(owner);
     if owner_path.exists() {
-        validate_directory(&owner_path, config.gitd_uid, config.gitd_gid, true)
+        validate_policy_directory(&owner_path, config.gitd_uid, config.gitd_gid, true)
             .map_err(|_| ProtectedPolicyInitializationError::Layout)?;
     } else {
         fs::create_dir(&owner_path).map_err(|_| ProtectedPolicyInitializationError::Create)?;
-        fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o700))
+        fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o755))
             .map_err(|_| ProtectedPolicyInitializationError::Create)?;
     }
     let policy_path = owner_path.join(repository);
@@ -132,7 +132,7 @@ pub fn initialize_catalog_protected_policy(
         return Err(ProtectedPolicyInitializationError::Exists);
     }
     fs::create_dir(&policy_path).map_err(|_| ProtectedPolicyInitializationError::Create)?;
-    fs::set_permissions(&policy_path, fs::Permissions::from_mode(0o700))
+    fs::set_permissions(&policy_path, fs::Permissions::from_mode(0o755))
         .map_err(|_| ProtectedPolicyInitializationError::Create)?;
     let policy_path = policy_path
         .to_str()
@@ -314,7 +314,7 @@ pub fn validate_storage_layout(config: &GitdConfig) -> Result<(), StartupValidat
     ] {
         validate_directory(path, config.gitd_uid, config.gitd_gid, true)?;
     }
-    validate_directory(&config.policy_root, config.gitd_uid, config.gitd_gid, false)
+    validate_policy_directory(&config.policy_root, config.gitd_uid, config.gitd_gid, true)
 }
 
 pub fn admit_catalog_repository(
@@ -472,6 +472,30 @@ fn validate_directory(
     Ok(())
 }
 
+fn validate_policy_directory(
+    path: &Path,
+    expected_uid: u32,
+    expected_gid: u32,
+    require_owner_write: bool,
+) -> Result<(), StartupValidationError> {
+    validate_components(path)?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| StartupValidationError::Missing)?;
+    if metadata.file_type().is_symlink() {
+        return Err(StartupValidationError::Symlink);
+    }
+    if !metadata.file_type().is_dir() {
+        return Err(StartupValidationError::Type);
+    }
+    if metadata.uid() != expected_uid || metadata.gid() != expected_gid {
+        return Err(StartupValidationError::Owner);
+    }
+    let mode = metadata.mode() & 0o777;
+    if mode & 0o022 != 0 || mode & 0o555 != 0o555 || (require_owner_write && mode & 0o200 == 0) {
+        return Err(StartupValidationError::Permissions);
+    }
+    Ok(())
+}
+
 fn validate_components(path: &Path) -> Result<(), StartupValidationError> {
     let mut current = std::path::PathBuf::new();
     for component in path.components() {
@@ -546,6 +570,7 @@ mod tests {
             fs::create_dir(&path).unwrap();
             fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
         }
+        fs::set_permissions(root.join("policies"), fs::Permissions::from_mode(0o755)).unwrap();
         let mut config = crate::parse_gitd_config(
             b"version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/a\nstate_root=/b\nquarantine_root=/c\ncache_root=/d\nreceipt_root=/e\npolicy_root=/f\nrepository_catalog=/f/repositories.v1\nrepository_catalog_sha256=1111111111111111111111111111111111111111111111111111111111111111\nprofile_catalog=/f/profiles.v1\nprofile_catalog_sha256=2222222222222222222222222222222222222222222222222222222222222222\ntoken_records=/b/tokens.v1\ntoken_pepper=/run/secrets/gitd-token-pepper\nquic_retry_key=/run/secrets/gitd-quic-retry-key\nquic_retry_generation=1\nauthority_socket=/g\ncertd_socket=/h\nauthority_capability=/i\ncertd_capability=/j\ngitd_uid=1\ngitd_gid=1\nauthority_uid=2\nauthority_gid=2\ncertd_uid=3\ncertd_gid=3\nnext_authority_request_id=1\nnext_certd_request_id=1\nmax_connections=1\nmax_uploads=1\nmax_receives=1\nmax_body_bytes=1024\ndrain_seconds=1\n",
         )
@@ -608,6 +633,7 @@ mod tests {
             fs::create_dir(storage_root).unwrap();
             fs::set_permissions(storage_root, fs::Permissions::from_mode(0o700)).unwrap();
         }
+        fs::set_permissions(&config.policy_root, fs::Permissions::from_mode(0o755)).unwrap();
         let identity = RepositoryIdentity::parse("owner/project").unwrap();
         let entry = crate::DeploymentRepository {
             repository: identity,
