@@ -790,6 +790,8 @@ pub struct Http3ServerConnection {
     requests: Vector<IncomingHttp3Stream>,
     completed_requests: Vector<u64>,
     ready_request: Option<(u64, RequestHead)>,
+    response_stream: Option<u64>,
+    response_offset: u64,
 }
 
 /// A response encoded away from the authoritative QUIC connection owner.
@@ -1025,6 +1027,8 @@ impl Http3ServerConnection {
             requests: Vector::new(),
             completed_requests: Vector::new(),
             ready_request: None,
+            response_stream: None,
+            response_offset: 0,
         })
     }
     pub fn next_request(&mut self) -> Result<(u64, RequestHead), HttpError> {
@@ -1186,11 +1190,50 @@ impl Http3ServerConnection {
         headers: &[(&str, &str)],
         body: &[u8],
     ) -> Result<(), HttpError> {
+        self.respond_head(id, status, headers, body.is_empty())?;
+        if !body.is_empty() {
+            self.respond_data(id, body, true)?;
+        }
+        Ok(())
+    }
+
+    pub fn respond_head(
+        &mut self,
+        id: u64,
+        status: u16,
+        headers: &[(&str, &str)],
+        end_stream: bool,
+    ) -> Result<(), HttpError> {
+        if self.response_stream.is_some() || id & 3 != 0 {
+            return Err(HttpError::InvalidResponse);
+        }
         let headers = self.protocol.response(status, headers)?;
-        let mut offset = headers.len() as u64;
         self.connection
-            .send_frames(&[stream_frame(id, 0, body.is_empty(), &headers)?])
+            .send_frames(&[stream_frame(id, 0, end_stream, &headers)?])
             .map_err(quic_error)?;
+        if !end_stream {
+            self.response_stream = Some(id);
+            self.response_offset = headers.len() as u64;
+        }
+        Ok(())
+    }
+
+    pub fn respond_data(
+        &mut self,
+        id: u64,
+        body: &[u8],
+        end_stream: bool,
+    ) -> Result<(), HttpError> {
+        if self.response_stream != Some(id) {
+            return Err(HttpError::InvalidResponse);
+        }
+        if body.is_empty() {
+            return if end_stream {
+                self.finish_response(id)
+            } else {
+                Ok(())
+            };
+        }
         for (index, chunk) in body.chunks(800).enumerate() {
             let mut payload = Vector::new();
             payload
@@ -1201,19 +1244,37 @@ impl Http3ServerConnection {
                 payload,
             }
             .encode()?;
-            let fin = (index + 1) * 800 >= body.len();
+            let fin = end_stream && (index + 1) * 800 >= body.len();
             self.connection
-                .send_frames(&[stream_frame(id, offset, fin, &bytes)?])
+                .send_frames(&[stream_frame(id, self.response_offset, fin, &bytes)?])
                 .map_err(quic_error)?;
-            offset = offset
+            self.response_offset = self
+                .response_offset
                 .checked_add(bytes.len() as u64)
                 .ok_or(HttpError::BodyTooLarge)?;
+        }
+        if end_stream {
+            self.response_stream = None;
+            self.response_offset = 0;
         }
         Ok(())
     }
 
+    pub fn finish_response(&mut self, id: u64) -> Result<(), HttpError> {
+        if self.response_stream != Some(id) {
+            return Err(HttpError::InvalidResponse);
+        }
+        self.connection
+            .send_frames(&[stream_frame(id, self.response_offset, true, &[])?])
+            .map_err(quic_error)?;
+        self.response_stream = None;
+        self.response_offset = 0;
+        Ok(())
+    }
+
     pub fn respond_prepared(&mut self, response: PreparedHttp3Response) -> Result<(), HttpError> {
-        if response.stream_id & 3 != 0
+        if self.response_stream.is_some()
+            || response.stream_id & 3 != 0
             || response.frames.iter().any(
                 |frame| !matches!(frame, QuicFrame::Stream { id, .. } if *id == response.stream_id),
             )
