@@ -1,5 +1,12 @@
 # Patent review log
 
+## 2026-09-02 — Gitd category-only startup diagnostics
+
+Patent review: **NOT_TRIGGERED**.
+
+This change adds only non-sensitive bounded operational error categories and
+introduces no new mechanism.
+
 ## 2026-09-02 — Authority signer-identity bootstrap command
 
 Patent review: **NOT_TRIGGERED**.

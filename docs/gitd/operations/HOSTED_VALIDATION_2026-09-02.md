@@ -256,3 +256,17 @@ lowercase identity encoding.
 Patent review: **NOT_TRIGGERED**. This exposes an already derived public
 identifier through a bounded administrative command and introduces no new
 mechanism. See `docs/patents/REVIEW_LOG.md`.
+
+## Category-only startup diagnostics
+
+Gitd now emits non-sensitive operational categories after certificate identity
+authentication and for composition failures in authentication, repository
+admission, recovery, backend construction, or cache construction. The recovery
+inspection command reports only its bounded error enum. Repository identities,
+paths, tokens, keys, request bodies, and object content remain absent.
+
+The hosted Gitd suite passed 29 library and 2 binary tests with local socket
+access.
+
+Patent review: **NOT_TRIGGERED**. This adds only bounded operational event
+classification. See `docs/patents/REVIEW_LOG.md`.

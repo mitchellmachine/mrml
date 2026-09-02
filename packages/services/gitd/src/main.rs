@@ -16,8 +16,8 @@ use mrml_gitd::{
     load_gitd_authentication, load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
     recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
     validate_identity_snapshot, validate_storage_layout, GitAuthorityChannelClient,
-    GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute, GitdHttp2WorkerPool,
-    GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
+    GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute, GitdCompositionError,
+    GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
 };
 use mrml_http::{AccessScopes, RepositoryIdentity};
 use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
@@ -108,8 +108,11 @@ fn run() -> Result<(), ()> {
             let mut uncertain = 0u32;
             for repository in &catalog.repositories {
                 let admitted = admit_catalog_repository(&config, repository).map_err(|_| ())?;
-                let status =
-                    inspect_admitted_repository_recovery(&config, &admitted).map_err(|_| ())?;
+                let status = inspect_admitted_repository_recovery(&config, &admitted).map_err(
+                    |error| {
+                        eprintln!("component=mrml-gitd event=recovery_inspection_failed category={error:?}");
+                    },
+                )?;
                 receipt = receipt.checked_add(status.recover_receipt).ok_or(())?;
                 complete = complete.checked_add(status.mark_complete).ok_or(())?;
                 discard = discard
@@ -381,10 +384,19 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let tls_config =
         build_certd_tls_server_config_with_route(identity, &signing_route).map_err(|_| ())?;
     let tls = Arc::new(GitdTlsConfigStore::new(identity_generation, tls_config).map_err(|_| ())?);
+    operational_event("startup_identity_authenticated");
 
     let receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
     let service = compose_gitd_service(&config, &catalog, receipt_authority, 16 * 1024 * 1024)
-        .map_err(|_| ())?;
+        .map_err(|error| {
+            operational_event(match error {
+                GitdCompositionError::Authentication(_) => "startup_authentication_failed",
+                GitdCompositionError::Admission(_) => "startup_repository_admission_failed",
+                GitdCompositionError::Recovery(_) => "startup_repository_recovery_failed",
+                GitdCompositionError::Backend => "startup_backend_failed",
+                GitdCompositionError::Cache => "startup_cache_failed",
+            });
+        })?;
     operational_event("startup_recovery_complete");
     let operational_health = service.operational_health();
     let maximum_connections = usize::try_from(config.max_connections).map_err(|_| ())?;
