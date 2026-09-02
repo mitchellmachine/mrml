@@ -84,6 +84,7 @@ impl GitdHttp2WorkerPool {
                         Ok(snapshot) => snapshot,
                         Err(_) => {
                             increment(&worker_counters.tls_failures);
+                            eprintln!("component=mrml-gitd event=http2_tls_failed");
                             continue;
                         }
                     };
@@ -102,6 +103,7 @@ impl GitdHttp2WorkerPool {
                         Ok(connection) => connection,
                         Err(_) => {
                             increment(&worker_counters.protocol_failures);
+                            eprintln!("component=mrml-gitd event=http2_protocol_failed");
                             continue;
                         }
                     };
@@ -114,6 +116,7 @@ impl GitdHttp2WorkerPool {
                     .is_err()
                     {
                         increment(&worker_counters.application_failures);
+                        eprintln!("component=mrml-gitd event=http2_application_failed");
                     }
                 }
             }) {
