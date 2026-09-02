@@ -6,8 +6,8 @@ use mrml_runtime::{Text, Vector};
 mod adversarial;
 mod arrival_pack;
 mod audit_receipt;
-mod authority_wire;
 mod authority_client;
+mod authority_wire;
 mod cache_pack;
 mod cache_pack_file;
 mod compaction;
@@ -17,8 +17,8 @@ mod detached_commit_proof;
 mod detached_commit_proof_file;
 mod diff;
 mod gitd_core;
-mod hybrid_signing;
 mod https_remote;
+mod hybrid_signing;
 mod index;
 mod inflate;
 mod local_repack;
@@ -53,17 +53,17 @@ pub use audit_receipt::{
     AuditReceiptDirectory, AuditReceiptError, MAX_AUDIT_RECEIPT_BYTES, encode_audit_receipt,
     parse_audit_receipt,
 };
+pub use authority_client::{
+    AUTHORITY_OP_AUTHORIZE_RECEIVE, AUTHORITY_OP_AUTHORIZE_REF_TRANSACTION,
+    AUTHORITY_OP_SIGN_RECEIPT, AUTHORITY_OP_VERIFY_COMMIT, AUTHORITY_OP_VERIFY_RECEIPT,
+    ProtectedAuthorityRpc, RemoteProtectedReceiveAuthority,
+};
 pub use authority_wire::{
     AuthorityCommitRequest, AuthorityReceiptRequest, AuthorityRefTransactionRequest,
     MAX_AUTHORITY_COMMIT_BYTES, MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES, encode_authority_commit,
     encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
     parse_authority_commit, parse_authority_receipt, parse_authority_receive,
     parse_authority_ref_transaction,
-};
-pub use authority_client::{
-    AUTHORITY_OP_AUTHORIZE_RECEIVE, AUTHORITY_OP_AUTHORIZE_REF_TRANSACTION,
-    AUTHORITY_OP_SIGN_RECEIPT, AUTHORITY_OP_VERIFY_COMMIT, AUTHORITY_OP_VERIFY_RECEIPT,
-    ProtectedAuthorityRpc, RemoteProtectedReceiveAuthority,
 };
 pub use cache_pack::{
     ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES, MAX_PACK_CACHE_KEY_BYTES,
@@ -94,8 +94,10 @@ pub use gitd_core::{
     SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedMetadataDescriptor,
     VerifiedRefTransaction, VerifiedRefUpdate, WorkBudget, build_verified_fast_forward_transaction,
 };
+pub use https_remote::{
+    HttpsDiscovery, HttpsRemote, HttpsRemoteError, HttpsTransport, SmartGitService,
+};
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
-pub use https_remote::{HttpsRemote, HttpsRemoteError, HttpsTransport, SmartGitService};
 pub use index::{Index, IndexEntry, IndexError};
 pub use local_repack::LocalRepackResult;
 pub use mrml_openpgp::{
