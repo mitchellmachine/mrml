@@ -6,7 +6,18 @@ use mrml_tls::{
     TlsServerSigningKey,
 };
 
-use crate::{GitdCertdChannelClient, ValidatedGitdIdentity};
+use crate::{
+    GitdCertdChannelClient, GitdIdentityValidationError, ValidatedGitdIdentity,
+    prove_identity_signing_route, validate_identity_snapshot,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitdTlsRefreshError {
+    Channel,
+    Generation,
+    Identity(GitdIdentityValidationError),
+    Tls,
+}
 
 pub struct GitdCertdTlsSigningKey {
     route: GitdCertdSigningRoute,
@@ -99,6 +110,14 @@ impl GitdCertdSigningRoute {
             identity_generation,
         })
     }
+
+    fn allocate_logical_request_id(&self) -> Result<u64, TlsError> {
+        self.next_logical_request_id
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| TlsError::SequenceExhausted)
+    }
 }
 
 impl TlsServerSigningKey for GitdCertdTlsSigningKey {
@@ -111,13 +130,7 @@ impl TlsServerSigningKey for GitdCertdTlsSigningKey {
         transcript_digest: &[u8; 32],
         output: &mut [u8; MAX_TLS13_SIGNATURE_BYTES],
     ) -> Result<usize, TlsError> {
-        let request_id = self
-            .route
-            .next_logical_request_id
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| TlsError::SequenceExhausted)?;
+        let request_id = self.route.allocate_logical_request_id()?;
         let signature = self
             .route
             .certd
@@ -160,7 +173,47 @@ pub fn build_certd_tls_server_config_with_route(
     let signer = route.signer(snapshot.identity_generation)?;
     TlsServerConfig::from_der_chain(&chain)?
         .require_server_name(&snapshot.server_name)
-        .map(|config| config.with_signing_key(signer))
+        .map(|config| config.with_signing_key(signer))?
+        .with_protocols(&["h2", "h3"])
+}
+
+pub fn refresh_certd_tls_config(
+    server_name: &str,
+    route: &GitdCertdSigningRoute,
+    store: &GitdTlsConfigStore,
+    timeout_milliseconds: u32,
+) -> Result<bool, GitdTlsRefreshError> {
+    let current_generation = store.snapshot().map_err(|_| GitdTlsRefreshError::Tls)?.0;
+    let mut certd = route
+        .certd
+        .lock()
+        .map_err(|_| GitdTlsRefreshError::Channel)?;
+    let Some(observed_generation) = certd
+        .wait_for_identity_generation(current_generation, timeout_milliseconds)
+        .map_err(|_| GitdTlsRefreshError::Channel)?
+    else {
+        return Ok(false);
+    };
+    let identity = certd
+        .get_identity_snapshot(server_name)
+        .map_err(|_| GitdTlsRefreshError::Channel)?;
+    let identity = validate_identity_snapshot(identity, Some(current_generation))
+        .map_err(GitdTlsRefreshError::Identity)?;
+    if identity.snapshot().identity_generation != observed_generation {
+        return Err(GitdTlsRefreshError::Generation);
+    }
+    let logical_request_id = route
+        .allocate_logical_request_id()
+        .map_err(|_| GitdTlsRefreshError::Tls)?;
+    prove_identity_signing_route(&mut certd, &identity, logical_request_id)
+        .map_err(GitdTlsRefreshError::Identity)?;
+    drop(certd);
+    let config = build_certd_tls_server_config_with_route(identity, route)
+        .map_err(|_| GitdTlsRefreshError::Tls)?;
+    store
+        .install(observed_generation, config)
+        .map_err(|_| GitdTlsRefreshError::Generation)?;
+    Ok(true)
 }
 
 #[cfg(test)]

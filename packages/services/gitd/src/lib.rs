@@ -44,6 +44,7 @@ pub use startup::{
     admit_catalog_repository, recover_admitted_repository, validate_storage_layout,
 };
 pub use tls_identity::{
-    GitdCertdSigningRoute, GitdCertdTlsSigningKey, GitdTlsConfigStore,
+    GitdCertdSigningRoute, GitdCertdTlsSigningKey, GitdTlsConfigStore, GitdTlsRefreshError,
     build_certd_tls_server_config, build_certd_tls_server_config_with_route,
+    refresh_certd_tls_config,
 };
