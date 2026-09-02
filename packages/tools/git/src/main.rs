@@ -12,6 +12,12 @@ use mrml_git::{
     parse_tree_with_format, push_ssh, sign_git_payload_via_interface, validate_positional,
     verify_detached_ascii,
 };
+#[cfg(target_os = "linux")]
+use mrml_git::{
+    AuthorizedHybridPair, CapabilityVerifiedProofSigner, HistoryVerificationLimits,
+    LinuxDurableTrustPolicyStore, ProtectedSignerCapability, ProtectedSignerPeer,
+    UnixProtectedCommitSigningProvider, push_https_protected_authenticated,
+};
 use mrml_interface_detached_signing_v1::{
     OpenPgpDigestAlgorithm as InterfaceOpenPgpDigestAlgorithm, OpenPgpGitSigningPurpose,
 };
@@ -252,6 +258,97 @@ fn repository_https_provider(repository: &Repository) -> Result<Option<Text>> {
         Some("standard-input") => Ok(provider),
         Some(_) => Err(anyhow!("HTTPS credential provider is unavailable")),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn protected_push_signer(
+    repository: &Repository,
+) -> Result<Option<(
+    UnixProtectedCommitSigningProvider,
+    mrml_git::HybridTrustPolicy,
+    mrml_openpgp::PublicKeyV6,
+    [u8; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES],
+)>> {
+    let provider = repository
+        .config_value("gpg.protected", "signerProvider")
+        .map_err(|error| anyhow!("{}", error))?;
+    let Some(provider) = provider else { return Ok(None) };
+    if provider != "unix-v1" {
+        return Err(anyhow!("protected signer provider is unavailable"));
+    }
+    let required = |name: &str| {
+        repository
+            .config_value("gpg.protected", name)
+            .map_err(|error| anyhow!("{}", error))?
+            .ok_or_else(|| anyhow!("protected signer configuration is incomplete"))
+    };
+    let socket = required("signerSocket")?;
+    let capability_path = required("signerCapabilityFile")?;
+    let signer_uid: u32 = required("signerUid")?
+        .parse()
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or_else(|| anyhow!("protected signer UID is invalid"))?;
+    let signer_gid: u32 = required("signerGid")?
+        .parse()
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or_else(|| anyhow!("protected signer GID is invalid"))?;
+    let mut capability_bytes = load_protected_secret(&capability_path, 32)?;
+    let mut capability = [0; 32];
+    capability.copy_from_slice(&capability_bytes);
+    erase_secret(&mut capability_bytes);
+    let transport = UnixProtectedCommitSigningProvider::new(
+        &socket,
+        ProtectedSignerPeer { uid: signer_uid, gid: signer_gid },
+        ProtectedSignerCapability::new(capability)
+            .map_err(|_| anyhow!("protected signer capability is invalid"))?,
+    )
+    .map_err(|_| anyhow!("protected signer transport configuration is invalid"))?;
+    erase_secret(&mut capability);
+
+    let policy_dir = required("trustPolicyDirectory")?;
+    let state = LinuxDurableTrustPolicyStore::open(&policy_dir)
+        .and_then(|store| store.load())
+        .map_err(|_| anyhow!("protected trust policy is unavailable"))?;
+    let openpgp_path = required("openpgpPublicKeyFile")?;
+    let openpgp_bytes = read_file_bounded(&openpgp_path, mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES)
+        .map_err(|_| anyhow!("protected OpenPGP public key is unavailable"))?;
+    let mut openpgp_scratch = [0; mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES];
+    let openpgp = mrml_openpgp::parse_public_key_v6_ascii(&openpgp_bytes, &mut openpgp_scratch)
+        .map_err(|_| anyhow!("protected OpenPGP public key is invalid"))?;
+    let ml_dsa_path = required("mlDsaPublicKeyFile")?;
+    let ml_dsa_bytes = read_file_bounded(&ml_dsa_path, mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES)
+        .map_err(|_| anyhow!("protected ML-DSA public key is unavailable"))?;
+    let ml_dsa: [u8; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES] = (&*ml_dsa_bytes)
+        .try_into()
+        .map_err(|_| anyhow!("protected ML-DSA public key is invalid"))?;
+    let pair = AuthorizedHybridPair::bind(&openpgp, &ml_dsa);
+    let now = mrml_runtime::unix_time_seconds()
+        .ok_or_else(|| anyhow!("trusted signing time is unavailable"))?;
+    let policy = state
+        .active_verification_policy_at(pair, now, true)
+        .map_err(|_| anyhow!("protected signing pair is not currently authorized"))?;
+    Ok(Some((transport, policy, openpgp, ml_dsa)))
+}
+
+#[cfg(target_os = "linux")]
+fn load_protected_secret(path: &str, exact: usize) -> Result<Vector<u8>> {
+    let mut file = File::open_regular(path)
+        .map_err(|_| anyhow!("cannot open protected signer capability"))?;
+    if !file.is_owner_only_secret()
+        || file.len().map_err(|_| anyhow!("cannot inspect protected signer capability"))?
+            != exact as u64
+    {
+        return Err(anyhow!("protected signer capability file is insecure"));
+    }
+    let mut bytes = Vector::with_capacity(exact).map_err(|_| anyhow!("allocation failed"))?;
+    bytes.resize(exact, 0);
+    if file.read_exact(&mut bytes).is_err() {
+        erase_secret(&mut bytes);
+        return Err(anyhow!("cannot read protected signer capability"));
+    }
+    Ok(bytes)
 }
 
 fn fetch_configured_https(
@@ -977,6 +1074,28 @@ fn native_push(repository: Option<&str>, name: &str, branch: Option<&str>) -> Re
         match repository_https_provider(&repo)?.as_deref() {
             Some("standard-input") => {
                 let mut provider = StandardInputBearerProvider::read()?;
+                #[cfg(target_os = "linux")]
+                if let Some((transport, policy, openpgp, ml_dsa)) = protected_push_signer(&repo)? {
+                    let mut scratch = [0; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
+                    let mut signer = CapabilityVerifiedProofSigner::new(
+                        transport, policy, &openpgp, &ml_dsa, &mut scratch,
+                    )
+                    .map_err(|_| anyhow!("protected signer policy is invalid"))?;
+                    push_https_protected_authenticated(
+                        &repo,
+                        name,
+                        &branch,
+                        &remote,
+                        &mut provider,
+                        &mut signer,
+                        HistoryVerificationLimits::default(),
+                    )
+                    .map_err(|error| anyhow!("{}", error))?
+                } else {
+                    mrml_git::push_https_authenticated(&repo, name, &branch, &remote, &mut provider)
+                        .map_err(|error| anyhow!("{}", error))?
+                }
+                #[cfg(not(target_os = "linux"))]
                 mrml_git::push_https_authenticated(&repo, name, &branch, &remote, &mut provider)
                     .map_err(|error| anyhow!("{}", error))?
             }

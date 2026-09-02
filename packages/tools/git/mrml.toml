@@ -25,6 +25,10 @@ name = "mrml_git"
 kind = "bin"
 name = "mrml-git"
 
+[[artifact]]
+kind = "bin"
+name = "mrml-git-protected-signer"
+
 [rust]
 crate_name = "mrml_git"
 crate_type = "lib"
@@ -83,6 +87,13 @@ crate_name = "mrml_git_cli"
 output = "mrml-git"
 self_extern = true
 source = "packages/tools/git/src/main.rs"
+
+[[binary]]
+crate_name = "mrml_git_protected_signer"
+output = "mrml-git-protected-signer"
+self_extern = true
+source = "packages/tools/git/src/protected_signer_main.rs"
+targets = ["LINUX"]
 
 [[compile_env]]
 name = "CARGO_PKG_VERSION"

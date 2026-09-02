@@ -18,8 +18,8 @@ on drop.
 
 This bridge is not a production signer, credential daemon, HSM integration, or
 claim that compiler-created copies, registers, caches, swap, or hardware traces
-are erased. Production protected operation must reject it and use a narrow
-capability-selected provider.
+are erased. Production protected operation rejects it and uses the narrow
+`unix-v1` protected signer described below.
 
 Native HTTPS now has a non-cloneable scoped Bearer credential boundary. Each
 use is bound to the exact host, port, repository path, and read/write action;
@@ -35,9 +35,49 @@ stores neither token nor token path in repository configuration, and erases its
 input and retained token buffers. Clone selects it with the non-secret
 `MRML_GIT_CREDENTIAL_PROVIDER=standard-input`; an existing repository selects
 it with `http.credentialProvider=standard-input`. Token plaintext is supplied
-only on standard input. A capability-selected OS credential service and HSM or
-desktop-vault integration remain future providers behind the same interface;
-they are not claimed by this bridge.
+only on standard input. An OS credential service remains a future provider
+behind the same interface; it is not claimed by this bridge.
+
+## Protected hybrid signer
+
+On Linux, `mrml-git-protected-signer` owns the reusable OpenPGP v6 seed and
+ML-DSA-65 secret. `mrml-git` receives neither secret. Its Unix connection is
+authenticated with the server's exact UID/GID and a distinct 256-bit channel
+capability. Each bounded request is restricted to one SHA-256 Git commit and
+binds the repository identity, commit ID, exact commit bytes, repository
+generation, trust generation, and revocation generation. The daemon recomputes
+the commit ID and exact hybrid transcript before signing. The client verifies
+both returned signatures against its independently loaded active trust policy
+before any upload.
+
+The repository selects this route using only non-secret configuration:
+
+```ini
+[gpg "protected"]
+    signerProvider = unix-v1
+    signerSocket = /run/user/1000/mrml-git-signer.sock
+    signerCapabilityFile = /run/user/1000/mrml-git-signer.cap
+    signerUid = 1000
+    signerGid = 1000
+    trustPolicyDirectory = /absolute/trusted/policy/owner/project
+    openpgpPublicKeyFile = /absolute/trusted/keys/openpgp-v6.asc
+    mlDsaPublicKeyFile = /absolute/trusted/keys/ml-dsa-65.pub
+```
+
+The capability file and both daemon secret files must be regular, single-link,
+owner-controlled files opened without following the final symlink. Capability
+and secret files require mode `0400` or `0600`; public material must not be
+group/world writable. Start the daemon as the key-owning non-root user:
+
+```text
+mrml-git-protected-signer serve SOCKET CAPABILITY CLIENT_UID CLIENT_GID OWNER_UID REPOSITORY REPOSITORY_GENERATION TRUST_GENERATION REVOCATION_GENERATION OPENPGP_SEED OPENPGP_CREATED_AT ML_DSA_PUBLIC ML_DSA_SECRET
+```
+
+The socket path and key paths identify resources but grant no signing authority.
+The channel capability and exact daemon policy do. The daemon accepts no generic
+message-signing, key-export, lifecycle, or repository-write operation. SIGINT or
+SIGTERM wakes the listener, erases loaded secret buffers, and removes only the
+exact socket inode created by that process.
 
 The native SSH proposal advertises `rsa-sha2-256` only; the SHA-1 `ssh-rsa`
 signature algorithm is not negotiable. Duplicate algorithm-list entries fail
@@ -46,7 +86,9 @@ packet before a 32-bit sequence could wrap under one key. Full byte/age-based
 rekey orchestration and independent constant-time cryptographic review remain
 open, so the optional SSH transport is not classified as production-ready.
 
-Patent review: **NOT_TRIGGERED**. This change is conventional local secret-file
-confinement, provider selection, diagnostic redaction, and memory erasure; it
-introduces no new protocol or cryptographic mechanism. See
+Patent review: **NOT_TRIGGERED**. These changes use conventional local
+secret-file confinement, a purpose-limited authenticated Unix channel, provider
+selection, diagnostic redaction, and memory erasure around already-reviewed
+OpenPGP v6 and ML-DSA-65 primitives. They introduce no new cryptographic
+primitive or patent-sensitive selection mechanism. See
 [`docs/patents/REVIEW_LOG.md`](../../patents/REVIEW_LOG.md).

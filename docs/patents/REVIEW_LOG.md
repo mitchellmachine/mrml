@@ -12194,3 +12194,14 @@ Patent review: **NOT_TRIGGERED**. This increment applies conventional
 synchronous POSIX termination-signal handling and removes only the exact Unix
 socket inode created by the listener. It introduces no protocol, cryptographic,
 storage-selection, compression, cache, or compaction mechanism.
+
+# 2026-09-02 — Capability-scoped protected Git signer transport
+
+Patent review: **NOT_TRIGGERED**. This increment applies a conventional
+peer-credential-checked, HMAC-authenticated Unix channel to an already-defined
+exact-context OpenPGP v6 plus ML-DSA-65 commit proof. It adds key confinement,
+bounded framing, context binding, independent result verification, and exact
+socket cleanup, but no new cryptographic primitive, compression, similarity,
+cache, or storage-selection mechanism. Existing Git patent-screen guardrails
+remain controlling; see
+[`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).

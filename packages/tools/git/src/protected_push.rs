@@ -44,6 +44,14 @@ impl HybridCommitSignatures {
             .map_err(|_| HistoryVerificationError::Resource)?;
         Ok(value)
     }
+
+    pub fn openpgp(&self) -> &[u8] {
+        &self.openpgp
+    }
+
+    pub fn ml_dsa(&self) -> &[u8] {
+        &self.ml_dsa
+    }
 }
 
 /// Capability-bearing provider operation restricted to one canonical Git
