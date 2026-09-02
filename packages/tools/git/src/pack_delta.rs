@@ -76,7 +76,11 @@ fn make_delta(
     target: &[u8],
     work_remaining: &mut usize,
 ) -> Result<Option<Vector<u8>>, PackError> {
-    if base.len() > *work_remaining {
+    // Indexing the base consumes one unit per byte. If that exhausts the
+    // entire budget, no target byte can be inspected and this candidate must
+    // return `None` after doing all of the indexing work. Reject that doomed
+    // boundary up front without changing the selected delta.
+    if base.len() >= *work_remaining {
         return Ok(None);
     }
     *work_remaining -= base.len();
@@ -277,5 +281,12 @@ mod tests {
             select_deltas_with_work(&objects, 8).unwrap(),
             select_deltas_with_work(&objects, 8).unwrap()
         );
+    }
+
+    #[test]
+    fn base_that_exhausts_the_budget_is_rejected_before_indexing() {
+        let mut work = 4;
+        assert_eq!(make_delta(b"base", b"next", &mut work).unwrap(), None);
+        assert_eq!(work, 4);
     }
 }
