@@ -11,7 +11,8 @@ use mrml_openpgp::PublicKeyV6;
 use mrml_runtime::Vector;
 
 use crate::{
-    verify_repository_admission, DeploymentRepository, DeploymentRepositoryProfile, GitdConfig,
+    production_receive::receive_pack_limit, verify_repository_admission, DeploymentRepository,
+    DeploymentRepositoryProfile, GitdConfig,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -282,7 +283,7 @@ pub fn inspect_admitted_repository_recovery(
         recovery_path(&admitted.paths.state)?,
         recovery_path(&plain_receipts)?,
         ObjectFormat::Sha256,
-        config.max_body_bytes,
+        receive_pack_limit(config.max_body_bytes),
     )
     .map_err(|_| RepositoryRecoveryError::Open)?;
     let actions = store
@@ -378,7 +379,7 @@ pub fn recover_admitted_repository(
         recovery_path(&admitted.paths.state)?,
         recovery_path(&plain_receipts)?,
         ObjectFormat::Sha256,
-        config.max_body_bytes,
+        receive_pack_limit(config.max_body_bytes),
     )
     .map_err(|_| RepositoryRecoveryError::Open)?;
     let actions = store

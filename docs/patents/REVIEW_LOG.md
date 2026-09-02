@@ -1,5 +1,12 @@
 # Patent review log
 
+## 2026-09-02 — Gitd durable receive-pack limit correction
+
+Patent review: **NOT_TRIGGERED**.
+
+This change takes the conservative minimum of two existing resource limits and
+introduces no new mechanism.
+
 ## 2026-09-02 — Gitd category-only startup diagnostics
 
 Patent review: **NOT_TRIGGERED**.

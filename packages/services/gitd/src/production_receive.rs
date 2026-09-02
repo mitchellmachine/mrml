@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use mrml_git::{
     HistoryVerificationLimits, LinuxDurableReceiveStore, LinuxDurableTrustPolicyStore,
     ObjectFormat, ProtectedReceiveAuthority, QuarantineLimits, QuarantineTransactionId,
+    DEFAULT_MAX_INCOMING_PACK_BYTES,
 };
 use mrml_http::{
     BackendError, BoundedRead, BoundedWrite, SmartGitOperation, SmartGitRequest, SmartGitResponse,
@@ -62,7 +63,7 @@ impl ProductionReceiveRepository {
             state: admitted.paths.state.clone(),
             plain_receipts: admitted.paths.receipts.join("plain"),
             authenticated_receipts: admitted.paths.receipts.join("authenticated"),
-            max_body_bytes: config.max_body_bytes,
+            max_body_bytes: receive_pack_limit(config.max_body_bytes),
             max_object_bytes: entry.profile.max_object_bytes,
         })
     }
@@ -153,6 +154,14 @@ impl ProductionReceiveRepository {
     }
 }
 
+pub(crate) const fn receive_pack_limit(max_body_bytes: u64) -> u64 {
+    if max_body_bytes < DEFAULT_MAX_INCOMING_PACK_BYTES {
+        max_body_bytes
+    } else {
+        DEFAULT_MAX_INCOMING_PACK_BYTES
+    }
+}
+
 struct ReadBridge<'a>(&'a mut dyn BoundedRead);
 impl mrml_git::BoundedRead for ReadBridge<'_> {
     fn remaining(&self) -> u64 {
@@ -239,6 +248,15 @@ fn available_bytes(path: &Path) -> Result<u64, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durable_pack_limit_is_independent_from_larger_http_body_limit() {
+        assert_eq!(receive_pack_limit(1024), 1024);
+        assert_eq!(
+            receive_pack_limit(8 * 1024 * 1024 * 1024),
+            DEFAULT_MAX_INCOMING_PACK_BYTES
+        );
+    }
 
     #[test]
     fn live_filesystem_capacity_is_nonzero_and_path_bound() {

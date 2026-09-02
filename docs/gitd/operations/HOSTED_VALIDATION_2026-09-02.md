@@ -270,3 +270,21 @@ access.
 
 Patent review: **NOT_TRIGGERED**. This adds only bounded operational event
 classification. See `docs/patents/REVIEW_LOG.md`.
+
+## Durable pack-limit correction
+
+Container recovery exposed that the 8 GiB HTTP request-body ceiling from the
+production example was passed directly to the durable arrival-pack store,
+whose deliberate maximum is 2 GiB. Store construction therefore failed before
+recovery despite valid storage. Gitd now derives an effective receive-pack
+limit as the smaller of the configured body ceiling and the durable store
+maximum for live receive and both recovery paths. HTTP framing retains its
+independent configured ceiling; repository object limits remain separately
+enforced.
+
+The hosted Gitd suite passed 30 library and 2 binary tests, including the 8 GiB
+body/2 GiB pack-limit case.
+
+Patent review: **NOT_TRIGGERED**. This is a conservative resource-limit
+composition correction and introduces no new mechanism. See
+`docs/patents/REVIEW_LOG.md`.
