@@ -3,9 +3,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use mrml_http::Http2ServerConnection;
 use mrml_runtime::{JoinHandle, Sender, TcpStream, Vector, blocking_channel, spawn_joinable};
-use mrml_tls::{TlsServerConfig, TlsServerStream};
+use mrml_tls::TlsServerStream;
 
-use crate::{GitdComposedService, serve_gitd_http2_connection_with_drain};
+use crate::{GitdComposedService, GitdTlsConfigStore, serve_gitd_http2_connection_with_drain};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdHttp2WorkerError {
@@ -41,7 +41,7 @@ pub struct GitdHttp2WorkerPool {
 impl GitdHttp2WorkerPool {
     pub fn new(
         service: &GitdComposedService,
-        tls: Arc<TlsServerConfig>,
+        tls: Arc<GitdTlsConfigStore>,
         worker_count: usize,
         queue_capacity: usize,
         maximum_connections: usize,
@@ -80,9 +80,16 @@ impl GitdHttp2WorkerPool {
                     if worker_draining.load(Ordering::Acquire) {
                         break;
                     }
+                    let (_, config) = match tls.snapshot() {
+                        Ok(snapshot) => snapshot,
+                        Err(_) => {
+                            increment(&worker_counters.tls_failures);
+                            continue;
+                        }
+                    };
                     let tls_stream = match TlsServerStream::accept_with_timeout(
                         socket,
-                        &tls,
+                        &config,
                         connection_timeout_millis,
                     ) {
                         Ok(stream) => stream,
