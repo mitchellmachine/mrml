@@ -1,0 +1,102 @@
+name: mrml-git
+
+services:
+  git-authority:
+    image: "mrml/git-authority:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21002:21002"
+    group_add: ["21901"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1.0
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ulimits:
+      nofile: {soft: 4096, hard: 4096}
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=21002,gid=21002,mode=0700
+    volumes:
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/authority/state:/var/lib/mrml/authority:rw"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/git-authority:/run/mrml/git-authority:rw"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/git-authority.cap.authority:/run/secrets/git-authority-channel:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/git-authority/receipt.key:/run/secrets/receipt.key:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/git-authority/openpgp-public.asc:/etc/mrml/authority/openpgp-public.asc:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/git-authority/ml-dsa-public.bin:/etc/mrml/authority/ml-dsa-public.bin:ro"
+    command:
+      - serve
+      - /run/mrml/git-authority/authority.sock
+      - /run/secrets/git-authority-channel
+      - "21001"
+      - "21001"
+      - "21002"
+      - "21002"
+      - /var/lib/mrml/authority/policies
+      - /var/lib/mrml/authority/proofs
+      - /etc/mrml/authority/openpgp-public.asc
+      - /etc/mrml/authority/ml-dsa-public.bin
+      - /run/secrets/receipt.key
+      - "${MRML_AUTHORITY_VALIDATION_TIME:?set MRML_AUTHORITY_VALIDATION_TIME}"
+      - "${MRML_REPOSITORY_GENERATION:?set MRML_REPOSITORY_GENERATION}"
+
+  gitd:
+    image: "mrml/gitd:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21001:21001"
+    group_add: ["21901", "21902"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 192
+    mem_limit: 2g
+    cpus: 2.0
+    restart: unless-stopped
+    stop_grace_period: 45s
+    ulimits:
+      nofile: {soft: 16384, hard: 16384}
+    logging:
+      driver: local
+      options: {max-size: 20m, max-file: "3"}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=21001,gid=21001,mode=0700
+    ports:
+      - "${MRML_GIT_BIND_IP:-0.0.0.0}:443:8443/tcp"
+      - "${MRML_GIT_BIND_IP:-0.0.0.0}:443:8443/udp"
+    depends_on:
+      git-authority: {condition: service_started}
+      certd: {condition: service_healthy}
+    networks: [git-public]
+    volumes:
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/repos:/mnt/mrml/gitd/repos:rw"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/state:/mnt/mrml/gitd/state:rw"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/quarantine:/mnt/mrml/gitd/quarantine:rw"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/cache:/mnt/mrml/gitd/cache:rw"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/receipts:/mnt/mrml/gitd/receipts:rw"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/gitd/policies:/mnt/mrml/gitd/policies:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/git-authority:/run/mrml/git-authority:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/runtime/certd-gitd:/run/mrml/certd-gitd:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/git-authority.cap.gitd:/run/secrets/git-authority-channel:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/channels/certd-gitd.cap.gitd:/run/secrets/certd-gitd-channel:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/gitd/token-pepper.key:/run/secrets/gitd-token-pepper:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/secrets/gitd/quic-retry.key:/run/secrets/gitd-quic-retry-key:ro"
+      - "${MRML_DEPLOY_ROOT:-/mnt/mrml}/config/gitd.conf:/etc/mrml/gitd.conf:ro"
+    command: [serve, /etc/mrml/gitd.conf, "${MRML_AUTHORITY_SIGNER_IDENTITY:?set MRML_AUTHORITY_SIGNER_IDENTITY}"]
+    healthcheck:
+      test: [CMD, /usr/bin/mrml-gitd, validate-config, /etc/mrml/gitd.conf]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  git-public:
+    driver: bridge
+    internal: false
