@@ -1126,14 +1126,17 @@ impl Http2ServerConnection {
         if self.request_stream.is_some() && !self.request_ended {
             return Err(HttpError::InvalidResponse);
         }
-        self.request_stream = None;
-        self.request_ended = false;
         loop {
             let frame = read_server_frame(&mut self.stream)?;
             match frame.kind {
                 Http2FrameKind::Headers => {
                     let id = frame.stream_id;
                     let request = self.protocol.request(&frame)?;
+                    // Keep the completed stream selected until the next
+                    // request HEADERS arrives. Response-body WINDOW_UPDATE
+                    // frames can legitimately race ahead of those headers;
+                    // clearing the stream first rejects them and closes the
+                    // connection while the peer is still acknowledging data.
                     self.request_stream = Some(id);
                     self.request_ended = frame.flags & 1 != 0;
                     self.send_stream_window = self.peer_initial_stream_window;
@@ -1720,8 +1723,9 @@ mod tests {
                 assert!(request_body.is_empty());
             }
             server.respond_head(id, 200, &[], false).unwrap();
-            server.respond_data(id, b"http2 ", false).unwrap();
-            server.respond_data(id, b"loopback", false).unwrap();
+            for _ in 0..16 {
+                server.respond_data(id, &[0x5a; MAX_FRAME], false).unwrap();
+            }
             server.finish_response(id).unwrap();
             let _ = server.next_request();
         }) else {
@@ -1751,7 +1755,8 @@ mod tests {
                 "curl failed: {}",
                 core::str::from_utf8(&output.stderr).unwrap_or("non-UTF-8 error")
             );
-            assert_eq!(&output.stdout[..], b"http2 loopback");
+            assert_eq!(output.stdout.len(), 16 * MAX_FRAME);
+            assert!(output.stdout.iter().all(|byte| *byte == 0x5a));
             return;
         } else {
             let mut client = Http2ClientConnection::connect("localhost", port).unwrap();
@@ -1759,7 +1764,8 @@ mod tests {
                 .request_with_body("POST", "localhost", "/loopback", &[], b"request body")
                 .unwrap();
             assert_eq!(response.status, 200);
-            assert_eq!(&response.body[..], b"http2 loopback");
+            assert_eq!(response.body.len(), 16 * MAX_FRAME);
+            assert!(response.body.iter().all(|byte| *byte == 0x5a));
         }
         assert!(worker.join());
     }
