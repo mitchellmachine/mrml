@@ -73,7 +73,11 @@ for image in git-authority gitd; do
   docker image inspect --format '{{json .RepoDigests}} {{.Id}}' \
     "mrml/$image:$version" > "$payload/images/$image.identity"
   docker save -o "$payload/images/$image.tar" "mrml/$image:$version"
-  syft "mrml/$image:$version" -o "spdx-json=$payload/sbom/$image.spdx.json"
+  # Scan the exact exported artifact rather than relying on a daemon-specific
+  # local image-store API. This keeps Docker and Podman-backed offline builds
+  # equivalent and binds the SBOM to the bytes that are actually distributed.
+  syft "docker-archive:$payload/images/$image.tar" \
+    -o "spdx-json=$payload/sbom/$image.spdx.json"
   cosign sign-blob --key "$COSIGN_KEY" --tlog-upload=false \
     --bundle "$payload/signatures/$image.cosign.bundle" "$payload/images/$image.tar"
 done
