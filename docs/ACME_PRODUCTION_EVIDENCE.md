@@ -1,7 +1,7 @@
 # ACME and TLS identity production evidence
 
-Evidence date: 2026-09-01  
-Target: Linux x86_64, Docker Compose  
+Evidence date: 2026-09-02
+Target: Linux x86_64, Docker Compose
 Component classification: **production candidate pending external runtime gates**
 
 This file records executed evidence, unavailable environments, and remaining
@@ -16,7 +16,7 @@ physical evidence are distinct.
 | Manifest lock | `./target/debug/mrml manifest lock --check` | PASS: 70 packages, 5 interfaces |
 | Manifest graph | `./target/debug/mrml manifest check` | PASS: 70 components, 209 dependencies |
 | Certificate release build | `./target/debug/mrml build org.mrml.service.certificate --target linux --release` | PASS |
-| Certificate focused tests | `./target/debug/mrml test org.mrml.service.certificate --target linux --release` | PASS: 136, fail: 0 |
+| Certificate focused tests | `./target/debug/mrml test org.mrml.service.certificate --target linux --release` | PASS: 137, fail: 0 |
 | ACME service release build | `./target/debug/mrml build org.mrml.service.acme --target linux --release` | PASS |
 | ACME service focused tests | `./target/debug/mrml test org.mrml.service.acme --target linux --release` | PASS: 14, fail: 0 |
 | ACME library release build | `./target/debug/mrml build org.mrml.library.acme --target linux --release` | PASS |
@@ -53,7 +53,7 @@ not prove the Docker namespace or mount configuration.
 | Native Windows production certification | DEFERRED | Outside this Linux production target and explicitly deferred by the task. |
 | Physical hardware | NOT RUN / NOT APPLICABLE | No physical-hardware claim is made for this hosted Linux service. |
 
-## Remaining implementation gate
+## Backup and restore implementation
 
 The shared certificate library implements authenticated backup containers,
 bounded transfer, verification, and clean-target restore with focused tests.
@@ -68,20 +68,37 @@ production binaries. A combined HMAC manifest re-verifies and binds both exact
 ciphertexts, roles, generations, file counts, and plaintext digests.
 `backup-acme.sh` stops both daemons, creates the two same-generation components
 under their respective UIDs, creates and verifies the combined manifest, and
-restarts the services on success or failure. This proves authenticated backup
-set creation, not restoration.
-The production Compose topology does not yet wire a real multi-principal
-one-shot backup provider spanning certd-owned encrypted key state, acmed-owned
-authenticated lifecycle state, publication records, and channel metadata.
+restarts the services on success or failure.
+
+`restore-acme.sh` requires an empty root-owned mode-`0700` target under `/mnt`,
+authenticates the combined manifest before writing, and restores each component
+under its distinct service UID. The restore implementation creates only
+canonical archive paths with no-follow/exclusive semantics, reopens and hashes
+every restored regular file, applies the authenticated mode, syncs files and
+directories, and returns a generation/content-bound HMAC receipt. Partial
+failure leaves a nonempty target that cannot be silently reused. The operator
+compares the two certd-acmed channel-capability copies and runs offline service
+validators. Certd re-authenticates its use-only key descriptors, active durable
+certificate state, current validity, and publication digest. Acmed
+re-authenticates its active account and renewal schedule against the reviewed
+configuration. The helper never starts services or selects the target.
+
+The Gitd-side peer capability and reviewed non-secret deployment configuration
+belong to the combined system recovery set and must be installed before target
+selection. This environment could not execute the Docker restore workflow, so
+its runtime result remains covered by the unavailable combined-stack/container
+gates above rather than being claimed as passed.
+
 `backup-auth.key` is separately provisioned as equal mode-`0400` copies for the
 certd, acmed, and administration identities. The service copies are mounted
-only into future stopped-service backup operations, never either daemon. A root `tar` wrapper is not an acceptable
-substitute because it would bypass the use-only provider boundary and would not
-prove record/key/generation consistency before activation.
+only into stopped-service one-shot backup and restore operations, never either
+long-running daemon. A root `tar` wrapper is not used because it would bypass
+the use-only provider boundary and would not prove record/key/generation
+consistency before activation.
 
-Until this provider and the external container gates are exercised, the
-accurate classification is **ACME/certd production candidate pending backup and
-Gitd integration**, not complete-stack production-ready.
+Until the external gates are exercised, the accurate classification is
+**ACME/certd production candidate pending external runtime and Gitd integration
+evidence**, not complete-stack production-ready.
 
 ## Security and IPR residuals
 
@@ -92,7 +109,7 @@ destination-aware egress; deployment requires host or upstream policy for the
 approved ACME and DNS-provider origins.
 
 Patent review: **NOT_TRIGGERED** for continued scoped engineering, including
-the hosted component archive. That archive composes the repository's existing
+the hosted component archive and clean-target restore. They compose the repository's existing
 AES-GCM, HMAC-SHA-256, bounded canonical encoding, and durable file-safety
 mechanisms without introducing a new cryptographic or network-validation
 mechanism. See
