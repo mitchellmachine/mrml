@@ -1,12 +1,54 @@
 use core::fmt;
 use mrml_http::{HttpError, ResponseBodySink};
-use mrml_runtime::Vector;
+use mrml_runtime::{File, Vector};
 
 const MAX_PACKET_PAYLOAD: usize = 65_516;
 
 pub trait PackOutput {
     fn write(&mut self, bytes: &[u8]) -> Result<(), HttpsPackError>;
     fn finish(&mut self) -> Result<(), HttpsPackError>;
+}
+
+pub struct FilePackOutput {
+    file: File,
+    bytes: u64,
+    maximum: u64,
+}
+
+impl FilePackOutput {
+    pub fn create_new(path: &str, maximum: u64) -> Result<Self, HttpsPackError> {
+        if maximum == 0 || maximum > 1024 * 1024 * 1024 {
+            return Err(HttpsPackError::TooLarge);
+        }
+        Ok(Self {
+            file: File::create_new(path).map_err(|_| HttpsPackError::Storage)?,
+            bytes: 0,
+            maximum,
+        })
+    }
+
+    pub const fn bytes_written(&self) -> u64 {
+        self.bytes
+    }
+}
+
+impl PackOutput for FilePackOutput {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), HttpsPackError> {
+        let next = self
+            .bytes
+            .checked_add(bytes.len() as u64)
+            .filter(|value| *value <= self.maximum)
+            .ok_or(HttpsPackError::TooLarge)?;
+        self.file
+            .write_all(bytes)
+            .map_err(|_| HttpsPackError::Storage)?;
+        self.bytes = next;
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), HttpsPackError> {
+        self.file.sync().map_err(|_| HttpsPackError::Storage)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -266,5 +308,23 @@ mod tests {
         let (output, bytes) = decoder.finish().unwrap();
         assert_eq!(bytes, 512 * 60_000);
         assert_eq!(output.bytes, bytes);
+    }
+
+    #[test]
+    fn file_output_is_create_new_bounded_and_synced() {
+        let root = mrml_runtime::join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-https-pack-{}", mrml_runtime::process_id()),
+        );
+        let _ = mrml_runtime::remove_dir_all(&root);
+        mrml_runtime::create_dir_all(&root).unwrap();
+        let path = mrml_runtime::join_path(&root, "candidate.pack");
+        let mut output = FilePackOutput::create_new(&path, 4).unwrap();
+        output.write(b"PACK").unwrap();
+        assert_eq!(output.write(b"x"), Err(HttpsPackError::TooLarge));
+        output.finish().unwrap();
+        assert_eq!(&mrml_runtime::read_file(&path).unwrap()[..], b"PACK");
+        assert!(FilePackOutput::create_new(&path, 4).is_err());
+        mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }

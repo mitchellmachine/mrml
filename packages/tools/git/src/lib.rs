@@ -99,7 +99,7 @@ pub use https_remote::{
     HttpsDiscovery, HttpsRefAdvertisement, HttpsRemote, HttpsRemoteError, HttpsTransport,
     SmartGitService,
 };
-pub use https_pack::{HttpsPackError, PackOutput, V2PackResponseDecoder};
+pub use https_pack::{FilePackOutput, HttpsPackError, PackOutput, V2PackResponseDecoder};
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
 pub use index::{Index, IndexEntry, IndexError};
 pub use local_repack::LocalRepackResult;
