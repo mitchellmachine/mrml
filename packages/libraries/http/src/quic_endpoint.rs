@@ -48,6 +48,12 @@ pub struct QuicEndpointDatagram {
     pub bytes: Vector<u8>,
 }
 
+pub struct QuicAdmittedHandshake {
+    pub connection: QuicConnectionHandle,
+    pub permit: u64,
+    pub listener: QuicServerListener,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct QuicEndpointMetrics {
     pub datagrams_received: u64,
@@ -121,6 +127,7 @@ pub struct QuicServerEndpoint {
     resources: Option<GitdResourceController>,
     resource_handshake_permits: Vector<u64>,
     metrics: QuicEndpointMetrics,
+    next_connection_handle: u64,
 }
 
 impl QuicServerEndpoint {
@@ -158,6 +165,7 @@ impl QuicServerEndpoint {
             resources: None,
             resource_handshake_permits: Vector::new(),
             metrics: QuicEndpointMetrics::default(),
+            next_connection_handle: 1,
         })
     }
 
@@ -313,6 +321,73 @@ impl QuicServerEndpoint {
         }
         self.metrics.retry_datagrams_sent = self.metrics.retry_datagrams_sent.saturating_add(1);
         Ok(())
+    }
+
+    /// Applies admission and constructs a routed handshake as one fail-closed
+    /// endpoint transaction. Retry and rejection intentionally return `None`.
+    pub fn admit_endpoint_datagram(
+        &mut self,
+        datagram: QuicEndpointDatagram,
+        now: u64,
+        estimated_memory_bytes: u64,
+        queue_capacity: usize,
+    ) -> Result<Option<QuicAdmittedHandshake>, QuicError> {
+        match self.admit_initial(
+            &datagram.bytes,
+            datagram.peer,
+            now,
+            estimated_memory_bytes,
+        ) {
+            QuicInitialAdmission::Retry { token } => {
+                self.send_retry(&datagram, &token)?;
+                Ok(None)
+            }
+            QuicInitialAdmission::Reject => Ok(None),
+            QuicInitialAdmission::Admit {
+                permit,
+                original_destination_id,
+            } => {
+                let connection = match self.allocate_connection_handle() {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        let _ = self.release_handshake_permit(permit);
+                        return Err(error);
+                    }
+                };
+                match self.begin_routed_handshake(
+                    datagram,
+                    original_destination_id,
+                    connection,
+                    queue_capacity,
+                ) {
+                    Ok(listener) => Ok(Some(QuicAdmittedHandshake {
+                        connection,
+                        permit,
+                        listener,
+                    })),
+                    Err(error) => {
+                        let _ = self.release_handshake_permit(permit);
+                        Err(error)
+                    }
+                }
+            }
+        }
+    }
+
+    fn allocate_connection_handle(&mut self) -> Result<QuicConnectionHandle, QuicError> {
+        for _ in 0..=self.maximum_connections {
+            let value = self.next_connection_handle;
+            self.next_connection_handle = self
+                .next_connection_handle
+                .checked_add(1)
+                .filter(|next| *next != 0)
+                .unwrap_or(1);
+            let handle = QuicConnectionHandle(value);
+            if !self.connections.iter().any(|entry| entry.handle == handle) {
+                return Ok(handle);
+            }
+        }
+        Err(QuicError::Limit)
     }
 
     /// Reconciles admission timeouts with resource permits. The endpoint owns
@@ -845,6 +920,7 @@ mod tests {
             resources: None,
             resource_handshake_permits: Vector::new(),
             metrics: QuicEndpointMetrics::default(),
+            next_connection_handle: 1,
         }
     }
 
@@ -930,6 +1006,79 @@ mod tests {
         assert_eq!(retry.destination_id, &[5, 6, 7, 8][..]);
         assert_eq!(retry.token, b"opaque-token".as_slice());
         assert_eq!(endpoint.metrics().retry_datagrams_sent, 1);
+    }
+
+    #[test]
+    fn endpoint_admission_atomically_retries_then_constructs_bounded_handshake() {
+        let server = UdpSocket::bind([127, 0, 0, 1], 0).unwrap();
+        let client = UdpSocket::bind([127, 0, 0, 1], 0).unwrap();
+        client.set_read_timeout_millis(1_000).unwrap();
+        let client_peer = SocketAddress {
+            ip: [127, 0, 0, 1],
+            port: client.local_port().unwrap(),
+        };
+        let mut endpoint = QuicServerEndpoint::from_socket(server, 2, 4).unwrap();
+        endpoint.configure_public_admission(
+            QuicAdmissionController::new(2, 2, 4096, 30, 0).unwrap(),
+            QuicRetryTokenManager::new(
+                QuicRetryKey {
+                    generation: 1,
+                    key: [7; 16],
+                },
+                30,
+            )
+            .unwrap(),
+        );
+        endpoint.configure_resource_controller(GitdResourceController::new(2).unwrap());
+
+        let original_id = [1, 2, 3, 4];
+        let initial = initial_datagram(&original_id);
+        let datagram = endpoint
+            .dispatch_datagram(client_peer, &initial)
+            .unwrap()
+            .unwrap();
+        assert!(
+            endpoint
+                .admit_endpoint_datagram(datagram, 100, 1024, 4)
+                .unwrap()
+                .is_none()
+        );
+        let mut wire = [0; 512];
+        let (amount, _) = client.receive_from(&mut wire).unwrap();
+        let (_, retry) = RetryPacket::open(&wire[..amount], &original_id).unwrap();
+
+        let retried = InitialPacket {
+            destination_id: retry.source_id.clone(),
+            source_id: [5, 6, 7, 8].into(),
+            packet_number: 0,
+            payload: [0; 1150].into(),
+        };
+        let keys = QuicInitialKeys::derive_for(
+            QuicVersion::V2,
+            &retried.destination_id,
+            QuicRole::Client,
+        )
+        .unwrap();
+        let retried = retried
+            .seal_padded_for_with_token(QuicVersion::V2, &keys, &retry.token)
+            .unwrap();
+        let datagram = endpoint
+            .dispatch_datagram(client_peer, &retried)
+            .unwrap()
+            .unwrap();
+        let admitted = endpoint
+            .admit_endpoint_datagram(datagram, 101, 1024, 4)
+            .unwrap()
+            .unwrap();
+        assert_eq!(admitted.connection, QuicConnectionHandle(1));
+        assert_eq!(admitted.permit, 1);
+        assert_eq!(endpoint.connection_count(), 1);
+        let connection = admitted.connection;
+        let permit = admitted.permit;
+        drop(admitted.listener);
+        endpoint.remove_connection(connection).unwrap();
+        endpoint.release_handshake_permit(permit).unwrap();
+        assert_eq!(endpoint.connection_count(), 0);
     }
 
     #[test]
