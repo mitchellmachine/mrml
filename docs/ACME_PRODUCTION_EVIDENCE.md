@@ -16,7 +16,7 @@ physical evidence are distinct.
 | Manifest lock | `./target/debug/mrml manifest lock --check` | PASS: 70 packages, 5 interfaces |
 | Manifest graph | `./target/debug/mrml manifest check` | PASS: 70 components, 209 dependencies |
 | Certificate release build | `./target/debug/mrml build org.mrml.service.certificate --target linux --release` | PASS |
-| Certificate focused tests | `./target/debug/mrml test org.mrml.service.certificate --target linux --release` | PASS: 133, fail: 0 |
+| Certificate focused tests | `./target/debug/mrml test org.mrml.service.certificate --target linux --release` | PASS: 135, fail: 0 |
 | ACME service release build | `./target/debug/mrml build org.mrml.service.acme --target linux --release` | PASS |
 | ACME service focused tests | `./target/debug/mrml test org.mrml.service.acme --target linux --release` | PASS: 14, fail: 0 |
 | ACME library release build | `./target/debug/mrml build org.mrml.library.acme --target linux --release` | PASS |
@@ -57,6 +57,12 @@ not prove the Docker namespace or mount configuration.
 
 The shared certificate library implements authenticated backup containers,
 bounded transfer, verification, and clean-target restore with focused tests.
+The hosted Linux layer now additionally implements bounded AES-GCM component
+archives derived from the distinct backup capability. It authenticates exact
+role, generation, sorted paths, modes, per-file digests, file count, and the
+complete plaintext digest; source and input scans reject symlinks, hard links,
+unsafe modes, traversal, duplicates, oversized files/scans, wrong roles, wrong
+keys, and ciphertext substitution. Secret-bearing scratch is cleared.
 The production Compose topology does not yet wire a real multi-principal
 one-shot backup provider spanning certd-owned encrypted key state, acmed-owned
 authenticated lifecycle state, publication records, and channel metadata.
@@ -78,7 +84,11 @@ but no independent constant-time claim is made. Compose cannot enforce
 destination-aware egress; deployment requires host or upstream policy for the
 approved ACME and DNS-provider origins.
 
-Patent review: **NOT_TRIGGERED** for continued scoped engineering. See
+Patent review: **NOT_TRIGGERED** for continued scoped engineering, including
+the hosted component archive. That archive composes the repository's existing
+AES-GCM, HMAC-SHA-256, bounded canonical encoding, and durable file-safety
+mechanisms without introducing a new cryptographic or network-validation
+mechanism. See
 [`patents/ACME_CERTIFICATE_REVIEW_2026-09-01.md`](patents/ACME_CERTIFICATE_REVIEW_2026-09-01.md)
 and [`patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md). Formal legal FTO was not
 performed.

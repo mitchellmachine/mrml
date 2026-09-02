@@ -39,6 +39,8 @@ mod durable_capability;
 mod durable_catalog;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod durable_hosted;
+#[cfg(target_os = "linux")]
+mod hosted_component_backup;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod hosted_daemon;
 #[cfg(target_os = "linux")]
@@ -199,6 +201,12 @@ pub use durable_catalog::{
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use durable_hosted::HostedDurableStateStore;
+#[cfg(target_os = "linux")]
+pub use hosted_component_backup::{
+    HostedBackupDescriptor, HostedBackupError, HostedBackupRole, HostedBackupSource,
+    MAX_HOSTED_BACKUP_BYTES, MAX_HOSTED_BACKUP_FILE_BYTES, MAX_HOSTED_BACKUP_FILES,
+    create_hosted_component_backup, verify_hosted_component_backup,
+};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use hosted_daemon::{
     HostedLifecycleDaemonError, HostedLifecycleSessionService, HostedLifecycleSupervisor,
