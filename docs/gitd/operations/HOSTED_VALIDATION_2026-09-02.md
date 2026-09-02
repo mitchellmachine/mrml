@@ -78,11 +78,42 @@ Git authority and certd at `network_mode: none`, published only Gitd TCP/UDP
 443, retained non-root users, dropped all capabilities, set read-only roots and
 `no-new-privileges`, and retained the declared resource limits and bind mounts.
 
+## Catalog and protected-policy bootstrap follow-up
+
+Follow-up validation used a clean detached worktree at commit
+`c54c1763630189cf6f65bff70b52e86be7c0f214` so unrelated edits in the shared
+checkout could not enter the binaries or images. Network-disabled pinned image
+builds produced:
+
+```text
+mrml-git-authority binary sha256:02612a450350f0dd79584a7fa27a4d1ffad02f399ca4521c3bf6f50afc531b8c
+mrml-gitd binary sha256:a76a95511c7c72f2020f2bf8cb9c84a3743e76d666d73539606183747b444177
+mrml/git-authority:c54c1763 image id sha256:bb621b8b2031e42d4819abba9fc872452f2c235892415920ea14c73084ecb505
+mrml/git-authority:c54c1763 manifest sha256:c28e9eb729f90987377abfcb94327fc617cdc61624ee88cba09461a8b79ce476
+mrml/gitd:c54c1763 image id sha256:c4ae793b2082df1c40a38305d4e9d2d1a7e3c9f8818996d7c6ccde36f262138e
+mrml/gitd:c54c1763 manifest sha256:6de5c3bf53aacee9c6f12217d8fdc0d39774276e7a80510255b6f0bc94c8cb13
+```
+
+A rootless Podman helper established production numeric ownership inside an
+isolated `/tmp` deployment; no production `/mnt` state was used. The clean Gitd
+image authenticated exact profile/repository catalogs, created the SHA-256
+`owner/project` repository at deterministic tip
+`eff5a40ef7f3b72a26c9ea5d203f87c71896c68cab1938f6bff65c7f90f43380`,
+and established the hybrid-required protected policy at that same cutover with
+trust/revocation generation 1. A second policy creation failed closed. The
+inputs were repository test-only OpenPGP v6 and ML-DSA-65 public fixtures; no
+private signing key entered either image. The authority image then opened and
+validated the exact same Gitd-owned policy through the read-only shared mount.
+An initial authority attempt against mode-`0700` policy directories failed
+closed, directly exposing and motivating the owner-writable/public-readable
+authenticated-policy directory correction in `c54c1763`.
+
 ## Remaining evidence boundary
 
 The session ran as UID 1000 and `sudo -n` required a password, so the root-only
-host provisioners could not establish and validate the exact numeric ownership
-layout. Consequently the combined containers were not started and no real
+host provisioners were not executed directly on the host. The isolated helper
+evidence above is not a real VPS or host-provisioner run. The combined containers
+were not started and no real
 clone/fetch/pull/push, process-kill recovery, backup/restore, upgrade/rollback,
 or 256 MiB streaming measurement was performed in this run. Those acceptance
 items remain required. The real certd integration and rotation test also
