@@ -64,7 +64,9 @@ require 'certd and acmed must both configure' deploy/compose/rotate-acme-key.sh
 require 'stop acmed certd' deploy/compose/rotate-acme-key.sh
 require 'MRML_CERTD_OFFLINE_BACKUP=1' deploy/compose/backup-acme.sh
 require 'MRML_ACMED_OFFLINE_BACKUP=1' deploy/compose/backup-acme.sh
-require 'the authenticated combined manifest and clean-target restore gate remain required' deploy/compose/backup-acme.sh
+require 'backup-manifest-create' deploy/compose/backup-acme.sh
+require 'backup-manifest-verify' deploy/compose/backup-acme.sh
+require 'the clean-target restore gate remains required' deploy/compose/backup-acme.sh
 require 'secrets/admin/backup-auth.key' deploy/compose/provision-acme-host.sh
 require 'secrets/certd/backup-auth.key' deploy/compose/provision-acme-host.sh
 require 'secrets/acmed/backup-auth.key' deploy/compose/provision-acme-host.sh

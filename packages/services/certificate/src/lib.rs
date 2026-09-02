@@ -203,9 +203,10 @@ pub use durable_catalog::{
 pub use durable_hosted::HostedDurableStateStore;
 #[cfg(target_os = "linux")]
 pub use hosted_component_backup::{
-    HostedBackupDescriptor, HostedBackupError, HostedBackupRole, HostedBackupSource,
-    MAX_HOSTED_BACKUP_BYTES, MAX_HOSTED_BACKUP_FILE_BYTES, MAX_HOSTED_BACKUP_FILES,
-    create_hosted_component_backup, verify_hosted_component_backup,
+    HOSTED_BACKUP_MANIFEST_BYTES, HostedBackupDescriptor, HostedBackupError, HostedBackupRole,
+    HostedBackupSource, MAX_HOSTED_BACKUP_BYTES, MAX_HOSTED_BACKUP_FILE_BYTES,
+    MAX_HOSTED_BACKUP_FILES, create_hosted_backup_manifest, create_hosted_component_backup,
+    verify_hosted_backup_manifest, verify_hosted_component_backup,
 };
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use hosted_daemon::{

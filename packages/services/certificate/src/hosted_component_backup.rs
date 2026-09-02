@@ -14,6 +14,9 @@ const VERSION: u16 = 1;
 const HEADER_BYTES: usize = 72;
 const TAG_BYTES: usize = 16;
 const ENTRY_HEADER_BYTES: usize = 40;
+const MANIFEST_MAGIC: &[u8; 8] = b"MRMLHBM1";
+const MANIFEST_VERSION: u16 = 1;
+pub const HOSTED_BACKUP_MANIFEST_BYTES: usize = 192;
 const LINUX_O_NOFOLLOW: i32 = 0x20_000;
 pub const MAX_HOSTED_BACKUP_FILES: usize = 512;
 pub const MAX_HOSTED_BACKUP_FILE_BYTES: usize = 2 * 1024 * 1024;
@@ -46,6 +49,123 @@ pub enum HostedBackupError {
     AuthenticationFailed,
     Malformed,
     RoleMismatch,
+    GenerationMismatch,
+    ManifestMismatch,
+}
+
+pub fn create_hosted_backup_manifest(
+    generation: u64,
+    backup_key: &[u8; 32],
+    certd_component: &Path,
+    acmed_component: &Path,
+    output: &Path,
+) -> Result<[u8; 32], HostedBackupError> {
+    if generation == 0 || backup_key == &[0; 32] || !output.is_absolute() {
+        return Err(HostedBackupError::InvalidGeneration);
+    }
+    let certd =
+        verify_hosted_component_backup(HostedBackupRole::Certd, backup_key, certd_component)?;
+    let acmed =
+        verify_hosted_component_backup(HostedBackupRole::Acmed, backup_key, acmed_component)?;
+    if certd.generation != generation || acmed.generation != generation {
+        return Err(HostedBackupError::GenerationMismatch);
+    }
+    let certd_digest = bounded_file_digest(certd_component)?;
+    let acmed_digest = bounded_file_digest(acmed_component)?;
+    let mut manifest = [0u8; HOSTED_BACKUP_MANIFEST_BYTES];
+    manifest[..8].copy_from_slice(MANIFEST_MAGIC);
+    manifest[8..10].copy_from_slice(&MANIFEST_VERSION.to_be_bytes());
+    manifest[16..24].copy_from_slice(&generation.to_be_bytes());
+    manifest[24..26].copy_from_slice(&certd.file_count.to_be_bytes());
+    manifest[26..28].copy_from_slice(&acmed.file_count.to_be_bytes());
+    manifest[32..64].copy_from_slice(&certd.plaintext_digest);
+    manifest[64..96].copy_from_slice(&acmed.plaintext_digest);
+    manifest[96..128].copy_from_slice(&certd_digest);
+    manifest[128..160].copy_from_slice(&acmed_digest);
+    let mut manifest_key = hmac_sha256(backup_key, &[b"mrml-hosted-backup-manifest-hmac-v1"]);
+    let tag = hmac_sha256(&manifest_key, &[&manifest[..160]]);
+    erase_secret_bytes(&mut manifest_key);
+    manifest[160..192].copy_from_slice(&tag);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o640)
+        .custom_flags(LINUX_O_NOFOLLOW)
+        .open(output)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                HostedBackupError::OutputExists
+            } else {
+                HostedBackupError::Io
+            }
+        })?;
+    if file
+        .write_all(&manifest)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        let _ = fs::remove_file(output);
+        return Err(HostedBackupError::Io);
+    }
+    sync_parent(output)?;
+    Ok(Sha256::digest(&manifest))
+}
+
+pub fn verify_hosted_backup_manifest(
+    generation: u64,
+    backup_key: &[u8; 32],
+    certd_component: &Path,
+    acmed_component: &Path,
+    manifest_path: &Path,
+) -> Result<[u8; 32], HostedBackupError> {
+    if generation == 0 || backup_key == &[0; 32] {
+        return Err(HostedBackupError::InvalidGeneration);
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(LINUX_O_NOFOLLOW)
+        .open(manifest_path)
+        .map_err(|_| HostedBackupError::Io)?;
+    let metadata = file.metadata().map_err(|_| HostedBackupError::Io)?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.len() != HOSTED_BACKUP_MANIFEST_BYTES as u64
+    {
+        return Err(HostedBackupError::UnsafeEntry);
+    }
+    let mut manifest = [0u8; HOSTED_BACKUP_MANIFEST_BYTES];
+    file.read_exact(&mut manifest)
+        .map_err(|_| HostedBackupError::Io)?;
+    if &manifest[..8] != MANIFEST_MAGIC
+        || manifest[8..10] != MANIFEST_VERSION.to_be_bytes()
+        || manifest[10..16] != [0; 6]
+        || manifest[28..32] != [0; 4]
+        || u64::from_be_bytes(manifest[16..24].try_into().unwrap()) != generation
+    {
+        return Err(HostedBackupError::Malformed);
+    }
+    let mut manifest_key = hmac_sha256(backup_key, &[b"mrml-hosted-backup-manifest-hmac-v1"]);
+    let expected_tag = hmac_sha256(&manifest_key, &[&manifest[..160]]);
+    erase_secret_bytes(&mut manifest_key);
+    if !constant_time_equal(&expected_tag, &manifest[160..192]) {
+        return Err(HostedBackupError::AuthenticationFailed);
+    }
+    let certd =
+        verify_hosted_component_backup(HostedBackupRole::Certd, backup_key, certd_component)?;
+    let acmed =
+        verify_hosted_component_backup(HostedBackupRole::Acmed, backup_key, acmed_component)?;
+    if certd.generation != generation
+        || acmed.generation != generation
+        || manifest[24..26] != certd.file_count.to_be_bytes()
+        || manifest[26..28] != acmed.file_count.to_be_bytes()
+        || manifest[32..64] != certd.plaintext_digest
+        || manifest[64..96] != acmed.plaintext_digest
+        || manifest[96..128] != bounded_file_digest(certd_component)?
+        || manifest[128..160] != bounded_file_digest(acmed_component)?
+    {
+        return Err(HostedBackupError::ManifestMismatch);
+    }
+    Ok(Sha256::digest(&manifest))
 }
 
 #[derive(Clone, Copy)]
@@ -450,6 +570,51 @@ fn validate_archive_name(name: &str) -> Result<(), HostedBackupError> {
     Ok(())
 }
 
+fn bounded_file_digest(path: &Path) -> Result<[u8; 32], HostedBackupError> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| HostedBackupError::Io)?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() != 1
+        || metadata.len() > (HEADER_BYTES + MAX_HOSTED_BACKUP_BYTES + TAG_BYTES) as u64
+    {
+        return Err(HostedBackupError::UnsafeEntry);
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(LINUX_O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| HostedBackupError::Io)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 16 * 1024];
+    let mut total = 0usize;
+    loop {
+        let read = file.read(&mut buffer).map_err(|_| HostedBackupError::Io)?;
+        if read == 0 {
+            break;
+        }
+        total = total.checked_add(read).ok_or(HostedBackupError::TooLarge)?;
+        if total > HEADER_BYTES + MAX_HOSTED_BACKUP_BYTES + TAG_BYTES {
+            return Err(HostedBackupError::TooLarge);
+        }
+        digest.update(&buffer[..read]);
+    }
+    if total as u64 != metadata.len() {
+        return Err(HostedBackupError::Io);
+    }
+    Ok(digest.finalize())
+}
+
+fn constant_time_equal(expected: &[u8], presented: &[u8]) -> bool {
+    if expected.len() != presented.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (left, right) in expected.iter().zip(presented) {
+        difference |= left ^ right;
+    }
+    difference == 0
+}
+
 fn clear_entries(entries: &mut Vec<Entry>) {
     for entry in entries {
         entry.bytes.fill(0);
@@ -620,6 +785,75 @@ mod tests {
         assert!(matches!(
             verify_hosted_component_backup(HostedBackupRole::Acmed, &[0x11; 32], &link),
             Err(HostedBackupError::UnsafeEntry)
+        ));
+    }
+
+    #[test]
+    fn combined_manifest_binds_both_roles_generation_counts_and_ciphertexts() {
+        let root = TestRoot::new();
+        let certd_state = root.0.join("certd");
+        let acmed_state = root.0.join("acmed");
+        fs::create_dir(&certd_state).unwrap();
+        fs::create_dir(&acmed_state).unwrap();
+        fs::write(certd_state.join("key.bin"), b"certd encrypted key").unwrap();
+        fs::write(
+            acmed_state.join("order.record"),
+            b"acmed authenticated order",
+        )
+        .unwrap();
+        let certd = root.0.join("certd.mrb");
+        let acmed = root.0.join("acmed.mrb");
+        let manifest = root.0.join("manifest.mrm");
+        let owner = metadata_uid(&certd_state);
+        create_hosted_component_backup(
+            HostedBackupRole::Certd,
+            12,
+            owner,
+            &[HostedBackupSource {
+                source: &certd_state,
+                archive_name: "certd",
+            }],
+            &[0x51; 32],
+            &certd,
+        )
+        .unwrap();
+        create_hosted_component_backup(
+            HostedBackupRole::Acmed,
+            12,
+            owner,
+            &[HostedBackupSource {
+                source: &acmed_state,
+                archive_name: "acmed",
+            }],
+            &[0x51; 32],
+            &acmed,
+        )
+        .unwrap();
+        let digest =
+            create_hosted_backup_manifest(12, &[0x51; 32], &certd, &acmed, &manifest).unwrap();
+        assert_eq!(
+            verify_hosted_backup_manifest(12, &[0x51; 32], &certd, &acmed, &manifest).unwrap(),
+            digest
+        );
+        assert!(matches!(
+            verify_hosted_backup_manifest(11, &[0x51; 32], &certd, &acmed, &manifest),
+            Err(HostedBackupError::Malformed)
+        ));
+        assert!(matches!(
+            verify_hosted_backup_manifest(12, &[0x52; 32], &certd, &acmed, &manifest),
+            Err(HostedBackupError::AuthenticationFailed)
+        ));
+        assert!(matches!(
+            verify_hosted_backup_manifest(12, &[0x51; 32], &acmed, &certd, &manifest),
+            Err(HostedBackupError::RoleMismatch)
+        ));
+        let changed = root.0.join("changed-manifest.mrm");
+        let mut bytes = fs::read(&manifest).unwrap();
+        bytes[100] ^= 1;
+        fs::write(&changed, bytes).unwrap();
+        assert!(matches!(
+            verify_hosted_backup_manifest(12, &[0x51; 32], &certd, &acmed, &changed),
+            Err(HostedBackupError::AuthenticationFailed)
         ));
     }
 

@@ -12,6 +12,7 @@ root=${MRML_DEPLOY_ROOT:-/mnt/mrml}
 "$directory/validate-acme.sh"
 [ ! -e "$root/backups/certd/certd-$generation.mrb" ] || { echo "certd backup component already exists" >&2; exit 1; }
 [ ! -e "$root/backups/acmed/acmed-$generation.mrb" ] || { echo "acmed backup component already exists" >&2; exit 1; }
+[ ! -e "$root/backups/certd/manifest-$generation.mrm" ] || { echo "backup manifest already exists" >&2; exit 1; }
 
 docker compose --env-file "$environment" -f "$compose" stop acmed certd
 restart=true
@@ -38,9 +39,19 @@ docker compose --env-file "$environment" -f "$compose" run --rm --no-deps \
   -v "$root/secrets/acmed/backup-auth.key:/run/secrets/backup-auth.key:ro" \
   -v "$root/backups/acmed:/var/lib/mrml/backups:ro" \
   acmed /usr/bin/mrml-acmed backup-verify "$generation"
+docker compose --env-file "$environment" -f "$compose" run --rm --no-deps \
+  --user 21003:21005 -e MRML_CERTD_OFFLINE_BACKUP=1 \
+  -v "$root/secrets/certd/backup-auth.key:/run/secrets/backup-auth.key:ro" \
+  -v "$root/backups:/var/lib/mrml/backups:rw" \
+  certd /usr/bin/mrml-certd backup-manifest-create "$generation"
+docker compose --env-file "$environment" -f "$compose" run --rm --no-deps \
+  --user 21003:21005 -e MRML_CERTD_OFFLINE_BACKUP=1 \
+  -v "$root/secrets/certd/backup-auth.key:/run/secrets/backup-auth.key:ro" \
+  -v "$root/backups:/var/lib/mrml/backups:ro" \
+  certd /usr/bin/mrml-certd backup-manifest-verify "$generation"
 
 docker compose --env-file "$environment" -f "$compose" up -d --no-build --pull never certd acmed
 restart=false
 trap - EXIT HUP INT TERM
-echo "encrypted ACME backup components created and verified at generation $generation"
-echo "the authenticated combined manifest and clean-target restore gate remain required"
+echo "encrypted ACME backup set created with authenticated manifest at generation $generation"
+echo "the clean-target restore gate remains required"

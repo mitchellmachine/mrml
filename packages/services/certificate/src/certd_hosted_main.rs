@@ -12,11 +12,12 @@ use mrml_certificate::{
     MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES, MAX_CERTIFICATE_CHAIN_BYTES,
     MAX_CERTIFICATES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, PRODUCTION_SECRET_MODE,
     PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute,
-    UnixCertdListener, create_hosted_component_backup, decode_certd_account_key_request,
-    decode_certd_candidate_request, decode_certd_channel_request, decode_certd_jws_request,
-    decode_certd_tls_key_request, encode_certd_candidate_request, encode_certd_channel_request,
-    encode_certd_tls_key_response, parse_certd_config, verify_hosted_component_backup,
-    write_constrained_acme_jws, write_pkcs10_csr,
+    UnixCertdListener, create_hosted_backup_manifest, create_hosted_component_backup,
+    decode_certd_account_key_request, decode_certd_candidate_request, decode_certd_channel_request,
+    decode_certd_jws_request, decode_certd_tls_key_request, encode_certd_candidate_request,
+    encode_certd_channel_request, encode_certd_tls_key_response, parse_certd_config,
+    verify_hosted_backup_manifest, verify_hosted_component_backup, write_constrained_acme_jws,
+    write_pkcs10_csr,
 };
 use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 use mrml_crypto::{ecdsa_p256_digest_verify_raw, encode_der_signature};
@@ -113,26 +114,63 @@ fn application_main() -> Result<(), &'static str> {
         }
         "backup-create" => backup_component_command(true),
         "backup-verify" => backup_component_command(false),
+        "backup-manifest-create" => backup_manifest_command(true),
+        "backup-manifest-verify" => backup_manifest_command(false),
         "health" => check_hosted_health(config),
         "serve" => serve(config),
         _ => Err(
-            "usage: mrml-certd [serve|check-config|config-status|health|backup-create GENERATION|backup-verify GENERATION]",
+            "usage: mrml-certd [serve|check-config|config-status|health|backup-create GENERATION|backup-verify GENERATION|backup-manifest-create GENERATION|backup-manifest-verify GENERATION]",
         ),
     }
+}
+
+fn backup_manifest_command(create: bool) -> Result<(), &'static str> {
+    if std::env::var("MRML_CERTD_OFFLINE_BACKUP").as_deref() != Ok("1") {
+        return Err("backup operation requires the stopped-certd one-shot context");
+    }
+    let generation = backup_generation_argument()?;
+    let secret = HostedSecret::open(
+        Path::new(BACKUP_CAPABILITY),
+        CERTD_UID,
+        PRODUCTION_SECRET_MODE,
+        32,
+    )
+    .map_err(|_| "invalid certd backup capability")?;
+    let mut key: [u8; 32] = secret
+        .expose()
+        .try_into()
+        .map_err(|_| "invalid certd backup capability")?;
+    let certd = std::path::PathBuf::from(std::format!(
+        "{}/certd/certd-{}.mrb",
+        BACKUP_ROOT,
+        generation
+    ));
+    let acmed = std::path::PathBuf::from(std::format!(
+        "{}/acmed/acmed-{}.mrb",
+        BACKUP_ROOT,
+        generation
+    ));
+    let manifest = std::path::PathBuf::from(std::format!(
+        "{}/certd/manifest-{}.mrm",
+        BACKUP_ROOT,
+        generation
+    ));
+    let result = if create {
+        create_hosted_backup_manifest(generation, &key, &certd, &acmed, &manifest)
+    } else {
+        verify_hosted_backup_manifest(generation, &key, &certd, &acmed, &manifest)
+    };
+    erase_secret_bytes(&mut key);
+    let digest = result.map_err(|_| "combined backup manifest operation failed")?;
+    println!("generation={} manifest_sha256={}", generation, hex(&digest));
+    Ok(())
 }
 
 fn backup_component_command(create: bool) -> Result<(), &'static str> {
     if std::env::var("MRML_CERTD_OFFLINE_BACKUP").as_deref() != Ok("1") {
         return Err("backup operation requires the stopped-certd one-shot context");
     }
-    let generation = std::env::args()
-        .nth(2)
-        .ok_or("backup generation is required")?
-        .parse::<u64>()
-        .map_err(|_| "backup generation must be a nonzero decimal integer")?;
-    if generation == 0 || std::env::args().nth(3).is_some() {
-        return Err("backup generation must be a nonzero decimal integer");
-    }
+    let generation = backup_generation_argument()?;
     let secret = HostedSecret::open(
         Path::new(BACKUP_CAPABILITY),
         CERTD_UID,
@@ -157,19 +195,19 @@ fn backup_component_command(create: bool) -> Result<(), &'static str> {
                 },
                 HostedBackupSource {
                     source: Path::new("/var/lib/mrml/publications"),
-                    archive_name: "publications",
+                    archive_name: "certd/publications",
                 },
                 HostedBackupSource {
                     source: Path::new(UNLOCK_SECRET),
-                    archive_name: "secrets/certd-unlock.key",
+                    archive_name: "secrets/certd/certd-unlock.key",
                 },
                 HostedBackupSource {
                     source: Path::new(GITD_CAPABILITY),
-                    archive_name: "secrets/certd-gitd.cap",
+                    archive_name: "secrets/channels/certd-gitd.cap.certd",
                 },
                 HostedBackupSource {
                     source: Path::new(ACMED_CAPABILITY),
-                    archive_name: "secrets/certd-acmed.cap",
+                    archive_name: "secrets/channels/certd-acmed.cap.certd",
                 },
             ],
             &key,
@@ -187,6 +225,19 @@ fn backup_component_command(create: bool) -> Result<(), &'static str> {
         hex(&descriptor.plaintext_digest)
     );
     Ok(())
+}
+
+fn backup_generation_argument() -> Result<u64, &'static str> {
+    let generation = std::env::args()
+        .nth(2)
+        .ok_or("backup generation is required")?
+        .parse::<u64>()
+        .map_err(|_| "backup generation must be a nonzero decimal integer")?;
+    if generation == 0 || std::env::args().nth(3).is_some() {
+        Err("backup generation must be a nonzero decimal integer")
+    } else {
+        Ok(generation)
+    }
 }
 
 fn hex(value: &[u8]) -> String {

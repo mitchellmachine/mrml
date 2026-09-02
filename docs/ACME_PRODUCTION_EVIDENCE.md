@@ -16,7 +16,7 @@ physical evidence are distinct.
 | Manifest lock | `./target/debug/mrml manifest lock --check` | PASS: 70 packages, 5 interfaces |
 | Manifest graph | `./target/debug/mrml manifest check` | PASS: 70 components, 209 dependencies |
 | Certificate release build | `./target/debug/mrml build org.mrml.service.certificate --target linux --release` | PASS |
-| Certificate focused tests | `./target/debug/mrml test org.mrml.service.certificate --target linux --release` | PASS: 135, fail: 0 |
+| Certificate focused tests | `./target/debug/mrml test org.mrml.service.certificate --target linux --release` | PASS: 136, fail: 0 |
 | ACME service release build | `./target/debug/mrml build org.mrml.service.acme --target linux --release` | PASS |
 | ACME service focused tests | `./target/debug/mrml test org.mrml.service.acme --target linux --release` | PASS: 14, fail: 0 |
 | ACME library release build | `./target/debug/mrml build org.mrml.library.acme --target linux --release` | PASS |
@@ -64,10 +64,12 @@ complete plaintext digest; source and input scans reject symlinks, hard links,
 unsafe modes, traversal, duplicates, oversized files/scans, wrong roles, wrong
 keys, and ciphertext substitution. Secret-bearing scratch is cleared.
 Stopped-service `backup-create` and `backup-verify` commands are wired into both
-production binaries, and `backup-acme.sh` stops both daemons, creates the two
-same-generation components under their respective UIDs, verifies each, and
-restarts the services on success or failure. This remains component evidence,
-not a completed backup/restore result.
+production binaries. A combined HMAC manifest re-verifies and binds both exact
+ciphertexts, roles, generations, file counts, and plaintext digests.
+`backup-acme.sh` stops both daemons, creates the two same-generation components
+under their respective UIDs, creates and verifies the combined manifest, and
+restarts the services on success or failure. This proves authenticated backup
+set creation, not restoration.
 The production Compose topology does not yet wire a real multi-principal
 one-shot backup provider spanning certd-owned encrypted key state, acmed-owned
 authenticated lifecycle state, publication records, and channel metadata.

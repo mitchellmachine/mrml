@@ -142,10 +142,10 @@ and acmed components at one exact generation and immediately verifies both:
 ```
 
 The components contain each service's own state and recovery secrets but are
-AES-GCM protected by the separately provisioned backup capability. They are not
-yet a complete restorable backup: do not move them off-host as a completed
-recovery set until the combined authenticated manifest and clean-target restore
-receipt are implemented.
+AES-GCM protected by the separately provisioned backup capability. A combined
+HMAC-authenticated manifest binds both ciphertexts, plaintext digests, roles,
+file counts, and the shared generation. The set is not yet restorable: do not
+rely on it for recovery until the clean-target restore receipt is implemented.
 
 Compose cannot enforce a destination-aware outbound firewall. Apply host or
 upstream egress policy for the configured ACME and DNS-provider origins. The

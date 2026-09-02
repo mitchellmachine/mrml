@@ -234,19 +234,19 @@ fn backup_component_command(create: bool) -> Result<(), &'static str> {
             &[
                 HostedBackupSource {
                     source: Path::new(STATE_ROOT),
-                    archive_name: "acmed",
+                    archive_name: "acmed/state",
                 },
                 HostedBackupSource {
                     source: Path::new("/var/lib/mrml/challenges"),
-                    archive_name: "challenges",
+                    archive_name: "acmed/challenges",
                 },
                 HostedBackupSource {
                     source: Path::new(STATE_KEY),
-                    archive_name: "secrets/acmed-state.key",
+                    archive_name: "secrets/acmed/acmed-state.key",
                 },
                 HostedBackupSource {
                     source: Path::new(CHANNEL_CAPABILITY),
-                    archive_name: "secrets/certd-acmed.cap",
+                    archive_name: "secrets/channels/certd-acmed.cap.acmed",
                 },
             ],
             &key,
