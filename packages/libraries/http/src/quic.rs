@@ -13,6 +13,18 @@ const V2_INITIAL_SALT: [u8; 20] = [
 ];
 const MAX_DATAGRAM: usize = 65_527;
 const MAX_INITIAL_TOKEN: usize = 256;
+const V1_RETRY_INTEGRITY_KEY: [u8; 16] = [
+    0xbe, 0x0c, 0x69, 0x0b, 0x9f, 0x66, 0x57, 0x5a, 0x1d, 0x76, 0x6b, 0x54, 0xe3, 0x68, 0xc8, 0x4e,
+];
+const V1_RETRY_INTEGRITY_NONCE: [u8; 12] = [
+    0x46, 0x15, 0x99, 0xd3, 0x5d, 0x63, 0x2b, 0xf2, 0x23, 0x98, 0x25, 0xbb,
+];
+const V2_RETRY_INTEGRITY_KEY: [u8; 16] = [
+    0x8f, 0xb4, 0xb0, 0x1b, 0x56, 0xac, 0x48, 0xe2, 0x60, 0xfb, 0xcb, 0xce, 0xad, 0x7c, 0xcc, 0x92,
+];
+const V2_RETRY_INTEGRITY_NONCE: [u8; 12] = [
+    0xd8, 0x69, 0x69, 0xbc, 0x2d, 0x7c, 0x6d, 0x99, 0x90, 0xef, 0xb0, 0x4a,
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuicVersion {
@@ -47,6 +59,20 @@ impl QuicVersion {
         match self {
             Self::V1 => 0xe0,
             Self::V2 => 0xf0,
+        }
+    }
+
+    const fn retry_type(self) -> u8 {
+        match self {
+            Self::V1 => 0xf0,
+            Self::V2 => 0xc0,
+        }
+    }
+
+    const fn retry_integrity(self) -> (&'static [u8; 16], &'static [u8; 12]) {
+        match self {
+            Self::V1 => (&V1_RETRY_INTEGRITY_KEY, &V1_RETRY_INTEGRITY_NONCE),
+            Self::V2 => (&V2_RETRY_INTEGRITY_KEY, &V2_RETRY_INTEGRITY_NONCE),
         }
     }
 
@@ -1546,6 +1572,142 @@ impl QuicStreamAssembler {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RetryPacket {
+    pub destination_id: Vector<u8>,
+    pub source_id: Vector<u8>,
+    pub token: Vector<u8>,
+}
+
+impl RetryPacket {
+    pub fn seal(
+        &self,
+        version: QuicVersion,
+        original_destination_id: &[u8],
+    ) -> Result<Vector<u8>, QuicError> {
+        if self.destination_id.len() > 20
+            || self.source_id.is_empty()
+            || self.source_id.len() > 20
+            || original_destination_id.len() > 20
+            || self.token.is_empty()
+            || self.token.len() > MAX_INITIAL_TOKEN
+        {
+            return Err(QuicError::Limit);
+        }
+        let mut packet = Vector::new();
+        packet
+            .try_push(version.retry_type())
+            .map_err(|_| QuicError::Allocation)?;
+        packet
+            .try_extend_from_slice(&version.wire().to_be_bytes())
+            .map_err(|_| QuicError::Allocation)?;
+        packet
+            .try_push(self.destination_id.len() as u8)
+            .map_err(|_| QuicError::Allocation)?;
+        packet
+            .try_extend_from_slice(&self.destination_id)
+            .map_err(|_| QuicError::Allocation)?;
+        packet
+            .try_push(self.source_id.len() as u8)
+            .map_err(|_| QuicError::Allocation)?;
+        packet
+            .try_extend_from_slice(&self.source_id)
+            .map_err(|_| QuicError::Allocation)?;
+        packet
+            .try_extend_from_slice(&self.token)
+            .map_err(|_| QuicError::Allocation)?;
+        let mut pseudo = Vector::new();
+        pseudo
+            .try_push(original_destination_id.len() as u8)
+            .map_err(|_| QuicError::Allocation)?;
+        pseudo
+            .try_extend_from_slice(original_destination_id)
+            .map_err(|_| QuicError::Allocation)?;
+        pseudo
+            .try_extend_from_slice(&packet)
+            .map_err(|_| QuicError::Allocation)?;
+        let (key, nonce) = version.retry_integrity();
+        let mut tag = [0; 16];
+        if !aes128_gcm_seal(key, nonce, &pseudo, &[], &mut [], &mut tag) {
+            return Err(QuicError::Crypto);
+        }
+        packet
+            .try_extend_from_slice(&tag)
+            .map_err(|_| QuicError::Allocation)?;
+        Ok(packet)
+    }
+
+    pub fn open(
+        input: &[u8],
+        original_destination_id: &[u8],
+    ) -> Result<(QuicVersion, Self), QuicError> {
+        if input.len() < 1 + 4 + 1 + 1 + 16 || original_destination_id.len() > 20 {
+            return Err(QuicError::Truncated);
+        }
+        let version = QuicVersion::from_wire(u32::from_be_bytes([
+            input[1], input[2], input[3], input[4],
+        ]))
+        .ok_or(QuicError::InvalidPacket)?;
+        if input[0] & 0xf0 != version.retry_type() {
+            return Err(QuicError::InvalidPacket);
+        }
+        let destination_length = input[5] as usize;
+        let destination_end = 6usize
+            .checked_add(destination_length)
+            .ok_or(QuicError::Limit)?;
+        let source_length = *input.get(destination_end).ok_or(QuicError::Truncated)? as usize;
+        let source_start = destination_end + 1;
+        let source_end = source_start
+            .checked_add(source_length)
+            .ok_or(QuicError::Limit)?;
+        let tag_start = input.len() - 16;
+        if destination_length > 20
+            || source_length == 0
+            || source_length > 20
+            || source_end >= tag_start
+        {
+            return Err(QuicError::InvalidPacket);
+        }
+        let mut pseudo = Vector::new();
+        pseudo
+            .try_push(original_destination_id.len() as u8)
+            .map_err(|_| QuicError::Allocation)?;
+        pseudo
+            .try_extend_from_slice(original_destination_id)
+            .map_err(|_| QuicError::Allocation)?;
+        pseudo
+            .try_extend_from_slice(&input[..tag_start])
+            .map_err(|_| QuicError::Allocation)?;
+        let tag: [u8; 16] = input[tag_start..]
+            .try_into()
+            .map_err(|_| QuicError::InvalidPacket)?;
+        let (key, nonce) = version.retry_integrity();
+        if !aes128_gcm_open(key, nonce, &pseudo, &[], &tag, &mut []) {
+            return Err(QuicError::Crypto);
+        }
+        let mut destination_id = Vector::new();
+        destination_id
+            .try_extend_from_slice(&input[6..destination_end])
+            .map_err(|_| QuicError::Allocation)?;
+        let mut source_id = Vector::new();
+        source_id
+            .try_extend_from_slice(&input[source_start..source_end])
+            .map_err(|_| QuicError::Allocation)?;
+        let mut token = Vector::new();
+        token
+            .try_extend_from_slice(&input[source_end..tag_start])
+            .map_err(|_| QuicError::Allocation)?;
+        Ok((
+            version,
+            Self {
+                destination_id,
+                source_id,
+                token,
+            },
+        ))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InitialPacket {
     pub destination_id: Vector<u8>,
     pub source_id: Vector<u8>,
@@ -1986,6 +2148,32 @@ mod tests {
         assert_eq!(&k.key[..], &hex("1f369613dd76d5467730efcbe3b1a22d")[..]);
         assert_eq!(&k.iv[..], &hex("fa044b2f42a3fd3b46fb255c")[..]);
         assert_eq!(&k.header[..], &hex("9f50449e04a0e810283a1e9933adedd2")[..])
+    }
+    #[test]
+    fn rfc9001_retry_integrity_authenticates_original_destination() {
+        let wire = hex(
+            "ff000000010008f067a5502a4262b5746f6b656e04a265ba2eff4d829058fb3f0f2496ba",
+        );
+        let original_destination_id = hex("8394c8f03e515708");
+        let (version, packet) = RetryPacket::open(&wire, &original_destination_id).unwrap();
+        assert_eq!(version, QuicVersion::V1);
+        assert!(packet.destination_id.is_empty());
+        assert_eq!(packet.source_id, hex("f067a5502a4262b5"));
+        assert_eq!(packet.token, b"token".as_slice());
+        let mut tampered = wire.clone();
+        tampered[15] ^= 1;
+        assert_eq!(
+            RetryPacket::open(&tampered, &original_destination_id),
+            Err(QuicError::Crypto)
+        );
+
+        let sealed = packet
+            .seal(QuicVersion::V1, &original_destination_id)
+            .unwrap();
+        assert_eq!(
+            RetryPacket::open(&sealed, &original_destination_id),
+            Ok((QuicVersion::V1, packet))
+        );
     }
     #[test]
     fn authenticated_packet_history_rejects_replay_and_bounds_sparse_ranges() {
