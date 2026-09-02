@@ -1,5 +1,5 @@
 use mrml_git::{AuditReceiptAuthority, RepositoryIdentity};
-use mrml_http::{BackendError, GitdAuthentication, GitdHttp3Server};
+use mrml_http::{BackendError, GitdAuthentication, GitdHttp3Server, GitdOperationalHealth};
 use mrml_runtime::Shared;
 
 use crate::{
@@ -23,6 +23,7 @@ pub struct GitdComposedService {
     pub recovery: Vec<(RepositoryIdentity, RepositoryRecoverySummary)>,
     backend: SharedGitdRepositorySet,
     authentication: Shared<GitdAuthentication>,
+    health: Shared<GitdOperationalHealth>,
 }
 
 impl GitdComposedService {
@@ -32,7 +33,12 @@ impl GitdComposedService {
     ) -> Result<GitdHttp3Server<SharedGitdRepositorySet>, BackendError> {
         let mut edge = GitdHttp3Server::new(self.backend.clone(), cache_bytes)?;
         edge.configure_shared_authentication(self.authentication.clone());
+        edge.configure_operational_health(self.health.clone());
         Ok(edge)
+    }
+
+    pub fn operational_health(&self) -> Shared<GitdOperationalHealth> {
+        self.health.clone()
     }
 }
 
@@ -72,13 +78,16 @@ pub fn compose_gitd_service(
         .into_shared()
         .map_err(|_| GitdCompositionError::Backend)?;
     let authentication = Shared::new(authentication);
+    let health = Shared::new(GitdOperationalHealth::starting());
     let mut edge = GitdHttp3Server::new(shared.clone(), cache_bytes)
         .map_err(|_| GitdCompositionError::Cache)?;
     edge.configure_shared_authentication(authentication.clone());
+    edge.configure_operational_health(health.clone());
     Ok(GitdComposedService {
         edge,
         recovery,
         backend: shared,
         authentication,
+        health,
     })
 }

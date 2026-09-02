@@ -1,6 +1,7 @@
 use mrml_crypto::Sha256;
 use mrml_runtime::{Shared, Text, Vector};
 use mrml_zstd::{HttpEncodingProfile, encode_http};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::{GitdAuthentication, Header, RepositoryAction, RequestHead};
 
@@ -16,6 +17,46 @@ const RENDERER_VERSION: &str = "gitd-html-v3";
 const TEMPLATE_VERSION: &str = "mrml-template-v2";
 const THEME_VERSION: &str = "charcoal-amber-v1";
 const SANITIZER_VERSION: &str = "structural-sanitizer-v2";
+
+const HEALTH_STARTING: u8 = 0;
+const HEALTH_READY: u8 = 1;
+const HEALTH_DRAINING: u8 = 2;
+const HEALTH_FAILED: u8 = 3;
+
+pub struct GitdOperationalHealth {
+    state: AtomicU8,
+}
+
+impl GitdOperationalHealth {
+    pub const fn starting() -> Self {
+        Self {
+            state: AtomicU8::new(HEALTH_STARTING),
+        }
+    }
+
+    pub fn mark_ready(&self) {
+        let _ = self.state.compare_exchange(
+            HEALTH_STARTING,
+            HEALTH_READY,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub fn begin_drain(&self) {
+        if self.state.load(Ordering::Acquire) != HEALTH_FAILED {
+            self.state.store(HEALTH_DRAINING, Ordering::Release);
+        }
+    }
+
+    pub fn fail(&self) {
+        self.state.store(HEALTH_FAILED, Ordering::Release);
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.state.load(Ordering::Acquire) == HEALTH_READY
+    }
+}
 const HIGHLIGHTER_VERSION: &str = "language-labels-v1";
 const ENCODING_PROFILE_VERSION: &str = "zstd-bounded-raw-rle-v1";
 const VERIFIER_VERSION: &str = "gitd-verifier-view-v1";
@@ -860,6 +901,7 @@ pub struct GitdHttp3Server<B: GitdBackend> {
     trust: TrustGeneration,
     revocations: RevocationGeneration,
     authentication: Option<Shared<GitdAuthentication>>,
+    operational_health: Option<Shared<GitdOperationalHealth>>,
 }
 
 impl<B: GitdBackend> GitdHttp3Server<B> {
@@ -871,6 +913,7 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             trust: TrustGeneration(0),
             revocations: RevocationGeneration(0),
             authentication: None,
+            operational_health: None,
         })
     }
     pub fn configure_authentication(&mut self, authentication: GitdAuthentication) {
@@ -878,6 +921,9 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
     }
     pub fn configure_shared_authentication(&mut self, authentication: Shared<GitdAuthentication>) {
         self.authentication = Some(authentication);
+    }
+    pub fn configure_operational_health(&mut self, health: Shared<GitdOperationalHealth>) {
+        self.operational_health = Some(health);
     }
     pub fn set_verification_generations(
         &mut self,
@@ -1042,6 +1088,25 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             return Ok(self.error(405, "Method not allowed"));
         }
         let target = request.target.split('?').next().unwrap_or("");
+        if target == "/health/live" {
+            let mut response = self.text(200, "text/plain; charset=utf-8", b"live\n", false)?;
+            set_header(&mut response.headers, "cache-control", "no-store")?;
+            return Ok(response);
+        }
+        if target == "/health/ready" {
+            let ready = self
+                .operational_health
+                .as_ref()
+                .is_some_and(|health| health.is_ready());
+            let mut response = self.text(
+                if ready { 200 } else { 503 },
+                "text/plain; charset=utf-8",
+                if ready { b"ready\n" } else { b"not-ready\n" },
+                false,
+            )?;
+            set_header(&mut response.headers, "cache-control", "no-store")?;
+            return Ok(response);
+        }
         if target == "/" {
             return self.html_page(request, "MRML", "Independent systems research", "<h1>MRML</h1><p>Experimental operating-system, compiler, and application-platform research.</p>", true, "/", "home-v1");
         }
@@ -2384,6 +2449,42 @@ mod tests {
         );
         assert_eq!(input.reads, 0);
         assert!(output.bytes.is_empty());
+    }
+
+    #[test]
+    fn operational_health_distinguishes_liveness_readiness_and_drain() {
+        let mut server = GitdHttp3Server::new(
+            MockBackend {
+                generation: RepositoryGeneration(7),
+            },
+            4096,
+        )
+        .unwrap();
+        let health = Shared::new(GitdOperationalHealth::starting());
+        server.configure_operational_health(health.clone());
+        assert_eq!(server.handle(&request("GET", "/health/live", false)).status, 200);
+        assert_eq!(
+            server.handle(&request("GET", "/health/ready", false)).status,
+            503
+        );
+        health.mark_ready();
+        let ready = server.handle(&request("GET", "/health/ready", false));
+        assert_eq!(ready.status, 200);
+        assert!(ready
+            .headers
+            .iter()
+            .any(|header| header.name == "cache-control" && header.value == "no-store"));
+        health.begin_drain();
+        assert_eq!(
+            server.handle(&request("GET", "/health/ready", false)).status,
+            503
+        );
+        health.fail();
+        health.mark_ready();
+        assert_eq!(
+            server.handle(&request("GET", "/health/ready", false)).status,
+            503
+        );
     }
 
     #[test]

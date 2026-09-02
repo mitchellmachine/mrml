@@ -208,6 +208,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
         16 * 1024 * 1024,
     )
     .map_err(|_| ())?;
+    let operational_health = service.operational_health();
     let maximum_connections = usize::try_from(config.max_connections).map_err(|_| ())?;
     if !(4..=65_536).contains(&maximum_connections) {
         return Err(());
@@ -262,6 +263,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let fatal = Arc::new(AtomicBool::new(false));
     let rotation_stop = Arc::new(AtomicBool::new(false));
     let rotation_fatal = fatal.clone();
+    let rotation_health = operational_health.clone();
     let worker_rotation_stop = rotation_stop.clone();
     let rotation_tls = tls.clone();
     let rotation_route = signing_route.clone();
@@ -276,6 +278,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             )
             .is_err()
             {
+                rotation_health.fail();
                 rotation_fatal.store(true, Ordering::Release);
                 break;
             }
@@ -283,6 +286,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     })
     .map_err(|_| ())?;
     let worker_fatal = fatal.clone();
+    let tcp_health = operational_health.clone();
     let _tcp_worker = mrml_runtime::spawn_joinable(move || {
         loop {
             let socket = match tcp.accept() {
@@ -296,18 +300,22 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
                 break;
             }
         }
+        tcp_health.fail();
         worker_fatal.store(true, Ordering::Release);
     })
     .map_err(|_| ())?;
 
+    operational_health.mark_ready();
     loop {
         if fatal.load(Ordering::Acquire) {
+            operational_health.begin_drain();
             let _ = reactor.shutdown(&mut quic);
             rotation_stop.store(true, Ordering::Release);
             let _ = rotation_worker.join();
             return Err(());
         }
         if reactor.step(&mut quic).is_err() {
+            operational_health.fail();
             let _ = reactor.shutdown(&mut quic);
             fatal.store(true, Ordering::Release);
             rotation_stop.store(true, Ordering::Release);
