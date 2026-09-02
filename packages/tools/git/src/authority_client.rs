@@ -1,11 +1,11 @@
 //! Protected receive authority adapter over a narrow authenticated RPC.
 
 use crate::{
-    AuditReceiptAuthority, CandidateRefTransaction, GitdCoreError, HistoryVerificationError,
+    encode_authority_commit, encode_authority_proof_install, encode_authority_receipt,
+    encode_authority_receive, encode_authority_ref_transaction, AuditReceiptAuthority,
+    CandidateRefTransaction, DetachedCommitProofRecord, GitdCoreError, HistoryVerificationError,
     ObjectId, ProtectedCommitVerifier, ProtectedHistoryContext, ProtectedReceiveAuthority,
     ProtectedReceiveAuthorization, VerifiedCommitProof, VerifiedLegacyCommitProof,
-    encode_authority_commit, encode_authority_receipt, encode_authority_receive,
-    encode_authority_ref_transaction,
 };
 
 pub const AUTHORITY_OP_AUTHORIZE_RECEIVE: u8 = 2;
@@ -13,6 +13,7 @@ pub const AUTHORITY_OP_AUTHORIZE_REF_TRANSACTION: u8 = 3;
 pub const AUTHORITY_OP_VERIFY_COMMIT: u8 = 4;
 pub const AUTHORITY_OP_SIGN_RECEIPT: u8 = 6;
 pub const AUTHORITY_OP_VERIFY_RECEIPT: u8 = 7;
+pub const AUTHORITY_OP_INSTALL_PROOF: u8 = 8;
 const MAX_AUTHORITY_RESULT_BYTES: usize = 1024;
 
 /// Transport-only capability. Implementations must authenticate the peer,
@@ -46,6 +47,17 @@ impl<T: ProtectedAuthorityRpc> RemoteProtectedReceiveAuthority<T> {
             return Err(GitdCoreError::Authorization);
         }
         Ok(())
+    }
+
+    pub fn install_commit_proof(
+        &mut self,
+        context: ProtectedHistoryContext<'_>,
+        commit: ObjectId,
+        exact_contents: &[u8],
+        proof: &DetachedCommitProofRecord,
+    ) -> Result<(), GitdCoreError> {
+        let encoded = encode_authority_proof_install(context, commit, exact_contents, proof)?;
+        self.empty_response(AUTHORITY_OP_INSTALL_PROOF, &encoded)
     }
 }
 
@@ -135,8 +147,8 @@ impl<T: ProtectedAuthorityRpc> AuditReceiptAuthority for RemoteProtectedReceiveA
 mod tests {
     use super::*;
     use crate::{
-        ObjectFormat, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
-        SignaturePurpose, TrustGeneration, parse_authority_commit, parse_authority_receive,
+        parse_authority_commit, parse_authority_receive, ObjectFormat, RepositoryGeneration,
+        RepositoryIdentity, RevocationGeneration, SignaturePurpose, TrustGeneration,
     };
     use mrml_runtime::Vector;
 
@@ -195,11 +207,9 @@ mod tests {
             allow: true,
             calls: Vector::new(),
         });
-        assert!(
-            allowed
-                .verify_commit(context, commit, b"commit bytes")
-                .is_ok()
-        );
+        assert!(allowed
+            .verify_commit(context, commit, b"commit bytes")
+            .is_ok());
         let mut signature = [0u8; 64];
         assert_eq!(allowed.sign(b"receipt", &mut signature), Ok(32));
         assert_eq!(&signature[..32], &[0x55; 32]);

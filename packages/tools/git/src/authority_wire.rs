@@ -4,14 +4,16 @@ use mrml_runtime::Vector;
 
 use crate::gitd_core::{MAX_REF_NAME_BYTES, MAX_REPOSITORY_IDENTITY_BYTES};
 use crate::{
-    CandidateRefTransaction, CandidateRefUpdate, FullRefName, GitdCoreError, ObjectFormat,
-    ObjectId, ProtectedHistoryContext, ProtectedReceiveAuthorization, RepositoryGeneration,
-    RepositoryIdentity, RevocationGeneration, SignaturePurpose, TrustGeneration,
+    CandidateRefTransaction, CandidateRefUpdate, DetachedCommitProofRecord, FullRefName,
+    GitdCoreError, ObjectFormat, ObjectId, ProtectedHistoryContext, ProtectedReceiveAuthorization,
+    RepositoryGeneration, RepositoryIdentity, RevocationGeneration, SignaturePurpose,
+    TrustGeneration,
 };
 
 const RECEIVE_MAGIC: &[u8; 8] = b"MRGARCV1";
 const REFS_MAGIC: &[u8; 8] = b"MRGARFV1";
 const COMMIT_MAGIC: &[u8; 8] = b"MRGACMV1";
+const PROOF_MAGIC: &[u8; 8] = b"MRGAPF01";
 const RECEIPT_MAGIC: &[u8; 8] = b"MRGARPV1";
 pub const MAX_AUTHORITY_COMMIT_BYTES: usize = 1024 * 1024;
 pub const MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES: usize = 128 * 1024;
@@ -26,6 +28,74 @@ pub struct AuthorityCommitRequest {
     pub object_format: ObjectFormat,
     pub commit: ObjectId,
     pub exact_contents: Vector<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorityProofInstallRequest {
+    pub repository: RepositoryIdentity,
+    pub repository_generation: RepositoryGeneration,
+    pub trust_generation: TrustGeneration,
+    pub revocation_generation: RevocationGeneration,
+    pub purpose: SignaturePurpose,
+    pub object_format: ObjectFormat,
+    pub commit: ObjectId,
+    pub exact_contents: Vector<u8>,
+    pub proof: DetachedCommitProofRecord,
+}
+
+pub fn encode_authority_proof_install(
+    context: ProtectedHistoryContext<'_>,
+    commit: ObjectId,
+    exact_contents: &[u8],
+    proof: &DetachedCommitProofRecord,
+) -> Result<Vector<u8>, GitdCoreError> {
+    if proof.commit() != commit {
+        return Err(GitdCoreError::Authorization);
+    }
+    let mut output = encode_authority_commit(context, commit, exact_contents)?;
+    output[..8].copy_from_slice(PROOF_MAGIC);
+    append_counted(&mut output, proof.openpgp_signature())?;
+    append_counted(&mut output, proof.ml_dsa_signature())?;
+    Ok(output)
+}
+
+pub fn parse_authority_proof_install(
+    input: &[u8],
+) -> Result<AuthorityProofInstallRequest, GitdCoreError> {
+    let mut cursor = Cursor::new(input);
+    cursor.magic(PROOF_MAGIC)?;
+    let (repository, repository_generation, trust_generation, revocation_generation) =
+        cursor.context()?;
+    let purpose = parse_purpose(cursor.byte()?)?;
+    if cursor.byte()? != 2 {
+        return Err(GitdCoreError::Authorization);
+    }
+    let commit = ObjectId::from_bytes(ObjectFormat::Sha256, cursor.take(32)?)
+        .ok_or(GitdCoreError::MalformedInput)?;
+    let length = usize::try_from(cursor.u32()?).map_err(|_| GitdCoreError::Resource)?;
+    if length == 0 || length > MAX_AUTHORITY_COMMIT_BYTES {
+        return Err(GitdCoreError::Resource);
+    }
+    let mut exact_contents = Vector::new();
+    exact_contents
+        .try_extend_from_slice(cursor.take(length)?)
+        .map_err(|_| GitdCoreError::Resource)?;
+    let openpgp = cursor.counted_bytes(mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES)?;
+    let ml_dsa = cursor.counted_bytes(mrml_crypto::ML_DSA_65_SIGNATURE_BYTES)?;
+    cursor.finish()?;
+    let proof = DetachedCommitProofRecord::new(commit, openpgp, ml_dsa)
+        .map_err(|_| GitdCoreError::Authorization)?;
+    Ok(AuthorityProofInstallRequest {
+        repository,
+        repository_generation,
+        trust_generation,
+        revocation_generation,
+        purpose,
+        object_format: ObjectFormat::Sha256,
+        commit,
+        exact_contents,
+        proof,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -382,6 +452,13 @@ impl<'a> Cursor<'a> {
         }
         core::str::from_utf8(self.take(length)?).map_err(|_| GitdCoreError::MalformedInput)
     }
+    fn counted_bytes(&mut self, maximum: usize) -> Result<&'a [u8], GitdCoreError> {
+        let length = usize::from(self.u16()?);
+        if length == 0 || length > maximum {
+            return Err(GitdCoreError::Resource);
+        }
+        self.take(length)
+    }
     fn context(
         &mut self,
     ) -> Result<
@@ -487,6 +564,19 @@ mod tests {
         .unwrap();
         assert_eq!(commit.commit, object);
         assert_eq!(&commit.exact_contents[..], b"tree contents");
+        let proof = DetachedCommitProofRecord::new(
+            object,
+            &[3; 64],
+            &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES],
+        )
+        .unwrap();
+        let installed = parse_authority_proof_install(
+            &encode_authority_proof_install(context, object, b"tree contents", &proof).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(installed.commit, object);
+        assert_eq!(installed.proof, proof);
+        assert_eq!(&installed.exact_contents[..], b"tree contents");
         let receipt =
             parse_authority_receipt(&encode_authority_receipt(b"transcript", &[4; 32]).unwrap())
                 .unwrap();

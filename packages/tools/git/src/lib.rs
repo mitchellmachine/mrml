@@ -57,15 +57,17 @@ pub use audit_receipt::{
 };
 pub use authority_client::{
     AUTHORITY_OP_AUTHORIZE_RECEIVE, AUTHORITY_OP_AUTHORIZE_REF_TRANSACTION,
-    AUTHORITY_OP_SIGN_RECEIPT, AUTHORITY_OP_VERIFY_COMMIT, AUTHORITY_OP_VERIFY_RECEIPT,
+    AUTHORITY_OP_INSTALL_PROOF, AUTHORITY_OP_SIGN_RECEIPT, AUTHORITY_OP_VERIFY_COMMIT,
+    AUTHORITY_OP_VERIFY_RECEIPT,
     ProtectedAuthorityRpc, RemoteProtectedReceiveAuthority,
 };
 pub use authority_wire::{
-    AuthorityCommitRequest, AuthorityReceiptRequest, AuthorityRefTransactionRequest,
-    MAX_AUTHORITY_COMMIT_BYTES, MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES, encode_authority_commit,
-    encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
-    parse_authority_commit, parse_authority_receipt, parse_authority_receive,
-    parse_authority_ref_transaction,
+    AuthorityCommitRequest, AuthorityProofInstallRequest, AuthorityReceiptRequest,
+    AuthorityRefTransactionRequest, MAX_AUTHORITY_COMMIT_BYTES,
+    MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES, encode_authority_commit,
+    encode_authority_proof_install, encode_authority_receipt, encode_authority_receive,
+    encode_authority_ref_transaction, parse_authority_commit, parse_authority_proof_install,
+    parse_authority_receipt, parse_authority_receive, parse_authority_ref_transaction,
 };
 pub use cache_pack::{
     ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES, MAX_PACK_CACHE_KEY_BYTES,

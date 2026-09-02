@@ -1,14 +1,13 @@
 //! Bounded detached hybrid proofs for protected commit admission.
 
 use mrml_crypto::{ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES};
-use mrml_openpgp::{MAX_OPENPGP_SIGNATURE_BYTES, PublicKeyV6};
+use mrml_openpgp::{PublicKeyV6, MAX_OPENPGP_SIGNATURE_BYTES};
 use mrml_runtime::Vector;
 
 use crate::{
-    DurableDetachedCommitProofDirectory, GitObjectType, HistoryVerificationError,
-    HybridTrustPolicy, HybridVerificationRequest, ObjectId, ProtectedCommitVerifier,
-    ProtectedHistoryContext, VerifiedCommitProof, bind_verified_commit_proof,
-    verify_hybrid_signature,
+    bind_verified_commit_proof, verify_hybrid_signature, DurableDetachedCommitProofDirectory,
+    GitObjectType, HistoryVerificationError, HybridTrustPolicy, HybridVerificationRequest,
+    ObjectId, ProtectedCommitVerifier, ProtectedHistoryContext, VerifiedCommitProof,
 };
 
 pub const MAX_DETACHED_COMMIT_PROOFS: usize = 5_000;
@@ -124,11 +123,11 @@ impl DetachedCommitProofRecord {
         self.commit
     }
 
-    pub(crate) fn openpgp_signature(&self) -> &[u8] {
+    pub fn openpgp_signature(&self) -> &[u8] {
         &self.openpgp_signature
     }
 
-    pub(crate) fn ml_dsa_signature(&self) -> &[u8] {
+    pub fn ml_dsa_signature(&self) -> &[u8] {
         &self.ml_dsa_signature
     }
 }
@@ -232,12 +231,12 @@ impl ProtectedCommitVerifier for DetachedHybridCommitVerifier<'_> {
 mod tests {
     use super::*;
     use crate::{
-        AuthorizedHybridPair, ObjectFormat, ObjectKind, RepositoryGeneration, RepositoryIdentity,
-        RevocationGeneration, SignaturePurpose, TrustGeneration, canonical_hybrid_transcript,
-        encode_loose_object_with_format,
+        canonical_hybrid_transcript, encode_loose_object_with_format, AuthorizedHybridPair,
+        ObjectFormat, ObjectKind, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
+        SignaturePurpose, TrustGeneration,
     };
-    use mrml_crypto::{ML_DSA_65_SECRET_KEY_BYTES, ml_dsa_65_keygen, ml_dsa_65_sign};
-    use mrml_openpgp::{DigestAlgorithm, SigningKeyV6, sign_detached_v6_ascii_with_salt};
+    use mrml_crypto::{ml_dsa_65_keygen, ml_dsa_65_sign, ML_DSA_65_SECRET_KEY_BYTES};
+    use mrml_openpgp::{sign_detached_v6_ascii_with_salt, DigestAlgorithm, SigningKeyV6};
 
     #[test]
     fn exact_detached_record_authenticates_bytes_and_context() {
@@ -343,14 +342,12 @@ mod tests {
     fn proof_store_rejects_duplicates_oversize_and_wrong_signature_width() {
         let commit = ObjectId::Sha256([1; 32]);
         assert!(DetachedCommitProofRecord::new(commit, &[1], &[2]).is_err());
-        assert!(
-            DetachedCommitProofRecord::new(
-                commit,
-                &[1; MAX_OPENPGP_SIGNATURE_BYTES + 1],
-                &[2; ML_DSA_65_SIGNATURE_BYTES],
-            )
-            .is_err()
-        );
+        assert!(DetachedCommitProofRecord::new(
+            commit,
+            &[1; MAX_OPENPGP_SIGNATURE_BYTES + 1],
+            &[2; ML_DSA_65_SIGNATURE_BYTES],
+        )
+        .is_err());
         let record =
             DetachedCommitProofRecord::new(commit, &[1], &[2; ML_DSA_65_SIGNATURE_BYTES]).unwrap();
         assert!(DetachedCommitProofStore::new([record.clone(), record].into()).is_err());
