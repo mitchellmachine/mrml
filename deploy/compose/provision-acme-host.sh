@@ -68,11 +68,13 @@ make_dir "$root/secrets" 0 0 0700
 make_dir "$root/secrets/certd" 21003 21003 0700
 make_dir "$root/secrets/acmed" 21004 21004 0700
 make_dir "$root/secrets/channels" 0 0 0700
+make_dir "$root/secrets/admin" 21005 21005 0700
 make_dir "$root/config" 0 0 0750
 make_dir "$root/backups" 21005 21005 0700
 
 make_secret "$root/secrets/certd/certd-unlock.key" 21003 21003
 make_secret "$root/secrets/acmed/acmed-state.key" 21004 21004
+make_secret "$root/secrets/admin/backup-auth.key" 21005 21005
 
 create_channel_pair() {
   name=$1 peer_uid=$2 peer_gid=$3

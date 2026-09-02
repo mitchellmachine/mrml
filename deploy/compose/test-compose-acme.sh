@@ -55,3 +55,5 @@ require 'up -d --no-build --pull never certd acmed' deploy/compose/switch-acme-v
 require 'certificate state was not rolled back' deploy/compose/switch-acme-version.sh
 require 'stop acmed' deploy/compose/renew-acme.sh
 require 'MRML_ACMED_OFFLINE_ADMIN=1' deploy/compose/renew-acme.sh
+require 'secrets/admin/backup-auth.key' deploy/compose/provision-acme-host.sh
+reject 'backup-auth.key' "$compose"
