@@ -28,6 +28,7 @@ pub struct GitAuthorityChannelClient {
     authority_peer: AuthorityPeer,
     signer_identity: [u8; 64],
     next_request_id: u64,
+    request_id_limit: u64,
 }
 
 impl GitAuthorityChannelClient {
@@ -56,7 +57,19 @@ impl GitAuthorityChannelClient {
             authority_peer,
             signer_identity,
             next_request_id,
+            request_id_limit: u64::MAX,
         })
+    }
+
+    pub fn with_request_id_limit(
+        mut self,
+        request_id_limit: u64,
+    ) -> Result<Self, GitAuthorityChannelError> {
+        if request_id_limit <= self.next_request_id {
+            return Err(GitAuthorityChannelError::InvalidConfiguration);
+        }
+        self.request_id_limit = request_id_limit;
+        Ok(self)
     }
 
     pub fn health(&mut self) -> Result<(), GitAuthorityChannelError> {
@@ -76,6 +89,9 @@ impl GitAuthorityChannelClient {
     ) -> Result<usize, GitAuthorityChannelError> {
         if request.len() > MAX_AUTHORITY_PAYLOAD_BYTES {
             return Err(GitAuthorityChannelError::OutputLimit);
+        }
+        if self.next_request_id >= self.request_id_limit {
+            return Err(GitAuthorityChannelError::SequenceExhausted);
         }
         let request_id = self.next_request_id;
         self.next_request_id = self
@@ -145,6 +161,24 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
 
     use mrml_git_authority::AuthorityListener;
+
+    #[test]
+    fn request_id_limit_must_leave_a_nonempty_lease() {
+        let peer = AuthorityPeer { uid: 1, gid: 1 };
+        let client = GitAuthorityChannelClient::new(
+            Path::new("/run/authority.sock"),
+            AuthorityCapability::new([0x41; 32]).unwrap(),
+            peer,
+            peer,
+            [0x42; 64],
+            9,
+        )
+        .unwrap();
+        assert!(matches!(
+            client.with_request_id_limit(9),
+            Err(GitAuthorityChannelError::InvalidConfiguration)
+        ));
+    }
 
     #[test]
     fn real_channel_authenticates_exact_health_response() {

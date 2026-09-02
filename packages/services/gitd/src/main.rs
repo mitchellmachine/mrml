@@ -1,6 +1,7 @@
 use std::fs::OpenOptions;
-use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -23,6 +24,13 @@ use mrml_http::{AccessScopes, RepositoryIdentity};
 use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
 
 const O_NOFOLLOW: i32 = 0x20_000;
+const O_DIRECTORY: i32 = 0x1_0000;
+const LOCK_EX: i32 = 2;
+const REQUEST_ID_LEASE_SIZE: u64 = 1 << 32;
+
+unsafe extern "C" {
+    fn flock(fd: i32, operation: i32) -> i32;
+}
 
 fn main() {
     if run().is_err() {
@@ -237,6 +245,15 @@ fn run() -> Result<(), ()> {
             load_authority_capability(config.authority_capability.as_path(), config.gitd_uid)?;
         let certd_capability =
             load_certd_capability(config.certd_capability.as_path(), config.gitd_uid)?;
+        let (
+            (authority_request_id, authority_request_id_limit),
+            (certd_request_id, certd_request_id_limit),
+        ) = reserve_request_id_leases(
+            &config.state_root,
+            config.gitd_uid,
+            config.next_authority_request_id,
+            config.next_certd_request_id,
+        )?;
         let mut authority = GitAuthorityChannelClient::new(
             config.authority_socket.as_path(),
             authority_capability,
@@ -249,8 +266,10 @@ fn run() -> Result<(), ()> {
                 gid: config.authority_gid,
             },
             parse_signer_identity(signer_identity)?,
-            config.next_authority_request_id,
+            authority_request_id,
         )
+        .map_err(|_| ())?
+        .with_request_id_limit(authority_request_id_limit)
         .map_err(|_| ())?;
         let mut certd = GitdCertdChannelClient::new(
             config.certd_socket.as_path(),
@@ -263,8 +282,10 @@ fn run() -> Result<(), ()> {
                 uid: config.certd_uid,
                 gid: config.certd_gid,
             },
-            config.next_certd_request_id,
+            certd_request_id,
         )
+        .map_err(|_| ())?
+        .with_request_id_limit(certd_request_id_limit)
         .map_err(|_| ())?;
         authority.health().map_err(|_| ())?;
         certd.health().map_err(|_| ())?;
@@ -342,6 +363,15 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
         load_authority_capability(config.authority_capability.as_path(), config.gitd_uid)?;
     let certd_capability =
         load_certd_capability(config.certd_capability.as_path(), config.gitd_uid)?;
+    let (
+        (authority_request_id, authority_request_id_limit),
+        (certd_request_id, certd_request_id_limit),
+    ) = reserve_request_id_leases(
+        &config.state_root,
+        config.gitd_uid,
+        config.next_authority_request_id,
+        config.next_certd_request_id,
+    )?;
     let mut authority = GitAuthorityChannelClient::new(
         config.authority_socket.as_path(),
         authority_capability,
@@ -354,8 +384,10 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             gid: config.authority_gid,
         },
         parse_signer_identity(signer_identity)?,
-        config.next_authority_request_id,
+        authority_request_id,
     )
+    .map_err(|_| ())?
+    .with_request_id_limit(authority_request_id_limit)
     .map_err(|_| ())?;
     let mut certd = GitdCertdChannelClient::new(
         config.certd_socket.as_path(),
@@ -368,8 +400,10 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             uid: config.certd_uid,
             gid: config.certd_gid,
         },
-        config.next_certd_request_id,
+        certd_request_id,
     )
+    .map_err(|_| ())?
+    .with_request_id_limit(certd_request_id_limit)
     .map_err(|_| ())?;
     authority.health().map_err(|_| ())?;
     certd.health().map_err(|_| ())?;
@@ -643,6 +677,111 @@ fn hex(value: u8) -> Result<u8, ()> {
     }
 }
 
+fn reserve_request_id_leases(
+    state_root: &Path,
+    expected_owner: u32,
+    authority_floor: u64,
+    certd_floor: u64,
+) -> Result<((u64, u64), (u64, u64)), ()> {
+    if !state_root.is_absolute() || authority_floor == 0 || certd_floor == 0 {
+        return Err(());
+    }
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW)
+        .open(state_root)
+        .map_err(|_| ())?;
+    let metadata = directory.metadata().map_err(|_| ())?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != expected_owner
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(());
+    }
+    // The directory lock serializes every cooperating Gitd process while both
+    // channel high-water marks are advanced and made durable.
+    if unsafe { flock(directory.as_raw_fd(), LOCK_EX) } != 0 {
+        return Err(());
+    }
+    let authority = reserve_request_id_lease(
+        state_root,
+        "authority-request-id.v1",
+        expected_owner,
+        authority_floor,
+    )?;
+    let certd = reserve_request_id_lease(
+        state_root,
+        "certd-request-id.v1",
+        expected_owner,
+        certd_floor,
+    )?;
+    directory.sync_all().map_err(|_| ())?;
+    Ok((authority, certd))
+}
+
+fn reserve_request_id_lease(
+    state_root: &Path,
+    name: &str,
+    expected_owner: u32,
+    configured_floor: u64,
+) -> Result<(u64, u64), ()> {
+    let path = state_root.join(name);
+    let persisted = if path.exists() {
+        read_request_id_high_watermark(&path, expected_owner)?
+    } else {
+        configured_floor
+    };
+    let start = persisted.max(configured_floor);
+    let next = start.checked_add(REQUEST_ID_LEASE_SIZE).ok_or(())?;
+    let temporary = state_root.join(format!(".{name}.{}.tmp", std::process::id()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(O_NOFOLLOW)
+            .open(&temporary)
+            .map_err(|_| ())?;
+        writeln!(file, "{next}").map_err(|_| ())?;
+        file.sync_all().map_err(|_| ())?;
+        std::fs::rename(&temporary, &path).map_err(|_| ())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result?;
+    Ok((start, next))
+}
+
+fn read_request_id_high_watermark(path: &Path, expected_owner: u32) -> Result<u64, ()> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| ())?;
+    let metadata = file.metadata().map_err(|_| ())?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() != 1
+        || metadata.uid() != expected_owner
+        || metadata.permissions().mode() & 0o777 != 0o600
+        || metadata.len() == 0
+        || metadata.len() > 21
+    {
+        return Err(());
+    }
+    let mut encoded = String::new();
+    file.read_to_string(&mut encoded).map_err(|_| ())?;
+    let value = encoded.strip_suffix('\n').ok_or(())?;
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(());
+    }
+    let value = value.parse::<u64>().map_err(|_| ())?;
+    (value != 0).then_some(value).ok_or(())
+}
+
 fn read_capability(path: &str, expected_owner: u32) -> Result<Vec<u8>, ()> {
     let mut file = OpenOptions::new()
         .read(true)
@@ -721,6 +860,58 @@ fn load_certd_capability(path: &Path, expected_owner: u32) -> Result<CertdChanne
 mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
+
+    fn request_sequence_root(label: &str) -> (std::path::PathBuf, u32) {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-gitd-request-sequence-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = std::fs::metadata(&root).unwrap().uid();
+        (root, uid)
+    }
+
+    #[test]
+    fn request_id_leases_advance_durably_across_restarts() {
+        let (root, uid) = request_sequence_root("restart");
+        assert_eq!(
+            reserve_request_id_leases(&root, uid, 7, 11),
+            Ok((
+                (7, 7 + REQUEST_ID_LEASE_SIZE),
+                (11, 11 + REQUEST_ID_LEASE_SIZE)
+            ))
+        );
+        assert_eq!(
+            reserve_request_id_leases(&root, uid, 7, 11),
+            Ok((
+                (7 + REQUEST_ID_LEASE_SIZE, 7 + 2 * REQUEST_ID_LEASE_SIZE),
+                (11 + REQUEST_ID_LEASE_SIZE, 11 + 2 * REQUEST_ID_LEASE_SIZE)
+            ))
+        );
+        assert_eq!(
+            read_request_id_high_watermark(&root.join("authority-request-id.v1"), uid),
+            Ok(7 + 2 * REQUEST_ID_LEASE_SIZE)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn request_id_leases_fail_closed_on_corrupt_or_linked_state() {
+        let (root, uid) = request_sequence_root("invalid");
+        let authority = root.join("authority-request-id.v1");
+        std::fs::write(&authority, b"not-a-number\n").unwrap();
+        std::fs::set_permissions(&authority, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(reserve_request_id_leases(&root, uid, 1, 1).is_err());
+        std::fs::remove_file(&authority).unwrap();
+        let target = root.join("target");
+        std::fs::write(&target, b"9\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&target, &authority).unwrap();
+        assert!(reserve_request_id_leases(&root, uid, 1, 1).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn gitd_capability_copy_requires_its_local_file_owner() {

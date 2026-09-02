@@ -54,6 +54,7 @@ pub struct GitdCertdChannelClient {
     gitd_peer: CertdPeerIdentity,
     certd_peer: CertdPeerIdentity,
     next_request_id: Arc<AtomicU64>,
+    request_id_limit: u64,
 }
 
 impl GitdCertdChannelClient {
@@ -79,7 +80,19 @@ impl GitdCertdChannelClient {
             gitd_peer,
             certd_peer,
             next_request_id: Arc::new(AtomicU64::new(next_request_id)),
+            request_id_limit: u64::MAX,
         })
+    }
+
+    pub fn with_request_id_limit(
+        mut self,
+        request_id_limit: u64,
+    ) -> Result<Self, GitdCertdChannelError> {
+        if request_id_limit <= self.next_request_id.load(Ordering::SeqCst) {
+            return Err(GitdCertdChannelError::InvalidConfiguration);
+        }
+        self.request_id_limit = request_id_limit;
+        Ok(self)
     }
 
     pub fn health(&mut self) -> Result<(), GitdCertdChannelError> {
@@ -94,7 +107,9 @@ impl GitdCertdChannelClient {
     fn allocate_request_id(&self) -> Result<u64, GitdCertdChannelError> {
         self.next_request_id
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
-                current.checked_add(1)
+                (current < self.request_id_limit)
+                    .then(|| current.checked_add(1))
+                    .flatten()
             })
             .map_err(|_| GitdCertdChannelError::SequenceExhausted)
     }
@@ -566,11 +581,17 @@ mod tests {
             peer,
             41,
         )
+        .unwrap()
+        .with_request_id_limit(44)
         .unwrap();
         let second = first.clone();
         assert_eq!(first.allocate_request_id(), Ok(41));
         assert_eq!(second.allocate_request_id(), Ok(42));
         assert_eq!(first.allocate_request_id(), Ok(43));
+        assert_eq!(
+            second.allocate_request_id(),
+            Err(GitdCertdChannelError::SequenceExhausted)
+        );
     }
 
     #[test]
