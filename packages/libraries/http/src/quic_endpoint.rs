@@ -58,7 +58,10 @@ pub struct QuicEndpointMetrics {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum QuicInitialAdmission {
-    Admit { permit: u64 },
+    Admit {
+        permit: u64,
+        original_destination_id: Vector<u8>,
+    },
     Retry { token: Vector<u8> },
     Reject,
 }
@@ -186,22 +189,15 @@ impl QuicServerEndpoint {
         let (Some(admission), Some(tokens)) = (&mut self.admission, &mut self.retry_tokens) else {
             return QuicInitialAdmission::Reject;
         };
-        let validated = if token.is_empty() {
-            false
-        } else if tokens
-            .verify_and_consume(
-                token,
-                peer,
-                &original_destination_id,
-                now,
-                QuicRetryPurpose::AddressValidation,
-            )
-            .is_ok()
-        {
-            true
+        let authenticated_original_destination_id = if token.is_empty() {
+            None
         } else {
-            return QuicInitialAdmission::Reject;
+            match tokens.verify_retry_and_consume(token, peer, now) {
+                Ok(original_destination_id) => Some(original_destination_id),
+                Err(_) => return QuicInitialAdmission::Reject,
+            }
         };
+        let validated = authenticated_original_destination_id.is_some();
         match admission.begin(peer, now, estimated_memory_bytes, validated) {
             QuicAdmissionDecision::Admit { permit } => {
                 if let Some(resources) = &mut self.resources {
@@ -219,7 +215,24 @@ impl QuicServerEndpoint {
                         return QuicInitialAdmission::Reject;
                     }
                 }
-                QuicInitialAdmission::Admit { permit }
+                let Some(original_destination_id) = authenticated_original_destination_id else {
+                    let _ = admission.release(permit);
+                    if let Some(resources) = &mut self.resources {
+                        if let Some(index) = self
+                            .resource_handshake_permits
+                            .iter()
+                            .position(|candidate| *candidate == permit)
+                        {
+                            self.resource_handshake_permits.remove(index);
+                            resources.complete(GitdWorkClass::Handshake);
+                        }
+                    }
+                    return QuicInitialAdmission::Reject;
+                };
+                QuicInitialAdmission::Admit {
+                    permit,
+                    original_destination_id,
+                }
             }
             QuicAdmissionDecision::Retry => match tokens.issue(
                 peer,
@@ -925,8 +938,20 @@ mod tests {
         else {
             panic!("unvalidated Initial did not receive Retry")
         };
-        let retried = initial
-            .seal_for_with_token(QuicVersion::V2, &keys, &token)
+        let retried_initial = InitialPacket {
+            destination_id: [9, 10, 11, 12].into(),
+            source_id: initial.source_id.clone(),
+            packet_number: 0,
+            payload: initial.payload.clone(),
+        };
+        let retried_keys = QuicInitialKeys::derive_for(
+            QuicVersion::V2,
+            &retried_initial.destination_id,
+            QuicRole::Client,
+        )
+        .unwrap();
+        let retried = retried_initial
+            .seal_for_with_token(QuicVersion::V2, &retried_keys, &token)
             .unwrap();
         assert_eq!(
             endpoint.admit_initial(&retried, peer(444), 101, 1024),
@@ -934,7 +959,10 @@ mod tests {
         );
         assert_eq!(
             endpoint.admit_initial(&retried, peer(443), 101, 1024),
-            QuicInitialAdmission::Admit { permit: 1 }
+            QuicInitialAdmission::Admit {
+                permit: 1,
+                original_destination_id: [1, 2, 3, 4].into(),
+            }
         );
         assert_eq!(
             endpoint
@@ -973,7 +1001,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             endpoint.admit_initial(&retried, peer(443), 102, 1024),
-            QuicInitialAdmission::Admit { permit: 2 }
+            QuicInitialAdmission::Admit {
+                permit: 2,
+                original_destination_id: [1, 2, 3, 4].into(),
+            }
         );
         endpoint.reap_handshakes(200);
         assert_eq!(
