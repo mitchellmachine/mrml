@@ -895,7 +895,20 @@ impl Http2ClientConnection {
                     .map_err(|_| HttpError::Tls)?;
                 Ok(false)
             }
-            Http2FrameKind::Headers | Http2FrameKind::Data if frame.stream_id == stream_id => {
+            Http2FrameKind::Headers if frame.stream_id == stream_id => {
+                if self.pending_response_frames.len() >= 4 {
+                    return Err(HttpError::BodyTooLarge);
+                }
+                let response_ended = response_frame_ends_upload(&frame);
+                self.pending_response_frames
+                    .try_push(frame)
+                    .map_err(|_| HttpError::Allocation)?;
+                // A server may send its response head before it has consumed
+                // the request body. Preserve that head, but continue servicing
+                // upload flow control unless the response is already final.
+                Ok(response_ended)
+            }
+            Http2FrameKind::Data if frame.stream_id == stream_id => {
                 if self.pending_response_frames.len() >= 4 {
                     return Err(HttpError::BodyTooLarge);
                 }
@@ -1038,6 +1051,10 @@ impl Http2ClientConnection {
         }
         head.ok_or(HttpError::InvalidResponse)
     }
+}
+
+fn response_frame_ends_upload(frame: &Http2Frame) -> bool {
+    matches!(frame.kind, Http2FrameKind::Headers) && frame.flags & 1 != 0
 }
 
 pub struct Http2ServerConnection {
@@ -1616,6 +1633,19 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn nonfinal_response_head_does_not_end_request_upload() {
+        let nonfinal = Http2Frame {
+            kind: Http2FrameKind::Headers,
+            flags: 4,
+            stream_id: 1,
+            payload: Vector::new(),
+        };
+        let final_head = Http2Frame { flags: 5, ..nonfinal.clone() };
+        assert!(!response_frame_ends_upload(&nonfinal));
+        assert!(response_frame_ends_upload(&final_head));
     }
 
     #[test]
