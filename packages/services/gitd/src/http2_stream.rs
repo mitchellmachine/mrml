@@ -129,8 +129,10 @@ fn serve_smart_git_http2_with_drain<B: GitdBackend>(
     maximum_body_bytes: u64,
     draining: &AtomicBool,
 ) -> Result<(), GitdHttp2StreamError> {
+    let input_bytes = exact_receive_body_length(request, maximum_body_bytes)
+        .map_err(GitdHttp2StreamError::Prepare)?;
     let (prepared, response) = edge
-        .prepare_smart_git(request, maximum_body_bytes, maximum_body_bytes)
+        .prepare_smart_git(request, input_bytes, maximum_body_bytes)
         .map_err(GitdHttp2StreamError::Prepare)?;
     let mut headers = Vec::new();
     headers
@@ -147,7 +149,7 @@ fn serve_smart_git_http2_with_drain<B: GitdBackend>(
     let mut input = Http2Input {
         transport: &transport,
         stream_id,
-        remaining: maximum_body_bytes,
+        remaining: input_bytes,
         draining,
     };
     let mut output = Http2Output {
@@ -169,6 +171,33 @@ fn serve_smart_git_http2_with_drain<B: GitdBackend>(
             Err(GitdHttp2StreamError::Backend(error))
         }
     }
+}
+
+pub(crate) fn exact_receive_body_length(
+    request: &RequestHead,
+    maximum: u64,
+) -> Result<u64, BackendError> {
+    if request.method != "POST" || !request.target.ends_with("/git-receive-pack") {
+        return Ok(maximum);
+    }
+    let mut values = request
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("content-length"));
+    let value = values.next().ok_or(BackendError::Unsupported)?;
+    if values.next().is_some()
+        || value.value.is_empty()
+        || (value.value.len() > 1 && value.value.starts_with('0'))
+        || !value.value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(BackendError::Unsupported);
+    }
+    value
+        .value
+        .parse::<u64>()
+        .ok()
+        .filter(|length| *length != 0 && *length <= maximum)
+        .ok_or(BackendError::ResourceLimit)
 }
 
 /// Serve requests sequentially on one authenticated HTTP/2 connection. The
@@ -333,5 +362,39 @@ mod tests {
         assert_eq!(prepare_error_status(BackendError::Private), 404);
         assert_eq!(prepare_error_status(BackendError::ResourceLimit), 429);
         assert_eq!(prepare_error_status(BackendError::Storage), 503);
+
+        let receive = |values: &[&str]| RequestHead {
+            method: "POST".into(),
+            scheme: "https".into(),
+            authority: "git.example".into(),
+            target: "/owner/repository.git/git-receive-pack".into(),
+            headers: values
+                .iter()
+                .map(|value| mrml_http::Header {
+                    name: "content-length".into(),
+                    value: (*value).into(),
+                })
+                .collect(),
+        };
+        assert_eq!(
+            exact_receive_body_length(&receive(&["4096"]), 8192),
+            Ok(4096)
+        );
+        assert_eq!(
+            exact_receive_body_length(&receive(&[]), 8192),
+            Err(BackendError::Unsupported)
+        );
+        assert_eq!(
+            exact_receive_body_length(&receive(&["1", "1"]), 8192),
+            Err(BackendError::Unsupported)
+        );
+        assert_eq!(
+            exact_receive_body_length(&receive(&["04096"]), 8192),
+            Err(BackendError::Unsupported)
+        );
+        assert_eq!(
+            exact_receive_body_length(&receive(&["8193"]), 8192),
+            Err(BackendError::ResourceLimit)
+        );
     }
 }

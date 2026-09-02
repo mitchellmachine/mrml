@@ -104,8 +104,10 @@ fn serve_smart_git_http3_with_drain<B: GitdBackend>(
     maximum_body_bytes: u64,
     draining: &AtomicBool,
 ) -> Result<(), GitdHttp3StreamError> {
+    let input_bytes = crate::http2_stream::exact_receive_body_length(request, maximum_body_bytes)
+        .map_err(GitdHttp3StreamError::Prepare)?;
     let (prepared, response) = edge
-        .prepare_smart_git(request, maximum_body_bytes, maximum_body_bytes)
+        .prepare_smart_git(request, input_bytes, maximum_body_bytes)
         .map_err(GitdHttp3StreamError::Prepare)?;
     let mut headers = Vec::new();
     headers
@@ -121,7 +123,7 @@ fn serve_smart_git_http3_with_drain<B: GitdBackend>(
     let mut input = Http3Input {
         connection: &connection,
         stream_id,
-        remaining: maximum_body_bytes,
+        remaining: input_bytes,
         draining,
     };
     let mut output = Http3Output {

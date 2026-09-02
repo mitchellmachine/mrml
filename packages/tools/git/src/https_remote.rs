@@ -353,11 +353,13 @@ impl HttpsRemote {
         let mut source = PushBodySource::new(prefix, file, pack_bytes)?;
         let target = self.service_target(SmartGitService::ReceivePack);
         let authority = self.authority();
-        let headers = request_headers(
+        let content_length = mrml_runtime::mrml_format!("{}", source.remaining());
+        let mut headers = request_headers(
             "application/x-git-receive-pack-result",
             Some("application/x-git-receive-pack-request"),
             Some(authorization),
         );
+        headers.push(("content-length", content_length.as_str()));
         let mut report = LimitedResponseBody::new(MAX_PUSH_REPORT_BYTES);
         let head = match self.transport {
             HttpsTransport::Http2 => {
