@@ -1,6 +1,7 @@
 use crate::{
-    ObjectId, Repository, extract_pack_response, fetch_request, parse_advertisement,
-    parse_push_response_mode, push_request_mode_negotiated,
+    FetchPackLimits, HttpsRemote, MAX_FETCH_WANTS_PER_REQUEST, ObjectId, Repository,
+    extract_pack_response, fetch_request, parse_advertisement, parse_push_response_mode,
+    push_request_mode_negotiated,
 };
 use core::fmt;
 use mrml_runtime::{Text, Vector};
@@ -22,12 +23,102 @@ pub struct RemoteInfo {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FetchError {
     Ssh,
+    Https,
     Protocol,
     Remote,
     Pack,
     Repository,
     TooLarge,
     NoReferences,
+}
+
+pub fn fetch_https(
+    repository: &Repository,
+    remote_name: &str,
+    remote: &HttpsRemote,
+    maximum_pack_bytes: u64,
+) -> Result<FetchResult, FetchError> {
+    if repository.object_format() != crate::ObjectFormat::Sha256 {
+        return Err(FetchError::Protocol);
+    }
+    let advertisement = remote.list_refs().map_err(|_| FetchError::Https)?;
+    let mut branches: Vector<(Text, ObjectId)> = advertisement
+        .refs
+        .into_iter()
+        .filter_map(|reference| {
+            reference
+                .name
+                .strip_prefix("refs/heads/")
+                .map(|branch| (branch.into(), reference.id))
+        })
+        .collect();
+    branches.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    if branches.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(FetchError::Protocol);
+    }
+    if branches.is_empty() {
+        repository
+            .activate_remote_refs_atomically(remote_name, &[])
+            .map_err(|_| FetchError::Repository)?;
+        return Ok(FetchResult {
+            objects: Vector::new(),
+            branches,
+            default_branch: advertisement.default_branch,
+        });
+    }
+    let limits =
+        FetchPackLimits::production(maximum_pack_bytes).map_err(|_| FetchError::TooLarge)?;
+    let candidate = mrml_runtime::join_path(
+        &repository.git_dir,
+        &mrml_runtime::mrml_format!("mrml-fetch-{}", mrml_runtime::process_id()),
+    );
+    if mrml_runtime::path_exists(&candidate) {
+        return Err(FetchError::Repository);
+    }
+    mrml_runtime::create_dir_all(&candidate).map_err(|_| FetchError::Repository)?;
+    let result = (|| {
+        let mut objects = Vector::new();
+        let mut tips = Vector::new();
+        for (_, id) in &branches {
+            if !tips.contains(id) {
+                tips.push(*id);
+            }
+        }
+        let mut offset = 0usize;
+        while offset < tips.len() {
+            let end = core::cmp::min(offset + MAX_FETCH_WANTS_PER_REQUEST, tips.len());
+            let wants = &tips[offset..end];
+            let pack = mrml_runtime::join_path(
+                &candidate,
+                &mrml_runtime::mrml_format!("batch-{offset}.pack"),
+            );
+            let scratch = mrml_runtime::join_path(
+                &candidate,
+                &mrml_runtime::mrml_format!("batch-{offset}.objects"),
+            );
+            remote
+                .fetch_pack_to_file(wants, &[], &pack, maximum_pack_bytes)
+                .map_err(|_| FetchError::Https)?;
+            let installed = repository
+                .import_pack_file_validated_commit_tips(&pack, &scratch, wants, limits)
+                .map_err(|_| FetchError::Pack)?;
+            objects.extend(installed);
+            offset = end;
+        }
+        mrml_runtime::remove_dir_all(&candidate).map_err(|_| FetchError::Repository)?;
+        repository
+            .activate_remote_refs_atomically(remote_name, &branches)
+            .map_err(|_| FetchError::Repository)?;
+        Ok(FetchResult {
+            objects,
+            branches: branches.clone(),
+            default_branch: advertisement.default_branch,
+        })
+    })();
+    if result.is_err() && mrml_runtime::path_exists(&candidate) {
+        let _ = mrml_runtime::remove_dir_all(&candidate);
+    }
+    result
 }
 
 pub fn fetch_ssh(
@@ -202,6 +293,7 @@ impl fmt::Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Ssh => "native SSH transport failed",
+            Self::Https => "native HTTPS transport failed",
             Self::Protocol => "remote Git protocol response is invalid",
             Self::Remote => "remote Git service failed",
             Self::Pack => "received Git pack failed authentication",

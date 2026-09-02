@@ -160,8 +160,8 @@ pub use ref_state::{
 };
 pub use ref_state_file::ActiveRefFile;
 pub use remote::{
-    FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_ssh, inspect_ssh,
-    push_ssh,
+    FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_https, fetch_ssh,
+    inspect_ssh, push_ssh,
 };
 pub use repository::{
     BlameLine, FetchPackLimits, GitSignatureFormat, MergeOutcome, NativeChange, NativeChangeKind,
