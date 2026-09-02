@@ -108,6 +108,37 @@ An initial authority attempt against mode-`0700` policy directories failed
 closed, directly exposing and motivating the owner-writable/public-readable
 authenticated-policy directory correction in `c54c1763`.
 
+## Protected receive proof-wire follow-up
+
+The protected proof carriage and authority-install integration was validated
+from the shared checkout based on `721d4bb6` with the reviewed proof-wire diff
+still uncommitted. This is development evidence, not immutable release
+evidence. The canonical Git test command passed 216 library and 4 CLI tests:
+
+```text
+./target/debug/mrml test org.mrml.tool.git --target linux
+```
+
+Network-disabled Podman builds from the locally available digest-pinned base
+images also passed. The resulting development artifacts were:
+
+```text
+mrml-git-authority binary sha256:e9be7323a90d5bda9ce7e762eb9e97c8efade5f97ee32c0aecdf6cfe6fd81068
+mrml-gitd binary sha256:9211a22b8f29539c63bb41efed6e364cdbb478871d79f83f861e2f6c1f306a5e
+mrml/git-authority:proof-wire-test image id sha256:99ccdb49b6df7cc1abdc5d9221274f572f060ef4ac08d9803466b19e7fc6ce41
+mrml/gitd:proof-wire-test image id sha256:f09eb51f20ec8782a10f4ddbd585f302328cd86f1e2a7c138c316c9181d4aa92
+authority archive sha256:e6ad177a8420ea9730ad3710f553f8270ea409d246dff7291712a1a391a39ec5
+Gitd archive sha256:6f4a1d26f804df04554fea20fcd48556171cf22331970c5b1e102a82d9b5d4cb
+authority SPDX JSON sha256:155ee1ee5a0154ba7e015ea64edb3be03cc95a646e4feb19fc331e55697e808d
+Gitd SPDX JSON sha256:d1a17731b1343f376011d67cd14d7c9cdb986349ed602836db64ab197cb87bd2
+```
+
+Image inspection reported users `21002:21002` and `21001:21001` with only
+the intended exec-form entrypoints. Syft 1.51.0 scanned the exact exported
+archives and emitted valid SPDX 2.3 JSON containing 12 package records per
+image. Its optional update check failed because the sandbox had no DNS; archive
+scanning itself completed and the outputs parsed successfully.
+
 ## Remaining evidence boundary
 
 The session ran as UID 1000 and `sudo -n` required a password, so the root-only
