@@ -9,8 +9,8 @@ use crate::quic::{
 };
 use crate::{
     HandshakePacket, InitialPacket, QuicConnectionState, QuicError, QuicFrame, QuicInitialKeys,
-    QuicRecovery, QuicRole, QuicStreamAssembler, QuicTransportParameters, QuicVersion, SentPacket,
-    ShortPacket,
+    QuicRecovery, QuicRole, QuicStreamAssembler, QuicTransportParameters, QuicVersion, RetryPacket,
+    SentPacket, ShortPacket,
 };
 
 const CRYPTO_CHUNK: usize = 900;
@@ -575,7 +575,8 @@ impl QuicClientConnection {
         socket
             .set_write_timeout_millis(30_000)
             .map_err(|_| QuicError::SocketTimeout)?;
-        let destination_id = random_connection_id()?;
+        let original_destination_id = random_connection_id()?;
+        let mut destination_id = original_destination_id.clone();
         let source_id = random_connection_id()?;
         let mut local_parameters = QuicTransportParameters::default();
         local_parameters.initial_source_connection_id = source_id.clone();
@@ -585,9 +586,9 @@ impl QuicClientConnection {
         let encoded_parameters = local_parameters.encode()?;
         let (mut tls, client_hello) =
             QuicTlsClientHandshake::new(host, &encoded_parameters).map_err(|_| QuicError::Tls)?;
-        let client_initial =
+        let mut client_initial =
             QuicInitialKeys::derive_for(version, &destination_id, QuicRole::Client)?;
-        let server_initial =
+        let mut server_initial =
             QuicInitialKeys::derive_for(version, &destination_id, QuicRole::Server)?;
         for (packet_number, chunk) in client_hello.chunks(CRYPTO_CHUNK).enumerate() {
             let packet = InitialPacket {
@@ -604,6 +605,7 @@ impl QuicClientConnection {
         let mut server_initial_crypto = QuicStreamAssembler::new(64 * 1024);
         let mut server_initial_packets = PacketReceiveState::new();
         let mut server_id = None;
+        let mut retry_received = false;
         let handshake_secrets = loop {
             let mut datagram = [0; 65_527];
             let (amount, from) = socket
@@ -611,6 +613,47 @@ impl QuicClientConnection {
                 .map_err(|_| QuicError::SocketRead)?;
             if from != peer {
                 return Err(QuicError::UnexpectedPeer);
+            }
+            if amount > 0 && datagram[0] & 0xf0 == version.retry_type() {
+                if retry_received {
+                    return Err(QuicError::ProtocolViolation);
+                }
+                let (retry_version, retry) =
+                    RetryPacket::open(&datagram[..amount], &original_destination_id)?;
+                if retry_version != version
+                    || retry.destination_id != source_id
+                    || retry.source_id == destination_id
+                {
+                    return Err(QuicError::ProtocolViolation);
+                }
+                destination_id = retry.source_id;
+                client_initial = QuicInitialKeys::derive_for(
+                    version,
+                    &destination_id,
+                    QuicRole::Client,
+                )?;
+                server_initial = QuicInitialKeys::derive_for(
+                    version,
+                    &destination_id,
+                    QuicRole::Server,
+                )?;
+                server_initial_crypto = QuicStreamAssembler::new(64 * 1024);
+                server_initial_packets = PacketReceiveState::new();
+                server_id = None;
+                for (packet_number, chunk) in client_hello.chunks(CRYPTO_CHUNK).enumerate() {
+                    let packet = InitialPacket {
+                        destination_id: destination_id.clone(),
+                        source_id: source_id.clone(),
+                        packet_number: packet_number as u64,
+                        payload: crypto_payload(packet_number * CRYPTO_CHUNK, chunk)?,
+                    }
+                    .seal_padded_for_with_token(version, &client_initial, &retry.token)?;
+                    socket
+                        .send_to(&packet, peer)
+                        .map_err(|_| QuicError::SocketWrite)?;
+                }
+                retry_received = true;
+                continue;
             }
             let (packet, _) = InitialPacket::open_for(
                 version,
@@ -673,7 +716,8 @@ impl QuicClientConnection {
             QuicTransportParameters::decode(&application.peer_transport_parameters)?;
         validate_version_information(&peer_parameters, version, false)?;
         let peer_id = server_id.ok_or(QuicError::ProtocolViolation)?;
-        if peer_parameters.original_destination_connection_id.as_ref() != Some(&destination_id)
+        if peer_parameters.original_destination_connection_id.as_ref()
+            != Some(&original_destination_id)
             || peer_parameters.initial_source_connection_id != peer_id
         {
             return Err(QuicError::TransportParameter);
@@ -1063,6 +1107,56 @@ impl QuicServerListener {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_authenticates_one_retry_and_resends_initial_with_token() {
+        let server = Shared::new(UdpSocket::bind([127, 0, 0, 1], 0).unwrap());
+        server.set_read_timeout_millis(2_000).unwrap();
+        let port = server.local_port().unwrap();
+        let worker_socket = server.clone();
+        let Ok(worker) = mrml_runtime::spawn_joinable(move || {
+            let mut datagram = [0; 65_527];
+            let (amount, client_peer) = worker_socket.receive_from(&mut datagram).unwrap();
+            let (version, original_destination_id) =
+                initial_version_and_destination_id(&datagram[..amount]).unwrap();
+            let client_id = crate::initial_source_id(&datagram[..amount]).unwrap();
+            let retry_source_id: Vector<u8> = [0x41; 16].into();
+            let retry = RetryPacket {
+                destination_id: client_id.clone(),
+                source_id: retry_source_id.clone(),
+                token: (*b"retry-token").into(),
+            }
+            .seal(version, &original_destination_id)
+            .unwrap();
+            worker_socket.send_to(&retry, client_peer).unwrap();
+
+            let amount = loop {
+                let (amount, retried_peer) = worker_socket.receive_from(&mut datagram).unwrap();
+                assert_eq!(retried_peer, client_peer);
+                let (_, destination_id) =
+                    initial_version_and_destination_id(&datagram[..amount]).unwrap();
+                if destination_id == retry_source_id {
+                    break amount;
+                }
+                assert_eq!(destination_id, original_destination_id);
+            };
+            assert_eq!(crate::initial_token(&datagram[..amount]).unwrap(), b"retry-token");
+            worker_socket.send_to(&retry, client_peer).unwrap();
+        }) else {
+            panic!("failed to start Retry peer");
+        };
+
+        assert!(matches!(
+            QuicClientConnection::connect_resolved(
+                "localhost",
+                [127, 0, 0, 1],
+                port,
+                QuicVersion::V1,
+            ),
+            Err(QuicError::ProtocolViolation)
+        ));
+        assert!(worker.join());
+    }
 
     #[test]
     fn version_information_prevents_v2_downgrade_and_mismatch() {

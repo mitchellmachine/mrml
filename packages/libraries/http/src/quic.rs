@@ -62,7 +62,7 @@ impl QuicVersion {
         }
     }
 
-    const fn retry_type(self) -> u8 {
+    pub(crate) const fn retry_type(self) -> u8 {
         match self {
             Self::V1 => 0xf0,
             Self::V2 => 0xc0,
@@ -1928,9 +1928,18 @@ impl InitialPacket {
         version: QuicVersion,
         keys: &QuicInitialKeys,
     ) -> Result<Vector<u8>, QuicError> {
+        self.seal_padded_for_with_token(version, keys, &[])
+    }
+
+    pub fn seal_padded_for_with_token(
+        &self,
+        version: QuicVersion,
+        keys: &QuicInitialKeys,
+        token: &[u8],
+    ) -> Result<Vector<u8>, QuicError> {
         let mut packet = self.clone();
         loop {
-            let sealed = packet.seal_for(version, keys)?;
+            let sealed = packet.seal_for_with_token(version, keys, token)?;
             if sealed.len() >= 1200 {
                 return Ok(sealed);
             }
