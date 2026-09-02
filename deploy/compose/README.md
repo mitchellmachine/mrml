@@ -144,8 +144,19 @@ and acmed components at one exact generation and immediately verifies both:
 The components contain each service's own state and recovery secrets but are
 AES-GCM protected by the separately provisioned backup capability. A combined
 HMAC-authenticated manifest binds both ciphertexts, plaintext digests, roles,
-file counts, and the shared generation. The set is not yet restorable: do not
-rely on it for recovery until the clean-target restore receipt is implemented.
+file counts, and the shared generation. Restore requires root and an existing,
+empty, root-owned mode-0700 directory under `/mnt`. The helper authenticates
+the combined manifest first, restores each component under its service UID,
+reopens and hashes every file, compares the two certd-acmed capability copies,
+and emits component restore receipts:
+
+```text
+sudo ./restore-acme.sh NONZERO_BACKUP_GENERATION /mnt/EMPTY_RESTORE_ROOT
+```
+
+The helper never starts services. Supply reviewed deployment configuration and
+the matching Gitd-side peer capability through the combined system recovery
+flow, then run the activation validation gate before selecting the new root.
 
 Compose cannot enforce a destination-aware outbound firewall. Apply host or
 upstream egress policy for the configured ACME and DNS-provider origins. The

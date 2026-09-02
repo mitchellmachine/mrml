@@ -48,7 +48,7 @@ done
 
 echo "ACME Compose static invariants PASS"
 
-for operator in deploy/compose/switch-acme-version.sh deploy/compose/upgrade-acme.sh deploy/compose/rollback-acme.sh deploy/compose/renew-acme.sh deploy/compose/cleanup-acme-dns.sh deploy/compose/revoke-acme.sh deploy/compose/rotate-acme-key.sh deploy/compose/backup-acme.sh; do
+for operator in deploy/compose/switch-acme-version.sh deploy/compose/upgrade-acme.sh deploy/compose/rollback-acme.sh deploy/compose/renew-acme.sh deploy/compose/cleanup-acme-dns.sh deploy/compose/revoke-acme.sh deploy/compose/rotate-acme-key.sh deploy/compose/backup-acme.sh deploy/compose/restore-acme.sh; do
   sh -n "$operator"
 done
 require 'up -d --no-build --pull never certd acmed' deploy/compose/switch-acme-version.sh
@@ -67,6 +67,11 @@ require 'MRML_ACMED_OFFLINE_BACKUP=1' deploy/compose/backup-acme.sh
 require 'backup-manifest-create' deploy/compose/backup-acme.sh
 require 'backup-manifest-verify' deploy/compose/backup-acme.sh
 require 'the clean-target restore gate remains required' deploy/compose/backup-acme.sh
+require 'restore target must be empty' deploy/compose/restore-acme.sh
+require 'backup-manifest-verify' deploy/compose/restore-acme.sh
+require 'backup-restore' deploy/compose/restore-acme.sh
+require 'restored certd-acmed peer capability copies differ' deploy/compose/restore-acme.sh
+require 'services remain disabled' deploy/compose/restore-acme.sh
 require 'secrets/admin/backup-auth.key' deploy/compose/provision-acme-host.sh
 require 'secrets/certd/backup-auth.key' deploy/compose/provision-acme-host.sh
 require 'secrets/acmed/backup-auth.key' deploy/compose/provision-acme-host.sh

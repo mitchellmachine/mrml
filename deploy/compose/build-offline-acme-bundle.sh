@@ -81,6 +81,7 @@ install -m 0555 deploy/compose/cleanup-acme-dns.sh "$payload/deploy/cleanup-acme
 install -m 0555 deploy/compose/revoke-acme.sh "$payload/deploy/revoke-acme.sh"
 install -m 0555 deploy/compose/rotate-acme-key.sh "$payload/deploy/rotate-acme-key.sh"
 install -m 0555 deploy/compose/backup-acme.sh "$payload/deploy/backup-acme.sh"
+install -m 0555 deploy/compose/restore-acme.sh "$payload/deploy/restore-acme.sh"
 install -m 0555 deploy/compose/switch-acme-version.sh "$payload/deploy/switch-acme-version.sh"
 install -m 0555 deploy/compose/upgrade-acme.sh "$payload/deploy/upgrade-acme.sh"
 install -m 0555 deploy/compose/rollback-acme.sh "$payload/deploy/rollback-acme.sh"

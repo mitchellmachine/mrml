@@ -38,6 +38,7 @@ git ls-tree -r --name-only "$commit" -- \
   deploy/compose/revoke-acme.sh \
   deploy/compose/rotate-acme-key.sh \
   deploy/compose/backup-acme.sh \
+  deploy/compose/restore-acme.sh \
   deploy/compose/build-offline-acme-bundle.sh \
   deploy/compose/verify-offline-acme-bundle.sh \
   packages/interfaces/certificate packages/libraries/acme \
