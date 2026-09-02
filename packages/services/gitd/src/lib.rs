@@ -7,15 +7,17 @@ mod composition;
 mod config;
 mod http2_stream;
 mod http2_workers;
-mod http3_stream;
 mod http3_reactor;
+mod http3_stream;
 mod http3_workers;
 mod identity;
 mod listener;
 mod startup;
 mod tls_identity;
 
-pub use auth_store::{AuthenticationStoreError, load_gitd_authentication};
+pub use auth_store::{
+    AuthenticationStoreError, initialize_empty_token_store, load_gitd_authentication,
+};
 pub use authority_rpc::{GitAuthorityChannelClient, GitAuthorityChannelError};
 pub use backend::{GitdRepositorySet, SharedGitdRepositorySet};
 pub use catalog::{
@@ -31,14 +33,13 @@ pub use http2_stream::{
     serve_smart_git_http2,
 };
 pub use http2_workers::{GitdHttp2WorkerError, GitdHttp2WorkerMetrics, GitdHttp2WorkerPool};
+pub use http3_reactor::{GitdHttp3Reactor, GitdHttp3ReactorError, GitdHttp3ReactorStep};
 pub use http3_stream::{
     GitdHttp3StreamError, serve_gitd_http3_connection, serve_gitd_http3_connection_with_drain,
     serve_smart_git_http3,
 };
-pub use http3_reactor::{GitdHttp3Reactor, GitdHttp3ReactorError, GitdHttp3ReactorStep};
 pub use http3_workers::{
-    GitdHttp3LifecycleEvent, GitdHttp3WorkerError, GitdHttp3WorkerMetrics,
-    GitdHttp3WorkerPool,
+    GitdHttp3LifecycleEvent, GitdHttp3WorkerError, GitdHttp3WorkerMetrics, GitdHttp3WorkerPool,
 };
 pub use identity::{
     GitdIdentityValidationError, ValidatedGitdIdentity, prove_identity_signing_route,

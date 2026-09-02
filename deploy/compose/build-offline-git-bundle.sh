@@ -79,6 +79,7 @@ install -m 0444 "$COSIGN_PUBLIC_KEY" "$payload/signatures/cosign.pub"
 
 install -m 0555 deploy/compose/provision-git-host.sh "$payload/deploy/provision-git-host.sh"
 install -m 0555 deploy/compose/start-git.sh "$payload/deploy/start-git.sh"
+install -m 0555 deploy/compose/initialize-git.sh "$payload/deploy/initialize-git.sh"
 install -m 0555 deploy/compose/switch-git-version.sh "$payload/deploy/switch-git-version.sh"
 install -m 0555 deploy/compose/upgrade-git.sh "$payload/deploy/upgrade-git.sh"
 install -m 0555 deploy/compose/rollback-git.sh "$payload/deploy/rollback-git.sh"

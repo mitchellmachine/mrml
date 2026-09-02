@@ -13,9 +13,10 @@ use mrml_gitd::{
     GitAuthorityChannelClient, GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute,
     GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
     admit_catalog_repository, build_certd_tls_server_config_with_route, compose_gitd_service,
-    load_deployment_catalog, load_gitd_authentication, load_gitd_config, load_quic_retry_key,
-    prove_identity_signing_route, recover_admitted_repository, refresh_certd_tls_config,
-    validate_identity_snapshot, validate_storage_layout,
+    initialize_empty_token_store, load_deployment_catalog, load_gitd_authentication,
+    load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
+    recover_admitted_repository, refresh_certd_tls_config, validate_identity_snapshot,
+    validate_storage_layout,
 };
 
 const O_NOFOLLOW: i32 = 0x20_000;
@@ -56,6 +57,19 @@ fn run() -> Result<(), ()> {
             admit_catalog_repository(&config, repository).map_err(|_| ())?;
         }
         println!("valid");
+        return Ok(());
+    }
+    if let [_, command, token_store, pepper, expected_uid] = arguments.as_slice() {
+        if command != "initialize-token-store" {
+            return Err(());
+        }
+        initialize_empty_token_store(
+            Path::new(token_store),
+            Path::new(pepper),
+            expected_uid.parse().map_err(|_| ())?,
+        )
+        .map_err(|_| ())?;
+        println!("initialized");
         return Ok(());
     }
     if let [_, command, config_path, signer_identity] = arguments.as_slice() {
@@ -135,7 +149,7 @@ fn run() -> Result<(), ()> {
     ] = arguments.as_slice()
     else {
         eprintln!(
-            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | dependencies-health CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
+            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | dependencies-health CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
         );
         std::process::exit(64);
     };

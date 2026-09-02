@@ -26,6 +26,15 @@ detached proofs, or publisher keys. Those require explicit authority-bearing
 administration so provisioning cannot replace selected policy or repository
 state.
 
+After installing the production environment and policy/catalog files, run
+`deploy/compose/initialize-git.sh` exactly once. It starts the preloaded Gitd
+image as a network-unpublished one-shot process with `--no-deps`, reads the
+mounted pepper through the same strict loader as the daemon, and creates an
+authenticated empty `tokens.v1`. Creation uses a private same-directory
+temporary file, file sync, a no-overwrite hard-link activation, temporary
+unlink, and directory sync. It refuses an existing destination and creates no
+access token. Token issuance and revocation administration remain a later gate.
+
 Hosted evidence is limited to shell syntax, static invariants, and negative
 argument tests because the current runner is neither root nor Docker-enabled.
 It does not establish a successful production-host provision, image run,

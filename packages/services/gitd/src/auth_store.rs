@@ -1,6 +1,6 @@
 use std::fs::OpenOptions;
-use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use mrml_crypto::erase_secret_bytes;
@@ -23,6 +23,54 @@ pub enum AuthenticationStoreError {
     Read,
     Decode,
     Catalog,
+}
+
+pub fn initialize_empty_token_store(
+    path: &Path,
+    pepper_path: &Path,
+    gitd_uid: u32,
+) -> Result<(), AuthenticationStoreError> {
+    if !path.is_absolute() || path.exists() || path.file_name().is_none() {
+        return Err(AuthenticationStoreError::Open);
+    }
+    let parent = path.parent().ok_or(AuthenticationStoreError::Open)?;
+    let parent_metadata =
+        std::fs::symlink_metadata(parent).map_err(|_| AuthenticationStoreError::Metadata)?;
+    if !parent_metadata.is_dir()
+        || parent_metadata.file_type().is_symlink()
+        || parent_metadata.uid() != gitd_uid
+        || parent_metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(AuthenticationStoreError::Permissions);
+    }
+    let mut pepper = read_pepper(pepper_path, gitd_uid)?;
+    let authority = TokenAuthority::new(pepper).map_err(|_| AuthenticationStoreError::Decode);
+    erase_secret_bytes(&mut pepper);
+    let bytes = authority?
+        .encode_records(&[])
+        .map_err(|_| AuthenticationStoreError::Decode)?;
+    let temporary = parent.join(format!(".tokens.v1.initialize.{}", std::process::id()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(O_NOFOLLOW)
+            .open(&temporary)
+            .map_err(|_| AuthenticationStoreError::Open)?;
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| AuthenticationStoreError::Read)?;
+        std::fs::hard_link(&temporary, path).map_err(|_| AuthenticationStoreError::Open)?;
+        std::fs::remove_file(&temporary).map_err(|_| AuthenticationStoreError::Open)?;
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| AuthenticationStoreError::Read)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 pub fn load_gitd_authentication(
@@ -154,6 +202,38 @@ mod tests {
         symlink(&store_path, &link).unwrap();
         assert_eq!(
             read_token_store(&link, uid),
+            Err(AuthenticationStoreError::Open)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_store_initialization_is_authenticated_and_never_overwrites() {
+        let root =
+            std::env::temp_dir().join(format!("mrml-gitd-auth-initialize-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = fs::metadata(&root).unwrap().uid();
+        let pepper_path = root.join("pepper");
+        fs::write(&pepper_path, [0x52; 32]).unwrap();
+        fs::set_permissions(&pepper_path, fs::Permissions::from_mode(0o400)).unwrap();
+        let store_path = root.join("tokens.v1");
+        assert_eq!(
+            initialize_empty_token_store(&store_path, &pepper_path, uid),
+            Ok(())
+        );
+        let mut pepper = read_pepper(&pepper_path, uid).unwrap();
+        let authority = TokenAuthority::new(pepper).unwrap();
+        erase_secret_bytes(&mut pepper);
+        assert!(
+            authority
+                .decode_records(&fs::read(&store_path).unwrap())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            initialize_empty_token_store(&store_path, &pepper_path, uid),
             Err(AuthenticationStoreError::Open)
         );
         fs::remove_dir_all(root).unwrap();
