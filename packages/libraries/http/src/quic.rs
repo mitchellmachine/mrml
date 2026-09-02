@@ -183,6 +183,29 @@ pub fn initial_token(input: &[u8]) -> Result<&[u8], QuicError> {
     Ok(&input[at..at + token_length])
 }
 
+pub fn initial_source_id(input: &[u8]) -> Result<Vector<u8>, QuicError> {
+    let _ = initial_version_and_destination_id(input)?;
+    let destination_length = input[5] as usize;
+    let source_length_offset = 6usize
+        .checked_add(destination_length)
+        .ok_or(QuicError::Limit)?;
+    let source_length = *input
+        .get(source_length_offset)
+        .ok_or(QuicError::Truncated)? as usize;
+    let source_start = source_length_offset + 1;
+    let source_end = source_start
+        .checked_add(source_length)
+        .ok_or(QuicError::Limit)?;
+    if source_length > 20 || source_end > input.len() {
+        return Err(QuicError::InvalidPacket);
+    }
+    let mut source_id = Vector::new();
+    source_id
+        .try_extend_from_slice(&input[source_start..source_end])
+        .map_err(|_| QuicError::Allocation)?;
+    Ok(source_id)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QuicRole {
     Client,

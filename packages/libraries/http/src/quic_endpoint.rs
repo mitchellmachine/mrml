@@ -3,13 +3,16 @@ use mrml_runtime::{
 };
 
 use crate::quic::{
-    PacketReceiveState, ReceivedPacket, initial_token, initial_version_and_destination_id,
+    PacketReceiveState, ReceivedPacket, initial_source_id, initial_token,
+    initial_version_and_destination_id,
 };
 use crate::quic_retry::{
     QuicAdmissionController, QuicAdmissionDecision, QuicRetryPurpose, QuicRetryTokenManager,
 };
 use crate::quic_connection::QuicRoutedDatagram;
-use crate::{GitdResourceController, GitdWorkClass, QuicError, QuicVersion, SourceIdentity};
+use crate::{
+    GitdResourceController, GitdWorkClass, QuicError, QuicVersion, RetryPacket, SourceIdentity,
+};
 use crate::QuicServerListener;
 
 const MAX_DATAGRAM: usize = 65_527;
@@ -54,6 +57,7 @@ pub struct QuicEndpointMetrics {
     pub handshake_datagrams: u64,
     pub established_datagrams: u64,
     pub candidate_path_datagrams: u64,
+    pub retry_datagrams_sent: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -266,6 +270,48 @@ impl QuicServerEndpoint {
             self.resource_handshake_permits.remove(index);
             resources.complete(GitdWorkClass::Handshake);
         }
+        Ok(())
+    }
+
+    pub fn send_retry(
+        &mut self,
+        datagram: &QuicEndpointDatagram,
+        token: &[u8],
+    ) -> Result<(), QuicError> {
+        let QuicEndpointRoute::NewInitial {
+            version,
+            original_destination_id,
+        } = &datagram.route
+        else {
+            return Err(QuicError::ProtocolViolation);
+        };
+        let destination_id = initial_source_id(&datagram.bytes)?;
+        if destination_id.is_empty() {
+            return Err(QuicError::ConnectionId);
+        }
+        let mut source_id = [0; 16];
+        mrml_runtime::fill_random(&mut source_id).map_err(|_| QuicError::Crypto)?;
+        let retry = RetryPacket {
+            destination_id,
+            source_id: source_id.into(),
+            token: {
+                let mut owned = Vector::new();
+                owned
+                    .try_extend_from_slice(token)
+                    .map_err(|_| QuicError::Allocation)?;
+                owned
+            },
+        }
+        .seal(*version, original_destination_id)?;
+        let socket = self.socket.as_ref().ok_or(QuicError::SocketWrite)?;
+        if socket
+            .send_to(&retry, datagram.peer)
+            .map_err(|_| QuicError::SocketWrite)?
+            != retry.len()
+        {
+            return Err(QuicError::SocketWrite);
+        }
+        self.metrics.retry_datagrams_sent = self.metrics.retry_datagrams_sent.saturating_add(1);
         Ok(())
     }
 
@@ -856,6 +902,33 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_sends_authenticated_retry_to_initial_source() {
+        let server = UdpSocket::bind([127, 0, 0, 1], 0).unwrap();
+        let client = UdpSocket::bind([127, 0, 0, 1], 0).unwrap();
+        client.set_read_timeout_millis(1_000).unwrap();
+        let client_peer = SocketAddress {
+            ip: [127, 0, 0, 1],
+            port: client.local_port().unwrap(),
+        };
+        let mut endpoint = QuicServerEndpoint::from_socket(server, 1, 4).unwrap();
+        let initial = initial_datagram(&[1, 2, 3, 4]);
+        let datagram = endpoint
+            .dispatch_datagram(client_peer, &initial)
+            .unwrap()
+            .unwrap();
+        endpoint.send_retry(&datagram, b"opaque-token").unwrap();
+
+        let mut wire = [0; 512];
+        let (amount, _) = client.receive_from(&mut wire).unwrap();
+        let (version, retry) =
+            RetryPacket::open(&wire[..amount], &[1, 2, 3, 4]).unwrap();
+        assert_eq!(version, QuicVersion::V2);
+        assert_eq!(retry.destination_id, &[5, 6, 7, 8][..]);
+        assert_eq!(retry.token, b"opaque-token".as_slice());
+        assert_eq!(endpoint.metrics().retry_datagrams_sent, 1);
+    }
+
+    #[test]
     fn long_header_routes_before_decryption_and_preserves_validated_peer() {
         let mut endpoint = endpoint(2, 2);
         endpoint
@@ -1170,6 +1243,7 @@ mod tests {
                 handshake_datagrams: 2,
                 established_datagrams: 3,
                 candidate_path_datagrams: 1,
+                retry_datagrams_sent: 0,
             }
         );
     }
