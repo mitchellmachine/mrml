@@ -164,15 +164,41 @@ impl RenewalSchedule {
         now_unix: u64,
         entropy: &mut impl RenewalEntropy,
     ) -> Result<Self, SchedulerError> {
-        validate_policy(policy)?;
         if certificate.ari_certificate_id != requested_certificate_id {
             return Err(SchedulerError::CertificateMismatch);
+        }
+        Self::from_ari_for_certificate(
+            identity,
+            identity_generation,
+            requested_certificate_id,
+            certificate.not_after,
+            info,
+            policy,
+            now_unix,
+            entropy,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_ari_for_certificate(
+        identity: TlsIdentityId,
+        identity_generation: u64,
+        certificate_id: AriCertificateId,
+        not_after: u64,
+        info: RenewalInfo,
+        policy: RenewalPolicy,
+        now_unix: u64,
+        entropy: &mut impl RenewalEntropy,
+    ) -> Result<Self, SchedulerError> {
+        validate_policy(policy)?;
+        if identity == TlsIdentityId([0; 16]) || identity_generation == 0 || now_unix >= not_after {
+            return Err(SchedulerError::Expired);
         }
         let renew_at = info
             .suggested_window
             .select(entropy.random_u64()?)
             .map_err(map_ari)?;
-        if renew_at >= certificate.not_after {
+        if renew_at >= not_after {
             return Err(SchedulerError::InvalidWindow);
         }
         let requery_span = policy.ari_requery_max_seconds - policy.ari_requery_min_seconds;
@@ -189,13 +215,13 @@ impl RenewalSchedule {
             identity,
             identity_generation,
             policy_generation: policy.generation,
-            certificate_id: requested_certificate_id,
+            certificate_id,
             source: RenewalSource::Ari,
             renew_at_unix: renew_at,
             requery_ari_at_unix: requery.min(renew_at),
-            not_after_unix: certificate.not_after,
+            not_after_unix: not_after,
             failure_count: 0,
-            health: health(certificate.not_after, now_unix, policy),
+            health: health(not_after, now_unix, policy),
         })
     }
 

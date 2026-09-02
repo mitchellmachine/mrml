@@ -6,7 +6,7 @@ use mrml_acme::{
     MAX_JWS_REQUEST_BYTES, MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk,
     ProtectedKey, ReplayNonce, account_contacts_digest, dns01_txt_digest,
     execute_prepared_account_create, execute_prepared_finalize, execute_prepared_order_create,
-    fetch_authorization, fetch_directory, poll_order, prepare_order_creation,
+    fetch_authorization, fetch_directory, fetch_renewal_info, poll_order, prepare_order_creation,
     recover_uncertain_account_creation, trigger_propagated_dns01_challenge,
     write_key_authorization,
 };
@@ -483,7 +483,13 @@ fn persist_renewal_schedule(
             && schedule.certificate_id == active.ari_certificate_id
             && schedule.not_after_unix == active.not_after
         {
-            return Ok(schedule);
+            let now = unix_time()?;
+            if now < schedule.requery_ari_at_unix || now >= schedule.renew_at_unix {
+                return Ok(schedule);
+            }
+            let refreshed = refresh_renewal_schedule(config, active, schedule, now)?;
+            store_renewal_schedule(object, durable.generation, refreshed, state, authenticator)?;
+            return Ok(refreshed);
         }
         if schedule.identity_generation >= active.key_generation {
             return Err("renewal schedule generation rollback rejected");
@@ -503,6 +509,67 @@ fn persist_renewal_schedule(
         &mut HostedRenewalEntropy,
     )
     .map_err(|_| "cannot construct renewal schedule")?;
+    store_renewal_schedule(object, previous_generation, schedule, state, authenticator)?;
+    Ok(schedule)
+}
+
+fn refresh_renewal_schedule(
+    config: &AcmedConfig,
+    active: CertdCandidateState,
+    mut existing: RenewalSchedule,
+    now: u64,
+) -> Result<RenewalSchedule, &'static str> {
+    existing
+        .refresh_health(now, config.renewal_policy)
+        .map_err(|_| "cannot refresh renewal health")?;
+    let mut exchange = AcmeExchange::new(config.directory_generation, config.directory_url);
+    let mut transport = HostedAcmeTransport::new();
+    let mut directory_response = [0u8; MAX_DIRECTORY_BYTES];
+    let directory = fetch_directory(
+        &config.directory_url,
+        config.directory_generation,
+        &mut exchange,
+        &mut transport,
+        &mut directory_response,
+    );
+    if let Ok(directory) = directory {
+        let mut response = [0u8; mrml_acme::MAX_ARI_RESPONSE_BYTES];
+        if let Ok(info) = fetch_renewal_info(
+            &directory,
+            &active.ari_certificate_id,
+            now,
+            config.renewal_policy.critical_lead_seconds,
+            &mut exchange,
+            &mut transport,
+            &mut response,
+        ) {
+            return RenewalSchedule::from_ari_for_certificate(
+                TlsIdentityId(config.identity),
+                active.key_generation,
+                active.ari_certificate_id,
+                active.not_after,
+                info,
+                config.renewal_policy,
+                now,
+                &mut HostedRenewalEntropy,
+            )
+            .map_err(|_| "invalid ACME renewal information");
+        }
+    }
+    existing.requery_ari_at_unix = now
+        .checked_add(config.renewal_policy.ari_requery_min_seconds)
+        .ok_or("ARI requery deadline overflow")?
+        .min(existing.renew_at_unix);
+    Ok(existing)
+}
+
+fn store_renewal_schedule(
+    object: DurableObjectId,
+    previous_generation: u64,
+    schedule: RenewalSchedule,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<u64, &'static str> {
     let mut payload = [0u8; RENEWAL_SCHEDULE_BYTES];
     schedule
         .encode(&mut payload)
@@ -519,10 +586,10 @@ fn persist_renewal_schedule(
     let prepared = state
         .prepare(&durable)
         .map_err(|_| "cannot prepare renewal schedule")?;
-    state
+    let committed = state
         .commit(prepared)
         .map_err(|_| "renewal schedule commit uncertain")?;
-    Ok(schedule)
+    Ok(committed.generation)
 }
 
 fn reserve_channel_request_ids(
