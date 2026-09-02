@@ -1,4 +1,4 @@
-use mrml_git::{AuditReceiptAuthority, RepositoryIdentity};
+use mrml_git::{ProtectedReceiveAuthority, RepositoryIdentity};
 use mrml_http::{BackendError, GitdAuthentication, GitdHttp3Server, GitdOperationalHealth};
 use mrml_runtime::Shared;
 
@@ -45,10 +45,10 @@ impl GitdComposedService {
 /// Construct the routable Git service only after every catalog repository is
 /// admitted against live generations and every durable receive journal has a
 /// non-ambiguous recovery result.
-pub fn compose_gitd_service(
+pub fn compose_gitd_service<A: ProtectedReceiveAuthority + Send + 'static>(
     config: &GitdConfig,
     catalog: &DeploymentCatalog,
-    receipt_authority: &mut dyn AuditReceiptAuthority,
+    mut authority: A,
     cache_bytes: usize,
 ) -> Result<GitdComposedService, GitdCompositionError> {
     if catalog.repositories.is_empty() {
@@ -58,17 +58,24 @@ pub fn compose_gitd_service(
         load_gitd_authentication(config, catalog).map_err(GitdCompositionError::Authentication)?;
     let mut repositories = GitdRepositorySet::new();
     let mut recovery = Vec::new();
+    let mut admitted_repositories = Vec::new();
     recovery
         .try_reserve_exact(catalog.repositories.len())
         .map_err(|_| GitdCompositionError::Backend)?;
     for entry in &catalog.repositories {
         let admitted =
             admit_catalog_repository(config, entry).map_err(GitdCompositionError::Admission)?;
-        let summary = recover_admitted_repository(config, entry, &admitted, receipt_authority)
+        let summary = recover_admitted_repository(config, entry, &admitted, &mut authority)
             .map_err(GitdCompositionError::Recovery)?;
         recovery.push((entry.repository.clone(), summary));
+        admitted_repositories.push(admitted);
+    }
+    repositories
+        .configure_receive_authority(Box::new(authority))
+        .map_err(|_| GitdCompositionError::Backend)?;
+    for (entry, admitted) in catalog.repositories.iter().zip(admitted_repositories) {
         repositories
-            .add(entry, admitted)
+            .add_production(config, entry, admitted)
             .map_err(|_| GitdCompositionError::Backend)?;
     }
     if repositories.len() != catalog.repositories.len() {

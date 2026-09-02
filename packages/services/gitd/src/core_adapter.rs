@@ -23,6 +23,10 @@ impl<B> GitdCoreAdapter<B> {
     pub fn into_inner(self) -> B {
         self.core
     }
+
+    pub(crate) fn core_mut(&mut self) -> &mut B {
+        &mut self.core
+    }
 }
 
 fn core_repository(

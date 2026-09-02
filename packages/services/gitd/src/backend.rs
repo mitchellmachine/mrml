@@ -7,20 +7,40 @@ use mrml_http::{
     VerificationSummary, WorkBudget,
 };
 
-use crate::{AdmittedRepository, DeploymentRepository, GitdCoreAdapter};
+use crate::{
+    AdmittedRepository, DeploymentRepository, GitdConfig, GitdCoreAdapter,
+    ProductionReceiveRepository,
+};
+
+type SharedReceiveAuthority =
+    Arc<Mutex<Box<dyn mrml_git::ProtectedReceiveAuthority + Send + 'static>>>;
 
 pub struct GitdRepositorySet {
     repositories: Vec<(
         RepositoryIdentity,
         GitdCoreAdapter<mrml_git::FilesystemRepositoryView>,
+        Option<ProductionReceiveRepository>,
     )>,
+    authority: Option<SharedReceiveAuthority>,
 }
 
 impl GitdRepositorySet {
     pub fn new() -> Self {
         Self {
             repositories: Vec::new(),
+            authority: None,
         }
+    }
+
+    pub fn configure_receive_authority(
+        &mut self,
+        authority: Box<dyn mrml_git::ProtectedReceiveAuthority + Send + 'static>,
+    ) -> Result<(), BackendError> {
+        if self.authority.is_some() || !self.repositories.is_empty() {
+            return Err(BackendError::Unsupported);
+        }
+        self.authority = Some(Arc::new(Mutex::new(authority)));
+        Ok(())
     }
 
     pub fn add(
@@ -32,12 +52,35 @@ impl GitdRepositorySet {
         if self
             .repositories
             .last()
-            .is_some_and(|(previous, _)| previous >= &identity)
+            .is_some_and(|(previous, _, _)| previous >= &identity)
         {
             return Err(BackendError::MalformedIdentifier);
         }
         self.repositories
-            .push((identity, GitdCoreAdapter::new(admitted.view)));
+            .push((identity, GitdCoreAdapter::new(admitted.view), None));
+        Ok(())
+    }
+
+    pub fn add_production(
+        &mut self,
+        config: &GitdConfig,
+        entry: &DeploymentRepository,
+        admitted: AdmittedRepository,
+    ) -> Result<(), BackendError> {
+        if self.authority.is_none() {
+            return Err(BackendError::Unsupported);
+        }
+        let identity = RepositoryIdentity::parse(entry.repository.as_str())?;
+        if self
+            .repositories
+            .last()
+            .is_some_and(|(previous, _, _)| previous >= &identity)
+        {
+            return Err(BackendError::MalformedIdentifier);
+        }
+        let receive = ProductionReceiveRepository::new(config, entry, &admitted)?;
+        self.repositories
+            .push((identity, GitdCoreAdapter::new(admitted.view), Some(receive)));
         Ok(())
     }
 
@@ -54,11 +97,12 @@ impl GitdRepositorySet {
         repositories
             .try_reserve_exact(self.repositories.len())
             .map_err(|_| BackendError::ResourceLimit)?;
-        for (identity, adapter) in self.repositories {
-            repositories.push((identity, Mutex::new(adapter)));
+        for (identity, adapter, receive) in self.repositories {
+            repositories.push((identity, Mutex::new(adapter), receive));
         }
         Ok(SharedGitdRepositorySet {
             repositories: Arc::new(repositories),
+            authority: self.authority,
         })
     }
 
@@ -67,18 +111,8 @@ impl GitdRepositorySet {
         repository: &RepositoryIdentity,
     ) -> Result<&GitdCoreAdapter<mrml_git::FilesystemRepositoryView>, BackendError> {
         self.repositories
-            .binary_search_by(|(identity, _)| identity.cmp(repository))
+            .binary_search_by(|(identity, _, _)| identity.cmp(repository))
             .map(|index| &self.repositories[index].1)
-            .map_err(|_| BackendError::NotFound)
-    }
-
-    fn get_mut(
-        &mut self,
-        repository: &RepositoryIdentity,
-    ) -> Result<&mut GitdCoreAdapter<mrml_git::FilesystemRepositoryView>, BackendError> {
-        self.repositories
-            .binary_search_by(|(identity, _)| identity.cmp(repository))
-            .map(|index| &mut self.repositories[index].1)
             .map_err(|_| BackendError::NotFound)
     }
 }
@@ -89,8 +123,10 @@ pub struct SharedGitdRepositorySet {
         Vec<(
             RepositoryIdentity,
             Mutex<GitdCoreAdapter<mrml_git::FilesystemRepositoryView>>,
+            Option<ProductionReceiveRepository>,
         )>,
     >,
+    authority: Option<SharedReceiveAuthority>,
 }
 
 impl SharedGitdRepositorySet {
@@ -102,7 +138,7 @@ impl SharedGitdRepositorySet {
     }
     fn index(&self, repository: &RepositoryIdentity) -> Result<usize, BackendError> {
         self.repositories
-            .binary_search_by(|(identity, _)| identity.cmp(repository))
+            .binary_search_by(|(identity, _, _)| identity.cmp(repository))
             .map_err(|_| BackendError::NotFound)
     }
 }
@@ -206,11 +242,31 @@ impl GitdBackend for SharedGitdRepositorySet {
         budget: WorkBudget,
     ) -> Result<SmartGitResponse, BackendError> {
         let index = self.index(&request.repository)?;
-        self.repositories[index]
+        let mut adapter = self.repositories[index]
             .1
             .lock()
-            .map_err(|_| BackendError::Storage)?
-            .smart_git(request, input, output, budget)
+            .map_err(|_| BackendError::Storage)?;
+        if request.operation == mrml_http::SmartGitOperation::ReceivePack {
+            let receive = self.repositories[index]
+                .2
+                .as_ref()
+                .ok_or(BackendError::Unsupported)?;
+            let mut authority = self
+                .authority
+                .as_ref()
+                .ok_or(BackendError::Unsupported)?
+                .lock()
+                .map_err(|_| BackendError::Storage)?;
+            return receive.execute(
+                adapter.core_mut(),
+                authority.as_mut(),
+                request,
+                input,
+                output,
+                budget,
+            );
+        }
+        adapter.smart_git(request, input, output, budget)
     }
 }
 
@@ -295,7 +351,30 @@ impl GitdBackend for GitdRepositorySet {
         budget: WorkBudget,
     ) -> Result<SmartGitResponse, BackendError> {
         let repository = request.repository.clone();
-        self.get_mut(&repository)?
+        let index = self
+            .repositories
+            .binary_search_by(|(identity, _, _)| identity.cmp(&repository))
+            .map_err(|_| BackendError::NotFound)?;
+        if request.operation == mrml_http::SmartGitOperation::ReceivePack {
+            let (_, adapter, receive) = &mut self.repositories[index];
+            let receive = receive.as_ref().ok_or(BackendError::Unsupported)?;
+            let mut authority = self
+                .authority
+                .as_ref()
+                .ok_or(BackendError::Unsupported)?
+                .lock()
+                .map_err(|_| BackendError::Storage)?;
+            return receive.execute(
+                adapter.core_mut(),
+                authority.as_mut(),
+                request,
+                input,
+                output,
+                budget,
+            );
+        }
+        self.repositories[index]
+            .1
             .smart_git(request, input, output, budget)
     }
 }

@@ -335,8 +335,8 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
         build_certd_tls_server_config_with_route(identity, &signing_route).map_err(|_| ())?;
     let tls = Arc::new(GitdTlsConfigStore::new(identity_generation, tls_config).map_err(|_| ())?);
 
-    let mut receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
-    let service = compose_gitd_service(&config, &catalog, &mut receipt_authority, 16 * 1024 * 1024)
+    let receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
+    let service = compose_gitd_service(&config, &catalog, receipt_authority, 16 * 1024 * 1024)
         .map_err(|_| ())?;
     operational_event("startup_recovery_complete");
     let operational_health = service.operational_health();
