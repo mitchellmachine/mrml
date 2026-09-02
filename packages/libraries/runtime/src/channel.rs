@@ -21,12 +21,26 @@ pub struct Receiver<T> {
 
 pub struct SendError<T>(pub T);
 
+pub enum TrySendError<T> {
+    Full(T),
+    Disconnected(T),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecvError;
 
 impl<T> fmt::Debug for SendError<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SendError(..)")
+    }
+}
+
+impl<T> fmt::Debug for TrySendError<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Full(_) => "TrySendError::Full(..)",
+            Self::Disconnected(_) => "TrySendError::Disconnected(..)",
+        })
     }
 }
 
@@ -59,6 +73,21 @@ fn channel_with_spin_limit<T>(capacity: usize, spin_limit: usize) -> (Sender<T>,
 }
 
 impl<T> Sender<T> {
+    pub fn try_send(&self, value: T) -> Result<(), TrySendError<T>> {
+        if self.channel.receivers.load(Ordering::Acquire) == 0 {
+            return Err(TrySendError::Disconnected(value));
+        }
+        let mut queue = self.channel.queue.lock();
+        if queue.len() >= self.channel.capacity {
+            return Err(TrySendError::Full(value));
+        }
+        queue.push(value);
+        drop(queue);
+        self.channel.epoch.fetch_add(1, Ordering::Release);
+        wake_one(&self.channel.epoch);
+        Ok(())
+    }
+
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         loop {
             if self.channel.receivers.load(Ordering::Acquire) == 0 {
@@ -178,6 +207,21 @@ mod tests {
         assert_eq!(receiver.recv(), Ok(5));
         drop(receiver);
         assert_eq!(sender.send(7).unwrap_err().0, 7);
+    }
+
+    #[test]
+    fn nonblocking_send_distinguishes_capacity_from_disconnect() {
+        let (sender, receiver) = sync_channel(1);
+        sender.try_send(7).unwrap();
+        assert!(matches!(sender.try_send(8), Err(TrySendError::Full(8))));
+        assert_eq!(receiver.recv(), Ok(7));
+        sender.try_send(9).unwrap();
+        assert_eq!(receiver.recv(), Ok(9));
+        drop(receiver);
+        assert!(matches!(
+            sender.try_send(10),
+            Err(TrySendError::Disconnected(10))
+        ));
     }
 
     #[test]

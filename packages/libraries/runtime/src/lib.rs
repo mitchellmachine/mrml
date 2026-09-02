@@ -18,7 +18,9 @@ mod time;
 mod vector;
 
 pub use args::command_arguments;
-pub use channel::{Receiver, RecvError, SendError, Sender, blocking_channel, sync_channel};
+pub use channel::{
+    Receiver, RecvError, SendError, Sender, TrySendError, blocking_channel, sync_channel,
+};
 pub use env::environment_variable;
 #[cfg(unix)]
 pub use file::sync_directory;
