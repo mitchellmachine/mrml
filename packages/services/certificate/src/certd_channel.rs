@@ -30,6 +30,7 @@ pub enum CertdChannelOperation {
     GetCertificateLifecycleStatus = 23,
     RequestCertificateKeyProofForRevocation = 24,
     GetActiveCertificateForRevocation = 25,
+    CreateAccountRolloverInnerJws = 26,
 }
 
 impl CertdChannelOperation {
@@ -49,6 +50,7 @@ impl CertdChannelOperation {
             23 => Self::GetCertificateLifecycleStatus,
             24 => Self::RequestCertificateKeyProofForRevocation,
             25 => Self::GetActiveCertificateForRevocation,
+            26 => Self::CreateAccountRolloverInnerJws,
             _ => return None,
         })
     }
@@ -75,6 +77,7 @@ impl CertdChannelOperation {
                     | Self::GetCertificateLifecycleStatus
                     | Self::RequestCertificateKeyProofForRevocation
                     | Self::GetActiveCertificateForRevocation
+                    | Self::CreateAccountRolloverInnerJws
             ),
         }
     }

@@ -1,4 +1,4 @@
-use mrml_acme::{AcmeIdentifier, CaClass};
+use mrml_acme::{AcmeIdentifier, CaClass, write_key_change_inner_jws};
 use mrml_certificate::{
     AccountP256SigningKey, AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
     CertdActivationRequest, CertdCandidateStage, CertdCandidateState, CertdChannelCapability,
@@ -292,6 +292,58 @@ fn dispatch_channel_request(
             )
             .map_err(|_| ())?;
             Ok(jws.len())
+        }
+        CertdChannelOperation::CreateAccountRolloverInnerJws => {
+            let request = decode_certd_jws_request(
+                payload,
+                state.config.directory_class == CertdDirectoryClass::LocalTest,
+            )
+            .map_err(|_| ())?;
+            if request.operation != AcmeJwsOperation::KeyChange
+                || request.directory_generation != state.config.directory_generation
+                || request.account_generation != state.config.account_generation
+                || request.account_identity != state.config.account_identity
+                || request.payload != b"MRML account rollover inner v1"
+            {
+                return Err(());
+            }
+            let account_url = request.account_url.ok_or(())?;
+            account_url
+                .require_origin(state.config.directory_url.origin())
+                .map_err(|_| ())?;
+            request
+                .protected_url
+                .require_origin(state.config.directory_url.origin())
+                .map_err(|_| ())?;
+            let previous_generation = state.config.account_generation.checked_sub(1).ok_or(())?;
+            let mut accounts = state.account_keys.lock().map_err(|_| ())?;
+            let old_public = accounts
+                .iter()
+                .find(|key| key.account_generation() == previous_generation)
+                .ok_or(())?
+                .public_jwk()
+                .map_err(|_| ())?;
+            let new_key = accounts
+                .iter_mut()
+                .find(|key| key.account_generation() == state.config.account_generation)
+                .ok_or(())?;
+            let new_public = new_key.public_jwk().map_err(|_| ())?;
+            new_key.authorize_generation(state.config.directory_generation, previous_generation);
+            let result = write_key_change_inner_jws(
+                &new_public,
+                &old_public,
+                &account_url,
+                &request.protected_url,
+                state.config.directory_generation,
+                previous_generation,
+                &mut *new_key,
+                output,
+            );
+            new_key.authorize_generation(
+                state.config.directory_generation,
+                state.config.account_generation,
+            );
+            result.map(|jws| jws.len()).map_err(|_| ())
         }
         CertdChannelOperation::CreateTlsKeyGeneration => {
             let request = decode_certd_tls_key_request(payload).map_err(|_| ())?;
