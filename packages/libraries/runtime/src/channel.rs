@@ -27,6 +27,12 @@ pub enum TrySendError<T> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TryRecvError {
+    Empty,
+    Disconnected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecvError;
 
 impl<T> fmt::Debug for SendError<T> {
@@ -125,6 +131,23 @@ impl<T> Drop for Sender<T> {
 }
 
 impl<T> Receiver<T> {
+    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+        let mut queue = self.channel.queue.lock();
+        if !queue.is_empty() {
+            let value = queue.remove(0);
+            drop(queue);
+            self.channel.epoch.fetch_add(1, Ordering::Release);
+            wake_one(&self.channel.epoch);
+            return Ok(value);
+        }
+        drop(queue);
+        if self.channel.senders.load(Ordering::Acquire) == 0 {
+            Err(TryRecvError::Disconnected)
+        } else {
+            Err(TryRecvError::Empty)
+        }
+    }
+
     pub fn recv(&self) -> Result<T, RecvError> {
         let mut spins = 0;
         loop {
@@ -222,6 +245,17 @@ mod tests {
             sender.try_send(10),
             Err(TrySendError::Disconnected(10))
         ));
+    }
+
+    #[test]
+    fn nonblocking_receive_distinguishes_empty_from_disconnect() {
+        let (sender, receiver) = sync_channel(1);
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+        sender.try_send(12).unwrap();
+        assert_eq!(receiver.try_recv(), Ok(12));
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+        drop(sender);
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
     }
 
     #[test]
