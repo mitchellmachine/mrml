@@ -138,6 +138,17 @@ fn find_match(
         if distance > WINDOW {
             break;
         }
+        if best.0 != 0
+            && best.0 < limit
+            && source[candidate + best.0] != source[position + best.0]
+        {
+            let next = previous[candidate & (WINDOW - 1)];
+            if next >= candidate {
+                break;
+            }
+            candidate = next;
+            continue;
+        }
         let mut length = 0usize;
         while length < limit && source[candidate + length] == source[position + length] {
             length += 1;
@@ -367,5 +378,66 @@ mod tests {
         let mut input: Vector<u8> = (0..WINDOW).map(|value| value as u8).collect();
         input.extend([0, 1, 2]);
         assert_eq!(inflate_zlib(&encode_zlib(&input)).unwrap(), input);
+    }
+
+    #[test]
+    fn best_boundary_skip_preserves_exhaustive_match_selection() {
+        let input: Vector<u8> = (0..16_384)
+            .map(|position| {
+                let block = position / 64;
+                ((position % 31) ^ (block * 17) ^ (block / 7)) as u8
+            })
+            .collect();
+        let mut heads = Vector::new();
+        heads.resize(HASH_SIZE, usize::MAX);
+        let mut previous = Vector::new();
+        previous.resize(WINDOW, usize::MAX);
+        for position in 0..input.len() {
+            assert_eq!(
+                find_match(&input, position, &heads, &previous),
+                find_match_exhaustive(&input, position, &heads, &previous),
+                "position {position}"
+            );
+            insert(&input, position, &mut heads, &mut previous);
+        }
+    }
+
+    fn find_match_exhaustive(
+        source: &[u8],
+        position: usize,
+        heads: &[usize],
+        previous: &[usize],
+    ) -> (usize, usize) {
+        let Some(hash) = hash(source, position) else {
+            return (0, 0);
+        };
+        let mut candidate = heads[hash];
+        let mut best = (0usize, 0usize);
+        let limit = source.len().saturating_sub(position).min(MAX_MATCH);
+        for _ in 0..MAX_CHAIN {
+            if candidate == usize::MAX || candidate >= position {
+                break;
+            }
+            let distance = position - candidate;
+            if distance > WINDOW {
+                break;
+            }
+            let mut length = 0usize;
+            while length < limit && source[candidate + length] == source[position + length] {
+                length += 1;
+            }
+            if length > best.0 {
+                best = (length, distance);
+                if length == limit {
+                    break;
+                }
+            }
+            let next = previous[candidate & (WINDOW - 1)];
+            if next >= candidate {
+                break;
+            }
+            candidate = next;
+        }
+        best
     }
 }
