@@ -23,7 +23,10 @@ pub use catalog::{
 pub use certd_rpc::{GitdCertdChannelClient, GitdCertdChannelError, GitdIdentitySnapshot};
 pub use composition::{GitdComposedService, GitdCompositionError, compose_gitd_service};
 pub use config::{GitdConfig, GitdConfigError, load_gitd_config, parse_gitd_config};
-pub use http2_stream::{GitdHttp2StreamError, serve_gitd_http2_connection, serve_smart_git_http2};
+pub use http2_stream::{
+    GitdHttp2StreamError, serve_gitd_http2_connection, serve_gitd_http2_connection_with_drain,
+    serve_smart_git_http2,
+};
 pub use http2_workers::{GitdHttp2WorkerError, GitdHttp2WorkerMetrics, GitdHttp2WorkerPool};
 pub use identity::{
     GitdIdentityValidationError, ValidatedGitdIdentity, prove_identity_signing_route,

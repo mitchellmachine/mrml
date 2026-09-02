@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mrml_http::{
     BackendError, BoundedRead, BoundedWrite, GitdBackend, GitdHttp3Server, Http2ServerConnection,
@@ -41,6 +42,7 @@ struct Http2Input<'a, T> {
     transport: &'a RefCell<&'a mut T>,
     stream_id: u32,
     remaining: u64,
+    draining: &'a AtomicBool,
 }
 
 impl<T: Http2BodyTransport> BoundedRead for Http2Input<'_, T> {
@@ -50,6 +52,9 @@ impl<T: Http2BodyTransport> BoundedRead for Http2Input<'_, T> {
     fn read(&mut self, output: &mut [u8]) -> Result<usize, BackendError> {
         if output.is_empty() {
             return Ok(0);
+        }
+        if self.draining.load(Ordering::Acquire) {
+            return Err(BackendError::Storage);
         }
         if self.remaining == 0 {
             return Err(BackendError::ResourceLimit);
@@ -74,6 +79,7 @@ struct Http2Output<'a, T> {
     transport: &'a RefCell<&'a mut T>,
     stream_id: u32,
     remaining: u64,
+    draining: &'a AtomicBool,
 }
 
 impl<T: Http2BodyTransport> BoundedWrite for Http2Output<'_, T> {
@@ -81,6 +87,9 @@ impl<T: Http2BodyTransport> BoundedWrite for Http2Output<'_, T> {
         self.remaining
     }
     fn write(&mut self, input: &[u8]) -> Result<(), BackendError> {
+        if self.draining.load(Ordering::Acquire) {
+            return Err(BackendError::Storage);
+        }
         let count = u64::try_from(input.len()).map_err(|_| BackendError::ResourceLimit)?;
         if count > self.remaining {
             return Err(BackendError::ResourceLimit);
@@ -101,6 +110,25 @@ pub fn serve_smart_git_http2<B: GitdBackend>(
     request: &RequestHead,
     maximum_body_bytes: u64,
 ) -> Result<(), GitdHttp2StreamError> {
+    let draining = AtomicBool::new(false);
+    serve_smart_git_http2_with_drain(
+        edge,
+        connection,
+        stream_id,
+        request,
+        maximum_body_bytes,
+        &draining,
+    )
+}
+
+fn serve_smart_git_http2_with_drain<B: GitdBackend>(
+    edge: &mut GitdHttp3Server<B>,
+    connection: &mut Http2ServerConnection,
+    stream_id: u32,
+    request: &RequestHead,
+    maximum_body_bytes: u64,
+    draining: &AtomicBool,
+) -> Result<(), GitdHttp2StreamError> {
     let (prepared, response) = edge
         .prepare_smart_git(request, maximum_body_bytes, maximum_body_bytes)
         .map_err(GitdHttp2StreamError::Prepare)?;
@@ -120,11 +148,13 @@ pub fn serve_smart_git_http2<B: GitdBackend>(
         transport: &transport,
         stream_id,
         remaining: maximum_body_bytes,
+        draining,
     };
     let mut output = Http2Output {
         transport: &transport,
         stream_id,
         remaining: maximum_body_bytes,
+        draining,
     };
     match edge.execute_prepared_smart_git(prepared, &mut input, &mut output) {
         Ok(_) => transport
@@ -149,12 +179,32 @@ pub fn serve_gitd_http2_connection<B: GitdBackend>(
     connection: &mut Http2ServerConnection,
     maximum_body_bytes: u64,
 ) -> Result<(), GitdHttp2StreamError> {
+    let draining = AtomicBool::new(false);
+    serve_gitd_http2_connection_with_drain(edge, connection, maximum_body_bytes, &draining)
+}
+
+pub fn serve_gitd_http2_connection_with_drain<B: GitdBackend>(
+    edge: &mut GitdHttp3Server<B>,
+    connection: &mut Http2ServerConnection,
+    maximum_body_bytes: u64,
+    draining: &AtomicBool,
+) -> Result<(), GitdHttp2StreamError> {
     loop {
+        if draining.load(Ordering::Acquire) {
+            return Ok(());
+        }
         let (stream_id, request) = connection
             .next_request()
             .map_err(|_| GitdHttp2StreamError::Transport)?;
         if is_smart_git_target(&request.target) {
-            match serve_smart_git_http2(edge, connection, stream_id, &request, maximum_body_bytes) {
+            match serve_smart_git_http2_with_drain(
+                edge,
+                connection,
+                stream_id,
+                &request,
+                maximum_body_bytes,
+                draining,
+            ) {
                 Ok(()) => continue,
                 Err(GitdHttp2StreamError::Prepare(error)) => {
                     let status = prepare_error_status(error);
@@ -244,15 +294,18 @@ mod tests {
             ..FakeTransport::default()
         };
         let transport = RefCell::new(&mut fake);
+        let draining = AtomicBool::new(false);
         let mut input = Http2Input {
             transport: &transport,
             stream_id: 1,
             remaining: 4,
+            draining: &draining,
         };
         let mut output = Http2Output {
             transport: &transport,
             stream_id: 1,
             remaining: 3,
+            draining: &draining,
         };
         let mut bytes = [0; 8];
         assert_eq!(input.read(&mut bytes).unwrap(), 4);
@@ -260,6 +313,8 @@ mod tests {
         assert_eq!(input.read(&mut bytes), Err(BackendError::ResourceLimit));
         output.write(b"abc").unwrap();
         assert_eq!(output.write(b"d"), Err(BackendError::ResourceLimit));
+        draining.store(true, Ordering::Release);
+        assert_eq!(output.write(b""), Err(BackendError::Storage));
         drop(input);
         drop(output);
         assert_eq!(&transport.borrow().output, b"abc");

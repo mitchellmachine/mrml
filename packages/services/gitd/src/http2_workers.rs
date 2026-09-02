@@ -1,11 +1,11 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use mrml_http::Http2ServerConnection;
 use mrml_runtime::{JoinHandle, Sender, TcpStream, Vector, blocking_channel, spawn_joinable};
 use mrml_tls::{TlsServerConfig, TlsServerStream};
 
-use crate::{GitdComposedService, serve_gitd_http2_connection};
+use crate::{GitdComposedService, serve_gitd_http2_connection_with_drain};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdHttp2WorkerError {
@@ -35,6 +35,7 @@ pub struct GitdHttp2WorkerPool {
     jobs: Option<Sender<TcpStream>>,
     workers: Vector<JoinHandle>,
     counters: Arc<WorkerCounters>,
+    draining: Arc<AtomicBool>,
 }
 
 impl GitdHttp2WorkerPool {
@@ -46,6 +47,7 @@ impl GitdHttp2WorkerPool {
         maximum_connections: usize,
         cache_bytes_per_worker: usize,
         maximum_body_bytes: u64,
+        connection_timeout_millis: u64,
     ) -> Result<Self, GitdHttp2WorkerError> {
         validate_limits(
             worker_count,
@@ -53,9 +55,11 @@ impl GitdHttp2WorkerPool {
             maximum_connections,
             cache_bytes_per_worker,
             maximum_body_bytes,
+            connection_timeout_millis,
         )?;
         let (jobs, receiver) = blocking_channel(queue_capacity);
         let counters = Arc::new(WorkerCounters::default());
+        let draining = Arc::new(AtomicBool::new(false));
         let mut workers =
             Vector::with_capacity(worker_count).map_err(|_| GitdHttp2WorkerError::Thread)?;
         for _ in 0..worker_count {
@@ -63,16 +67,24 @@ impl GitdHttp2WorkerPool {
                 Ok(edge) => edge,
                 Err(_) => {
                     drop(jobs);
-                    retire_workers(workers);
+                    let _ = retire_workers(workers);
                     return Err(GitdHttp2WorkerError::Edge);
                 }
             };
             let receiver = receiver.clone();
             let tls = tls.clone();
             let worker_counters = counters.clone();
+            let worker_draining = draining.clone();
             let worker = match spawn_joinable(move || {
                 while let Ok(socket) = receiver.recv() {
-                    let tls_stream = match TlsServerStream::accept(socket, &tls) {
+                    if worker_draining.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let tls_stream = match TlsServerStream::accept_with_timeout(
+                        socket,
+                        &tls,
+                        connection_timeout_millis,
+                    ) {
                         Ok(stream) => stream,
                         Err(_) => {
                             increment(&worker_counters.tls_failures);
@@ -86,8 +98,13 @@ impl GitdHttp2WorkerPool {
                             continue;
                         }
                     };
-                    if serve_gitd_http2_connection(&mut edge, &mut connection, maximum_body_bytes)
-                        .is_err()
+                    if serve_gitd_http2_connection_with_drain(
+                        &mut edge,
+                        &mut connection,
+                        maximum_body_bytes,
+                        &worker_draining,
+                    )
+                    .is_err()
                     {
                         increment(&worker_counters.application_failures);
                     }
@@ -96,7 +113,7 @@ impl GitdHttp2WorkerPool {
                 Ok(worker) => worker,
                 Err(_) => {
                     drop(jobs);
-                    retire_workers(workers);
+                    let _ = retire_workers(workers);
                     return Err(GitdHttp2WorkerError::Thread);
                 }
             };
@@ -106,6 +123,7 @@ impl GitdHttp2WorkerPool {
             jobs: Some(jobs),
             workers,
             counters,
+            draining,
         })
     }
 
@@ -127,13 +145,27 @@ impl GitdHttp2WorkerPool {
             application_failures: self.counters.application_failures.load(Ordering::Acquire),
         }
     }
+
+    pub fn shutdown(mut self) -> Result<GitdHttp2WorkerMetrics, GitdHttp2WorkerError> {
+        self.retire()?;
+        Ok(self.metrics())
+    }
+
+    fn retire(&mut self) -> Result<(), GitdHttp2WorkerError> {
+        self.draining.store(true, Ordering::Release);
+        self.jobs.take();
+        let workers = core::mem::take(&mut self.workers);
+        if retire_workers(workers) {
+            Ok(())
+        } else {
+            Err(GitdHttp2WorkerError::Thread)
+        }
+    }
 }
 
 impl Drop for GitdHttp2WorkerPool {
     fn drop(&mut self) {
-        self.jobs.take();
-        let workers = core::mem::take(&mut self.workers);
-        retire_workers(workers);
+        let _ = self.retire();
     }
 }
 
@@ -143,6 +175,7 @@ fn validate_limits(
     maximum_connections: usize,
     cache_bytes_per_worker: usize,
     maximum_body_bytes: u64,
+    connection_timeout_millis: u64,
 ) -> Result<(), GitdHttp2WorkerError> {
     if worker_count == 0
         || worker_count > 64
@@ -156,16 +189,19 @@ fn validate_limits(
         || cache_bytes_per_worker < 1024 * 1024
         || cache_bytes_per_worker > 1024 * 1024 * 1024
         || maximum_body_bytes == 0
+        || !(1_000..=300_000).contains(&connection_timeout_millis)
     {
         return Err(GitdHttp2WorkerError::Limit);
     }
     Ok(())
 }
 
-fn retire_workers(mut workers: Vector<JoinHandle>) {
+fn retire_workers(mut workers: Vector<JoinHandle>) -> bool {
+    let mut retired = true;
     while let Some(worker) = workers.pop() {
-        let _ = worker.join();
+        retired &= worker.join();
     }
+    retired
 }
 
 fn increment(counter: &AtomicU64) {
@@ -181,21 +217,25 @@ mod tests {
     #[test]
     fn worker_and_queue_limits_are_exact_and_bounded() {
         for invalid in [
-            (0, 1, 2, 1024 * 1024, 1),
-            (65, 1, 66, 1024 * 1024, 1),
-            (1, 0, 1, 1024 * 1024, 1),
-            (1, 65_537, 65_536, 1024 * 1024, 1),
-            (1, 1, 1, 1024 * 1024, 1),
-            (1, 1, 2, 1024 * 1024 - 1, 1),
-            (1, 1, 2, 1024 * 1024, 0),
+            (0, 1, 2, 1024 * 1024, 1, 1_000),
+            (65, 1, 66, 1024 * 1024, 1, 1_000),
+            (1, 0, 1, 1024 * 1024, 1, 1_000),
+            (1, 65_537, 65_536, 1024 * 1024, 1, 1_000),
+            (1, 1, 1, 1024 * 1024, 1, 1_000),
+            (1, 1, 2, 1024 * 1024 - 1, 1, 1_000),
+            (1, 1, 2, 1024 * 1024, 0, 1_000),
+            (1, 1, 2, 1024 * 1024, 1, 999),
+            (1, 1, 2, 1024 * 1024, 1, 300_001),
         ] {
             assert_eq!(
-                validate_limits(invalid.0, invalid.1, invalid.2, invalid.3, invalid.4),
+                validate_limits(
+                    invalid.0, invalid.1, invalid.2, invalid.3, invalid.4, invalid.5,
+                ),
                 Err(GitdHttp2WorkerError::Limit)
             );
         }
         assert_eq!(
-            validate_limits(64, 65_472, 65_536, 1024 * 1024, u64::MAX),
+            validate_limits(64, 65_472, 65_536, 1024 * 1024, u64::MAX, 300_000),
             Ok(())
         );
     }
