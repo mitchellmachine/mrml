@@ -66,9 +66,11 @@ cat images/certd.identity images/acmed.identity
 After installing and rechecking configuration and secrets:
 
 ```text
-export MRML_ACME_VERSION=VERSION
-docker compose -f compose.acme.yml config
-docker compose -f compose.acme.yml up -d --no-build --pull never
+install -m 0600 .env.production.example .env.production
+# Edit .env.production and set the exact release version.
+./validate-acme.sh
+./start-acme.sh
+./status-acme.sh
 ```
 
 Compose cannot enforce a destination-aware outbound firewall. Apply host or

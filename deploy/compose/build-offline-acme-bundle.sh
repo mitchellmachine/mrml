@@ -56,8 +56,11 @@ for image in certd acmed; do
 done
 install -m 0444 "$COSIGN_PUBLIC_KEY" "$payload/signatures/cosign.pub"
 
-install -m 0444 deploy/compose/compose.acme.yml "$payload/deploy/compose.acme.yml"
+install -m 0444 deploy/compose/compose.acme.yaml "$payload/deploy/compose.acme.yaml"
 install -m 0555 deploy/compose/provision-acme-host.sh "$payload/deploy/provision-acme-host.sh"
+install -m 0555 deploy/compose/validate-acme.sh "$payload/deploy/validate-acme.sh"
+install -m 0555 deploy/compose/start-acme.sh "$payload/deploy/start-acme.sh"
+install -m 0555 deploy/compose/status-acme.sh "$payload/deploy/status-acme.sh"
 install -m 0555 deploy/compose/verify-offline-acme-bundle.sh "$payload/verify-offline-acme-bundle.sh"
 install -m 0444 deploy/compose/README.md "$payload/README.md"
 install -m 0444 deploy/compose/certd.example.json "$payload/deploy/certd.example.json"

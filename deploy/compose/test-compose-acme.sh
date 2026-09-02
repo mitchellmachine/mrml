@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-compose=${1:-deploy/compose/compose.acme.yml}
+compose=${1:-deploy/compose/compose.acme.yaml}
 certd_dockerfile=${2:-deploy/compose/Dockerfile.certd}
 acmed_dockerfile=${3:-deploy/compose/Dockerfile.acmed}
 
