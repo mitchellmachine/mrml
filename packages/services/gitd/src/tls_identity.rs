@@ -9,9 +9,14 @@ use mrml_tls::{
 use crate::{GitdCertdChannelClient, ValidatedGitdIdentity};
 
 pub struct GitdCertdTlsSigningKey {
-    certd: Mutex<GitdCertdChannelClient>,
+    route: GitdCertdSigningRoute,
     identity_generation: u64,
-    next_logical_request_id: AtomicU64,
+}
+
+#[derive(Clone)]
+pub struct GitdCertdSigningRoute {
+    certd: Arc<Mutex<GitdCertdChannelClient>>,
+    next_logical_request_id: Arc<AtomicU64>,
 }
 
 struct GitdTlsConfigState {
@@ -66,13 +71,32 @@ impl GitdCertdTlsSigningKey {
         identity_generation: u64,
         next_logical_request_id: u64,
     ) -> Result<Self, TlsError> {
-        if identity_generation == 0 || next_logical_request_id == 0 {
+        let route = GitdCertdSigningRoute::new(certd, next_logical_request_id)?;
+        route.signer(identity_generation)
+    }
+}
+
+impl GitdCertdSigningRoute {
+    pub fn new(
+        certd: GitdCertdChannelClient,
+        next_logical_request_id: u64,
+    ) -> Result<Self, TlsError> {
+        if next_logical_request_id == 0 {
             return Err(TlsError::Certificate);
         }
         Ok(Self {
-            certd: Mutex::new(certd),
+            certd: Arc::new(Mutex::new(certd)),
+            next_logical_request_id: Arc::new(AtomicU64::new(next_logical_request_id)),
+        })
+    }
+
+    fn signer(&self, identity_generation: u64) -> Result<GitdCertdTlsSigningKey, TlsError> {
+        if identity_generation == 0 {
+            return Err(TlsError::Certificate);
+        }
+        Ok(GitdCertdTlsSigningKey {
+            route: self.clone(),
             identity_generation,
-            next_logical_request_id: AtomicU64::new(next_logical_request_id),
         })
     }
 }
@@ -88,12 +112,14 @@ impl TlsServerSigningKey for GitdCertdTlsSigningKey {
         output: &mut [u8; MAX_TLS13_SIGNATURE_BYTES],
     ) -> Result<usize, TlsError> {
         let request_id = self
+            .route
             .next_logical_request_id
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
                 current.checked_add(1)
             })
             .map_err(|_| TlsError::SequenceExhausted)?;
         let signature = self
+            .route
             .certd
             .lock()
             .map_err(|_| TlsError::AuthenticationFailed)?
@@ -117,14 +143,21 @@ pub fn build_certd_tls_server_config(
     certd: GitdCertdChannelClient,
     next_logical_request_id: u64,
 ) -> Result<TlsServerConfig, TlsError> {
+    let route = GitdCertdSigningRoute::new(certd, next_logical_request_id)?;
+    build_certd_tls_server_config_with_route(identity, &route)
+}
+
+pub fn build_certd_tls_server_config_with_route(
+    identity: ValidatedGitdIdentity,
+    route: &GitdCertdSigningRoute,
+) -> Result<TlsServerConfig, TlsError> {
     let snapshot = identity.into_snapshot();
     let chain: Vec<&[u8]> = snapshot
         .certificate_chain
         .iter()
         .map(Vec::as_slice)
         .collect();
-    let signer =
-        GitdCertdTlsSigningKey::new(certd, snapshot.identity_generation, next_logical_request_id)?;
+    let signer = route.signer(snapshot.identity_generation)?;
     TlsServerConfig::from_der_chain(&chain)?
         .require_server_name(&snapshot.server_name)
         .map(|config| config.with_signing_key(signer))
