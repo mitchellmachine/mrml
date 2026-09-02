@@ -6,7 +6,8 @@ use mrml_acme::{
 };
 use mrml_certificate::{
     Dns01PublicationReceipt, Dns01PublicationRequest, Dns01RecordName, Dns01TxtValue,
-    MAX_DNS01_PROVIDER_RECORD_ID_BYTES, certd_identifier_set_digest, dns01_publication_binding,
+    MAX_DNS01_PROVIDER_RECORD_ID_BYTES, RenewalPolicy, certd_identifier_set_digest,
+    dns01_publication_binding,
 };
 use mrml_crypto::Sha256;
 use mrml_json::Value;
@@ -960,6 +961,7 @@ pub struct AcmedConfig {
     pub poll_interval_seconds: u64,
     pub global_concurrency: u8,
     pub per_identity_concurrency: u8,
+    pub renewal_policy: RenewalPolicy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1003,7 +1005,7 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     }
     let value = mrml_json::parse(source).map_err(|_| AcmedConfigError::Malformed)?;
     let object = value.as_object().ok_or(AcmedConfigError::Malformed)?;
-    const FIELDS: [&str; 28] = [
+    const FIELDS: [&str; 37] = [
         "directory_url",
         "directory_generation",
         "directory_class",
@@ -1032,6 +1034,15 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
         "wildcard_enabled",
         "poll_interval_seconds",
         "global_concurrency",
+        "renewal_elapsed_numerator",
+        "renewal_elapsed_denominator",
+        "minimum_renewal_lead_seconds",
+        "warning_lead_seconds",
+        "critical_lead_seconds",
+        "initial_backoff_seconds",
+        "maximum_backoff_seconds",
+        "ari_requery_min_seconds",
+        "ari_requery_max_seconds",
     ];
     if object
         .iter()
@@ -1164,6 +1175,34 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
     if !(5..=3_600).contains(&poll_interval_seconds) || !(1..=8).contains(&global_concurrency) {
         return Err(AcmedConfigError::InvalidBounds);
     }
+    let renewal_policy = RenewalPolicy {
+        generation: policy_generation,
+        fallback_elapsed_numerator: u32::try_from(number(&value, "renewal_elapsed_numerator")?)
+            .map_err(|_| AcmedConfigError::InvalidBounds)?,
+        fallback_elapsed_denominator: u32::try_from(number(&value, "renewal_elapsed_denominator")?)
+            .map_err(|_| AcmedConfigError::InvalidBounds)?,
+        minimum_renewal_lead_seconds: number(&value, "minimum_renewal_lead_seconds")?,
+        warning_lead_seconds: number(&value, "warning_lead_seconds")?,
+        critical_lead_seconds: number(&value, "critical_lead_seconds")?,
+        initial_backoff_seconds: number(&value, "initial_backoff_seconds")?,
+        maximum_backoff_seconds: number(&value, "maximum_backoff_seconds")?,
+        ari_requery_min_seconds: number(&value, "ari_requery_min_seconds")?,
+        ari_requery_max_seconds: number(&value, "ari_requery_max_seconds")?,
+    };
+    if renewal_policy.fallback_elapsed_denominator == 0
+        || renewal_policy.fallback_elapsed_numerator >= renewal_policy.fallback_elapsed_denominator
+        || renewal_policy.minimum_renewal_lead_seconds < 86_400
+        || renewal_policy.warning_lead_seconds <= renewal_policy.critical_lead_seconds
+        || renewal_policy.critical_lead_seconds < 3_600
+        || renewal_policy.initial_backoff_seconds == 0
+        || renewal_policy.maximum_backoff_seconds < renewal_policy.initial_backoff_seconds
+        || renewal_policy.maximum_backoff_seconds > 86_400
+        || renewal_policy.ari_requery_min_seconds == 0
+        || renewal_policy.ari_requery_max_seconds < renewal_policy.ari_requery_min_seconds
+        || renewal_policy.ari_requery_max_seconds > 86_400
+    {
+        return Err(AcmedConfigError::InvalidBounds);
+    }
     Ok(AcmedConfig {
         directory_url,
         directory_generation,
@@ -1194,6 +1233,7 @@ pub fn parse_acmed_config(source: &str) -> Result<AcmedConfig, AcmedConfigError>
         poll_interval_seconds,
         global_concurrency,
         per_identity_concurrency: 1,
+        renewal_policy,
     })
 }
 
@@ -1304,7 +1344,7 @@ mod tests {
         HmacSha256DurableAuthenticator, MAX_DURABLE_RECORD_BYTES,
     };
 
-    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"terms_of_service_url":"https://letsencrypt.org/documents/approved.pdf","terms_content_sha256":"1111111111111111111111111111111111111111111111111111111111111111","dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"certificate_profile":"classic","order_lifetime_seconds":3600,"order_retry_limit":6,"authoritative_dns_ipv4":"192.0.2.53","authoritative_dns_port":53,"recursive_dns_ipv4":"198.51.100.53","recursive_dns_port":53,"propagation_attempts":12,"propagation_interval_seconds":5,"propagation_timeout_seconds":300,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2}"#;
+    const STAGING: &str = r#"{"directory_url":"https://acme-staging-v02.api.letsencrypt.org/directory","directory_generation":1,"directory_class":"public-staging","production_enabled":false,"terms_of_service_url":"https://letsencrypt.org/documents/approved.pdf","terms_content_sha256":"1111111111111111111111111111111111111111111111111111111111111111","dns_provider":"cloudflare","zone_id":"0123456789abcdef0123456789abcdef","zone":"example.com","identity":"11111111111111111111111111111111","account_identity":"22222222222222222222222222222222","account_generation":1,"key_generation":1,"policy_generation":1,"certificate_profile":"classic","order_lifetime_seconds":3600,"order_retry_limit":6,"authoritative_dns_ipv4":"192.0.2.53","authoritative_dns_port":53,"recursive_dns_ipv4":"198.51.100.53","recursive_dns_port":53,"propagation_attempts":12,"propagation_interval_seconds":5,"propagation_timeout_seconds":300,"identifiers":["example.com","www.example.com"],"wildcard_enabled":false,"poll_interval_seconds":30,"global_concurrency":2,"renewal_elapsed_numerator":2,"renewal_elapsed_denominator":3,"minimum_renewal_lead_seconds":604800,"warning_lead_seconds":1209600,"critical_lead_seconds":259200,"initial_backoff_seconds":60,"maximum_backoff_seconds":21600,"ari_requery_min_seconds":21600,"ari_requery_max_seconds":43200}"#;
 
     #[test]
     fn account_record_round_trips_only_exact_policy_bound_states() {
@@ -1744,6 +1784,27 @@ mod tests {
         ));
         assert!(matches!(
             parse_acmed_config(&STAGING.replace("order_retry_limit\":6", "order_retry_limit\":0")),
+            Err(AcmedConfigError::InvalidBounds)
+        ));
+        assert!(matches!(
+            parse_acmed_config(&STAGING.replace(
+                "renewal_elapsed_numerator\":2",
+                "renewal_elapsed_numerator\":3"
+            )),
+            Err(AcmedConfigError::InvalidBounds)
+        ));
+        assert!(matches!(
+            parse_acmed_config(&STAGING.replace(
+                "critical_lead_seconds\":259200",
+                "critical_lead_seconds\":1209600"
+            )),
+            Err(AcmedConfigError::InvalidBounds)
+        ));
+        assert!(matches!(
+            parse_acmed_config(&STAGING.replace(
+                "maximum_backoff_seconds\":21600",
+                "maximum_backoff_seconds\":0"
+            )),
             Err(AcmedConfigError::InvalidBounds)
         ));
         assert!(matches!(
