@@ -564,6 +564,35 @@ impl Http3Client {
         }
         .encode()
     }
+    pub fn request_with_control_body(
+        &self,
+        method: &str,
+        scheme: &str,
+        authority: &str,
+        target: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> Result<Vector<u8>, HttpError> {
+        if body.len() > 4096 {
+            return Err(HttpError::BodyTooLarge);
+        }
+        let mut wire = self.request(method, scheme, authority, target, headers)?;
+        if !body.is_empty() {
+            let mut payload = Vector::new();
+            payload
+                .try_extend_from_slice(body)
+                .map_err(|_| HttpError::Allocation)?;
+            wire.try_extend_from_slice(
+                &Http3Frame {
+                    kind: Http3FrameKind::Data,
+                    payload,
+                }
+                .encode()?,
+            )
+            .map_err(|_| HttpError::Allocation)?;
+        }
+        Ok(wire)
+    }
     pub fn response(&self, frame: &Http3Frame) -> Result<ResponseHead, HttpError> {
         if frame.kind != Http3FrameKind::Headers {
             return Err(HttpError::InvalidResponse);
@@ -729,10 +758,24 @@ impl Http3ClientConnection {
         target: &str,
         headers: &[(&str, &str)],
     ) -> Result<Http3Response, HttpError> {
+        self.request_control_with_body(method, authority, target, headers, &[])
+    }
+
+    /// Send one deliberately small request body in the initial request-stream
+    /// packet. This is for bounded control-plane commands, not pack transfer;
+    /// bulk callers must use the flow-controlled streaming path.
+    pub fn request_control_with_body(
+        &mut self,
+        method: &str,
+        authority: &str,
+        target: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> Result<Http3Response, HttpError> {
         let id = self.connection.open_bidi_stream().map_err(quic_error)?;
         let request = self
             .protocol
-            .request(method, "https", authority, target, headers)?;
+            .request_with_control_body(method, "https", authority, target, headers, body)?;
         self.connection
             .send_frames(&[stream_frame(id, 0, true, &request)?])
             .map_err(quic_error)?;
@@ -1531,6 +1574,23 @@ mod tests {
         let wire = Http3Server::new().response(200, &[]).unwrap();
         let (f, _) = Http3Frame::decode(&wire).unwrap();
         assert_eq!(c.response(&f).unwrap().status, 200)
+    }
+    #[test]
+    fn control_request_body_is_exact_and_bounded() {
+        let client = Http3Client::new();
+        let wire = client
+            .request_with_control_body("POST", "https", "x", "/git", &[], b"0000")
+            .unwrap();
+        let (headers, used) = Http3Frame::decode(&wire).unwrap();
+        assert_eq!(headers.kind, Http3FrameKind::Headers);
+        let (data, consumed) = Http3Frame::decode(&wire[used..]).unwrap();
+        assert_eq!(data.kind, Http3FrameKind::Data);
+        assert_eq!(&data.payload[..], b"0000");
+        assert_eq!(used + consumed, wire.len());
+        assert_eq!(
+            client.request_with_control_body("POST", "https", "x", "/", &[], &[0; 4097]),
+            Err(HttpError::BodyTooLarge)
+        );
     }
     #[test]
     fn bounded_workers_prepare_independent_streams() {
