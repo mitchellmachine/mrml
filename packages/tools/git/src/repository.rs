@@ -985,16 +985,22 @@ impl Repository {
     ) -> Result<ObjectId, RepositoryError> {
         let reference = mrml_runtime::mrml_format!("refs/heads/{branch}");
         validate_reference(&reference)?;
-        self.read_commit(id)?;
+        let commit = self.read_commit(id)?;
         if !self.changes()?.is_empty() {
             return Err(RepositoryError::WorktreeDirty);
         }
+        let target = self.tree_index(commit.tree)?;
+        self.materialize_index(&target)?;
         let path = join_path(&self.git_dir, &reference);
         if let Some(parent) = parent_path(&path) {
             create_dir_all(parent)?;
         }
         write_file(&path, mrml_runtime::mrml_format!("{id}\n").as_bytes())?;
-        self.switch_branch(branch)
+        write_file(
+            &join_path(&self.git_dir, "HEAD"),
+            mrml_runtime::mrml_format!("ref: {reference}\n").as_bytes(),
+        )?;
+        Ok(id)
     }
 
     pub fn fast_forward(&self, revision: &str) -> Result<MergeOutcome, RepositoryError> {
@@ -5086,6 +5092,30 @@ mod tests {
             repository.current_branch().unwrap().as_deref(),
             Some("clone-tip")
         );
+        remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn checkout_branch_at_materializes_an_initial_clone_before_activating_its_ref() {
+        let path = root("checkout-initial-clone");
+        let repository = Repository::init(&path).unwrap();
+        let file = join_path(&path, "tracked");
+        write_file(&file, b"clone contents").unwrap();
+        repository.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        let tip = repository
+            .commit("initial", "MRML", "mrml@example.invalid", 1)
+            .unwrap();
+        mrml_runtime::remove_file(&file).unwrap();
+        mrml_runtime::remove_file(&join_path(&repository.git_dir, "index")).unwrap();
+        mrml_runtime::remove_file(&join_path(
+            &repository.git_dir,
+            "refs/heads/main",
+        ))
+        .unwrap();
+
+        assert_eq!(repository.checkout_branch_at("main", tip).unwrap(), tip);
+        assert_eq!(&*read_file_bounded(&file, 32).unwrap(), b"clone contents");
+        assert!(repository.changes().unwrap().is_empty());
         remove_dir_all(&path).unwrap();
     }
 
