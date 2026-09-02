@@ -662,7 +662,7 @@ fn fetch_request(
         )
         .map_err(|_| HttpsRemoteError::Protocol)?;
     }
-    for line in [b"done\n".as_slice(), b"ofs-delta\n", b"sideband-all\n"] {
+    for line in [b"done\n".as_slice(), b"ofs-delta\n"] {
         crate::encode_packet(line, &mut body).map_err(|_| HttpsRemoteError::Protocol)?;
     }
     crate::encode_flush(&mut body);
@@ -1173,7 +1173,6 @@ mod tests {
             "object-format=sha256\n",
             "done\n",
             "ofs-delta\n",
-            "sideband-all\n",
         ] {
             assert!(
                 request
@@ -1181,6 +1180,7 @@ mod tests {
                     .any(|window| window == required.as_bytes())
             );
         }
+        assert!(!request.windows(13).any(|window| window == b"sideband-all\n"));
         assert!(request.windows(4).any(|window| window == b"0001"));
         assert!(request.ends_with(b"0000"));
         assert!(request.len() <= 4096);
