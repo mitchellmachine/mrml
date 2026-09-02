@@ -12,6 +12,34 @@ use crate::{
     encode_pack_with_format, parse_pack_with_format, parse_tree_with_format,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FetchPackLimits {
+    pub max_pack_bytes: u64,
+    pub max_objects: u32,
+    pub max_expanded_bytes: u64,
+    pub max_individual_bytes: u64,
+    pub max_work_units: u64,
+}
+
+impl FetchPackLimits {
+    pub fn production(max_pack_bytes: u64) -> Result<Self, RepositoryError> {
+        if max_pack_bytes == 0 || max_pack_bytes > MAX_PACK_BYTES as u64 {
+            return Err(RepositoryError::FileTooLarge);
+        }
+        Ok(Self {
+            max_pack_bytes,
+            max_objects: 1_000_000,
+            max_expanded_bytes: max_pack_bytes
+                .checked_mul(4)
+                .ok_or(RepositoryError::FileTooLarge)?,
+            max_individual_bytes: MAX_WORKTREE_FILE as u64,
+            max_work_units: max_pack_bytes
+                .checked_mul(6)
+                .ok_or(RepositoryError::FileTooLarge)?,
+        })
+    }
+}
+
 const MAX_INDEX_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PACK_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_PACKED_REFS_BYTES: usize = 64 * 1024 * 1024;
@@ -381,6 +409,93 @@ impl Repository {
         self.install_parsed_pack(objects)
     }
 
+    /// Validate a streamed pack from an isolated regular file without loading
+    /// the whole pack, traverse every required commit tip before installation,
+    /// and leave reference activation to the caller as a separate final step.
+    pub fn import_pack_file_validated_commit_tips(
+        &self,
+        pack_path: &str,
+        scratch_directory: &str,
+        tips: &[ObjectId],
+        limits: FetchPackLimits,
+    ) -> Result<Vector<ObjectId>, RepositoryError> {
+        if tips.is_empty()
+            || limits.max_pack_bytes == 0
+            || limits.max_pack_bytes > MAX_PACK_BYTES as u64
+            || limits.max_objects == 0
+            || limits.max_objects > 1_000_000
+            || limits.max_expanded_bytes == 0
+            || limits.max_individual_bytes == 0
+            || limits.max_individual_bytes > MAX_WORKTREE_FILE as u64
+            || limits.max_work_units < limits.max_pack_bytes
+            || path_exists(scratch_directory)
+        {
+            return Err(RepositoryError::FileTooLarge);
+        }
+        create_dir_all(scratch_directory)?;
+        let validated = crate::pack_file::validate_pack_file_with_bases(
+            pack_path,
+            self.object_format,
+            limits.max_pack_bytes,
+            limits.max_objects,
+            limits.max_expanded_bytes,
+            limits.max_individual_bytes,
+            limits.max_work_units,
+            &mut |id, kind, contents| {
+                crate::arrival_pack::write_scratch_object(scratch_directory, id, kind, contents)
+                    .map_err(|_| PackError::TooLarge)
+            },
+            |id, limit| {
+                if let Some(object) =
+                    crate::arrival_pack::read_scratch_object(scratch_directory, id, limit)?
+                {
+                    return Ok(Some(object));
+                }
+                match self.read_object(id) {
+                    Ok(object) if object.contents.len() as u64 <= limit => {
+                        Ok(Some((object.kind, object.contents)))
+                    }
+                    Ok(_) => Err(PackError::TooLarge),
+                    Err(RepositoryError::ReferenceMissing) => Ok(None),
+                    Err(_) => Err(PackError::MissingBase),
+                }
+            },
+        )?;
+        if validated.objects.is_empty()
+            || tips.iter().any(|tip| {
+                tip.format() != self.object_format
+                    || (!validated.objects.iter().any(|(id, _)| id == tip)
+                        && self.read_object(*tip).is_err())
+            })
+        {
+            return Err(RepositoryError::InvalidReference);
+        }
+        self.validate_commit_tips_with_loader(tips, |id| {
+            if let Some((kind, contents)) = crate::arrival_pack::read_scratch_object(
+                scratch_directory,
+                id,
+                limits.max_individual_bytes,
+            )? {
+                return Ok(Some(Object { kind, contents }));
+            }
+            Ok(None)
+        })?;
+        let mut installed = Vector::new();
+        for (id, expected_kind) in validated.objects {
+            let (kind, contents) = crate::arrival_pack::read_scratch_object(
+                scratch_directory,
+                id,
+                limits.max_individual_bytes,
+            )?
+            .ok_or(RepositoryError::InvalidReference)?;
+            if kind != expected_kind || self.write_object(kind, &contents)? != id {
+                return Err(RepositoryError::InvalidReference);
+            }
+            installed.push(id);
+        }
+        Ok(installed)
+    }
+
     fn install_parsed_pack(
         &self,
         objects: Vector<PackObject>,
@@ -458,6 +573,25 @@ impl Repository {
         tips: &[ObjectId],
         candidates: &[PackObject],
     ) -> Result<(), RepositoryError> {
+        self.validate_commit_tips_with_loader(tips, |id| {
+            Ok(candidates
+                .iter()
+                .find(|object| object.id == id)
+                .map(|candidate| Object {
+                    kind: candidate.kind,
+                    contents: candidate.contents.clone(),
+                }))
+        })
+    }
+
+    fn validate_commit_tips_with_loader<F>(
+        &self,
+        tips: &[ObjectId],
+        mut candidate: F,
+    ) -> Result<(), RepositoryError>
+    where
+        F: FnMut(ObjectId) -> Result<Option<Object>, RepositoryError>,
+    {
         let mut pending = Vector::new();
         for tip in tips {
             if tip.format() != self.object_format {
@@ -467,14 +601,7 @@ impl Repository {
         }
         let mut seen = Vector::new();
         while let Some((id, expected_kind)) = pending.pop() {
-            let object = if let Some(candidate) = candidates.iter().find(|object| object.id == id) {
-                Object {
-                    kind: candidate.kind,
-                    contents: candidate.contents.clone(),
-                }
-            } else {
-                self.read_object(id)?
-            };
+            let object = candidate(id)?.map_or_else(|| self.read_object(id), Ok)?;
             if object.kind != expected_kind {
                 return Err(RepositoryError::InvalidReference);
             }
@@ -3693,6 +3820,67 @@ mod tests {
         let rejected = Repository::init_with_format(&rejected_path, ObjectFormat::Sha256).unwrap();
         assert_eq!(
             rejected.import_pack_validated_commit_tips(&blob_pack, &[blob]),
+            Err(RepositoryError::InvalidReference)
+        );
+        assert_eq!(
+            rejected.read_object(blob),
+            Err(RepositoryError::ReferenceMissing)
+        );
+
+        remove_dir_all(&source_path).unwrap();
+        remove_dir_all(&destination_path).unwrap();
+        remove_dir_all(&rejected_path).unwrap();
+    }
+
+    #[test]
+    fn streamed_fetch_pack_is_file_validated_before_object_installation() {
+        let source_path = root("streamed-import-source");
+        let source = Repository::init_with_format(&source_path, ObjectFormat::Sha256).unwrap();
+        write_file(&join_path(&source_path, "tracked"), b"streamed candidate").unwrap();
+        source
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
+        let commit = source
+            .commit("streamed", "MRML", "mrml@example.invalid", 1)
+            .unwrap();
+        let pack = source.pack_reachable(commit).unwrap();
+
+        let destination_path = root("streamed-import-destination");
+        let destination =
+            Repository::init_with_format(&destination_path, ObjectFormat::Sha256).unwrap();
+        let candidate = join_path(&destination.git_dir, "fetch-candidate.pack");
+        let scratch = join_path(&destination.git_dir, "fetch-candidate-objects");
+        write_file(&candidate, &pack).unwrap();
+        let installed = destination
+            .import_pack_file_validated_commit_tips(
+                &candidate,
+                &scratch,
+                &[commit],
+                FetchPackLimits::production(pack.len() as u64).unwrap(),
+            )
+            .unwrap();
+        assert!(installed.contains(&commit));
+        assert_eq!(
+            destination.read_commit(commit).unwrap().message,
+            "streamed\n"
+        );
+
+        let rejected_path = root("streamed-import-rejected");
+        let rejected = Repository::init_with_format(&rejected_path, ObjectFormat::Sha256).unwrap();
+        let blob = source
+            .write_object(ObjectKind::Blob, b"not a commit")
+            .unwrap();
+        let blob_pack = source.pack_reachable(blob).unwrap();
+        let rejected_pack = join_path(&rejected.git_dir, "fetch-candidate.pack");
+        let rejected_scratch = join_path(&rejected.git_dir, "fetch-candidate-objects");
+        write_file(&rejected_pack, &blob_pack).unwrap();
+        assert_eq!(
+            rejected.import_pack_file_validated_commit_tips(
+                &rejected_pack,
+                &rejected_scratch,
+                &[blob],
+                FetchPackLimits::production(blob_pack.len() as u64).unwrap(),
+            ),
             Err(RepositoryError::InvalidReference)
         );
         assert_eq!(

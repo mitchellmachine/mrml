@@ -164,8 +164,8 @@ pub use remote::{
     push_ssh,
 };
 pub use repository::{
-    BlameLine, GitSignatureFormat, MergeOutcome, NativeChange, NativeChangeKind, RebaseOutcome,
-    Repository, RepositoryError,
+    BlameLine, FetchPackLimits, GitSignatureFormat, MergeOutcome, NativeChange, NativeChangeKind,
+    RebaseOutcome, Repository, RepositoryError,
 };
 pub use repository_view::{
     FilesystemRepositoryView, MAX_VERIFICATION_SUMMARY_EVIDENCE, VerificationSummaryEvidence,

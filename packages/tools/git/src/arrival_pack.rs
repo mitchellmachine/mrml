@@ -502,7 +502,7 @@ impl ArrivalPackStore {
     }
 }
 
-fn read_scratch_object(
+pub(crate) fn read_scratch_object(
     directory: &str,
     id: ObjectId,
     max_bytes: u64,
@@ -535,7 +535,7 @@ fn write_new_synced(path: &str, bytes: &[u8]) -> Result<(), DurableFailure> {
     file.sync().map_err(|_| DurableFailure::Fsync)
 }
 
-fn write_scratch_object(
+pub(crate) fn write_scratch_object(
     directory: &str,
     id: ObjectId,
     kind: crate::ObjectKind,
