@@ -31,6 +31,39 @@ fn run() -> Result<(), ()> {
         [
             _,
             command,
+            _socket,
+            capability,
+            peer_uid,
+            peer_gid,
+            own_uid,
+            own_gid,
+            policy,
+            proofs,
+            openpgp,
+            ml_dsa,
+            receipt_key,
+            validation_time,
+            repository_generation,
+        ] if command == "check-config" => {
+            let _ = parse_peer(peer_uid, peer_gid)?;
+            let authority_peer = parse_peer(own_uid, own_gid)?;
+            let _capability = read_capability(capability, authority_peer.uid)?;
+            load_authority(
+                authority_peer.uid,
+                policy,
+                proofs,
+                openpgp,
+                ml_dsa,
+                receipt_key,
+                validation_time.parse().map_err(|_| ())?,
+                repository_generation.parse().map_err(|_| ())?,
+            )?;
+            println!("valid");
+            Ok(())
+        }
+        [
+            _,
+            command,
             socket,
             capability,
             peer_uid,
@@ -74,7 +107,7 @@ fn run() -> Result<(), ()> {
         ),
         _ => {
             eprintln!(
-                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_DIR PROOF_DIR OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
+                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_DIR PROOF_DIR OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_DIR PROOF_DIR OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
             );
             std::process::exit(EX_USAGE);
         }
@@ -95,42 +128,16 @@ fn serve(
     repository_generation: u64,
 ) -> Result<(), ()> {
     let capability = read_capability(capability_path, authority_peer.uid)?;
-    let policy = LinuxDurableTrustPolicyStore::open(policy_path).map_err(|_| ())?;
-    let proofs = DurableDetachedCommitProofDirectory::open(proof_path).map_err(|_| ())?;
-    let openpgp_bytes = read_regular(
+    let mut authority = load_authority(
+        authority_peer.uid,
+        policy_path,
+        proof_path,
         openpgp_path,
-        1,
-        MAX_OPENPGP_PUBLIC_KEY_BYTES,
-        authority_peer.uid,
-        false,
-    )?;
-    let mut openpgp_scratch = vec![0u8; MAX_OPENPGP_PUBLIC_KEY_BYTES];
-    let openpgp_key =
-        parse_public_key_v6_ascii(&openpgp_bytes, &mut openpgp_scratch).map_err(|_| ())?;
-    let ml_dsa_bytes = read_regular(
         ml_dsa_path,
-        mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
-        mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
-        authority_peer.uid,
-        false,
-    )?;
-    let mut ml_dsa_key = [0u8; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
-    ml_dsa_key.copy_from_slice(&ml_dsa_bytes);
-    let mut receipt_bytes = read_regular(receipt_key_path, 32, 32, authority_peer.uid, true)?;
-    let mut receipt_key = [0u8; 32];
-    receipt_key.copy_from_slice(&receipt_bytes);
-    erase_secret_bytes(&mut receipt_bytes);
-    let mut authority = ProductionAuthority::new(
-        policy,
-        proofs,
-        openpgp_key,
-        ml_dsa_key,
-        receipt_key,
+        receipt_key_path,
         validation_time,
-        mrml_git::RepositoryGeneration(repository_generation),
-    )
-    .map_err(|_| ())?;
-    erase_secret_bytes(&mut receipt_key);
+        repository_generation,
+    )?;
     let listener =
         AuthorityListener::bind(Path::new(socket), 0o660, expected_gitd).map_err(|_| ())?;
     let mut replay = AuthorityReplayWindow::new();
@@ -174,6 +181,55 @@ fn serve(
         let response_length = encode_frame(response, &capability, &mut encoded).map_err(|_| ())?;
         let _ = session.write_frame(&encoded[..response_length]);
     }
+}
+
+fn load_authority(
+    authority_uid: u32,
+    policy_path: &str,
+    proof_path: &str,
+    openpgp_path: &str,
+    ml_dsa_path: &str,
+    receipt_key_path: &str,
+    validation_time: u64,
+    repository_generation: u64,
+) -> Result<ProductionAuthority, ()> {
+    let policy = LinuxDurableTrustPolicyStore::open(policy_path).map_err(|_| ())?;
+    let proofs = DurableDetachedCommitProofDirectory::open(proof_path).map_err(|_| ())?;
+    let openpgp_bytes = read_regular(
+        openpgp_path,
+        1,
+        MAX_OPENPGP_PUBLIC_KEY_BYTES,
+        authority_uid,
+        false,
+    )?;
+    let mut openpgp_scratch = vec![0u8; MAX_OPENPGP_PUBLIC_KEY_BYTES];
+    let openpgp_key =
+        parse_public_key_v6_ascii(&openpgp_bytes, &mut openpgp_scratch).map_err(|_| ())?;
+    let ml_dsa_bytes = read_regular(
+        ml_dsa_path,
+        mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
+        mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
+        authority_uid,
+        false,
+    )?;
+    let mut ml_dsa_key = [0u8; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
+    ml_dsa_key.copy_from_slice(&ml_dsa_bytes);
+    let mut receipt_bytes = read_regular(receipt_key_path, 32, 32, authority_uid, true)?;
+    let mut receipt_key = [0u8; 32];
+    receipt_key.copy_from_slice(&receipt_bytes);
+    erase_secret_bytes(&mut receipt_bytes);
+    let authority = ProductionAuthority::new(
+        policy,
+        proofs,
+        openpgp_key,
+        ml_dsa_key,
+        receipt_key,
+        validation_time,
+        mrml_git::RepositoryGeneration(repository_generation),
+    )
+    .map_err(|_| ())?;
+    erase_secret_bytes(&mut receipt_key);
+    Ok(authority)
 }
 
 fn healthcheck(
