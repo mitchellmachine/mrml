@@ -377,6 +377,29 @@ pub fn push_request_mode_negotiated(
     Ok(output)
 }
 
+/// Builds only the bounded command section for MRML's protected receive-pack
+/// profile. The caller streams the pack immediately after this prefix.
+pub fn protected_push_command_prefix(
+    old: ObjectId,
+    new: ObjectId,
+    reference: &str,
+) -> Result<Vector<u8>, TransportError> {
+    validate_ref(reference)?;
+    if old == new || old.format() != ObjectFormat::Sha256 || new.format() != ObjectFormat::Sha256 {
+        return Err(TransportError::InvalidObjectId);
+    }
+    let line = mrml_runtime::mrml_format!(
+        "{old} {new} {reference}\0report-status-v2 atomic side-band-64k ofs-delta object-format=sha256\n"
+    );
+    let mut output = Vector::new();
+    encode_packet(line.as_bytes(), &mut output)?;
+    encode_flush(&mut output);
+    if output.len() > 1024 {
+        return Err(TransportError::TooLarge);
+    }
+    Ok(output)
+}
+
 pub fn parse_push_response(source: &[u8], reference: &str) -> Result<(), TransportError> {
     parse_push_response_mode(source, reference, true)
 }
@@ -694,6 +717,30 @@ mod tests {
         assert_eq!(
             parse_push_response_mode(&report, "refs/heads/main", false),
             Ok(())
+        );
+    }
+    #[test]
+    fn protected_push_prefix_is_atomic_sha256_and_pack_free() {
+        let old = ObjectId::Sha256([1; 32]);
+        let new = ObjectId::Sha256([2; 32]);
+        let prefix = protected_push_command_prefix(old, new, "refs/heads/main").unwrap();
+        let packets = crate::decode_packets(&prefix).unwrap();
+        assert_eq!(packets.len(), 2);
+        let command = core::str::from_utf8(packets[0].as_deref().unwrap()).unwrap();
+        let expected = mrml_runtime::mrml_format!("{old} {new} refs/heads/main\0");
+        assert!(command.starts_with(expected.as_str()));
+        assert!(command.contains("report-status-v2"));
+        assert!(command.contains(" atomic "));
+        assert!(command.contains("object-format=sha256"));
+        assert!(!prefix.windows(4).any(|bytes| bytes == b"PACK"));
+        assert_eq!(packets[1], None);
+        assert!(
+            protected_push_command_prefix(
+                ObjectId::Sha1([1; 20]),
+                ObjectId::Sha1([2; 20]),
+                "refs/heads/main"
+            )
+            .is_err()
         );
     }
 }

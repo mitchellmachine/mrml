@@ -378,6 +378,7 @@ pub struct PushResult {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PushError {
     Ssh,
+    Https,
     Protocol,
     Remote,
     Repository,
@@ -385,6 +386,109 @@ pub enum PushError {
     NonFastForward,
     NeedsFetch,
 }
+
+struct PushPackFile {
+    file: mrml_runtime::File,
+    bytes: u64,
+    failed: bool,
+}
+
+impl PushPackFile {
+    fn create_new(path: &str) -> Result<Self, PushError> {
+        Ok(Self {
+            file: mrml_runtime::File::create_new(path).map_err(|_| PushError::Repository)?,
+            bytes: 0,
+            failed: false,
+        })
+    }
+
+    fn finish(&self) -> Result<(), PushError> {
+        self.file.sync().map_err(|_| PushError::Repository)
+    }
+}
+
+impl crate::PackStreamOutput for PushPackFile {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), crate::PackError> {
+        let Some(next) = self.bytes.checked_add(bytes.len() as u64) else {
+            return Err(crate::PackError::TooLarge);
+        };
+        if next > MAX_WIRE as u64 || self.file.write_all(bytes).is_err() {
+            self.failed = true;
+            return Err(crate::PackError::TooLarge);
+        }
+        self.bytes = next;
+        Ok(())
+    }
+}
+
+pub fn push_https_authenticated(
+    repository: &Repository,
+    remote_name: &str,
+    branch: &str,
+    remote: &HttpsRemote,
+    provider: &mut dyn crate::HttpsCredentialProvider,
+) -> Result<PushResult, PushError> {
+    if repository.object_format() != crate::ObjectFormat::Sha256 {
+        return Err(PushError::Protocol);
+    }
+    let reference = mrml_runtime::mrml_format!("refs/heads/{branch}");
+    let advertisement = remote
+        .list_refs_authenticated(provider)
+        .map_err(|_| PushError::Https)?;
+    let old = advertisement
+        .refs
+        .iter()
+        .find(|entry| entry.name == reference)
+        .map(|entry| entry.id)
+        .unwrap_or(ObjectId::zero(crate::ObjectFormat::Sha256));
+    let new = repository
+        .resolve_revision(branch)
+        .map_err(|_| PushError::Repository)?;
+    if old == new {
+        return Ok(PushResult { old, new });
+    }
+    if !old.is_zero() {
+        match repository.is_ancestor(old, new) {
+            Ok(true) => {}
+            Ok(false) => return Err(PushError::NonFastForward),
+            Err(_) => return Err(PushError::NeedsFetch),
+        }
+    }
+    let pack_path = mrml_runtime::join_path(
+        &repository.git_dir,
+        &mrml_runtime::mrml_format!("mrml-push-{}.pack", mrml_runtime::process_id()),
+    );
+    if mrml_runtime::path_exists(&pack_path) {
+        return Err(PushError::Repository);
+    }
+    let result = (|| {
+        let mut output = PushPackFile::create_new(&pack_path)?;
+        let haves = if old.is_zero() { &[][..] } else { &[old][..] };
+        if repository
+            .write_negotiated_pack(&[new], haves, &mut output)
+            .is_err()
+        {
+            return Err(if output.failed {
+                PushError::Repository
+            } else {
+                PushError::Protocol
+            });
+        }
+        output.finish()?;
+        remote
+            .push_pack_file_authenticated(old, new, &reference, &pack_path, provider)
+            .map_err(|_| PushError::Https)?;
+        repository
+            .update_remote_ref(remote_name, &reference, new)
+            .map_err(|_| PushError::Repository)?;
+        Ok(PushResult { old, new })
+    })();
+    if mrml_runtime::path_exists(&pack_path) && mrml_runtime::remove_file(&pack_path).is_err() {
+        return Err(PushError::Repository);
+    }
+    result
+}
+
 pub fn push_ssh(
     repository: &Repository,
     remote_name: &str,
@@ -469,6 +573,7 @@ impl fmt::Display for PushError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Ssh => "native SSH transport failed",
+            Self::Https => "native HTTPS transport failed or push result is uncertain",
             Self::Protocol => "remote receive-pack protocol is unsupported or invalid",
             Self::Remote => "remote rejected the pushed reference",
             Self::Repository => "failed to read or update repository state",

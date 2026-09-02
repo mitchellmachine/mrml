@@ -1,10 +1,15 @@
 use core::fmt;
-use mrml_http::{Header, Http2ClientConnection, Http3ClientConnection, Url};
-use mrml_runtime::{Text, Vector};
+use mrml_http::{
+    Header, Http2ClientConnection, Http3ClientConnection, HttpError, RequestBodySource,
+    ResponseBodySink, Url,
+};
+use mrml_runtime::{File, Text, Vector};
 
 const MAX_DISCOVERY_BYTES: usize = 256 * 1024;
 const MAX_LS_REFS_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LS_REFS: usize = 1_000_000;
+const MAX_PUSH_PACK_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_PUSH_REPORT_BYTES: usize = 1024 * 1024;
 pub const MAX_FETCH_WANTS_PER_REQUEST: usize = 32;
 pub const MAX_FETCH_HAVES_PER_REQUEST: usize = 16;
 
@@ -323,12 +328,159 @@ impl HttpsRemote {
         Ok(bytes)
     }
 
+    pub fn push_pack_file_authenticated<P: crate::HttpsCredentialProvider + ?Sized>(
+        &self,
+        old: crate::ObjectId,
+        new: crate::ObjectId,
+        reference: &str,
+        pack_path: &str,
+        provider: &mut P,
+    ) -> Result<(), HttpsRemoteError> {
+        let scope = self.credential_scope(crate::HttpsCredentialAction::Write)?;
+        let credential = provider
+            .credential(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        let authorization = credential
+            .authorization_for(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        let prefix = crate::protected_push_command_prefix(old, new, reference)
+            .map_err(|_| HttpsRemoteError::Protocol)?;
+        let file = File::open_regular(pack_path).map_err(|_| HttpsRemoteError::Storage)?;
+        let pack_bytes = file.len().map_err(|_| HttpsRemoteError::Storage)?;
+        if pack_bytes == 0 || pack_bytes > MAX_PUSH_PACK_BYTES {
+            return Err(HttpsRemoteError::TooLarge);
+        }
+        let mut source = PushBodySource::new(prefix, file, pack_bytes)?;
+        let target = self.service_target(SmartGitService::ReceivePack);
+        let authority = self.authority();
+        let headers = request_headers(
+            "application/x-git-receive-pack-result",
+            Some("application/x-git-receive-pack-request"),
+            Some(authorization),
+        );
+        let mut report = LimitedResponseBody::new(MAX_PUSH_REPORT_BYTES);
+        let head = match self.transport {
+            HttpsTransport::Http2 => {
+                let mut connection = Http2ClientConnection::connect(&self.host, self.port)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                connection
+                    .request_streaming_body_to(
+                        "POST",
+                        &authority,
+                        &target,
+                        &headers,
+                        &mut source,
+                        &mut report,
+                    )
+                    .map_err(|_| HttpsRemoteError::Transport)?
+            }
+            HttpsTransport::Http3V2 => {
+                let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
+                    .map_err(|_| HttpsRemoteError::Transport)?;
+                connection
+                    .request_streaming_body_to(
+                        "POST",
+                        &authority,
+                        &target,
+                        &headers,
+                        &mut source,
+                        &mut report,
+                    )
+                    .map_err(|_| HttpsRemoteError::Transport)?
+            }
+        };
+        validate_service_response(
+            head.status,
+            &head.headers,
+            &report.bytes,
+            "application/x-git-receive-pack-result",
+        )?;
+        crate::parse_push_response_mode(&report.bytes, reference, true)
+            .map_err(|_| HttpsRemoteError::Protocol)
+    }
+
     fn credential_scope(
         &self,
         action: crate::HttpsCredentialAction,
     ) -> Result<crate::HttpsCredentialScope, HttpsRemoteError> {
         crate::HttpsCredentialScope::new(&self.host, self.port, &self.repository_path, action)
             .map_err(|_| HttpsRemoteError::Credential)
+    }
+}
+
+struct PushBodySource {
+    prefix: Vector<u8>,
+    prefix_offset: usize,
+    file: File,
+    file_remaining: u64,
+}
+
+impl PushBodySource {
+    fn new(prefix: Vector<u8>, file: File, file_remaining: u64) -> Result<Self, HttpsRemoteError> {
+        prefix
+            .len()
+            .checked_add(usize::try_from(file_remaining).map_err(|_| HttpsRemoteError::TooLarge)?)
+            .ok_or(HttpsRemoteError::TooLarge)?;
+        Ok(Self {
+            prefix,
+            prefix_offset: 0,
+            file,
+            file_remaining,
+        })
+    }
+}
+
+impl RequestBodySource for PushBodySource {
+    fn remaining(&self) -> u64 {
+        (self.prefix.len() - self.prefix_offset) as u64 + self.file_remaining
+    }
+
+    fn read(&mut self, output: &mut [u8]) -> Result<usize, HttpError> {
+        let prefix_remaining = &self.prefix[self.prefix_offset..];
+        let copied = prefix_remaining.len().min(output.len());
+        output[..copied].copy_from_slice(&prefix_remaining[..copied]);
+        self.prefix_offset += copied;
+        if copied == output.len() || self.file_remaining == 0 {
+            return Ok(copied);
+        }
+        let maximum = usize::try_from(self.file_remaining.min((output.len() - copied) as u64))
+            .map_err(|_| HttpError::BodyTooLarge)?;
+        let read = self
+            .file
+            .read(&mut output[copied..copied + maximum])
+            .map_err(|_| HttpError::Io)?;
+        self.file_remaining = self.file_remaining.saturating_sub(read as u64);
+        Ok(copied + read)
+    }
+}
+
+struct LimitedResponseBody {
+    bytes: Vector<u8>,
+    maximum: usize,
+}
+
+impl LimitedResponseBody {
+    const fn new(maximum: usize) -> Self {
+        Self {
+            bytes: Vector::new(),
+            maximum,
+        }
+    }
+}
+
+impl ResponseBodySink for LimitedResponseBody {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), HttpError> {
+        if self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .is_none_or(|length| length > self.maximum)
+        {
+            return Err(HttpError::BodyTooLarge);
+        }
+        self.bytes
+            .try_extend_from_slice(bytes)
+            .map_err(|_| HttpError::Allocation)
     }
 }
 
@@ -858,5 +1010,30 @@ mod tests {
                 .map(|(_, value)| *value),
             Some("Bearer redacted-test-value")
         );
+    }
+
+    #[test]
+    fn push_body_source_streams_prefix_then_exact_file_and_bounds_report() {
+        let path =
+            mrml_runtime::mrml_format!("/tmp/mrml-git-push-source-{}", mrml_runtime::process_id());
+        let _ = mrml_runtime::remove_file(&path);
+        mrml_runtime::write_new_file(&path, b"PACK-file-bytes").unwrap();
+        let file = File::open_regular(&path).unwrap();
+        let mut source = PushBodySource::new(Vector::from(*b"prefix-"), file, 15).unwrap();
+        assert_eq!(source.remaining(), 22);
+        let mut received = Vector::new();
+        let mut chunk = [0u8; 5];
+        while source.remaining() != 0 {
+            let maximum = (source.remaining() as usize).min(chunk.len());
+            let read = source.read(&mut chunk[..maximum]).unwrap();
+            assert!(read != 0);
+            received.try_extend_from_slice(&chunk[..read]).unwrap();
+        }
+        assert_eq!(&received[..], b"prefix-PACK-file-bytes");
+        mrml_runtime::remove_file(&path).unwrap();
+
+        let mut report = LimitedResponseBody::new(4);
+        assert!(report.write(b"okay").is_ok());
+        assert_eq!(report.write(b"!"), Err(HttpError::BodyTooLarge));
     }
 }

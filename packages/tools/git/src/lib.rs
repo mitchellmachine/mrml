@@ -100,11 +100,11 @@ pub use https_credential::{
     HttpsCredentialAction, HttpsCredentialError, HttpsCredentialProvider, HttpsCredentialScope,
     ScopedBearerCredential,
 };
+pub use https_pack::{FilePackOutput, HttpsPackError, PackOutput, V2PackResponseDecoder};
 pub use https_remote::{
     HttpsDiscovery, HttpsRefAdvertisement, HttpsRemote, HttpsRemoteError, HttpsTransport,
-    SmartGitService, MAX_FETCH_HAVES_PER_REQUEST, MAX_FETCH_WANTS_PER_REQUEST,
+    MAX_FETCH_HAVES_PER_REQUEST, MAX_FETCH_WANTS_PER_REQUEST, SmartGitService,
 };
-pub use https_pack::{FilePackOutput, HttpsPackError, PackOutput, V2PackResponseDecoder};
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
 pub use index::{Index, IndexEntry, IndexError};
 pub use local_repack::LocalRepackResult;
@@ -166,7 +166,7 @@ pub use ref_state::{
 pub use ref_state_file::ActiveRefFile;
 pub use remote::{
     FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_https,
-    fetch_https_authenticated, fetch_ssh, inspect_ssh, push_ssh,
+    fetch_https_authenticated, fetch_ssh, inspect_ssh, push_https_authenticated, push_ssh,
 };
 pub use repository::{
     BlameLine, FetchPackLimits, GitSignatureFormat, MergeOutcome, NativeChange, NativeChangeKind,
@@ -187,6 +187,7 @@ pub use smart_protocol::{
     read_receive_pack_commands, read_v2_request, write_pkt_line, write_receive_pack_report,
     write_v2_capability_advertisement,
 };
+pub use transport::protected_push_command_prefix;
 pub use transport::{
     Advertisement, RemoteRef, TransportError, decode_packets, encode_flush, encode_packet,
     extract_pack_response, fetch_request, parse_advertisement, parse_push_response,

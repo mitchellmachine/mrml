@@ -970,10 +970,29 @@ fn native_push(repository: Option<&str>, name: &str, branch: Option<&str>) -> Re
         .map(Into::into)
         .or_else(|| repo.current_branch().ok().flatten())
         .ok_or_else(|| anyhow!("push requires a branch for detached HEAD"))?;
-    let (_, remote) = ssh_remote(repository, name)?;
-    let (key, host) = ssh_credentials(&repo)?;
-    let result = push_ssh(&repo, name, &branch, &remote, &key, &host)
-        .map_err(|error| anyhow!("{}", error))?;
+    let url = remote_url(&repo, name)?;
+    let result = if url.starts_with("https://") {
+        let remote = HttpsRemote::parse(&url, repository_https_transport(&repo)?)
+            .map_err(|error| anyhow!("invalid HTTPS remote: {}", error))?;
+        match repository_https_provider(&repo)?.as_deref() {
+            Some("standard-input") => {
+                let mut provider = StandardInputBearerProvider::read()?;
+                mrml_git::push_https_authenticated(&repo, name, &branch, &remote, &mut provider)
+                    .map_err(|error| anyhow!("{}", error))?
+            }
+            _ => {
+                return Err(anyhow!(
+                    "protected HTTPS push requires http.credentialProvider=standard-input"
+                ));
+            }
+        }
+    } else {
+        let remote =
+            SshRemote::parse(&url).map_err(|error| anyhow!("invalid SSH remote: {}", error))?;
+        let (key, host) = ssh_credentials(&repo)?;
+        push_ssh(&repo, name, &branch, &remote, &key, &host)
+            .map_err(|error| anyhow!("{}", error))?
+    };
     if result.old == result.new {
         println!("Everything up to date.");
     } else {
