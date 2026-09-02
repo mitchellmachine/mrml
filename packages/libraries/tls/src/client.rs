@@ -922,6 +922,21 @@ impl TlsClientStream {
         }
         Ok(())
     }
+    /// Change the timeout for an established application-data channel. TLS
+    /// handshakes retain their independent 30-second timeout; callers must
+    /// select an explicit bounded value for longer-running protocols.
+    pub fn set_application_io_timeout_millis(
+        &self,
+        timeout_millis: u64,
+    ) -> Result<(), TlsError> {
+        if !(1_000..=900_000).contains(&timeout_millis) {
+            return Err(TlsError::Io);
+        }
+        self.stream
+            .set_read_timeout_millis(timeout_millis)
+            .and_then(|_| self.stream.set_write_timeout_millis(timeout_millis))
+            .map_err(|_| TlsError::Io)
+    }
     pub const fn negotiated_group(&self) -> u16 {
         self.negotiated_group
     }
