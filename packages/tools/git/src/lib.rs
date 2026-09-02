@@ -185,7 +185,7 @@ pub use smart_protocol::{
     MAX_PKT_LINE_BYTES, MAX_V2_ARGUMENTS, MAX_V2_REF_PREFIXES, PktLine, ProtocolBudget,
     ProtocolV2Request, ReceivePackRequest, ReceiveRefStatus, read_pkt_line,
     read_receive_pack_commands, read_v2_request, write_pkt_line, write_receive_pack_report,
-    write_v2_capability_advertisement,
+    write_v2_capability_advertisement, write_v2_receive_capability_advertisement,
 };
 pub use transport::protected_push_command_prefix;
 pub use transport::{

@@ -240,6 +240,7 @@ pub struct VerificationSummary {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SmartGitOperation {
     Discovery,
+    ReceiveDiscovery,
     UploadPack,
     ReceivePack,
 }
@@ -1009,6 +1010,10 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
                 SmartGitOperation::Discovery,
                 "application/x-git-upload-pack-advertisement",
             ),
+            ("GET", ["info", "refs"], Some("service=git-receive-pack")) => (
+                SmartGitOperation::ReceiveDiscovery,
+                "application/x-git-receive-pack-advertisement",
+            ),
             ("POST", ["git-upload-pack"], None) => {
                 require_content_type(request, "application/x-git-upload-pack-request")?;
                 (
@@ -1025,7 +1030,10 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             }
             _ => return Err(BackendError::NotFound),
         };
-        let action = if operation == SmartGitOperation::ReceivePack {
+        let action = if matches!(
+            operation,
+            SmartGitOperation::ReceiveDiscovery | SmartGitOperation::ReceivePack
+        ) {
             RepositoryAction::Write
         } else {
             RepositoryAction::Read
@@ -2243,6 +2251,7 @@ mod tests {
         ) -> Result<SmartGitResponse, BackendError> {
             let bytes = match request.operation {
                 SmartGitOperation::Discovery => b"000eversion 2\n0000".as_slice(),
+                SmartGitOperation::ReceiveDiscovery => b"000eversion 2\n0000".as_slice(),
                 SmartGitOperation::UploadPack => b"000dpackfile\n0000".as_slice(),
                 SmartGitOperation::ReceivePack => b"000eunpack ok\n0000".as_slice(),
             };
@@ -2331,6 +2340,12 @@ mod tests {
                 "application/x-git-upload-pack-advertisement",
             ),
             (
+                "GET",
+                "/mitchellrenouf/mrml.git/info/refs?service=git-receive-pack",
+                None,
+                "application/x-git-receive-pack-advertisement",
+            ),
+            (
                 "POST",
                 "/mitchellrenouf/mrml.git/git-upload-pack",
                 Some("application/x-git-upload-pack-request"),
@@ -2344,7 +2359,7 @@ mod tests {
             ),
         ] {
             let mut request = smart_request(method, target, request_type);
-            if target.ends_with("git-receive-pack") {
+            if target.contains("git-receive-pack") {
                 request.headers.push(Header {
                     name: "authorization".into(),
                     value: mrml_runtime::mrml_format!("Bearer {token}"),

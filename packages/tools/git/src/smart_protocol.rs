@@ -347,6 +347,26 @@ pub fn write_v2_capability_advertisement(
     write_pkt_line(output, &PktLine::Flush, budget)
 }
 
+/// Advertises only the receive capabilities implemented by the protected
+/// production backend. It does not expose refs before authentication.
+pub fn write_v2_receive_capability_advertisement(
+    output: &mut dyn BoundedWrite,
+    format: ObjectFormat,
+    budget: &mut ProtocolBudget,
+) -> Result<(), GitdCoreError> {
+    if format != ObjectFormat::Sha256 {
+        return Err(GitdCoreError::Unsupported);
+    }
+    for line in [
+        b"version 2\n".as_slice(),
+        b"object-format=sha256\n",
+        b"receive=report-status-v2 atomic side-band-64k ofs-delta\n",
+    ] {
+        write_pkt_line(output, &PktLine::Data(copy_bytes(line)?), budget)?;
+    }
+    write_pkt_line(output, &PktLine::Flush, budget)
+}
+
 /// Parse one protocol-v2 command. The transport must already have selected the
 /// exact repository and object format. Unknown command capabilities and
 /// unsupported arguments fail closed instead of being ignored.
@@ -921,6 +941,31 @@ mod tests {
         assert!(!text.contains("filter"));
         assert!(!text.contains("shallow"));
         assert!(!text.contains("packfile-uris"));
+
+        let mut receive = Writer {
+            bytes: Vector::new(),
+            limit: 512,
+        };
+        write_v2_receive_capability_advertisement(
+            &mut receive,
+            ObjectFormat::Sha256,
+            &mut budget(512),
+        )
+        .unwrap();
+        let receive = core::str::from_utf8(&receive.bytes).unwrap();
+        assert!(receive.contains("report-status-v2"));
+        assert!(receive.contains(" atomic "));
+        assert!(receive.contains("side-band-64k"));
+        assert!(receive.contains("ofs-delta"));
+        assert!(!receive.contains("push-options"));
+        assert!(
+            write_v2_receive_capability_advertisement(
+                &mut writer,
+                ObjectFormat::Sha1,
+                &mut budget(512)
+            )
+            .is_err()
+        );
     }
 
     #[test]
