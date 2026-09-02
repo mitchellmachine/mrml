@@ -4,17 +4,18 @@ use mrml_acme::{
     CaClass, ChallengeKind, Dns01ActivationEvidence, HostedAcmeTransport, JoseError,
     MAX_ACME_PAYLOAD_BYTES, MAX_AUTHORIZATIONS, MAX_CSR_IDENTIFIERS, MAX_DIRECTORY_BYTES,
     MAX_JWS_REQUEST_BYTES, MAX_KEY_AUTHORIZATION, OrderCreateBuffers, OrderLifecycle, P256Jwk,
-    ProtectedKey, ReplayNonce, account_contacts_digest, dns01_txt_digest,
+    ProtectedKey, ReplayNonce, RevocationOutcome, account_contacts_digest, dns01_txt_digest,
     execute_prepared_account_create, execute_prepared_finalize, execute_prepared_order_create,
     fetch_authorization, fetch_directory, fetch_renewal_info, poll_order, prepare_order_creation,
-    recover_uncertain_account_creation, trigger_propagated_dns01_challenge,
+    recover_uncertain_account_creation, revoke_certificate, trigger_propagated_dns01_challenge,
     write_key_authorization,
 };
 use mrml_acmed::{
     AcmeDirectoryClass, AcmedAccountPhase, AcmedAccountRecord, AcmedChallengePhase,
     AcmedChallengeRecord, AcmedChannelRequestCounter, AcmedConfig, AcmedFinalizationPhase,
     AcmedFinalizationRecord, AcmedOrderPhase, AcmedOrderRecord, AcmedRequestIdReservation,
-    MAX_ACMED_CONFIG_BYTES, challenge_object_id, finalization_object_id, parse_acmed_config,
+    AcmedRevocationPhase, AcmedRevocationRecord, MAX_ACMED_CONFIG_BYTES, challenge_object_id,
+    finalization_object_id, parse_acmed_config,
 };
 use mrml_certificate::{
     AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CERTD_P256_PUBLIC_KEY_BYTES,
@@ -29,9 +30,10 @@ use mrml_certificate::{
     MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES,
     MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PRODUCTION_SECRET_MODE, RENEWAL_SCHEDULE_BYTES,
     RenewalEntropy, RenewalSchedule, SchedulerError, TlsIdentityId, UnixCertdSession,
-    decode_certd_channel_request, encode_certd_account_key_request, encode_certd_candidate_request,
-    encode_certd_channel_request, encode_certd_jws_request, encode_certd_tls_key_request,
-    load_durable_authenticator, p256_public_key_is_valid, retrieve_certificate_chain,
+    decode_certd_candidate_request, decode_certd_channel_request, encode_certd_account_key_request,
+    encode_certd_candidate_request, encode_certd_channel_request, encode_certd_jws_request,
+    encode_certd_tls_key_request, load_durable_authenticator, p256_public_key_is_valid,
+    retrieve_certificate_chain,
 };
 use std::io::Read;
 use std::path::Path;
@@ -153,22 +155,429 @@ fn application_main() -> Result<(), &'static str> {
     let config = load_config()?;
     let state_authenticator = load_durable_authenticator(Path::new(STATE_KEY), ACMED_UID)
         .map_err(|_| "invalid acmed state authentication key")?;
-    let provider = CloudflareDns01Provider::open(
+    let capability = load_channel_capability()?;
+    match command.as_str() {
+        "check-config" => {
+            let _provider = load_dns_provider(&config)?;
+            println!("mrml-acmed configuration valid");
+            Ok(())
+        }
+        "serve" => serve(
+            config,
+            capability,
+            state_authenticator,
+            load_dns_provider(&config)?,
+        ),
+        "revoke-preview" => revoke_command(config, capability, state_authenticator, false),
+        "revoke" => revoke_command(config, capability, state_authenticator, true),
+        _ => Err(
+            "usage: mrml-acmed [serve|check-config|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
+        ),
+    }
+}
+
+fn load_dns_provider(config: &AcmedConfig) -> Result<CloudflareDns01Provider, &'static str> {
+    CloudflareDns01Provider::open(
         Path::new(DNS_TOKEN),
         ACMED_UID,
         core::str::from_utf8(&config.zone_id).map_err(|_| "invalid zone ID")?,
         config.zone,
     )
-    .map_err(|_| "invalid Cloudflare DNS provider configuration")?;
-    let capability = load_channel_capability()?;
-    match command.as_str() {
-        "check-config" => {
-            println!("mrml-acmed configuration valid");
-            Ok(())
-        }
-        "serve" => serve(config, capability, state_authenticator, provider),
-        _ => Err("usage: mrml-acmed [serve|check-config]"),
+    .map_err(|_| "invalid Cloudflare DNS provider configuration")
+}
+
+fn revoke_command(
+    config: AcmedConfig,
+    capability: CertdChannelCapability,
+    mut authenticator: impl DurableAuthenticator,
+    submit: bool,
+) -> Result<(), &'static str> {
+    let reason_text = std::env::args()
+        .nth(2)
+        .ok_or("revocation reason is required")?;
+    let reason = match reason_text.as_str() {
+        "unspecified" => 0,
+        "key-compromise" => 1,
+        "affiliation-changed" => 3,
+        "superseded" => 4,
+        "cessation-of-operation" => 5,
+        "privilege-withdrawn" => 9,
+        _ => return Err("unsupported revocation reason"),
+    };
+    if (!submit && std::env::args().nth(3).is_some())
+        || (submit && std::env::args().nth(4).is_some())
+    {
+        return Err("unexpected revocation argument");
     }
+    let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
+        .map_err(|_| "cannot open acmed durable state")?;
+    let reservation = reserve_channel_request_ids(&config, &mut state, &mut authenticator)?;
+    let bootstrap = bootstrap_certd(&config, &capability, reservation.next)?;
+    let mut signer = CertdEnvelopeWriter {
+        capability: &capability,
+        account_identity: config.account_identity,
+        configured_account_generation: config.account_generation,
+        operation: AcmeJwsOperation::NewAccount,
+        next_request_id: bootstrap.next_request_id,
+    };
+    let account = establish_account(
+        &config,
+        &bootstrap.account_public_key,
+        &mut signer,
+        &mut state,
+        &mut authenticator,
+    )?;
+    let mut active_bytes = [0u8; MAX_CERTD_CHANNEL_PAYLOAD_BYTES];
+    let active_length = certd_call(
+        &capability,
+        signer.next_request_id,
+        CertdChannelOperation::GetActiveCertificateForRevocation,
+        &[],
+        &mut active_bytes,
+    )?;
+    signer.next_request_id = signer
+        .next_request_id
+        .checked_add(1)
+        .ok_or("channel request ID exhausted")?;
+    let active = decode_certd_candidate_request(&active_bytes[..active_length])
+        .map_err(|_| "invalid active certificate publication")?;
+    if active.identity != config.identity
+        || active.account_generation != config.account_generation
+        || active.policy_generation != config.policy_generation
+    {
+        return Err("active certificate policy mismatch");
+    }
+    let mut lifecycle_bytes = [0u8; mrml_certificate::CERTD_CANDIDATE_STATE_BYTES];
+    let lifecycle_length = certd_call(
+        &capability,
+        signer.next_request_id,
+        CertdChannelOperation::GetCertificateLifecycleStatus,
+        &[],
+        &mut lifecycle_bytes,
+    )?;
+    signer.next_request_id = signer
+        .next_request_id
+        .checked_add(1)
+        .ok_or("channel request ID exhausted")?;
+    let lifecycle = CertdCandidateState::decode(&lifecycle_bytes[..lifecycle_length])
+        .map_err(|_| "invalid active certificate lifecycle state")?;
+    if lifecycle.stage != CertdCandidateStage::Active
+        || lifecycle.identity_generation != active.identity_generation
+        || lifecycle.chain_digest != active.chain.chain_digest()
+    {
+        return Err("active certificate lifecycle binding mismatch");
+    }
+    let certificate_id = lifecycle.ari_certificate_id;
+    let chain_digest = active.chain.chain_digest();
+    let approval = revocation_approval_digest(
+        config.identity,
+        active.identity_generation,
+        &certificate_id,
+        chain_digest,
+        reason,
+    );
+    if !submit {
+        println!(
+            "identity_generation={} certificate_id={} chain_sha256={} reason={} approval_sha256={}",
+            active.identity_generation,
+            certificate_id.as_str(),
+            hex(&chain_digest),
+            reason_text,
+            hex(&approval)
+        );
+        return Ok(());
+    }
+    let supplied = parse_digest(
+        &std::env::args()
+            .nth(3)
+            .ok_or("approval SHA-256 is required")?,
+    )?;
+    if supplied != approval {
+        return Err("revocation approval does not match the active certificate preview");
+    }
+    submit_revocation(
+        &config,
+        &account,
+        &active,
+        certificate_id,
+        chain_digest,
+        reason,
+        approval,
+        &mut signer,
+        &mut state,
+        &mut authenticator,
+    )?;
+    println!("mrml-acmed revocation confirmed");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_revocation(
+    config: &AcmedConfig,
+    account: &AccountLifecycle,
+    active: &mrml_certificate::CertdCandidateRequest,
+    certificate_id: mrml_acme::AriCertificateId,
+    chain_digest: [u8; 32],
+    reason: u8,
+    authorization_digest: [u8; 32],
+    signer: &mut CertdEnvelopeWriter<'_>,
+    state: &mut HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<(), &'static str> {
+    let object = revocation_object(config.identity);
+    let loaded = load_revocation_record(config, object, state, authenticator)?;
+    let was_absent = loaded.is_none();
+    let (revocation_generation, previous_generation, phase) = match loaded {
+        Some((record, generation)) => {
+            if same_revocation_binding(
+                &record,
+                active.identity_generation,
+                &certificate_id,
+                chain_digest,
+                reason,
+                authorization_digest,
+            ) {
+                if record.phase == AcmedRevocationPhase::Revoked {
+                    return Ok(());
+                }
+                (record.revocation_generation, generation, record.phase)
+            } else if record.phase == AcmedRevocationPhase::Revoked {
+                (
+                    record
+                        .revocation_generation
+                        .checked_add(1)
+                        .ok_or("revocation generation exhausted")?,
+                    generation,
+                    AcmedRevocationPhase::Prepared,
+                )
+            } else {
+                return Err("different revocation transaction is unresolved");
+            }
+        }
+        None => (1, 0, AcmedRevocationPhase::Prepared),
+    };
+    let prepared = AcmedRevocationRecord {
+        phase: AcmedRevocationPhase::Prepared,
+        directory_generation: config.directory_generation,
+        account_generation: config.account_generation,
+        policy_generation: config.policy_generation,
+        identity: config.identity,
+        identity_generation: active.identity_generation,
+        revocation_generation,
+        certificate_id,
+        chain_digest,
+        reason,
+        authorization_digest,
+        transaction_digest: [0; 32],
+        revoked_at_unix: 0,
+    };
+    let prepared_generation = if was_absent || phase == AcmedRevocationPhase::Prepared {
+        persist_revocation_record(object, previous_generation, &prepared, state, authenticator)?
+    } else {
+        previous_generation
+    };
+    let uncertain = AcmedRevocationRecord {
+        phase: AcmedRevocationPhase::SubmissionMayHaveBeenSent,
+        ..prepared
+    };
+    let uncertain_generation = if phase == AcmedRevocationPhase::SubmissionMayHaveBeenSent {
+        previous_generation
+    } else {
+        persist_revocation_record(
+            object,
+            prepared_generation,
+            &uncertain,
+            state,
+            authenticator,
+        )?
+    };
+    let mut exchange = AcmeExchange::new(config.directory_generation, config.directory_url);
+    let mut transport = HostedAcmeTransport::new();
+    let mut directory_response = [0u8; MAX_DIRECTORY_BYTES];
+    let directory = fetch_directory(
+        &config.directory_url,
+        config.directory_generation,
+        &mut exchange,
+        &mut transport,
+        &mut directory_response,
+    )
+    .map_err(|_| "cannot retrieve ACME directory for revocation")?;
+    signer.operation = AcmeJwsOperation::RevokeCertificate;
+    let mut payload = [0u8; MAX_ACME_PAYLOAD_BYTES];
+    let mut response = [0u8; MAX_DIRECTORY_BYTES];
+    let mut jws = [0u8; MAX_JWS_REQUEST_BYTES];
+    let certificate_der = active
+        .chain
+        .certificate(0)
+        .ok_or("active leaf certificate is absent")?;
+    let account_url = account
+        .account_url
+        .ok_or("active ACME account URL is absent")?;
+    let outcome = revoke_certificate(
+        &directory,
+        certificate_der,
+        Some(reason),
+        ProtectedKey::Kid(&account_url),
+        account.generation,
+        &mut exchange,
+        &mut transport,
+        signer,
+        &mut payload,
+        &mut response,
+        &mut jws,
+    )
+    .map_err(|_| "ACME revocation response is uncertain or rejected")?;
+    let now = unix_time()?;
+    let mut transaction = mrml_crypto::Sha256::new();
+    transaction.update(b"MRML acmed revocation receipt v1\0");
+    transaction.update(directory.revoke_cert.as_str().as_bytes());
+    transaction.update(&mrml_crypto::Sha256::digest(certificate_der));
+    transaction.update(&[reason]);
+    transaction.update(&[match outcome {
+        RevocationOutcome::Submitted => 1,
+        RevocationOutcome::AlreadyRevoked => 2,
+    }]);
+    persist_revocation_record(
+        object,
+        uncertain_generation,
+        &AcmedRevocationRecord {
+            phase: AcmedRevocationPhase::Revoked,
+            transaction_digest: transaction.finalize(),
+            revoked_at_unix: now,
+            ..uncertain
+        },
+        state,
+        authenticator,
+    )?;
+    Ok(())
+}
+
+fn revocation_object(identity: [u8; 16]) -> DurableObjectId {
+    let mut digest = mrml_crypto::Sha256::new();
+    digest.update(b"MRML acmed revocation v1\0");
+    digest.update(&identity);
+    let digest = digest.finalize();
+    DurableObjectId(digest[..16].try_into().unwrap_or([0; 16]))
+}
+
+fn revocation_approval_digest(
+    identity: [u8; 16],
+    identity_generation: u64,
+    certificate_id: &mrml_acme::AriCertificateId,
+    chain_digest: [u8; 32],
+    reason: u8,
+) -> [u8; 32] {
+    let mut digest = mrml_crypto::Sha256::new();
+    digest.update(b"MRML acmed owner revocation approval v1\0");
+    digest.update(&identity);
+    digest.update(&identity_generation.to_be_bytes());
+    digest.update(certificate_id.as_str().as_bytes());
+    digest.update(&chain_digest);
+    digest.update(&[reason]);
+    digest.finalize()
+}
+
+fn same_revocation_binding(
+    record: &AcmedRevocationRecord,
+    identity_generation: u64,
+    certificate_id: &mrml_acme::AriCertificateId,
+    chain_digest: [u8; 32],
+    reason: u8,
+    authorization_digest: [u8; 32],
+) -> bool {
+    record.identity_generation == identity_generation
+        && record.certificate_id == *certificate_id
+        && record.chain_digest == chain_digest
+        && record.reason == reason
+        && record.authorization_digest == authorization_digest
+}
+
+fn parse_digest(text: &str) -> Result<[u8; 32], &'static str> {
+    if text.len() != 64 {
+        return Err("approval SHA-256 must contain 64 lowercase hexadecimal characters");
+    }
+    let mut output = [0u8; 32];
+    for (index, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+        let high = hex_nibble(pair[0])?;
+        let low = hex_nibble(pair[1])?;
+        output[index] = (high << 4) | low;
+    }
+    Ok(output)
+}
+
+fn hex_nibble(value: u8) -> Result<u8, &'static str> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        _ => Err("approval SHA-256 must be lowercase hexadecimal"),
+    }
+}
+
+fn hex(value: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut output = String::with_capacity(value.len() * 2);
+    for byte in value {
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output
+}
+
+fn load_revocation_record(
+    config: &AcmedConfig,
+    object: DurableObjectId,
+    state: &HostedDurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<Option<(AcmedRevocationRecord, u64)>, &'static str> {
+    let mut encoded = [0u8; MAX_DURABLE_RECORD_BYTES];
+    let Some(length) = state
+        .load_authoritative(DurableNamespace::PublicState, object, &mut encoded)
+        .map_err(|_| "cannot load ACME revocation state")?
+    else {
+        return Ok(None);
+    };
+    let durable = DurableRecord::decode(&encoded[..length], authenticator)
+        .map_err(|_| "ACME revocation state authentication failed")?;
+    if durable.namespace != DurableNamespace::PublicState
+        || durable.kind != DurableRecordKind::Revocation
+        || durable.object != object
+    {
+        return Err("ACME revocation durable record type mismatch");
+    }
+    let record = AcmedRevocationRecord::decode(durable.payload())
+        .map_err(|_| "invalid ACME revocation durable record")?;
+    record
+        .require_policy(config)
+        .map_err(|_| "stale ACME revocation policy")?;
+    Ok(Some((record, durable.generation)))
+}
+
+fn persist_revocation_record(
+    object: DurableObjectId,
+    previous_generation: u64,
+    record: &AcmedRevocationRecord,
+    state: &mut impl DurableStateStore,
+    authenticator: &mut impl DurableAuthenticator,
+) -> Result<u64, &'static str> {
+    let mut payload = [0u8; MAX_DURABLE_PAYLOAD];
+    let length = record
+        .encode(&mut payload)
+        .map_err(|_| "cannot encode ACME revocation state")?;
+    let durable = DurableRecord::prepare(
+        DurableNamespace::PublicState,
+        DurableRecordKind::Revocation,
+        object,
+        previous_generation,
+        &payload[..length],
+        authenticator,
+    )
+    .map_err(|_| "cannot authenticate ACME revocation state")?;
+    let prepared = state
+        .prepare(&durable)
+        .map_err(|_| "cannot prepare ACME revocation state")?;
+    let committed = state
+        .commit(prepared)
+        .map_err(|_| "ACME revocation state commit uncertain")?;
+    Ok(committed.generation)
 }
 
 fn serve(
