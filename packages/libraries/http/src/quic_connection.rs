@@ -785,6 +785,7 @@ pub struct QuicServerListener {
     socket: QuicDatagramTransport,
     parameters: QuicTransportParameters,
     server_connection_id: Option<Vector<u8>>,
+    original_destination_id: Option<Vector<u8>>,
 }
 impl QuicServerListener {
     pub fn bind(ip: [u8; 4], port: u16) -> Result<Self, QuicError> {
@@ -799,19 +800,25 @@ impl QuicServerListener {
             socket: QuicDatagramTransport::Direct(socket),
             parameters: QuicTransportParameters::default(),
             server_connection_id: None,
+            original_destination_id: None,
         })
     }
 
     pub(crate) fn from_routed_datagrams(
         socket: Shared<UdpSocket>,
         inbound: Receiver<QuicRoutedDatagram>,
+        original_destination_id: Vector<u8>,
     ) -> Result<(Self, Vector<u8>), QuicError> {
+        if original_destination_id.is_empty() || original_destination_id.len() > 20 {
+            return Err(QuicError::ConnectionId);
+        }
         let server_connection_id = random_connection_id()?;
         Ok((
             Self {
                 socket: QuicDatagramTransport::Routed { socket, inbound },
                 parameters: QuicTransportParameters::default(),
                 server_connection_id: Some(server_connection_id.clone()),
+                original_destination_id: Some(original_destination_id),
             },
             server_connection_id,
         ))
@@ -823,7 +830,7 @@ impl QuicServerListener {
         let mut datagram = [0; 65_527];
         let mut initial_crypto = QuicStreamAssembler::new(64 * 1024);
         let mut initial_keys = None;
-        let mut original_destination_id = None;
+        let mut received_destination_id = None;
         let mut client_id = None;
         let mut peer = None;
         let mut client_initial_packets = PacketReceiveState::new();
@@ -848,7 +855,7 @@ impl QuicServerListener {
                     &id,
                     QuicRole::Client,
                 )?);
-                original_destination_id = Some(id);
+                received_destination_id = Some(id);
             }
             let (packet, _) = InitialPacket::open_for(
                 version.ok_or(QuicError::InvalidPacket)?,
@@ -875,8 +882,11 @@ impl QuicServerListener {
         };
         let peer = peer.ok_or(QuicError::ProtocolViolation)?;
         let client_id = client_id.ok_or(QuicError::ProtocolViolation)?;
-        let original_destination_id =
-            original_destination_id.ok_or(QuicError::ProtocolViolation)?;
+        let received_destination_id =
+            received_destination_id.ok_or(QuicError::ProtocolViolation)?;
+        let original_destination_id = self
+            .original_destination_id
+            .unwrap_or_else(|| received_destination_id.clone());
         let version = version.ok_or(QuicError::ProtocolViolation)?;
         let server_id = match self.server_connection_id {
             Some(server_connection_id) => server_connection_id,
@@ -893,7 +903,7 @@ impl QuicServerListener {
             QuicTlsServerHandshake::accept(&client_hello, &encoded_parameters, config)
                 .map_err(|_| QuicError::Tls)?;
         let server_initial =
-            QuicInitialKeys::derive_for(version, &original_destination_id, QuicRole::Server)?;
+            QuicInitialKeys::derive_for(version, &received_destination_id, QuicRole::Server)?;
         for (number, chunk) in flight.server_hello.chunks(CRYPTO_CHUNK).enumerate() {
             let mut payload = crypto_payload(number * CRYPTO_CHUNK, chunk)?;
             if number == 0 {

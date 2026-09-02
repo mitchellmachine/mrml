@@ -616,6 +616,7 @@ impl QuicServerEndpoint {
     pub fn begin_routed_handshake(
         &mut self,
         datagram: QuicEndpointDatagram,
+        original_destination_id: Vector<u8>,
         connection: QuicConnectionHandle,
         queue_capacity: usize,
     ) -> Result<QuicServerListener, QuicError> {
@@ -623,7 +624,7 @@ impl QuicServerEndpoint {
             return Err(QuicError::Limit);
         }
         let QuicEndpointRoute::NewInitial {
-            original_destination_id,
+            original_destination_id: received_destination_id,
             ..
         } = &datagram.route
         else {
@@ -631,9 +632,12 @@ impl QuicServerEndpoint {
         };
         let socket = self.socket.as_ref().ok_or(QuicError::SocketBind)?.clone();
         let (inbound, receiver) = blocking_channel(queue_capacity);
-        let (listener, server_connection_id) =
-            QuicServerListener::from_routed_datagrams(socket, receiver)?;
-        self.register_handshake(original_destination_id, connection, datagram.peer)?;
+        let (listener, server_connection_id) = QuicServerListener::from_routed_datagrams(
+            socket,
+            receiver,
+            original_destination_id,
+        )?;
+        self.register_handshake(received_destination_id, connection, datagram.peer)?;
         if let Err(error) =
             self.register_handshake(&server_connection_id, connection, datagram.peer)
         {
@@ -875,7 +879,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let listener = endpoint
-            .begin_routed_handshake(datagram, connection, 1)
+            .begin_routed_handshake(datagram, [1, 2, 3, 4].into(), connection, 1)
             .unwrap();
         assert_eq!(endpoint.connection_count(), 1);
 
