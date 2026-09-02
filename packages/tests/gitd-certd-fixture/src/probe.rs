@@ -3,7 +3,7 @@ use mrml_crypto::erase_secret_bytes;
 use mrml_gitd::{prove_identity_signing_route, validate_identity_snapshot, GitdCertdChannelClient};
 use std::fs::OpenOptions;
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 const O_NOFOLLOW: i32 = 0x20_000;
@@ -17,6 +17,22 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let [command, socket, owner_uid, socket_gid] = arguments.as_slice() {
+        if command != "socket-health" {
+            return Err(());
+        }
+        let metadata = std::fs::symlink_metadata(socket).map_err(|_| ())?;
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_socket()
+            || metadata.uid() != owner_uid.parse::<u32>().map_err(|_| ())?
+            || metadata.gid() != socket_gid.parse::<u32>().map_err(|_| ())?
+            || metadata.mode() & 0o777 != 0o660
+        {
+            return Err(());
+        }
+        println!("ready");
+        return Ok(());
+    }
     let [socket, capability_file, client_uid, client_gid, fixture_uid, fixture_gid, owner_uid, server_name] =
         arguments.as_slice()
     else {
@@ -92,5 +108,11 @@ mod tests {
             .ok()
             .filter(|value| *value != 0)
             .is_none());
+    }
+
+    #[test]
+    fn socket_health_requires_exact_arity() {
+        let arguments = ["socket-health", "/tmp/certd.sock", "21003"];
+        assert_ne!(arguments.len(), 4);
     }
 }

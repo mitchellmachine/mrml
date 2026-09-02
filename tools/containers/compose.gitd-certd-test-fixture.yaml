@@ -1,0 +1,45 @@
+# TEST ONLY: combine with deploy/compose/compose.git.yaml. Never deploy this
+# overlay or its fixture image to production.
+services:
+  certd:
+    image: "mrml/gitd-certd-test-fixture:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21003:21003"
+    group_add: ["21902"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    mem_limit: 128m
+    cpus: 0.5
+    restart: "no"
+    volumes:
+      - "${MRML_DEPLOY_ROOT:?set MRML_DEPLOY_ROOT}/runtime/certd-gitd:/run/mrml/certd-gitd:rw"
+      - "${MRML_DEPLOY_ROOT:?set MRML_DEPLOY_ROOT}/secrets/channels/certd-gitd.cap.certd:/run/secrets/certd-gitd-channel:ro"
+      - "${MRML_TEST_CERT_ROOT:?set MRML_TEST_CERT_ROOT}/leaf.der:/run/test-only/leaf.der:ro"
+      - "${MRML_TEST_CERT_ROOT:?set MRML_TEST_CERT_ROOT}/root.der:/run/test-only/root.der:ro"
+      - "${MRML_TEST_CERT_ROOT:?set MRML_TEST_CERT_ROOT}/leaf.scalar:/run/test-only/leaf.scalar:ro"
+    command:
+      - serve
+      - /run/mrml/certd-gitd/certd.sock
+      - /run/secrets/certd-gitd-channel
+      - "21001"
+      - "21001"
+      - "21003"
+      - "21003"
+      - "21003"
+      - "21902"
+      - "${MRML_TEST_SERVER_NAME:?set MRML_TEST_SERVER_NAME}"
+      - "1"
+      - /run/test-only/leaf.der
+      - /run/test-only/root.der
+      - /run/test-only/leaf.scalar
+      - "4096"
+    healthcheck:
+      test: [CMD, /usr/bin/mrml-gitd-certd-test-probe, socket-health, /run/mrml/certd-gitd/certd.sock, "21003", "21902"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 1s

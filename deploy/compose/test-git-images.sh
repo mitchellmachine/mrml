@@ -28,6 +28,7 @@ for dockerfile in "$gitd" "$authority"; do
     reject "apt-get" "$dockerfile"
     reject "curl" "$dockerfile"
     reject "COPY . " "$dockerfile"
+    reject "gitd-certd-test-fixture" "$dockerfile"
 done
 
 require "USER 21001:21001" "$gitd"

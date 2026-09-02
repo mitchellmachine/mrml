@@ -2,6 +2,11 @@
 set -eu
 
 compose=${1:-deploy/compose/compose.git.yaml}
+
+if grep -F "gitd-certd-test-fixture" "$compose" >/dev/null; then
+  echo "test-only certd fixture is forbidden in production Compose" >&2
+  exit 1
+fi
 gitd_dockerfile=${2:-deploy/compose/Dockerfile.gitd}
 authority_dockerfile=${3:-deploy/compose/Dockerfile.git-authority}
 

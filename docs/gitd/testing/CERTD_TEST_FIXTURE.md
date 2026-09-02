@@ -16,14 +16,15 @@ ACME, renewal, revocation, key export, arbitrary signing, or certificate
 activation.
 
 The `serve` process requires an absolute Unix-socket path, a single-link
-32-byte capability file, exact nonzero peer identities, a lowercase DNS name,
+32-byte capability file, exact nonzero peer and socket-group identities, a lowercase DNS name,
 a nonzero identity generation, a bounded request count, a DER leaf and issuer,
 and a single-link 32-byte P-256 scalar file. Secret inputs must be owned by the
 configured fixture owner and mode `0400` or `0600`. Before binding, the fixture
 parses the leaf, checks its hostname, and proves that its P-256 public key is
-the one in the certificate. The socket parent must be owner-controlled and
-non-writable by group or others. Socket removal exact-matches the bound device
-and inode.
+the one in the certificate. The socket parent must be either owner-private
+mode `0700` or the exact production-style setgid group directory mode `2770`.
+The socket is mode `0660`; socket removal exact-matches the bound device and
+inode.
 
 The companion `mrml-gitd-certd-test-probe` uses the production Gitd certd
 client. It checks health, obtains and independently validates the system-trusted
@@ -53,6 +54,20 @@ Focused command:
 
 Result: one library test, two server-binary tests, and one probe-binary test
 passed.
+
+For container acceptance, the repository also contains the explicitly
+test-only files `tools/containers/Dockerfile.gitd-certd-test-fixture` and
+`tools/containers/compose.gitd-certd-test-fixture.yaml`. The overlay must be
+combined with the production Git fragment only on a trusted test host. It runs
+as `21003:21003`, joins only socket group `21902`, has no network namespace,
+drops every capability, uses a read-only root, and mounts only the certd-Gitd
+channel, runtime socket directory, and ephemeral certificate inputs. Production
+image and Compose policy tests reject the fixture name.
+
+Podman Compose 1.6.0 successfully rendered the test overlay with
+`deploy/compose/compose.git.yaml`. The merged model retained the production
+Gitd and authority confinement and required fixture health before Gitd startup.
+This is configuration-render evidence; no container runtime result is implied.
 
 Patent review: **NOT_TRIGGERED**. The fixture composes already documented Unix
 peer credentials, bounded HMAC-authenticated framing, X.509 parsing, SHA-256,

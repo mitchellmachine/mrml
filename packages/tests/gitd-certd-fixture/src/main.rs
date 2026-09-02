@@ -29,6 +29,7 @@ struct Configuration {
     client: CertdPeerIdentity,
     fixture: CertdPeerIdentity,
     owner_uid: u32,
+    socket_gid: u32,
     server_name: String,
     generation: u64,
     leaf_file: PathBuf,
@@ -59,7 +60,7 @@ fn main() {
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let config = parse_arguments(&arguments)?;
-    validate_socket_parent(&config.socket, config.owner_uid)?;
+    validate_socket_parent(&config.socket, config.owner_uid, config.socket_gid)?;
     let mut capability_bytes =
         read_exact_file(&config.capability_file, 32, config.owner_uid, true)?;
     let mut capability_key: [u8; 32] = capability_bytes.as_slice().try_into().map_err(|_| ())?;
@@ -70,7 +71,7 @@ fn run() -> Result<(), ()> {
     let identity = load_identity(&config)?;
     let listener = UnixCertdListener::bind(
         &config.socket,
-        0o600,
+        0o660,
         CertdChannelPolicy {
             role: CertdChannelRole::Gitd,
             peer: config.client,
@@ -343,7 +344,7 @@ fn publication_digest(
 }
 
 fn parse_arguments(arguments: &[String]) -> Result<Configuration, ()> {
-    let [command, socket, capability, client_uid, client_gid, fixture_uid, fixture_gid, owner_uid, server_name, generation, leaf, issuer, key, request_limit] =
+    let [command, socket, capability, client_uid, client_gid, fixture_uid, fixture_gid, owner_uid, socket_gid, server_name, generation, leaf, issuer, key, request_limit] =
         arguments
     else {
         return Err(());
@@ -374,6 +375,7 @@ fn parse_arguments(arguments: &[String]) -> Result<Configuration, ()> {
             gid: u32::try_from(nonzero(fixture_gid)?).map_err(|_| ())?,
         },
         owner_uid: u32::try_from(nonzero(owner_uid)?).map_err(|_| ())?,
+        socket_gid: u32::try_from(nonzero(socket_gid)?).map_err(|_| ())?,
         server_name: server_name.clone(),
         generation: nonzero(generation)?,
         leaf_file: leaf.into(),
@@ -423,7 +425,7 @@ fn read_exact_file(path: &Path, limit: usize, owner_uid: u32, secret: bool) -> R
     Ok(bytes)
 }
 
-fn validate_socket_parent(path: &Path, owner_uid: u32) -> Result<(), ()> {
+fn validate_socket_parent(path: &Path, owner_uid: u32, socket_gid: u32) -> Result<(), ()> {
     if !path.is_absolute()
         || path.as_os_str().as_encoded_bytes().len() > 107
         || path
@@ -434,10 +436,12 @@ fn validate_socket_parent(path: &Path, owner_uid: u32) -> Result<(), ()> {
     }
     let parent = path.parent().ok_or(())?;
     let metadata = fs::symlink_metadata(parent).map_err(|_| ())?;
+    let mode = metadata.mode() & 0o7777;
     if !metadata.is_dir()
         || metadata.file_type().is_symlink()
         || metadata.uid() != owner_uid
-        || metadata.mode() & 0o022 != 0
+        || metadata.gid() != socket_gid
+        || !matches!(mode, 0o700 | 0o2770)
     {
         return Err(());
     }
@@ -477,6 +481,7 @@ mod tests {
             "1000",
             "1000",
             "1000",
+            "1000",
             "git.example",
             "1",
             "/tmp/leaf",
@@ -487,10 +492,10 @@ mod tests {
         .map(String::from);
         assert!(parse_arguments(&valid).is_ok());
         let mut uppercase = valid.clone();
-        uppercase[8] = "Git.example".into();
+        uppercase[9] = "Git.example".into();
         assert!(parse_arguments(&uppercase).is_err());
         let mut unlimited = valid;
-        unlimited[13] = "4097".into();
+        unlimited[14] = "4097".into();
         assert!(parse_arguments(&unlimited).is_err());
     }
 
