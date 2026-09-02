@@ -39,6 +39,18 @@ measurement was recorded; and no coverage-guided fuzz or sanitizer campaign is
 claimed. The offline builder deliberately requires those tools and fails rather
 than emitting partial release evidence.
 
+`tools/containers/measure-git-streaming.sh` is the production measurement
+harness for the missing large-transfer evidence. It refuses transfers below
+256 MiB, runs an argument-vector command without recording it, samples the
+client/Gitd/authority RSS and descriptor counts from `/proc`, records Docker
+network/resource counters and repository/quarantine/cache disk use, calculates
+peak and growth summaries plus throughput, and authenticates the evidence files
+with `SHA256SUMS`. It discards command stdout/stderr so credentials and request
+data cannot enter the evidence package. The offline release builder now refuses
+to emit a release unless this exact-commit evidence verifies and is at least
+256 MiB; the bundle verifier repeats those checks. The harness has passed shell
+syntax and negative-boundary tests only on this Docker-less host.
+
 Current classification remains **PARTIALLY IMPLEMENTED** until the remaining
 administration surface is complete and all mandatory real-container,
 large-transfer, crash-cycle, backup/restore, upgrade/rollback, and real-certd

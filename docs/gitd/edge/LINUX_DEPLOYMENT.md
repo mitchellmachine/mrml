@@ -70,6 +70,13 @@ both image archives with the bundled public key. Hosted shell evidence covers
 syntax and early invalid-version/output refusal only; Docker, Syft, Cosign, and
 the complete offline recipe have not yet run in this environment.
 
+Release construction also requires `GIT_STREAMING_EVIDENCE` from the exact
+source commit. The evidence must be produced by the bounded 256 MiB-or-larger
+real-stack measurement harness, pass its inner SHA-256 manifest, and include
+process samples and a peak/growth summary. Both the builder and offline verifier
+enforce this gate, so an unmeasured image cannot be represented as the complete
+Git release artifact.
+
 `backup-git.sh` accepts only a stopped stack and captures authoritative Gitd,
 authority, policy, receipt, journal, verifier, and secret state while excluding
 the disposable cache. Restore accepts only a new empty deployment root, rejects

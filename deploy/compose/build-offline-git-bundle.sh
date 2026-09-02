@@ -22,19 +22,29 @@ esac
 
 : "${COSIGN_KEY:?set COSIGN_KEY to an offline cosign private-key path}"
 : "${COSIGN_PUBLIC_KEY:?set COSIGN_PUBLIC_KEY to its public-key path}"
+: "${GIT_STREAMING_EVIDENCE:?set GIT_STREAMING_EVIDENCE to verified 256 MiB measurement evidence}"
 
 for tool in docker syft cosign sha256sum tar gzip git; do
   command -v "$tool" >/dev/null || { echo "missing required tool: $tool" >&2; exit 1; }
 done
 [ -f "$COSIGN_KEY" ] && [ ! -L "$COSIGN_KEY" ] || { echo "unsafe cosign key" >&2; exit 1; }
 [ -f "$COSIGN_PUBLIC_KEY" ] && [ ! -L "$COSIGN_PUBLIC_KEY" ] || { echo "unsafe cosign public key" >&2; exit 1; }
+[ -d "$GIT_STREAMING_EVIDENCE" ] && [ ! -L "$GIT_STREAMING_EVIDENCE" ] || { echo "unsafe streaming evidence" >&2; exit 1; }
+[ -z "$(find "$GIT_STREAMING_EVIDENCE" -type l -print -quit)" ] || { echo "streaming evidence contains a symlink" >&2; exit 1; }
+(cd "$GIT_STREAMING_EVIDENCE" && sha256sum -c --strict SHA256SUMS)
+[ "$(cat "$GIT_STREAMING_EVIDENCE/source.commit")" = "$(git rev-parse --verify HEAD)" ] || { echo "streaming evidence source commit is stale" >&2; exit 1; }
+streaming_bytes=$(sed -n 's/^source_bytes=//p' "$GIT_STREAMING_EVIDENCE/metadata")
+[ "${streaming_bytes:-0}" -ge 268435456 ] || { echo "streaming evidence is below 256 MiB" >&2; exit 1; }
 [ ! -e "$output" ] || { echo "output already exists" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "release requires a clean source tree" >&2; exit 1; }
 
 bundle_root=$(mktemp -d)
 trap 'rm -rf "$bundle_root"' EXIT HUP INT TERM
 payload=$bundle_root/mrml-git-$version
-install -d -m 0700 "$payload/images" "$payload/sbom" "$payload/signatures" "$payload/deploy"
+install -d -m 0700 "$payload/images" "$payload/sbom" "$payload/signatures" "$payload/deploy" "$payload/evidence/streaming"
+for evidence in source.commit metadata configured-limits process.tsv docker-stats.jsonl summary SHA256SUMS; do
+  install -m 0444 "$GIT_STREAMING_EVIDENCE/$evidence" "$payload/evidence/streaming/$evidence"
+done
 
 target/release/mrml manifest lock --check
 target/release/mrml manifest check
