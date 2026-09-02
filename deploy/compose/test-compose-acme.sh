@@ -47,3 +47,9 @@ for dockerfile in "$certd_dockerfile" "$acmed_dockerfile"; do
 done
 
 echo "ACME Compose static invariants PASS"
+
+for operator in deploy/compose/switch-acme-version.sh deploy/compose/upgrade-acme.sh deploy/compose/rollback-acme.sh; do
+  sh -n "$operator"
+done
+require 'up -d --no-build --pull never certd acmed' deploy/compose/switch-acme-version.sh
+require 'certificate state was not rolled back' deploy/compose/switch-acme-version.sh

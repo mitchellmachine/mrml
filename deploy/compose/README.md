@@ -73,6 +73,17 @@ install -m 0600 .env.production.example .env.production
 ./status-acme.sh
 ```
 
+For an image-only upgrade or rollback, preload both images for the exact
+version, then run the corresponding command as root. Both services must become
+healthy before the new immutable version receipt is committed. Rollback changes
+only the container images; authenticated certificate and ACME lifecycle state
+is never rolled backward:
+
+```text
+sudo ./upgrade-acme.sh NEW_VERSION
+sudo ./rollback-acme.sh PREVIOUS_VERSION
+```
+
 Compose cannot enforce a destination-aware outbound firewall. Apply host or
 upstream egress policy for the configured ACME and DNS-provider origins. The
 networkless certd design ensures that compromise of acmed does not reveal an

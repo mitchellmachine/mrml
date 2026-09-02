@@ -31,6 +31,8 @@ git ls-tree -r --name-only "$commit" -- \
   deploy/compose/README.md deploy/compose/provision-acme-host.sh \
   deploy/compose/validate-acme.sh deploy/compose/start-acme.sh \
   deploy/compose/status-acme.sh deploy/compose/test-compose-acme.sh \
+  deploy/compose/switch-acme-version.sh deploy/compose/upgrade-acme.sh \
+  deploy/compose/rollback-acme.sh \
   deploy/compose/build-offline-acme-bundle.sh \
   deploy/compose/verify-offline-acme-bundle.sh \
   packages/interfaces/certificate packages/libraries/acme \
