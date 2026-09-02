@@ -56,14 +56,19 @@ pub struct OneTimeAccessToken {
 }
 
 impl OneTimeAccessToken {
-    pub fn reveal_once(&mut self) -> Option<Text> {
+    pub fn expose_once<R>(&mut self, use_token: impl FnOnce(&str) -> R) -> Option<R> {
         if !self.available {
             return None;
         }
-        let text = core::str::from_utf8(&self.bytes).ok().map(Text::from);
         self.available = false;
+        let token = core::str::from_utf8(&self.bytes).ok()?;
+        let result = use_token(token);
         erase(&mut self.bytes);
-        text
+        Some(result)
+    }
+
+    pub fn reveal_once(&mut self) -> Option<Text> {
+        self.expose_once(|value| Text::from(value))
     }
 }
 
@@ -275,6 +280,31 @@ impl TokenAuthority {
             return Err(AuthenticationError::Denied);
         }
         Ok(AuthenticatedAccess::Token)
+    }
+
+    pub fn revoke_encoded_token(
+        &self,
+        records: &mut Vector<TokenRecord>,
+        encoded: &str,
+    ) -> Result<bool, AuthenticationError> {
+        let mut raw = decode_token(encoded)?;
+        let verifier = hmac_sha256(&self.pepper, &[b"mrml-git-token-v1", &raw]);
+        erase(&mut raw);
+        let mut selected = None;
+        for (index, record) in records.iter().enumerate() {
+            if constant_time_equal(&verifier, &record.verifier) {
+                if selected.is_some() {
+                    return Err(AuthenticationError::Denied);
+                }
+                selected = Some(index);
+            }
+        }
+        if let Some(index) = selected {
+            records.remove(index);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     fn record_integrity(&self, record: &TokenRecord) -> Result<[u8; 32], AuthenticationError> {
@@ -617,7 +647,12 @@ mod tests {
             "OneTimeAccessToken(<redacted>)"
         );
         assert!(mrml_runtime::mrml_format!("{:?}", record).contains("<redacted>"));
-        let revealed = token.reveal_once().unwrap();
+        let revealed = token
+            .expose_once(|value| {
+                assert_eq!(value.len(), 64);
+                Text::from(value)
+            })
+            .unwrap();
         assert_eq!(revealed.len(), 64);
         assert!(token.reveal_once().is_none());
         let headers = authorization(&revealed);
@@ -657,6 +692,16 @@ mod tests {
                 Err(AuthenticationError::Denied)
             );
         }
+        let mut records: Vector<TokenRecord> = [record].into();
+        assert_eq!(
+            authority.revoke_encoded_token(&mut records, &revealed),
+            Ok(true)
+        );
+        assert!(records.is_empty());
+        assert_eq!(
+            authority.revoke_encoded_token(&mut records, &revealed),
+            Ok(false)
+        );
     }
 
     #[test]
