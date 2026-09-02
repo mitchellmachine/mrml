@@ -3,7 +3,7 @@ extern crate std;
 use crate::{AuthorityError, AuthorityPeer, AUTHORITY_HEADER_BYTES, MAX_AUTHORITY_PAYLOAD_BYTES};
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -25,8 +25,25 @@ pub enum UnixAuthorityError {
 pub struct AuthorityListener {
     listener: UnixListener,
     path: PathBuf,
+    socket_device: u64,
+    socket_inode: u64,
     expected_peer: AuthorityPeer,
     health_peer: Option<AuthorityPeer>,
+}
+
+impl Drop for AuthorityListener {
+    fn drop(&mut self) {
+        let Ok(path) = fs::symlink_metadata(&self.path) else {
+            return;
+        };
+        if path.file_type().is_socket()
+            && !path.file_type().is_symlink()
+            && path.dev() == self.socket_device
+            && path.ino() == self.socket_inode
+        {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }
 
 impl AuthorityListener {
@@ -56,6 +73,8 @@ impl AuthorityListener {
         Ok(Self {
             listener,
             path: path.to_path_buf(),
+            socket_device: metadata.dev(),
+            socket_inode: metadata.ino(),
             expected_peer,
             health_peer: None,
         })
@@ -248,8 +267,8 @@ mod tests {
             );
         });
         drop(listener);
-        fs::remove_file(socket).unwrap();
-        fs::remove_file(root.join("duplicate.sock")).unwrap();
+        assert!(!socket.exists());
+        assert!(!root.join("duplicate.sock").exists());
         fs::remove_dir(root).unwrap();
     }
 }

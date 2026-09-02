@@ -139,6 +139,20 @@ archives and emitted valid SPDX 2.3 JSON containing 12 package records per
 image. Its optional update check failed because the sandbox had no DNS; archive
 scanning itself completed and the outputs parsed successfully.
 
+The authority lifecycle was subsequently exercised from another uncommitted
+development build. Its network-disabled image ID was
+`sha256:5f9a1dd387cfabb45ade05248af5d49426384761c244392261fd1391f7acbe6a`.
+The first container run authenticated its native health request but exposed
+that SIGTERM required a forced kill and left `authority.sock`, preventing a
+secure restart. After adding synchronous SIGINT/SIGTERM handling and
+identity-checked socket cleanup, the hardened container reported `ready`,
+stopped within the five-second test bound without SIGKILL, left no socket, then
+started, healthchecked, and stopped cleanly a second time. The test used
+`network=none`, UID/GID `21002:21002`, a read-only root, empty capabilities,
+`no-new-privileges`, and the isolated `/tmp` policy/state tree. This proves the
+tested authority lifecycle only; Gitd drain and the combined stack remain
+separate required evidence.
+
 ## Remaining evidence boundary
 
 The session ran as UID 1000 and `sudo -n` required a password, so the root-only

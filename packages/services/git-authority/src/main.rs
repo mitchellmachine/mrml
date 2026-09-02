@@ -13,6 +13,8 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const EX_USAGE: i32 = 64;
 const EX_CONFIG: i32 = 78;
@@ -101,6 +103,7 @@ fn serve(
     validation_time: u64,
     repository_generation: u64,
 ) -> Result<(), ()> {
+    let termination_signals = TerminationSignals::block_current()?;
     let capability = read_capability(capability_path, authority_peer.uid)?;
     let mut authority = load_authority(
         authority_peer.uid,
@@ -118,11 +121,26 @@ fn serve(
         .map_err(|_| ())?;
     let mut replay = AuthorityReplayWindow::new();
     let mut health_replay = AuthorityReplayWindow::new();
+    let terminating = Arc::new(AtomicBool::new(false));
+    let signal_terminating = terminating.clone();
+    let signal_socket = PathBuf::from(socket);
+    let signal_worker = std::thread::spawn(move || {
+        if termination_signals.wait().is_ok() {
+            signal_terminating.store(true, Ordering::Release);
+            let _ = std::os::unix::net::UnixStream::connect(signal_socket);
+        }
+    });
     loop {
+        if terminating.load(Ordering::Acquire) {
+            break;
+        }
         let mut session = match listener.accept() {
             Ok(session) => session,
             Err(_) => continue,
         };
+        if terminating.load(Ordering::Acquire) {
+            break;
+        }
         let mut encoded = vec![0u8; AUTHORITY_HEADER_BYTES + MAX_AUTHORITY_PAYLOAD_BYTES];
         let length = match session.read_frame(&mut encoded) {
             Ok(length) => length,
@@ -170,6 +188,8 @@ fn serve(
         let response_length = encode_frame(response, &capability, &mut encoded).map_err(|_| ())?;
         let _ = session.write_frame(&encoded[..response_length]);
     }
+    signal_worker.join().map_err(|_| ())?;
+    Ok(())
 }
 
 fn load_authority(
@@ -281,6 +301,49 @@ fn healthcheck(
     }
     println!("ready");
     Ok(())
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NativeSignalSet {
+    bits: [u64; 16],
+}
+
+struct TerminationSignals {
+    set: NativeSignalSet,
+}
+
+impl TerminationSignals {
+    fn block_current() -> Result<Self, ()> {
+        const SIG_BLOCK: i32 = 0;
+        const SIGINT: i32 = 2;
+        const SIGTERM: i32 = 15;
+        let mut set = NativeSignalSet { bits: [0; 16] };
+        if unsafe { sigemptyset(&mut set) } != 0
+            || unsafe { sigaddset(&mut set, SIGINT) } != 0
+            || unsafe { sigaddset(&mut set, SIGTERM) } != 0
+            || unsafe { pthread_sigmask(SIG_BLOCK, &set, core::ptr::null_mut()) } != 0
+        {
+            return Err(());
+        }
+        Ok(Self { set })
+    }
+
+    fn wait(self) -> Result<i32, ()> {
+        let mut signal = 0;
+        if unsafe { sigwait(&self.set, &mut signal) } == 0 && matches!(signal, 2 | 15) {
+            Ok(signal)
+        } else {
+            Err(())
+        }
+    }
+}
+
+unsafe extern "C" {
+    fn sigemptyset(set: *mut NativeSignalSet) -> i32;
+    fn sigaddset(set: *mut NativeSignalSet, signal: i32) -> i32;
+    fn pthread_sigmask(how: i32, set: *const NativeSignalSet, old: *mut NativeSignalSet) -> i32;
+    fn sigwait(set: *const NativeSignalSet, signal: *mut i32) -> i32;
 }
 
 fn parse_peer(uid: &str, gid: &str) -> Result<AuthorityPeer, ()> {

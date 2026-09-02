@@ -12176,3 +12176,21 @@ distributed deduplication, cryptographic primitive, or protocol mechanism.
 The existing triggered Git compression/cache/compaction screen and its
 guardrails remain controlling; see
 [`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).
+
+# 2026-09-02 — Protected Git proof carriage and capability signer composition
+
+Patent review: **NOT_TRIGGERED**. This increment carries existing exact-context
+hybrid signatures in a bounded negotiated Smart Git extension, traverses the
+existing commit graph, and independently verifies output from a use-only signer
+provider before authority installation. It introduces no cryptographic
+primitive, compression/cache/compaction selection, similarity mechanism, or
+new patent-sensitive subsystem. Existing Git patent-screen guardrails remain
+controlling; see
+[`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).
+
+# 2026-09-02 — Git authority bounded termination and socket cleanup
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional
+synchronous POSIX termination-signal handling and removes only the exact Unix
+socket inode created by the listener. It introduces no protocol, cryptographic,
+storage-selection, compression, cache, or compaction mechanism.
