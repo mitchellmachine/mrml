@@ -448,7 +448,7 @@ impl FilesystemRepositoryView {
     /// and ref stores used by reads. Callers retain authority, policy, storage,
     /// resource, and transaction-ID ownership.
     #[allow(clippy::too_many_arguments)]
-    pub fn execute_protected_receive<A: crate::ProtectedReceiveAuthority>(
+    pub fn execute_protected_receive<A: crate::ProtectedReceiveAuthority + ?Sized>(
         &mut self,
         request: SmartGitRequest,
         store: &mut crate::LinuxDurableReceiveStore,
