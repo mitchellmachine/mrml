@@ -10,3 +10,5 @@ compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
   exit 1
 }
 docker compose --env-file "$environment" -f "$compose" ps --all
+docker compose --env-file "$environment" -f "$compose" exec -T acmed \
+  /usr/bin/mrml-acmed status
