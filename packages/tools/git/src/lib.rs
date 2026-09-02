@@ -18,6 +18,7 @@ mod detached_commit_proof_file;
 mod diff;
 mod gitd_core;
 mod hybrid_signing;
+mod https_remote;
 mod index;
 mod inflate;
 mod local_repack;
@@ -94,6 +95,7 @@ pub use gitd_core::{
     VerifiedRefTransaction, VerifiedRefUpdate, WorkBudget, build_verified_fast_forward_transaction,
 };
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
+pub use https_remote::{HttpsRemote, HttpsRemoteError, HttpsTransport, SmartGitService};
 pub use index::{Index, IndexEntry, IndexError};
 pub use local_repack::LocalRepackResult;
 pub use mrml_openpgp::{
