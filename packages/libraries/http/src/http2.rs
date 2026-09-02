@@ -754,7 +754,7 @@ impl Http2ClientConnection {
         let protocol = Http2Client::new();
         stream
             .write_all(&protocol.connection_bytes()?)
-            .map_err(|_| HttpError::Tls)?;
+            .map_err(map_tls_read_error)?;
         let settings = read_client_frame(&mut stream)?;
         if settings.kind != Http2FrameKind::Settings || settings.flags != 0 {
             return Err(HttpError::InvalidResponse);
@@ -770,10 +770,10 @@ impl Http2ClientConnection {
                 }
                 .encode()?,
             )
-            .map_err(|_| HttpError::Tls)?;
+            .map_err(map_tls_read_error)?;
         stream
             .set_application_io_timeout_millis(ESTABLISHED_HTTP2_IO_TIMEOUT_MILLIS)
-            .map_err(|_| HttpError::Tls)?;
+            .map_err(map_tls_read_error)?;
         let initial_window = initial_window.unwrap_or(65_535);
         Ok(Self {
             stream,
@@ -849,7 +849,7 @@ impl Http2ClientConnection {
                 .request(method, "https", authority, target, headers, remaining == 0)?;
         self.stream
             .write_all(&request)
-            .map_err(|_| HttpError::Tls)?;
+            .map_err(map_tls_read_error)?;
         let mut chunk = [0u8; 16 * 1024];
         while remaining != 0 {
             while self.send_connection_window <= 0 || self.send_stream_window <= 0 {
@@ -879,7 +879,7 @@ impl Http2ClientConnection {
                     }
                     .encode()?,
                 )
-                .map_err(|_| HttpError::Tls)?;
+                .map_err(map_tls_read_error)?;
             self.send_connection_window -= count as i64;
             self.send_stream_window -= count as i64;
         }
@@ -896,7 +896,7 @@ impl Http2ClientConnection {
             Http2FrameKind::Ping if frame.flags & 1 == 0 && frame.payload.len() == 8 => {
                 self.stream
                     .write_all(&Http2Frame { flags: 1, ..frame }.encode()?)
-                    .map_err(|_| HttpError::Tls)?;
+                    .map_err(map_tls_read_error)?;
                 Ok(false)
             }
             Http2FrameKind::Headers if frame.stream_id == stream_id => {
@@ -960,7 +960,7 @@ impl Http2ClientConnection {
                 }
                 .encode()?,
             )
-            .map_err(|_| HttpError::Tls)
+            .map_err(map_tls_read_error)
     }
 
     fn accept_send_window_update(
@@ -1012,7 +1012,7 @@ impl Http2ClientConnection {
                 Http2FrameKind::Ping if frame.flags & 1 == 0 && frame.payload.len() == 8 => {
                     self.stream
                         .write_all(&Http2Frame { flags: 1, ..frame }.encode()?)
-                        .map_err(|_| HttpError::Tls)?;
+                        .map_err(map_tls_read_error)?;
                 }
                 Http2FrameKind::Headers if frame.stream_id == stream_id => {
                     if head.is_some() {
@@ -1042,7 +1042,7 @@ impl Http2ClientConnection {
                                     }
                                     .encode()?,
                                 )
-                                .map_err(|_| HttpError::Tls)?;
+                                .map_err(map_tls_read_error)?;
                         }
                     }
                     if frame.flags & 1 != 0 {
