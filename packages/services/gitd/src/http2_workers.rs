@@ -119,7 +119,25 @@ impl GitdHttp2WorkerPool {
                             match error {
                                 crate::GitdHttp2StreamError::Transport => "http2_transport_failed",
                                 crate::GitdHttp2StreamError::Prepare(_) => "http2_prepare_failed",
-                                crate::GitdHttp2StreamError::Backend(_) => "http2_backend_failed",
+                                crate::GitdHttp2StreamError::Backend(error) => match error {
+                                    mrml_http::BackendError::MalformedIdentifier
+                                    | mrml_http::BackendError::MalformedPath
+                                    | mrml_http::BackendError::MalformedRevision => {
+                                        "http2_backend_malformed"
+                                    }
+                                    mrml_http::BackendError::NotFound => "http2_backend_not_found",
+                                    mrml_http::BackendError::Private => "http2_backend_private",
+                                    mrml_http::BackendError::StaleGeneration => {
+                                        "http2_backend_stale_generation"
+                                    }
+                                    mrml_http::BackendError::ResourceLimit => {
+                                        "http2_backend_resource_limit"
+                                    }
+                                    mrml_http::BackendError::Unsupported => {
+                                        "http2_backend_unsupported"
+                                    }
+                                    mrml_http::BackendError::Storage => "http2_backend_storage",
+                                },
                             }
                         );
                     }
