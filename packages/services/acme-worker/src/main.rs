@@ -185,7 +185,7 @@ fn application_main() -> Result<(), &'static str> {
 
 fn acmed_health(
     config: AcmedConfig,
-    capability: CertdChannelCapability,
+    _capability: CertdChannelCapability,
     mut authenticator: impl DurableAuthenticator,
 ) -> Result<(), &'static str> {
     let executable = std::fs::read_link("/proc/1/exe").map_err(|_| "cannot inspect acmed pid 1")?;
@@ -195,8 +195,21 @@ fn acmed_health(
     let _provider = load_dns_provider(&config)?;
     let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
         .map_err(|_| "cannot open acmed durable state")?;
-    let reservation = reserve_channel_request_ids(&config, &mut state, &mut authenticator)?;
-    certd_health(&capability, reservation.next)?;
+    let (account, _) = load_account_record(&config, &state, &mut authenticator)?
+        .ok_or("active ACME account state is absent")?;
+    account
+        .require_policy(&config)
+        .map_err(|_| "stale ACME account health state")?;
+    if account.phase != AcmedAccountPhase::Active {
+        return Err("ACME account is not active");
+    }
+    let (_, _) = load_renewal_schedule(&config, &mut state, &mut authenticator)?
+        .ok_or("active renewal schedule is absent")?;
+    let session = UnixCertdSession::connect(Path::new(CERTD_SOCKET))
+        .map_err(|_| "certd listener is unavailable")?;
+    if session.observed_peer() != CERTD_PEER {
+        return Err("certd peer identity mismatch");
+    }
     println!("mrml-acmed ready");
     Ok(())
 }
