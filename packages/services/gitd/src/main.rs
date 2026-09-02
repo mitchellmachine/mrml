@@ -354,7 +354,7 @@ fn parse_scopes(input: &str) -> Result<AccessScopes, ()> {
 }
 
 fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
-    let termination_signals = TerminationSignals::block_current()?;
+    let _termination_signals = TerminationSignals::install()?;
     let config = load_gitd_config(config_path).map_err(|_| ())?;
     validate_storage_layout(&config).map_err(|_| ())?;
     let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
@@ -533,32 +533,17 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
         worker_fatal.store(true, Ordering::Release);
     })
     .map_err(|_| ())?;
-    let signal_terminating = terminating.clone();
-    let listen_port = config.listen_port;
-    let _signal_worker = mrml_runtime::spawn_joinable(move || {
-        if termination_signals.wait().is_ok() {
-            signal_terminating.store(true, Ordering::Release);
-            if let Ok(socket) = mrml_runtime::UdpSocket::bind([127, 0, 0, 1], 0) {
-                let _ = socket.send_to(
-                    &[0],
-                    mrml_runtime::SocketAddress {
-                        ip: [127, 0, 0, 1],
-                        port: listen_port,
-                    },
-                );
-            }
-            let _ = mrml_runtime::TcpStream::connect([127, 0, 0, 1], listen_port);
-        }
-    })
-    .map_err(|_| ())?;
-
     operational_health.mark_ready();
     operational_event("ready");
     loop {
+        if TERMINATION_SIGNALLED.load(Ordering::Acquire) {
+            terminating.store(true, Ordering::Release);
+        }
         if terminating.load(Ordering::Acquire) {
             operational_event("shutdown_signal_received");
             operational_health.begin_drain();
             rotation_stop.store(true, Ordering::Release);
+            let _ = mrml_runtime::TcpStream::connect([127, 0, 0, 1], config.listen_port);
             let quic_result = reactor.shutdown(&mut quic);
             let rotation_result = rotation_worker.join();
             let tcp_result = _tcp_worker.join();
@@ -579,7 +564,8 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             return Err(());
         }
         if reactor.step(&mut quic).is_err() {
-            if terminating.load(Ordering::Acquire) {
+            if TERMINATION_SIGNALLED.load(Ordering::Acquire) {
+                terminating.store(true, Ordering::Release);
                 continue;
             }
             operational_health.fail();
@@ -597,49 +583,37 @@ fn operational_event(event: &'static str) {
     eprintln!("component=mrml-gitd event={event}");
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct NativeSignalSet {
-    bits: [u64; 16],
-}
+static TERMINATION_SIGNALLED: AtomicBool = AtomicBool::new(false);
 
-struct TerminationSignals {
-    set: NativeSignalSet,
-}
+struct TerminationSignals;
 
 impl TerminationSignals {
-    fn block_current() -> Result<Self, ()> {
-        const SIG_BLOCK: i32 = 0;
+    fn install() -> Result<Self, ()> {
         const SIGINT: i32 = 2;
         const SIGTERM: i32 = 15;
-        let mut set = NativeSignalSet { bits: [0; 16] };
-        // Linux x86_64 production adapter: block before worker creation so only
-        // the dedicated synchronous waiter consumes termination signals.
-        if unsafe { sigemptyset(&mut set) } != 0
-            || unsafe { sigaddset(&mut set, SIGINT) } != 0
-            || unsafe { sigaddset(&mut set, SIGTERM) } != 0
-            || unsafe { pthread_sigmask(SIG_BLOCK, &set, core::ptr::null_mut()) } != 0
+        const SIG_ERR: usize = usize::MAX;
+        TERMINATION_SIGNALLED.store(false, Ordering::Release);
+        let handler = termination_signal_handler as *const () as usize;
+        if unsafe { signal(SIGINT, handler) } == SIG_ERR
+            || unsafe { signal(SIGTERM, handler) } == SIG_ERR
+            || unsafe { siginterrupt(SIGINT, 1) } != 0
+            || unsafe { siginterrupt(SIGTERM, 1) } != 0
         {
             return Err(());
         }
-        Ok(Self { set })
+        Ok(Self)
     }
+}
 
-    fn wait(self) -> Result<i32, ()> {
-        let mut signal = 0;
-        if unsafe { sigwait(&self.set, &mut signal) } == 0 && matches!(signal, 2 | 15) {
-            Ok(signal)
-        } else {
-            Err(())
-        }
+extern "C" fn termination_signal_handler(signal_number: i32) {
+    if matches!(signal_number, 2 | 15) {
+        TERMINATION_SIGNALLED.store(true, Ordering::Release);
     }
 }
 
 unsafe extern "C" {
-    fn sigemptyset(set: *mut NativeSignalSet) -> i32;
-    fn sigaddset(set: *mut NativeSignalSet, signal: i32) -> i32;
-    fn pthread_sigmask(how: i32, set: *const NativeSignalSet, old: *mut NativeSignalSet) -> i32;
-    fn sigwait(set: *const NativeSignalSet, signal: *mut i32) -> i32;
+    fn signal(signal_number: i32, handler: usize) -> usize;
+    fn siginterrupt(signal_number: i32, interrupt: i32) -> i32;
 }
 
 fn parse_peer(uid: &str, gid: &str) -> Result<AuthorityPeer, ()> {
