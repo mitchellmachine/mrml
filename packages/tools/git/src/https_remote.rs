@@ -105,12 +105,34 @@ impl HttpsRemote {
     }
 
     pub fn discover_upload_pack(&self) -> Result<HttpsDiscovery, HttpsRemoteError> {
+        self.discover_upload_pack_with_authorization(None)
+    }
+
+    pub fn discover_upload_pack_authenticated<P: crate::HttpsCredentialProvider + ?Sized>(
+        &self,
+        provider: &mut P,
+    ) -> Result<HttpsDiscovery, HttpsRemoteError> {
+        let scope = self.credential_scope(crate::HttpsCredentialAction::Read)?;
+        let credential = provider
+            .credential(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        let authorization = credential
+            .authorization_for(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        self.discover_upload_pack_with_authorization(Some(authorization))
+    }
+
+    fn discover_upload_pack_with_authorization(
+        &self,
+        authorization: Option<&str>,
+    ) -> Result<HttpsDiscovery, HttpsRemoteError> {
         let target = self.discovery_target(SmartGitService::UploadPack);
         let authority = self.authority();
-        let headers = [
-            ("accept", "application/x-git-upload-pack-advertisement"),
-            ("git-protocol", "version=2"),
-        ];
+        let headers = request_headers(
+            "application/x-git-upload-pack-advertisement",
+            None,
+            authorization,
+        );
         let (status, response_headers, body) = match self.transport {
             HttpsTransport::Http2 => {
                 let mut connection = Http2ClientConnection::connect(&self.host, self.port)
@@ -133,18 +155,39 @@ impl HttpsRemote {
     }
 
     pub fn list_refs(&self) -> Result<HttpsRefAdvertisement, HttpsRemoteError> {
-        let discovery = self.discover_upload_pack()?;
+        self.list_refs_with_authorization(None)
+    }
+
+    pub fn list_refs_authenticated<P: crate::HttpsCredentialProvider + ?Sized>(
+        &self,
+        provider: &mut P,
+    ) -> Result<HttpsRefAdvertisement, HttpsRemoteError> {
+        let scope = self.credential_scope(crate::HttpsCredentialAction::Read)?;
+        let credential = provider
+            .credential(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        let authorization = credential
+            .authorization_for(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        self.list_refs_with_authorization(Some(authorization))
+    }
+
+    fn list_refs_with_authorization(
+        &self,
+        authorization: Option<&str>,
+    ) -> Result<HttpsRefAdvertisement, HttpsRemoteError> {
+        let discovery = self.discover_upload_pack_with_authorization(authorization)?;
         if !discovery.ls_refs_unborn {
             return Err(HttpsRemoteError::Protocol);
         }
         let body = ls_refs_request()?;
         let target = self.service_target(SmartGitService::UploadPack);
         let authority = self.authority();
-        let headers = [
-            ("accept", "application/x-git-upload-pack-result"),
-            ("content-type", "application/x-git-upload-pack-request"),
-            ("git-protocol", "version=2"),
-        ];
+        let headers = request_headers(
+            "application/x-git-upload-pack-result",
+            Some("application/x-git-upload-pack-request"),
+            authorization,
+        );
         let (status, response_headers, response_body) = match self.transport {
             HttpsTransport::Http2 => {
                 let mut connection = Http2ClientConnection::connect(&self.host, self.port)
@@ -179,17 +222,61 @@ impl HttpsRemote {
         pack_path: &str,
         maximum_pack_bytes: u64,
     ) -> Result<u64, HttpsRemoteError> {
-        if !self.discover_upload_pack()?.fetch_ofs_delta {
+        self.fetch_pack_to_file_with_authorization(
+            wants,
+            haves,
+            pack_path,
+            maximum_pack_bytes,
+            None,
+        )
+    }
+
+    pub fn fetch_pack_to_file_authenticated<P: crate::HttpsCredentialProvider + ?Sized>(
+        &self,
+        wants: &[crate::ObjectId],
+        haves: &[crate::ObjectId],
+        pack_path: &str,
+        maximum_pack_bytes: u64,
+        provider: &mut P,
+    ) -> Result<u64, HttpsRemoteError> {
+        let scope = self.credential_scope(crate::HttpsCredentialAction::Read)?;
+        let credential = provider
+            .credential(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        let authorization = credential
+            .authorization_for(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        self.fetch_pack_to_file_with_authorization(
+            wants,
+            haves,
+            pack_path,
+            maximum_pack_bytes,
+            Some(authorization),
+        )
+    }
+
+    fn fetch_pack_to_file_with_authorization(
+        &self,
+        wants: &[crate::ObjectId],
+        haves: &[crate::ObjectId],
+        pack_path: &str,
+        maximum_pack_bytes: u64,
+        authorization: Option<&str>,
+    ) -> Result<u64, HttpsRemoteError> {
+        if !self
+            .discover_upload_pack_with_authorization(authorization)?
+            .fetch_ofs_delta
+        {
             return Err(HttpsRemoteError::Protocol);
         }
         let body = fetch_request(wants, haves)?;
         let target = self.service_target(SmartGitService::UploadPack);
         let authority = self.authority();
-        let headers = [
-            ("accept", "application/x-git-upload-pack-result"),
-            ("content-type", "application/x-git-upload-pack-request"),
-            ("git-protocol", "version=2"),
-        ];
+        let headers = request_headers(
+            "application/x-git-upload-pack-result",
+            Some("application/x-git-upload-pack-request"),
+            authorization,
+        );
         let output = crate::FilePackOutput::create_new(pack_path, maximum_pack_bytes)
             .map_err(map_pack_error)?;
         let mut decoder = crate::V2PackResponseDecoder::new(output);
@@ -235,6 +322,29 @@ impl HttpsRemote {
         }
         Ok(bytes)
     }
+
+    fn credential_scope(
+        &self,
+        action: crate::HttpsCredentialAction,
+    ) -> Result<crate::HttpsCredentialScope, HttpsRemoteError> {
+        crate::HttpsCredentialScope::new(&self.host, self.port, &self.repository_path, action)
+            .map_err(|_| HttpsRemoteError::Credential)
+    }
+}
+
+fn request_headers<'a>(
+    accept: &'a str,
+    content_type: Option<&'a str>,
+    authorization: Option<&'a str>,
+) -> Vector<(&'a str, &'a str)> {
+    let mut headers = Vector::from([("accept", accept), ("git-protocol", "version=2")]);
+    if let Some(value) = content_type {
+        headers.push(("content-type", value));
+    }
+    if let Some(value) = authorization {
+        headers.push(("authorization", value));
+    }
+    headers
 }
 
 fn map_pack_error(error: crate::HttpsPackError) -> HttpsRemoteError {
@@ -494,6 +604,7 @@ pub enum HttpsRemoteError {
     Protocol,
     TooLarge,
     Storage,
+    Credential,
 }
 
 impl fmt::Display for HttpsRemoteError {
@@ -507,6 +618,7 @@ impl fmt::Display for HttpsRemoteError {
             Self::Protocol => "Git protocol-v2 discovery is invalid",
             Self::TooLarge => "Git discovery response exceeds its limit",
             Self::Storage => "Git fetch quarantine storage failed",
+            Self::Credential => "HTTPS credential use failed",
         })
     }
 }
@@ -721,5 +833,30 @@ mod tests {
         assert!(fetch_request(&[crate::ObjectId::zero(crate::ObjectFormat::Sha256)], &[]).is_err());
         assert!(fetch_request(&[sha1], &[]).is_err());
         assert!(fetch_request(&[sha256; MAX_FETCH_WANTS_PER_REQUEST + 1], &[]).is_err());
+    }
+
+    #[test]
+    fn authenticated_headers_are_single_exact_and_never_ambient() {
+        let anonymous = request_headers("application/test", None, None);
+        assert!(!anonymous.iter().any(|(name, _)| *name == "authorization"));
+        let authenticated = request_headers(
+            "application/test",
+            Some("application/request"),
+            Some("Bearer redacted-test-value"),
+        );
+        assert_eq!(
+            authenticated
+                .iter()
+                .filter(|(name, _)| *name == "authorization")
+                .count(),
+            1
+        );
+        assert_eq!(
+            authenticated
+                .iter()
+                .find(|(name, _)| *name == "authorization")
+                .map(|(_, value)| *value),
+            Some("Bearer redacted-test-value")
+        );
     }
 }

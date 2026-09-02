@@ -38,10 +38,40 @@ pub fn fetch_https(
     remote: &HttpsRemote,
     maximum_pack_bytes: u64,
 ) -> Result<FetchResult, FetchError> {
+    fetch_https_with_provider(repository, remote_name, remote, maximum_pack_bytes, None)
+}
+
+pub fn fetch_https_authenticated(
+    repository: &Repository,
+    remote_name: &str,
+    remote: &HttpsRemote,
+    maximum_pack_bytes: u64,
+    provider: &mut dyn crate::HttpsCredentialProvider,
+) -> Result<FetchResult, FetchError> {
+    fetch_https_with_provider(
+        repository,
+        remote_name,
+        remote,
+        maximum_pack_bytes,
+        Some(provider),
+    )
+}
+
+fn fetch_https_with_provider(
+    repository: &Repository,
+    remote_name: &str,
+    remote: &HttpsRemote,
+    maximum_pack_bytes: u64,
+    mut provider: Option<&mut dyn crate::HttpsCredentialProvider>,
+) -> Result<FetchResult, FetchError> {
     if repository.object_format() != crate::ObjectFormat::Sha256 {
         return Err(FetchError::Protocol);
     }
-    let advertisement = remote.list_refs().map_err(|_| FetchError::Https)?;
+    let advertisement = match provider.as_deref_mut() {
+        Some(provider) => remote.list_refs_authenticated(provider),
+        None => remote.list_refs(),
+    }
+    .map_err(|_| FetchError::Https)?;
     let mut branches: Vector<(Text, ObjectId)> = advertisement
         .refs
         .into_iter()
@@ -96,9 +126,17 @@ pub fn fetch_https(
                 &candidate,
                 &mrml_runtime::mrml_format!("batch-{offset}.objects"),
             );
-            remote
-                .fetch_pack_to_file(wants, &[], &pack, maximum_pack_bytes)
-                .map_err(|_| FetchError::Https)?;
+            match provider.as_deref_mut() {
+                Some(provider) => remote.fetch_pack_to_file_authenticated(
+                    wants,
+                    &[],
+                    &pack,
+                    maximum_pack_bytes,
+                    provider,
+                ),
+                None => remote.fetch_pack_to_file(wants, &[], &pack, maximum_pack_bytes),
+            }
+            .map_err(|_| FetchError::Https)?;
             let installed = repository
                 .import_pack_file_validated_commit_tips(&pack, &scratch, wants, limits)
                 .map_err(|_| FetchError::Pack)?;

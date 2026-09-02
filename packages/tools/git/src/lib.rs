@@ -17,6 +17,7 @@ mod detached_commit_proof;
 mod detached_commit_proof_file;
 mod diff;
 mod gitd_core;
+mod https_credential;
 mod https_pack;
 mod https_remote;
 mod hybrid_signing;
@@ -95,6 +96,10 @@ pub use gitd_core::{
     SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedMetadataDescriptor,
     VerifiedRefTransaction, VerifiedRefUpdate, WorkBudget, build_verified_fast_forward_transaction,
 };
+pub use https_credential::{
+    HttpsCredentialAction, HttpsCredentialError, HttpsCredentialProvider, HttpsCredentialScope,
+    ScopedBearerCredential,
+};
 pub use https_remote::{
     HttpsDiscovery, HttpsRefAdvertisement, HttpsRemote, HttpsRemoteError, HttpsTransport,
     SmartGitService, MAX_FETCH_HAVES_PER_REQUEST, MAX_FETCH_WANTS_PER_REQUEST,
@@ -160,8 +165,8 @@ pub use ref_state::{
 };
 pub use ref_state_file::ActiveRefFile;
 pub use remote::{
-    FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_https, fetch_ssh,
-    inspect_ssh, push_ssh,
+    FetchError, FetchResult, PushError, PushResult, RemoteInfo, check_ssh, fetch_https,
+    fetch_https_authenticated, fetch_ssh, inspect_ssh, push_ssh,
 };
 pub use repository::{
     BlameLine, FetchPackLimits, GitSignatureFormat, MergeOutcome, NativeChange, NativeChangeKind,
