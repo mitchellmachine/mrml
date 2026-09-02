@@ -66,6 +66,20 @@ mv "$target/.restore-certd/secrets/channels/certd-acmed.cap.certd" "$target/secr
 mv "$target/.restore-acmed/secrets/channels/certd-acmed.cap.acmed" "$target/secrets/channels/"
 rmdir "$target/.restore-certd/secrets/channels" "$target/.restore-certd/secrets" "$target/.restore-certd"
 rmdir "$target/.restore-acmed/secrets/channels" "$target/.restore-acmed/secrets" "$target/.restore-acmed"
+
+docker compose --env-file "$environment" -f "$compose" run --rm --no-deps \
+  --user 21003:21003 -e MRML_CERTD_OFFLINE_RESTORE=1 \
+  -v "$target/certd/state:/var/lib/mrml/certd:ro" \
+  -v "$target/certd/publications:/var/lib/mrml/publications:ro" \
+  -v "$target/secrets/certd/certd-unlock.key:/run/secrets/certd-unlock.key:ro" \
+  -v "$target/secrets/channels/certd-gitd.cap.certd:/run/secrets/certd-gitd.cap:ro" \
+  certd /usr/bin/mrml-certd restore-check
+docker compose --env-file "$environment" -f "$compose" run --rm --no-deps \
+  --user 21004:21004 -e MRML_ACMED_OFFLINE_RESTORE=1 \
+  -v "$target/acmed/state:/var/lib/mrml/acmed:ro" \
+  -v "$target/secrets/acmed/acmed-state.key:/run/secrets/acmed-state.key:ro" \
+  -v "$target/secrets/channels/certd-acmed.cap.acmed:/run/secrets/certd-acmed.cap:ro" \
+  acmed /usr/bin/mrml-acmed restore-check
 sync "$target"
 
 echo "authenticated ACME generation $generation restored to clean target $target"

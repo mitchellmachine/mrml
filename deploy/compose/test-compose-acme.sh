@@ -71,6 +71,9 @@ require 'restore target must be empty' deploy/compose/restore-acme.sh
 require 'backup-manifest-verify' deploy/compose/restore-acme.sh
 require 'backup-restore' deploy/compose/restore-acme.sh
 require 'restored certd-acmed peer capability copies differ' deploy/compose/restore-acme.sh
+require 'MRML_CERTD_OFFLINE_RESTORE=1' deploy/compose/restore-acme.sh
+require 'MRML_ACMED_OFFLINE_RESTORE=1' deploy/compose/restore-acme.sh
+require 'restore-check' deploy/compose/restore-acme.sh
 require 'services remain disabled' deploy/compose/restore-acme.sh
 require 'secrets/admin/backup-auth.key' deploy/compose/provision-acme-host.sh
 require 'secrets/certd/backup-auth.key' deploy/compose/provision-acme-host.sh

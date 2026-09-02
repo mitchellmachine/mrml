@@ -184,6 +184,7 @@ fn application_main() -> Result<(), &'static str> {
         "backup-create" => backup_component_command(true),
         "backup-verify" => backup_component_command(false),
         "backup-restore" => backup_restore_command(),
+        "restore-check" => acmed_restore_check(config, state_authenticator),
         "health" => acmed_health(config, capability, state_authenticator),
         "status" => acmed_status(config, state_authenticator),
         "renew-now-preview" => renew_now_command(config, state_authenticator, false),
@@ -198,9 +199,40 @@ fn application_main() -> Result<(), &'static str> {
         "revoke-preview" => revoke_command(config, capability, state_authenticator, false),
         "revoke" => revoke_command(config, capability, state_authenticator, true),
         _ => Err(
-            "usage: mrml-acmed [serve|check-config|config-status|health|status|backup-create GENERATION|backup-verify GENERATION|backup-restore GENERATION|renew-now-preview|renew-now APPROVAL_SHA256|dns-cleanup confirm-exact-records|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
+            "usage: mrml-acmed [serve|check-config|config-status|health|status|restore-check|backup-create GENERATION|backup-verify GENERATION|backup-restore GENERATION|renew-now-preview|renew-now APPROVAL_SHA256|dns-cleanup confirm-exact-records|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
         ),
     }
+}
+
+fn acmed_restore_check(
+    config: AcmedConfig,
+    mut authenticator: impl DurableAuthenticator,
+) -> Result<(), &'static str> {
+    if std::env::var("MRML_ACMED_OFFLINE_RESTORE").as_deref() != Ok("1") {
+        return Err("restore validation requires the stopped-acmed one-shot context");
+    }
+    let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
+        .map_err(|_| "cannot open restored acmed durable state")?;
+    let (account, _) = load_account_record(&config, &state, &mut authenticator)?
+        .ok_or("restored active ACME account state is absent")?;
+    account
+        .require_policy(&config)
+        .map_err(|_| "restored ACME account policy is stale")?;
+    if account.phase != AcmedAccountPhase::Active {
+        return Err("restored ACME account is not active");
+    }
+    let (schedule, _) = load_renewal_schedule(&config, &mut state, &mut authenticator)?
+        .ok_or("restored renewal schedule is absent")?;
+    if schedule.identity != TlsIdentityId(config.identity)
+        || schedule.policy_generation != config.policy_generation
+    {
+        return Err("restored renewal schedule policy is stale");
+    }
+    println!(
+        "mrml-acmed restore valid identity_generation={} renew_at_unix={}",
+        schedule.identity_generation, schedule.renew_at_unix
+    );
+    Ok(())
 }
 
 fn backup_restore_command() -> Result<(), &'static str> {

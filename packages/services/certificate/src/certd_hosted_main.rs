@@ -117,10 +117,14 @@ fn application_main() -> Result<(), &'static str> {
         "backup-restore" => backup_restore_command(),
         "backup-manifest-create" => backup_manifest_command(true),
         "backup-manifest-verify" => backup_manifest_command(false),
+        "restore-check" => {
+            require_offline_restore_context()?;
+            check_hosted_identity(config)
+        }
         "health" => check_hosted_health(config),
         "serve" => serve(config),
         _ => Err(
-            "usage: mrml-certd [serve|check-config|config-status|health|backup-create GENERATION|backup-verify GENERATION|backup-restore GENERATION|backup-manifest-create GENERATION|backup-manifest-verify GENERATION]",
+            "usage: mrml-certd [serve|check-config|config-status|health|restore-check|backup-create GENERATION|backup-verify GENERATION|backup-restore GENERATION|backup-manifest-create GENERATION|backup-manifest-verify GENERATION]",
         ),
     }
 }
@@ -291,6 +295,18 @@ fn check_hosted_health(config: CertdConfig) -> Result<(), &'static str> {
     if executable.file_name().and_then(|name| name.to_str()) != Some("mrml-certd") {
         return Err("mrml-certd is not container pid 1");
     }
+    check_hosted_identity(config)
+}
+
+fn require_offline_restore_context() -> Result<(), &'static str> {
+    if std::env::var("MRML_CERTD_OFFLINE_RESTORE").as_deref() == Ok("1") {
+        Ok(())
+    } else {
+        Err("restore validation requires the stopped-certd one-shot context")
+    }
+}
+
+fn check_hosted_identity(config: CertdConfig) -> Result<(), &'static str> {
     let (mut authenticator, key_store) = load_certd_storage()?;
     key_store
         .load_account(HostedP256KeyDescriptor {
