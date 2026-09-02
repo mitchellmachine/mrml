@@ -1,7 +1,7 @@
 use crate::{
     Header, HttpError, QuicClientConnection, QuicConnection, QuicFrame, QuicServerListener,
-    QuicStreamAssembler, QuicVersion, RequestHead, ResponseBodySink, ResponseHead, valid_header,
-    valid_value,
+    QuicStreamAssembler, QuicVersion, RequestBodySource, RequestHead, ResponseBodySink,
+    ResponseHead, read_request_body_chunk, valid_header, valid_value,
 };
 use mrml_runtime::{JoinHandle, Receiver, Sender, Vector};
 use mrml_tls::TlsServerConfig;
@@ -859,6 +859,60 @@ impl Http3ClientConnection {
         self.connection
             .send_frames(&[stream_frame(id, 0, true, &request)?])
             .map_err(quic_error)?;
+        self.receive_response(id, output)
+    }
+
+    pub fn request_streaming_body_to(
+        &mut self,
+        method: &str,
+        authority: &str,
+        target: &str,
+        headers: &[(&str, &str)],
+        source: &mut dyn RequestBodySource,
+        output: &mut dyn ResponseBodySink,
+    ) -> Result<ResponseHead, HttpError> {
+        let id = self.connection.open_bidi_stream().map_err(quic_error)?;
+        let request = self
+            .protocol
+            .request(method, "https", authority, target, headers)?;
+        self.connection
+            .send_frames_flow_controlled(&[stream_frame(id, 0, false, &request)?])
+            .map_err(quic_error)?;
+        let mut offset = request.len() as u64;
+        let mut chunk = [0u8; 16 * 1024];
+        let mut remaining = source.remaining();
+        while remaining != 0 {
+            let maximum = usize::try_from(remaining.min(chunk.len() as u64))
+                .map_err(|_| HttpError::BodyTooLarge)?;
+            let count = read_request_body_chunk(source, &mut chunk[..maximum], remaining)?;
+            remaining -= count as u64;
+            let mut payload = Vector::new();
+            payload
+                .try_extend_from_slice(&chunk[..count])
+                .map_err(|_| HttpError::Allocation)?;
+            let encoded = Http3Frame {
+                kind: Http3FrameKind::Data,
+                payload,
+            }
+            .encode()?;
+            self.connection
+                .send_frames_flow_controlled(&[stream_frame(id, offset, false, &encoded)?])
+                .map_err(quic_error)?;
+            offset = offset
+                .checked_add(encoded.len() as u64)
+                .ok_or(HttpError::BodyTooLarge)?;
+        }
+        self.connection
+            .send_frames_flow_controlled(&[stream_frame(id, offset, true, &[])?])
+            .map_err(quic_error)?;
+        self.receive_response(id, output)
+    }
+
+    fn receive_response(
+        &mut self,
+        id: u64,
+        output: &mut dyn ResponseBodySink,
+    ) -> Result<ResponseHead, HttpError> {
         let mut stream = QuicStreamAssembler::new(MAX_FRAME + 64 * 1024);
         let mut head = None;
         loop {

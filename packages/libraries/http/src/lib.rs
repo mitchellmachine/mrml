@@ -91,6 +91,32 @@ pub trait ResponseBodySink {
     fn write(&mut self, bytes: &[u8]) -> Result<(), HttpError>;
 }
 
+/// Caller-owned source for a bounded HTTP request body. `remaining` is exact
+/// and monotonically decreases; returning zero while bytes remain fails the
+/// request rather than being treated as an implicit end-of-stream.
+pub trait RequestBodySource {
+    fn remaining(&self) -> u64;
+    fn read(&mut self, output: &mut [u8]) -> Result<usize, HttpError>;
+}
+
+pub(crate) fn read_request_body_chunk(
+    source: &mut dyn RequestBodySource,
+    output: &mut [u8],
+    remaining: u64,
+) -> Result<usize, HttpError> {
+    if output.is_empty() || output.len() as u64 > remaining {
+        return Err(HttpError::Io);
+    }
+    let count = source.read(output)?;
+    if count == 0
+        || count > output.len()
+        || source.remaining() != remaining.saturating_sub(count as u64)
+    {
+        return Err(HttpError::Io);
+    }
+    Ok(count)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Url {
     pub host: Text,
@@ -642,6 +668,55 @@ fn valid_target(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct HostileSource {
+        remaining: u64,
+        reported_after_read: u64,
+        count: usize,
+    }
+    impl RequestBodySource for HostileSource {
+        fn remaining(&self) -> u64 {
+            self.remaining
+        }
+        fn read(&mut self, _: &mut [u8]) -> Result<usize, HttpError> {
+            self.remaining = self.reported_after_read;
+            Ok(self.count)
+        }
+    }
+    #[test]
+    fn streaming_request_sources_must_make_exact_bounded_progress() {
+        let mut output = [0u8; 8];
+        let mut exact = HostileSource {
+            remaining: 8,
+            reported_after_read: 4,
+            count: 4,
+        };
+        assert_eq!(
+            read_request_body_chunk(&mut exact, &mut output[..4], 8),
+            Ok(4)
+        );
+        for mut hostile in [
+            HostileSource {
+                remaining: 8,
+                reported_after_read: 8,
+                count: 4,
+            },
+            HostileSource {
+                remaining: 8,
+                reported_after_read: 8,
+                count: 0,
+            },
+            HostileSource {
+                remaining: 8,
+                reported_after_read: 0,
+                count: 9,
+            },
+        ] {
+            assert_eq!(
+                read_request_body_chunk(&mut hostile, &mut output, 8),
+                Err(HttpError::Io)
+            );
+        }
+    }
     #[test]
     fn parses_and_resolves_https_urls() {
         let url = Url::parse("https://Example.COM:8443/a/b?q=1").unwrap();

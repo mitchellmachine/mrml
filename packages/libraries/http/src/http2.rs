@@ -2,7 +2,8 @@ use mrml_runtime::{Text, Vector};
 use mrml_tls::{TlsClientStream, TlsError, TlsServerStream};
 
 use crate::{
-    Header, HttpError, RequestHead, ResponseBodySink, ResponseHead, valid_header, valid_value,
+    Header, HttpError, RequestBodySource, RequestHead, ResponseBodySink, ResponseHead,
+    read_request_body_chunk, valid_header, valid_value,
 };
 
 pub const HTTP2_CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -700,10 +701,30 @@ fn read_server_frame(stream: &mut TlsServerStream) -> Result<Http2Frame, HttpErr
 pub struct Http2ClientConnection {
     stream: TlsClientStream,
     protocol: Http2Client,
+    send_connection_window: i64,
+    send_stream_window: i64,
+    peer_initial_stream_window: i64,
+    peer_maximum_frame: usize,
+    pending_response_frames: Vector<Http2Frame>,
 }
 struct LimitedBody {
     bytes: Vector<u8>,
     limit: usize,
+}
+struct SliceBodySource<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+impl RequestBodySource for SliceBodySource<'_> {
+    fn remaining(&self) -> u64 {
+        (self.bytes.len() - self.offset) as u64
+    }
+    fn read(&mut self, output: &mut [u8]) -> Result<usize, HttpError> {
+        let count = output.len().min(self.bytes.len() - self.offset);
+        output[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
+        self.offset += count;
+        Ok(count)
+    }
 }
 impl ResponseBodySink for LimitedBody {
     fn write(&mut self, bytes: &[u8]) -> Result<(), HttpError> {
@@ -735,7 +756,7 @@ impl Http2ClientConnection {
         if settings.kind != Http2FrameKind::Settings || settings.flags != 0 {
             return Err(HttpError::InvalidResponse);
         }
-        validate_settings(&settings.payload)?;
+        let (initial_window, maximum_frame) = peer_send_settings(&settings.payload)?;
         stream
             .write_all(
                 &Http2Frame {
@@ -747,7 +768,16 @@ impl Http2ClientConnection {
                 .encode()?,
             )
             .map_err(|_| HttpError::Tls)?;
-        Ok(Self { stream, protocol })
+        let initial_window = initial_window.unwrap_or(65_535);
+        Ok(Self {
+            stream,
+            protocol,
+            send_connection_window: 65_535,
+            send_stream_window: initial_window,
+            peer_initial_stream_window: initial_window,
+            peer_maximum_frame: maximum_frame.unwrap_or(16_384),
+            pending_response_frames: Vector::new(),
+        })
     }
     pub fn request(
         &mut self,
@@ -790,51 +820,175 @@ impl Http2ClientConnection {
         if body.len() > 16 * 1024 * 1024 {
             return Err(HttpError::BodyTooLarge);
         }
+        let mut source = SliceBodySource {
+            bytes: body,
+            offset: 0,
+        };
+        self.request_streaming_body_to(method, authority, target, headers, &mut source, output)
+    }
+
+    pub fn request_streaming_body_to(
+        &mut self,
+        method: &str,
+        authority: &str,
+        target: &str,
+        headers: &[(&str, &str)],
+        source: &mut dyn RequestBodySource,
+        output: &mut dyn ResponseBodySink,
+    ) -> Result<ResponseHead, HttpError> {
+        self.send_stream_window = self.peer_initial_stream_window;
+        let mut remaining = source.remaining();
         let (stream_id, request) =
             self.protocol
-                .request(method, "https", authority, target, headers, body.is_empty())?;
+                .request(method, "https", authority, target, headers, remaining == 0)?;
         self.stream
             .write_all(&request)
             .map_err(|_| HttpError::Tls)?;
-        for (index, chunk) in body.chunks(MAX_FRAME).enumerate() {
+        let mut chunk = [0u8; 16 * 1024];
+        while remaining != 0 {
+            while self.send_connection_window <= 0 || self.send_stream_window <= 0 {
+                if self.receive_send_control(stream_id)? {
+                    return self.receive_response(stream_id, output);
+                }
+            }
+            let maximum = chunk
+                .len()
+                .min(self.peer_maximum_frame)
+                .min(self.send_connection_window as usize)
+                .min(self.send_stream_window as usize)
+                .min(usize::try_from(remaining).unwrap_or(usize::MAX));
+            let count = read_request_body_chunk(source, &mut chunk[..maximum], remaining)?;
+            remaining -= count as u64;
             let mut payload = Vector::new();
             payload
-                .try_extend_from_slice(chunk)
+                .try_extend_from_slice(&chunk[..count])
                 .map_err(|_| HttpError::Allocation)?;
             self.stream
                 .write_all(
                     &Http2Frame {
                         kind: Http2FrameKind::Data,
-                        flags: if (index + 1) * MAX_FRAME >= body.len() {
-                            1
-                        } else {
-                            0
-                        },
+                        flags: if remaining == 0 { 1 } else { 0 },
                         stream_id,
                         payload,
                     }
                     .encode()?,
                 )
                 .map_err(|_| HttpError::Tls)?;
+            self.send_connection_window -= count as i64;
+            self.send_stream_window -= count as i64;
         }
+        self.receive_response(stream_id, output)
+    }
+
+    fn receive_send_control(&mut self, stream_id: u32) -> Result<bool, HttpError> {
+        let frame = read_client_frame(&mut self.stream)?;
+        match frame.kind {
+            Http2FrameKind::Settings => self.accept_peer_settings(&frame).map(|()| false),
+            Http2FrameKind::WindowUpdate => self
+                .accept_send_window_update(&frame, stream_id)
+                .map(|()| false),
+            Http2FrameKind::Ping if frame.flags & 1 == 0 && frame.payload.len() == 8 => {
+                self.stream
+                    .write_all(&Http2Frame { flags: 1, ..frame }.encode()?)
+                    .map_err(|_| HttpError::Tls)?;
+                Ok(false)
+            }
+            Http2FrameKind::Headers | Http2FrameKind::Data if frame.stream_id == stream_id => {
+                if self.pending_response_frames.len() >= 4 {
+                    return Err(HttpError::BodyTooLarge);
+                }
+                self.pending_response_frames
+                    .try_push(frame)
+                    .map_err(|_| HttpError::Allocation)?;
+                Ok(true)
+            }
+            Http2FrameKind::GoAway => Err(HttpError::Io),
+            _ => Ok(false),
+        }
+    }
+
+    fn accept_peer_settings(&mut self, frame: &Http2Frame) -> Result<(), HttpError> {
+        if frame.stream_id != 0 {
+            return Err(HttpError::InvalidResponse);
+        }
+        if frame.flags & 1 != 0 {
+            return if frame.payload.is_empty() {
+                Ok(())
+            } else {
+                Err(HttpError::InvalidResponse)
+            };
+        }
+        let (initial_window, maximum_frame) = peer_send_settings(&frame.payload)?;
+        if let Some(initial_window) = initial_window {
+            let delta = initial_window - self.peer_initial_stream_window;
+            self.send_stream_window = self
+                .send_stream_window
+                .checked_add(delta)
+                .filter(|window| *window >= -0x7fff_ffff && *window <= 0x7fff_ffff)
+                .ok_or(HttpError::InvalidResponse)?;
+            self.peer_initial_stream_window = initial_window;
+        }
+        if let Some(maximum_frame) = maximum_frame {
+            self.peer_maximum_frame = maximum_frame;
+        }
+        self.stream
+            .write_all(
+                &Http2Frame {
+                    kind: Http2FrameKind::Settings,
+                    flags: 1,
+                    stream_id: 0,
+                    payload: Vector::new(),
+                }
+                .encode()?,
+            )
+            .map_err(|_| HttpError::Tls)
+    }
+
+    fn accept_send_window_update(
+        &mut self,
+        frame: &Http2Frame,
+        stream_id: u32,
+    ) -> Result<(), HttpError> {
+        validate_window_update(frame)?;
+        if frame.stream_id != 0 && frame.stream_id != stream_id {
+            return Err(HttpError::InvalidResponse);
+        }
+        let increment = i64::from(
+            u32::from_be_bytes([
+                frame.payload[0],
+                frame.payload[1],
+                frame.payload[2],
+                frame.payload[3],
+            ]) & 0x7fff_ffff,
+        );
+        let window = if frame.stream_id == 0 {
+            &mut self.send_connection_window
+        } else {
+            &mut self.send_stream_window
+        };
+        *window = window
+            .checked_add(increment)
+            .filter(|value| *value <= 0x7fff_ffff)
+            .ok_or(HttpError::InvalidResponse)?;
+        Ok(())
+    }
+
+    fn receive_response(
+        &mut self,
+        stream_id: u32,
+        output: &mut dyn ResponseBodySink,
+    ) -> Result<ResponseHead, HttpError> {
         let mut head = None;
         loop {
-            let frame = read_client_frame(&mut self.stream)?;
+            let frame = if self.pending_response_frames.is_empty() {
+                read_client_frame(&mut self.stream)?
+            } else {
+                self.pending_response_frames.remove(0)
+            };
             match frame.kind {
-                Http2FrameKind::Settings => {
-                    if frame.flags & 1 == 0 {
-                        self.stream
-                            .write_all(
-                                &Http2Frame {
-                                    kind: Http2FrameKind::Settings,
-                                    flags: 1,
-                                    stream_id: 0,
-                                    payload: Vector::new(),
-                                }
-                                .encode()?,
-                            )
-                            .map_err(|_| HttpError::Tls)?;
-                    }
+                Http2FrameKind::Settings => self.accept_peer_settings(&frame)?,
+                Http2FrameKind::WindowUpdate => {
+                    self.accept_send_window_update(&frame, stream_id)?
                 }
                 Http2FrameKind::Ping if frame.flags & 1 == 0 && frame.payload.len() == 8 => {
                     self.stream
