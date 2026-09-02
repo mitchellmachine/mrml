@@ -89,8 +89,12 @@ impl<T: ProtectedAuthorityRpc> ProtectedCommitVerifier for RemoteProtectedReceiv
         &mut self,
         proofs: &[DetachedCommitProofRecord],
     ) -> Result<(), GitdCoreError> {
+        // This method is the explicit boundary of a new serialized receive.
+        // Discard proof state left by an earlier receive that failed before its
+        // completion hook; proofs are commit-bound and must never leak across
+        // receive transactions or leave the worker permanently unavailable.
+        self.pending_proofs.clear();
         if proofs.is_empty()
-            || !self.pending_proofs.is_empty()
             || proofs.len() > crate::MAX_DETACHED_COMMIT_PROOFS
             || !proofs
                 .windows(2)
@@ -311,7 +315,7 @@ mod tests {
             calls: Vector::new(),
         });
         authority
-            .begin_receive_proofs(&[first_proof, second_proof])
+            .begin_receive_proofs(&[first_proof, second_proof.clone()])
             .unwrap();
         assert_eq!(
             authority.verify_commit(context, first, b"first commit bytes"),
@@ -333,5 +337,21 @@ mod tests {
             authority.verify_commit(context, second, b"second commit bytes"),
             Err(HistoryVerificationError::Signature)
         );
+        authority
+            .begin_receive_proofs(core::slice::from_ref(&second_proof))
+            .unwrap();
+        assert_eq!(
+            authority.verify_commit(context, second, b"second commit bytes"),
+            Ok(VerifiedCommitProof {
+                commit: second,
+                repository,
+                repository_generation: RepositoryGeneration(3),
+                trust_generation: TrustGeneration(4),
+                revocation_generation: RevocationGeneration(8),
+                purpose: SignaturePurpose::GitCommit,
+                object_format: ObjectFormat::Sha256,
+            })
+        );
+        assert_eq!(authority.finish_receive_proofs(), Ok(()));
     }
 }
