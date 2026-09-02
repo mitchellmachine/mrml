@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 
 use mrml_http::{
     BackendError, BlobPage, BoundedRead, BoundedWrite, CommitPage, GitdBackend, GitdCoreAdapter,
@@ -55,7 +55,7 @@ impl GitdRepositorySet {
             .try_reserve_exact(self.repositories.len())
             .map_err(|_| BackendError::ResourceLimit)?;
         for (identity, adapter) in self.repositories {
-            repositories.push((identity, RwLock::new(adapter)));
+            repositories.push((identity, Mutex::new(adapter)));
         }
         Ok(SharedGitdRepositorySet {
             repositories: Arc::new(repositories),
@@ -88,7 +88,7 @@ pub struct SharedGitdRepositorySet {
     repositories: Arc<
         Vec<(
             RepositoryIdentity,
-            RwLock<GitdCoreAdapter<mrml_git::FilesystemRepositoryView>>,
+            Mutex<GitdCoreAdapter<mrml_git::FilesystemRepositoryView>>,
         )>,
     >,
 }
@@ -114,7 +114,7 @@ impl GitdBackend for SharedGitdRepositorySet {
     ) -> Result<RepositoryGeneration, BackendError> {
         self.repositories[self.index(repository)?]
             .1
-            .read()
+            .lock()
             .map_err(|_| BackendError::Storage)?
             .repository_generation(repository)
     }
@@ -126,7 +126,7 @@ impl GitdBackend for SharedGitdRepositorySet {
     ) -> Result<RepositorySummary, BackendError> {
         self.repositories[self.index(repository)?]
             .1
-            .read()
+            .lock()
             .map_err(|_| BackendError::Storage)?
             .repository_summary(repository, limits)
     }
@@ -138,7 +138,7 @@ impl GitdBackend for SharedGitdRepositorySet {
     ) -> Result<ObjectId, BackendError> {
         self.repositories[self.index(repository)?]
             .1
-            .read()
+            .lock()
             .map_err(|_| BackendError::Storage)?
             .resolve_ref(repository, revision)
     }
@@ -151,7 +151,7 @@ impl GitdBackend for SharedGitdRepositorySet {
     ) -> Result<CommitPage, BackendError> {
         self.repositories[self.index(repository)?]
             .1
-            .read()
+            .lock()
             .map_err(|_| BackendError::Storage)?
             .read_commit_page(repository, commit, limits)
     }
@@ -165,7 +165,7 @@ impl GitdBackend for SharedGitdRepositorySet {
     ) -> Result<TreePage, BackendError> {
         self.repositories[self.index(repository)?]
             .1
-            .read()
+            .lock()
             .map_err(|_| BackendError::Storage)?
             .read_tree_page(repository, treeish, path, limits)
     }
@@ -179,7 +179,7 @@ impl GitdBackend for SharedGitdRepositorySet {
     ) -> Result<BlobPage, BackendError> {
         self.repositories[self.index(repository)?]
             .1
-            .read()
+            .lock()
             .map_err(|_| BackendError::Storage)?
             .read_blob_page(repository, treeish, path, limits)
     }
@@ -193,7 +193,7 @@ impl GitdBackend for SharedGitdRepositorySet {
     ) -> Result<VerificationSummary, BackendError> {
         self.repositories[self.index(repository)?]
             .1
-            .read()
+            .lock()
             .map_err(|_| BackendError::Storage)?
             .verification_summary(repository, object, policy, revocations)
     }
@@ -208,7 +208,7 @@ impl GitdBackend for SharedGitdRepositorySet {
         let index = self.index(&request.repository)?;
         self.repositories[index]
             .1
-            .write()
+            .lock()
             .map_err(|_| BackendError::Storage)?
             .smart_git(request, input, output, budget)
     }
