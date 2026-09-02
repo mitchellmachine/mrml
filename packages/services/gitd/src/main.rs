@@ -15,7 +15,7 @@ use mrml_gitd::{
     GitdHttp3WorkerPool, GitdTlsConfigStore, build_certd_tls_server_config_with_route,
     compose_gitd_service, load_deployment_catalog, load_gitd_authentication, load_gitd_config,
     load_quic_retry_key, prove_identity_signing_route, recover_admitted_repository,
-    validate_identity_snapshot, validate_storage_layout,
+    refresh_certd_tls_config, validate_identity_snapshot, validate_storage_layout,
 };
 
 const O_NOFOLLOW: i32 = 0x20_000;
@@ -249,7 +249,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     .map_err(|_| ())?;
     let http3 = GitdHttp3WorkerPool::new(
         &service,
-        tls,
+        tls.clone(),
         http3_workers,
         http3_queue,
         http3_maximum,
@@ -259,30 +259,59 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     .map_err(|_| ())?;
     let reactor = GitdHttp3Reactor::new(http3, 256 * 1024, 64).map_err(|_| ())?;
     let (tcp, mut quic) = listeners.into_parts();
-    let tcp_failed = Arc::new(AtomicBool::new(false));
-    let worker_failed = tcp_failed.clone();
-    let tcp_worker = mrml_runtime::spawn_joinable(move || {
+    let fatal = Arc::new(AtomicBool::new(false));
+    let rotation_stop = Arc::new(AtomicBool::new(false));
+    let rotation_fatal = fatal.clone();
+    let worker_rotation_stop = rotation_stop.clone();
+    let rotation_tls = tls.clone();
+    let rotation_route = signing_route.clone();
+    let rotation_server_name = config.server_name.clone();
+    let rotation_worker = mrml_runtime::spawn_joinable(move || {
+        while !worker_rotation_stop.load(Ordering::Acquire) {
+            if refresh_certd_tls_config(
+                &rotation_server_name,
+                &rotation_route,
+                &rotation_tls,
+                1_000,
+            )
+            .is_err()
+            {
+                rotation_fatal.store(true, Ordering::Release);
+                break;
+            }
+        }
+    })
+    .map_err(|_| ())?;
+    let worker_fatal = fatal.clone();
+    let _tcp_worker = mrml_runtime::spawn_joinable(move || {
         loop {
             let socket = match tcp.accept() {
                 Ok(socket) => socket,
                 Err(_) => break,
             };
+            if worker_fatal.load(Ordering::Acquire) {
+                break;
+            }
             if http2.submit(socket).is_err() {
                 break;
             }
         }
-        worker_failed.store(true, Ordering::Release);
+        worker_fatal.store(true, Ordering::Release);
     })
     .map_err(|_| ())?;
 
     loop {
-        if tcp_failed.load(Ordering::Acquire) {
+        if fatal.load(Ordering::Acquire) {
             let _ = reactor.shutdown(&mut quic);
-            let _ = tcp_worker.join();
+            rotation_stop.store(true, Ordering::Release);
+            let _ = rotation_worker.join();
             return Err(());
         }
         if reactor.step(&mut quic).is_err() {
             let _ = reactor.shutdown(&mut quic);
+            fatal.store(true, Ordering::Release);
+            rotation_stop.store(true, Ordering::Release);
+            let _ = rotation_worker.join();
             return Err(());
         }
     }
