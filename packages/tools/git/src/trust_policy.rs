@@ -180,6 +180,19 @@ impl AuthorizedHybridPair {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) const fn from_components_for_test(
+        openpgp_fingerprint: FingerprintV6,
+        openpgp_key_digest: [u8; 64],
+        ml_dsa_key_digest: [u8; 64],
+    ) -> Self {
+        Self {
+            openpgp_fingerprint,
+            openpgp_key_digest,
+            ml_dsa_key_digest,
+        }
+    }
+
     pub const fn openpgp_fingerprint(&self) -> FingerprintV6 {
         self.openpgp_fingerprint
     }

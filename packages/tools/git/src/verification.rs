@@ -243,26 +243,18 @@ where
     {
         return Err(HistoryVerificationError::Signature);
     }
-    let checkpoint = policy
-        .legacy_checkpoint()
-        .ok_or(HistoryVerificationError::Signature)?;
+    let checkpoint = policy.legacy_checkpoint();
     let cutover = policy
         .hybrid_cutover()
         .ok_or(HistoryVerificationError::Signature)?;
-    if checkpoint.format() != context.object_format
-        || cutover.format() != context.object_format
-        || checkpoint == cutover
+    if cutover.format() != context.object_format
+        || checkpoint.is_some_and(|checkpoint| {
+            checkpoint.format() != context.object_format || checkpoint == cutover
+        })
     {
         return Err(HistoryVerificationError::Signature);
     }
     let mut legacy = Vector::new();
-    collect_reachable(
-        checkpoint,
-        limits.max_existing_commits,
-        limits.max_parents_per_commit,
-        &mut read_parents,
-        &mut legacy,
-    )?;
     let mut cutover_history = Vector::new();
     collect_reachable(
         cutover,
@@ -271,8 +263,17 @@ where
         &mut read_parents,
         &mut cutover_history,
     )?;
-    if !cutover_history.contains(&checkpoint) || legacy.contains(&cutover) {
-        return Err(HistoryVerificationError::NotFastForward);
+    if let Some(checkpoint) = checkpoint {
+        collect_reachable(
+            checkpoint,
+            limits.max_existing_commits,
+            limits.max_parents_per_commit,
+            &mut read_parents,
+            &mut legacy,
+        )?;
+        if !cutover_history.contains(&checkpoint) || legacy.contains(&cutover) {
+            return Err(HistoryVerificationError::NotFastForward);
+        }
     }
 
     let mut range = verify_introduced_history(old, new, limits, &mut read_parents, |id| {
@@ -475,6 +476,8 @@ fn remove_id(values: &mut Vector<ObjectId>, id: ObjectId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AuthorizedHybridPair, FullRefName, PolicyPairStatus, TrustPolicyCandidate};
+    use mrml_openpgp::FingerprintV6;
 
     fn id(value: u8) -> ObjectId {
         ObjectId::Sha1([value; 20])
@@ -524,6 +527,76 @@ mod tests {
             purpose: SignaturePurpose::GitCommit,
             object_format: ObjectFormat::Sha1,
         }
+    }
+
+    #[test]
+    fn hybrid_only_policy_requires_no_legacy_checkpoint() {
+        let repository = RepositoryIdentity::parse("owner/hybrid-only").unwrap();
+        let pair = AuthorizedHybridPair::from_components_for_test(
+            FingerprintV6::from_bytes([1; 32]),
+            [2; 64],
+            [3; 64],
+        );
+        let cutover = ObjectId::Sha256([8; 32]);
+        let tip = ObjectId::Sha256([9; 32]);
+        let policy = TrustPolicyState::establish(TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(8),
+            previous_policy_digest: [0; 64],
+            revocation_generation: RevocationGeneration(9),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: true,
+            legacy_checkpoint: None,
+            hybrid_cutover: Some(cutover),
+            emergency_policy_digest: None,
+            active_pairs: [pair].into(),
+            pair_statuses: [PolicyPairStatus::new(pair, 1, 100, None).unwrap()].into(),
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        })
+        .unwrap();
+        let context = ProtectedHistoryContext {
+            repository: &repository,
+            repository_generation: RepositoryGeneration(7),
+            trust_generation: TrustGeneration(8),
+            revocation_generation: RevocationGeneration(9),
+            purpose: SignaturePurpose::GitCommit,
+            object_format: ObjectFormat::Sha256,
+        };
+        let range = verify_policy_classified_history(
+            &policy,
+            context,
+            cutover,
+            tip,
+            HistoryVerificationLimits::default(),
+            |id| {
+                Ok(if id == tip {
+                    [cutover].into()
+                } else if id == cutover {
+                    Vector::new()
+                } else {
+                    return Err(HistoryVerificationError::MissingCommit);
+                })
+            },
+            |commit| {
+                Ok(proof(
+                    commit,
+                    &repository,
+                    7,
+                    8,
+                    9,
+                    SignaturePurpose::GitCommit,
+                    ObjectFormat::Sha256,
+                ))
+            },
+            |_| panic!("hybrid-only policy must not request legacy verification"),
+        )
+        .unwrap();
+        assert_eq!(range.introduced(), &[tip]);
     }
 
     #[test]
