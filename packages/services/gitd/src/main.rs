@@ -30,6 +30,21 @@ fn main() {
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
     if let [_, command, config] = arguments.as_slice() {
+        if command == "listener-health" {
+            let config = load_gitd_config(Path::new(config)).map_err(|_| ())?;
+            let connection = mrml_tls::TlsClientStream::connect_resolved_with_alpn(
+                &config.server_name,
+                [127, 0, 0, 1],
+                config.listen_port,
+                &["h2"],
+            )
+            .map_err(|_| ())?;
+            if connection.negotiated_protocol() != Some("h2") {
+                return Err(());
+            }
+            println!("ready");
+            return Ok(());
+        }
         if command != "validate-config" {
             return Err(());
         }
@@ -120,7 +135,7 @@ fn run() -> Result<(), ()> {
     ] = arguments.as_slice()
     else {
         eprintln!(
-            "usage: mrml-gitd validate-config CONFIG | dependencies-health CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
+            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | dependencies-health CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
         );
         std::process::exit(64);
     };

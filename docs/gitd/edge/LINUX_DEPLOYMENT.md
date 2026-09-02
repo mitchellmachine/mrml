@@ -37,9 +37,12 @@ proved simultaneous TCP/UDP ownership and over-limit refusal. HTTP/2 and HTTP/3
 now dispatch to the same authenticated backend. QUIC admission uses an
 authenticated Retry before substantial connection state. Fatal dependency or
 listener failure marks readiness false and enters worker drain. POSIX
-termination handling and a native live-process Compose health probe remain
-incomplete; the present Compose check revalidates static production
-configuration and storage, not process liveness.
+termination handling remains incomplete. Gitd's native Compose health command
+performs a fresh loopback TLS 1.3 handshake, authenticates the configured
+server name through the project trust policy, and requires negotiated HTTP/2;
+it loads no private key and does not use curl or a shell. The authority's
+current Compose check remains configuration/state validation rather than a
+live request through its serving socket.
 
 Before UDP admission, the endpoint receives a distinct generated retry key and
 nonzero generation. Gitd configures a 30-second one-use retry-token manager,
