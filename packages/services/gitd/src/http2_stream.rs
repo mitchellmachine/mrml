@@ -164,12 +164,46 @@ fn serve_smart_git_http2_with_drain<B: GitdBackend>(
             .finish(stream_id)
             .map_err(|_| GitdHttp2StreamError::Transport),
         Err(error) => {
+            eprintln!(
+                "component=mrml-gitd event={}",
+                smart_git_backend_event(request, error)
+            );
             transport
                 .borrow_mut()
                 .reset(stream_id)
                 .map_err(|_| GitdHttp2StreamError::Transport)?;
             Err(GitdHttp2StreamError::Backend(error))
         }
+    }
+}
+
+fn smart_git_backend_event(request: &RequestHead, error: BackendError) -> &'static str {
+    let operation = if request.method == "GET"
+        && request
+            .target
+            .ends_with("info/refs?service=git-upload-pack")
+    {
+        "discovery"
+    } else if request.method == "GET"
+        && request
+            .target
+            .ends_with("info/refs?service=git-receive-pack")
+    {
+        "receive_discovery"
+    } else if request.method == "POST" && request.target.ends_with("/git-upload-pack") {
+        "upload_pack"
+    } else {
+        "receive_pack"
+    };
+    match (operation, error) {
+        ("discovery", BackendError::Unsupported) => "http2_discovery_unsupported",
+        ("receive_discovery", BackendError::Unsupported) => "http2_receive_discovery_unsupported",
+        ("upload_pack", BackendError::Unsupported) => "http2_upload_pack_unsupported",
+        ("receive_pack", BackendError::Unsupported) => "http2_receive_pack_unsupported",
+        ("discovery", _) => "http2_discovery_failed",
+        ("receive_discovery", _) => "http2_receive_discovery_failed",
+        ("upload_pack", _) => "http2_upload_pack_failed",
+        _ => "http2_receive_pack_failed",
     }
 }
 
