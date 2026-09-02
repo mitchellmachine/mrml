@@ -13,11 +13,12 @@ use mrml_gitd::{
     GitAuthorityChannelClient, GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute,
     GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
     admit_catalog_repository, build_certd_tls_server_config_with_route, compose_gitd_service,
-    initialize_empty_token_store, load_deployment_catalog, load_gitd_authentication,
-    load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
-    recover_admitted_repository, refresh_certd_tls_config, validate_identity_snapshot,
-    validate_storage_layout,
+    initialize_empty_token_store, issue_access_token, load_deployment_catalog,
+    load_gitd_authentication, load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
+    recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
+    validate_identity_snapshot, validate_storage_layout,
 };
+use mrml_http::{AccessScopes, RepositoryIdentity};
 
 const O_NOFOLLOW: i32 = 0x20_000;
 
@@ -60,16 +61,73 @@ fn run() -> Result<(), ()> {
         return Ok(());
     }
     if let [_, command, token_store, pepper, expected_uid] = arguments.as_slice() {
-        if command != "initialize-token-store" {
+        let expected_uid = expected_uid.parse().map_err(|_| ())?;
+        if command == "initialize-token-store" {
+            initialize_empty_token_store(Path::new(token_store), Path::new(pepper), expected_uid)
+                .map_err(|_| ())?;
+            println!("initialized");
+            return Ok(());
+        }
+        if command == "revoke-token" {
+            let mut encoded = Vec::new();
+            std::io::Read::read_to_end(&mut std::io::stdin().take(66), &mut encoded)
+                .map_err(|_| ())?;
+            while encoded
+                .last()
+                .is_some_and(|byte| matches!(byte, b'\n' | b'\r'))
+            {
+                encoded.pop();
+            }
+            let token = core::str::from_utf8(&encoded).map_err(|_| ())?;
+            if token.len() != 64 {
+                erase_secret_bytes(&mut encoded);
+                return Err(());
+            }
+            let removed = revoke_access_token(
+                Path::new(token_store),
+                Path::new(pepper),
+                expected_uid,
+                token,
+            );
+            erase_secret_bytes(&mut encoded);
+            if !removed.map_err(|_| ())? {
+                return Err(());
+            }
+            println!("revoked");
+            return Ok(());
+        }
+        return Err(());
+    }
+    if let [
+        _,
+        command,
+        token_store,
+        pepper,
+        expected_uid,
+        repository,
+        scopes,
+        valid_from,
+        expires_at,
+        revocation_generation,
+        label,
+    ] = arguments.as_slice()
+    {
+        if command != "issue-token" {
             return Err(());
         }
-        initialize_empty_token_store(
+        let mut token = issue_access_token(
             Path::new(token_store),
             Path::new(pepper),
             expected_uid.parse().map_err(|_| ())?,
+            RepositoryIdentity::parse(repository).map_err(|_| ())?,
+            parse_scopes(scopes)?,
+            valid_from.parse().map_err(|_| ())?,
+            expires_at.parse().map_err(|_| ())?,
+            revocation_generation.parse().map_err(|_| ())?,
+            label,
         )
         .map_err(|_| ())?;
-        println!("initialized");
+        token.expose_once(|value| println!("{value}")).ok_or(())?;
         return Ok(());
     }
     if let [_, command, config_path, signer_identity] = arguments.as_slice() {
@@ -149,7 +207,7 @@ fn run() -> Result<(), ()> {
     ] = arguments.as_slice()
     else {
         eprintln!(
-            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | dependencies-health CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
+            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
         );
         std::process::exit(64);
     };
@@ -175,6 +233,17 @@ fn run() -> Result<(), ()> {
     client.health().map_err(|_| ())?;
     println!("ready");
     Ok(())
+}
+
+fn parse_scopes(input: &str) -> Result<AccessScopes, ()> {
+    match input {
+        "read" => Ok(AccessScopes::READ),
+        "write" => Ok(AccessScopes::READ.union(AccessScopes::WRITE)),
+        "admin" => Ok(AccessScopes::READ
+            .union(AccessScopes::WRITE)
+            .union(AccessScopes::ADMINISTER)),
+        _ => Err(()),
+    }
 }
 
 fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {

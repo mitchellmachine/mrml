@@ -5,8 +5,8 @@ use std::path::Path;
 
 use mrml_crypto::erase_secret_bytes;
 use mrml_http::{
-    GitdAuthentication, MAX_TOKEN_STORE_BYTES, RepositoryAccessPolicy, RepositoryIdentity,
-    RepositoryProfile, TokenAuthority,
+    AccessScopes, GitdAuthentication, MAX_TOKEN_STORE_BYTES, OneTimeAccessToken,
+    RepositoryAccessPolicy, RepositoryIdentity, RepositoryProfile, TokenAuthority, TokenRecord,
 };
 use mrml_runtime::Vector;
 
@@ -63,6 +63,98 @@ pub fn initialize_empty_token_store(
             .map_err(|_| AuthenticationStoreError::Read)?;
         std::fs::hard_link(&temporary, path).map_err(|_| AuthenticationStoreError::Open)?;
         std::fs::remove_file(&temporary).map_err(|_| AuthenticationStoreError::Open)?;
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| AuthenticationStoreError::Read)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+pub fn issue_access_token(
+    path: &Path,
+    pepper_path: &Path,
+    gitd_uid: u32,
+    repository: RepositoryIdentity,
+    scopes: AccessScopes,
+    valid_from: u64,
+    expires_at: u64,
+    revocation_generation: u64,
+    label: &str,
+) -> Result<OneTimeAccessToken, AuthenticationStoreError> {
+    let (authority, mut records) = load_token_authority(path, pepper_path, gitd_uid)?;
+    let (token, record) = authority
+        .issue(
+            repository,
+            scopes,
+            valid_from,
+            expires_at,
+            revocation_generation,
+            label,
+        )
+        .map_err(|_| AuthenticationStoreError::Decode)?;
+    records.push(record);
+    replace_token_store(path, gitd_uid, &authority, &records)?;
+    Ok(token)
+}
+
+pub fn revoke_access_token(
+    path: &Path,
+    pepper_path: &Path,
+    gitd_uid: u32,
+    encoded_token: &str,
+) -> Result<bool, AuthenticationStoreError> {
+    let (authority, mut records) = load_token_authority(path, pepper_path, gitd_uid)?;
+    let removed = authority
+        .revoke_encoded_token(&mut records, encoded_token)
+        .map_err(|_| AuthenticationStoreError::Decode)?;
+    if removed {
+        replace_token_store(path, gitd_uid, &authority, &records)?;
+    }
+    Ok(removed)
+}
+
+fn load_token_authority(
+    path: &Path,
+    pepper_path: &Path,
+    gitd_uid: u32,
+) -> Result<(TokenAuthority, Vector<TokenRecord>), AuthenticationStoreError> {
+    let mut pepper = read_pepper(pepper_path, gitd_uid)?;
+    let authority = TokenAuthority::new(pepper).map_err(|_| AuthenticationStoreError::Decode);
+    erase_secret_bytes(&mut pepper);
+    let authority = authority?;
+    let records = authority
+        .decode_records(&read_token_store(path, gitd_uid)?)
+        .map_err(|_| AuthenticationStoreError::Decode)?;
+    Ok((authority, records))
+}
+
+fn replace_token_store(
+    path: &Path,
+    gitd_uid: u32,
+    authority: &TokenAuthority,
+    records: &[TokenRecord],
+) -> Result<(), AuthenticationStoreError> {
+    let _existing = secure_file(path, gitd_uid, 44, MAX_TOKEN_STORE_BYTES as u64)?;
+    let parent = path.parent().ok_or(AuthenticationStoreError::Open)?;
+    let bytes = authority
+        .encode_records(records)
+        .map_err(|_| AuthenticationStoreError::Decode)?;
+    let temporary = parent.join(format!(".tokens.v1.replace.{}", std::process::id()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(O_NOFOLLOW)
+            .open(&temporary)
+            .map_err(|_| AuthenticationStoreError::Open)?;
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| AuthenticationStoreError::Read)?;
+        std::fs::rename(&temporary, path).map_err(|_| AuthenticationStoreError::Open)?;
         std::fs::File::open(parent)
             .and_then(|directory| directory.sync_all())
             .map_err(|_| AuthenticationStoreError::Read)
@@ -231,6 +323,29 @@ mod tests {
                 .decode_records(&fs::read(&store_path).unwrap())
                 .unwrap()
                 .is_empty()
+        );
+        let mut token = issue_access_token(
+            &store_path,
+            &pepper_path,
+            uid,
+            RepositoryIdentity::parse("owner/repository").unwrap(),
+            AccessScopes::READ.union(AccessScopes::WRITE),
+            10,
+            20,
+            3,
+            "operator-issued",
+        )
+        .unwrap();
+        let encoded = token
+            .expose_once(|value| mrml_runtime::Text::from(value))
+            .unwrap();
+        assert_eq!(
+            revoke_access_token(&store_path, &pepper_path, uid, &encoded),
+            Ok(true)
+        );
+        assert_eq!(
+            revoke_access_token(&store_path, &pepper_path, uid, &encoded),
+            Ok(false)
         );
         assert_eq!(
             initialize_empty_token_store(&store_path, &pepper_path, uid),

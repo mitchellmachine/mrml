@@ -33,7 +33,18 @@ mounted pepper through the same strict loader as the daemon, and creates an
 authenticated empty `tokens.v1`. Creation uses a private same-directory
 temporary file, file sync, a no-overwrite hard-link activation, temporary
 unlink, and directory sync. It refuses an existing destination and creates no
-access token. Token issuance and revocation administration remain a later gate.
+access token.
+
+`token-git.sh issue` and `token-git.sh revoke` are cold one-shot operations:
+they refuse a running Gitd so its authenticated in-memory snapshot cannot race
+the durable store. Issuance accepts an exact repository identity, the bounded
+`read`, `write`, or `admin` scope profile, validity interval, revocation
+generation, and non-authoritative label. It displays the 256-bit token exactly
+once and stores only a keyed verifier plus authenticated metadata. Revocation
+accepts the token only on standard input, never an argument or environment
+variable, uses constant-time verifier comparison, and atomically replaces the
+authenticated store with file and directory sync. Restart Gitd after either
+operation so startup reauthenticates the complete store.
 
 Hosted evidence is limited to shell syntax, static invariants, and negative
 argument tests because the current runner is neither root nor Docker-enabled.

@@ -64,7 +64,7 @@ for dockerfile in "$gitd_dockerfile" "$authority_dockerfile"; do
   reject 'COPY . ' "$dockerfile"
 done
 
-for operator in deploy/compose/initialize-git.sh deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh deploy/compose/load-offline-git-images.sh; do
+for operator in deploy/compose/initialize-git.sh deploy/compose/token-git.sh deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh deploy/compose/load-offline-git-images.sh; do
   [ -x "$operator" ] || {
     echo "missing executable Git deployment operator: $operator" >&2
     exit 1
@@ -76,5 +76,7 @@ require 'docker load -i' deploy/compose/load-offline-git-images.sh
 require 'loaded image identity does not match images.git.lock' deploy/compose/load-offline-git-images.sh
 require 'run --rm --no-deps' deploy/compose/initialize-git.sh
 require 'initialize-token-store' deploy/compose/initialize-git.sh
+require 'token administration requires stopped Gitd' deploy/compose/token-git.sh
+require 'run -T --rm --no-deps' deploy/compose/token-git.sh
 
 echo "Git Compose static invariants PASS"
