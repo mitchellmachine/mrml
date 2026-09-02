@@ -16,6 +16,7 @@ use mrml_openpgp::{
 };
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
+use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
@@ -43,6 +44,28 @@ struct Configuration {
     ml_dsa_secret_file: PathBuf,
 }
 
+struct SecretBuffer(Vec<u8>);
+
+impl Deref for SecretBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for SecretBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for SecretBuffer {
+    fn drop(&mut self) {
+        erase_secret_bytes(&mut self.0);
+    }
+}
+
 fn main() {
     if run().is_err() {
         eprintln!("mrml-git-protected-signer: operation failed closed");
@@ -65,7 +88,7 @@ fn run() -> Result<(), ()> {
     erase_secret_bytes(&mut seed_bytes);
     let openpgp = SigningKeyV6::from_seed(seed, config.openpgp_created_at).map_err(|_| ())?;
     erase_secret_bytes(&mut seed);
-    let mut ml_dsa = read_secret(
+    let ml_dsa = read_secret(
         &config.ml_dsa_secret_file,
         ML_DSA_65_SECRET_KEY_BYTES,
         config.owner_uid,
@@ -87,16 +110,14 @@ fn run() -> Result<(), ()> {
             let _ = UnixStream::connect(wake_socket);
         }
     });
-    let result = serve(
+    serve(
         &config,
         &capability,
         &openpgp,
         &ml_dsa_public,
         &ml_dsa,
         &terminating,
-    );
-    erase_secret_bytes(&mut ml_dsa);
-    result
+    )
 }
 
 fn validate_ml_dsa_pair(public: &[u8], secret: &[u8]) -> Result<(), ()> {
@@ -386,7 +407,7 @@ fn read_public(path: &Path, exact: usize, expected_owner: u32) -> Result<Vec<u8>
     Ok(bytes)
 }
 
-fn read_secret(path: &Path, exact: usize, expected_owner: u32) -> Result<Vec<u8>, ()> {
+fn read_secret(path: &Path, exact: usize, expected_owner: u32) -> Result<SecretBuffer, ()> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(O_NOFOLLOW)
@@ -402,8 +423,10 @@ fn read_secret(path: &Path, exact: usize, expected_owner: u32) -> Result<Vec<u8>
     {
         return Err(());
     }
-    let mut bytes = vec![0; exact];
-    file.read_exact(&mut bytes).map_err(|_| ())?;
+    let mut bytes = SecretBuffer(vec![0; exact]);
+    if file.read_exact(&mut bytes).is_err() {
+        return Err(());
+    }
     Ok(bytes)
 }
 
