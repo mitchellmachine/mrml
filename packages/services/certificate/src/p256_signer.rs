@@ -120,6 +120,10 @@ impl CertificateP256SigningKey {
         self.route
     }
 
+    pub const fn key_generation(&self) -> u64 {
+        self.key_generation
+    }
+
     pub fn public_jwk(&self) -> Result<P256Jwk, P256Error> {
         let public = self.key.public_key()?;
         let mut x = [0u8; 32];

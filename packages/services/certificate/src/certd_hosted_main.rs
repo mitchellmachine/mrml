@@ -64,7 +64,7 @@ const MAX_GENERATION_WAIT_MILLISECONDS: u32 = 30_000;
 struct CertdHostedState {
     config: CertdConfig,
     account_key: Mutex<AccountP256SigningKey>,
-    certificate_key: Mutex<CertificateP256SigningKey>,
+    certificate_keys: Mutex<Vec<CertificateP256SigningKey>>,
     trust_roots: PemCertificateChain,
     candidate: Mutex<Option<StagedCandidate>>,
     durable_authenticator: Mutex<HmacSha256DurableAuthenticator>,
@@ -226,7 +226,7 @@ fn dispatch_channel_request(
             if !payload.is_empty()
                 || state.config.identity == [0; 16]
                 || state.account_key.is_poisoned()
-                || state.certificate_key.is_poisoned()
+                || state.certificate_keys.is_poisoned()
                 || output.len() < 5
                 || (role == CertdChannelRole::Gitd && load_active_candidate(state).is_err())
             {
@@ -281,7 +281,11 @@ fn dispatch_channel_request(
         CertdChannelOperation::CreateTlsKeyGeneration => {
             let request = decode_certd_tls_key_request(payload).map_err(|_| ())?;
             require_tls_request(state.config, request)?;
-            let certificate = state.certificate_key.lock().map_err(|_| ())?;
+            let mut certificates = state.certificate_keys.lock().map_err(|_| ())?;
+            let certificate = certificates
+                .iter_mut()
+                .find(|key| key.key_generation() == state.config.key_generation)
+                .ok_or(())?;
             let public = certificate
                 .public_jwk()
                 .map_err(|_| ())?
@@ -307,7 +311,11 @@ fn dispatch_channel_request(
             {
                 *target = source.ok_or(())?;
             }
-            let mut certificate = state.certificate_key.lock().map_err(|_| ())?;
+            let mut certificates = state.certificate_keys.lock().map_err(|_| ())?;
+            let certificate = certificates
+                .iter_mut()
+                .find(|key| key.key_generation() == state.config.key_generation)
+                .ok_or(())?;
             let public = certificate.public_jwk().map_err(|_| ())?;
             let csr = write_pkcs10_csr(
                 &public,
@@ -344,7 +352,11 @@ fn dispatch_channel_request(
             {
                 *target = Some(AcmeIdentifier::Dns(source.ok_or(())?));
             }
-            let certificate = state.certificate_key.lock().map_err(|_| ())?;
+            let mut certificates = state.certificate_keys.lock().map_err(|_| ())?;
+            let certificate = certificates
+                .iter_mut()
+                .find(|key| key.key_generation() == state.config.key_generation)
+                .ok_or(())?;
             let expected_key = certificate.public_jwk().map_err(|_| ())?;
             let mut approved_roots = [&[][..]; MAX_CERTIFICATES];
             for (index, root) in approved_roots
@@ -392,7 +404,6 @@ fn dispatch_channel_request(
                 [0x5a; 32],
                 certificate.route(),
             );
-            let mut certificate = certificate;
             let signature = certificate
                 .sign_tls13_certificate_verify(&approved)
                 .map_err(|_| ())?;
@@ -545,7 +556,11 @@ fn sign_gitd_certificate_verify(
     {
         return Err(());
     }
-    let mut certificate = state.certificate_key.lock().map_err(|_| ())?;
+    let mut certificates = state.certificate_keys.lock().map_err(|_| ())?;
+    let certificate = certificates
+        .iter_mut()
+        .find(|key| key.key_generation() == candidate.key_generation)
+        .ok_or(())?;
     let approved =
         mrml_certificate::ApprovedTls13CertificateVerify::new(digest, certificate.route());
     let signature = certificate
@@ -644,6 +659,16 @@ fn load_active_candidate(
     {
         return Err("active publication binding mismatch");
     }
+    let keys = state
+        .certificate_keys
+        .lock()
+        .map_err(|_| "certificate key store poisoned")?;
+    if !keys
+        .iter()
+        .any(|key| key.key_generation() == candidate.key_generation)
+    {
+        return Err("active certificate key generation is unavailable");
+    }
     Ok((candidate, request))
 }
 
@@ -722,38 +747,46 @@ fn load_or_create_keys(
             .map_err(|_| "cannot create ACME account key")?,
         Err(_) => return Err("cannot load ACME account key"),
     };
-    let certificate_descriptor = HostedP256KeyDescriptor {
-        role: HostedP256KeyRole::TlsIdentity,
-        object_id: config.identity,
-        key_generation: config.key_generation,
-        binding_generation: config.policy_generation,
-        binding_digest: config.identifier_set_digest,
-    };
-    let route = TlsSigningRoute {
-        identity: TlsIdentityId(config.identity),
-        identity_generation: config.key_generation,
-        key_identity: TlsKeyIdentity([0; 32]),
-        route_generation: config.policy_generation,
-        capability_id: route_capability(config),
-    };
-    let certificate_key = match key_store.load_certificate(certificate_descriptor, route) {
-        Ok(key) => key,
-        Err(HostedP256KeyError::NotFound) => key_store
-            .create_certificate(certificate_descriptor, route, fill_entropy)
-            .or_else(|error| {
-                if error == HostedP256KeyError::AlreadyExists {
-                    key_store.load_certificate(certificate_descriptor, route)
-                } else {
-                    Err(error)
-                }
-            })
-            .map_err(|_| "cannot create TLS certificate key")?,
-        Err(_) => return Err("cannot load TLS certificate key"),
-    };
+    let mut certificate_keys = Vec::new();
+    let first_retained_generation = config.key_generation.saturating_sub(63).max(1);
+    for generation in first_retained_generation..=config.key_generation {
+        let descriptor = HostedP256KeyDescriptor {
+            role: HostedP256KeyRole::TlsIdentity,
+            object_id: config.identity,
+            key_generation: generation,
+            binding_generation: config.policy_generation,
+            binding_digest: config.identifier_set_digest,
+        };
+        let route = TlsSigningRoute {
+            identity: TlsIdentityId(config.identity),
+            identity_generation: generation,
+            key_identity: TlsKeyIdentity([0; 32]),
+            route_generation: config.policy_generation,
+            capability_id: route_capability(config, generation),
+        };
+        match key_store.load_certificate(descriptor, route) {
+            Ok(key) => certificate_keys.push(key),
+            Err(HostedP256KeyError::NotFound) if generation < config.key_generation => {}
+            Err(HostedP256KeyError::NotFound) => {
+                let key = key_store
+                    .create_certificate(descriptor, route, fill_entropy)
+                    .or_else(|error| {
+                        if error == HostedP256KeyError::AlreadyExists {
+                            key_store.load_certificate(descriptor, route)
+                        } else {
+                            Err(error)
+                        }
+                    })
+                    .map_err(|_| "cannot create TLS certificate key")?;
+                certificate_keys.push(key);
+            }
+            Err(_) => return Err("cannot load retained TLS certificate key"),
+        }
+    }
     Ok(CertdHostedState {
         config,
         account_key: Mutex::new(account_key),
-        certificate_key: Mutex::new(certificate_key),
+        certificate_keys: Mutex::new(certificate_keys),
         trust_roots,
         candidate: Mutex::new(None),
         durable_authenticator: Mutex::new(durable_authenticator),
@@ -1065,11 +1098,11 @@ fn directory_binding(config: CertdConfig) -> [u8; 32] {
     digest.finalize()
 }
 
-fn route_capability(config: CertdConfig) -> [u8; 16] {
+fn route_capability(config: CertdConfig, key_generation: u64) -> [u8; 16] {
     let mut digest = Sha256::new();
     digest.update(b"mrml-certd-tls-route-capability-v1\0");
     digest.update(&config.identity);
-    digest.update(&config.key_generation.to_be_bytes());
+    digest.update(&key_generation.to_be_bytes());
     digest.update(&config.policy_generation.to_be_bytes());
     digest.update(&config.identifier_set_digest);
     let digest = digest.finalize();
