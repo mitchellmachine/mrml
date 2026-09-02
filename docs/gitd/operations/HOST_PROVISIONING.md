@@ -46,6 +46,22 @@ variable, uses constant-time verifier comparison, and atomically replaces the
 authenticated store with file and directory sync. Restart Gitd after either
 operation so startup reauthenticates the complete store.
 
+`recovery-git.sh status` is a cold, read-only scan of every authenticated
+repository journal. It reports only bounded aggregate counts for receipt
+recovery, completion cleanup, pre-activation discard/reverification, and manual
+uncertainty; it exposes no repository, ref, object, proof, or filesystem
+identity. `recovery-git.sh complete-safe` requires Gitd stopped and the
+authenticated authority/certd dependencies available, then performs only the
+existing provably safe receipt recovery and completion cleanup. Reverification
+and manual-uncertain states remain unavailable rather than being guessed.
+
+Normal receive completion now re-reads the exact final journal, removes it, and
+syncs the journal directory after the durable receipt and final journal phase.
+If cleanup alone fails, the receive remains definitely activated and successful;
+the authenticated journal stays present for the same completion operation at
+startup. Recovery likewise removes only an exact re-read recognized journal
+after its receipt has been recovered and verified.
+
 Hosted evidence is limited to shell syntax, static invariants, and negative
 argument tests because the current runner is neither root nor Docker-enabled.
 It does not establish a successful production-host provision, image run,

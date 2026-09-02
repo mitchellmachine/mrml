@@ -13,10 +13,10 @@ use mrml_gitd::{
     GitAuthorityChannelClient, GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute,
     GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
     admit_catalog_repository, build_certd_tls_server_config_with_route, compose_gitd_service,
-    initialize_empty_token_store, issue_access_token, load_deployment_catalog,
-    load_gitd_authentication, load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
-    recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
-    validate_identity_snapshot, validate_storage_layout,
+    initialize_empty_token_store, inspect_admitted_repository_recovery, issue_access_token,
+    load_deployment_catalog, load_gitd_authentication, load_gitd_config, load_quic_retry_key,
+    prove_identity_signing_route, recover_admitted_repository, refresh_certd_tls_config,
+    revoke_access_token, validate_identity_snapshot, validate_storage_layout,
 };
 use mrml_http::{AccessScopes, RepositoryIdentity};
 
@@ -45,6 +45,35 @@ fn run() -> Result<(), ()> {
                 return Err(());
             }
             println!("ready");
+            return Ok(());
+        }
+        if command == "recovery-status" {
+            let config = load_gitd_config(Path::new(config)).map_err(|_| ())?;
+            validate_storage_layout(&config).map_err(|_| ())?;
+            let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
+            load_gitd_authentication(&config, &catalog).map_err(|_| ())?;
+            let mut receipt = 0u32;
+            let mut complete = 0u32;
+            let mut discard = 0u32;
+            let mut reverify = 0u32;
+            let mut uncertain = 0u32;
+            for repository in &catalog.repositories {
+                let admitted = admit_catalog_repository(&config, repository).map_err(|_| ())?;
+                let status =
+                    inspect_admitted_repository_recovery(&config, &admitted).map_err(|_| ())?;
+                receipt = receipt.checked_add(status.recover_receipt).ok_or(())?;
+                complete = complete.checked_add(status.mark_complete).ok_or(())?;
+                discard = discard
+                    .checked_add(status.discard_before_activation)
+                    .ok_or(())?;
+                reverify = reverify
+                    .checked_add(status.reverify_before_activation)
+                    .ok_or(())?;
+                uncertain = uncertain.checked_add(status.manual_uncertain).ok_or(())?;
+            }
+            println!(
+                "recovery-status-v1 receipt={receipt} complete={complete} discard={discard} reverify={reverify} uncertain={uncertain}"
+            );
             return Ok(());
         }
         if command != "validate-config" {
@@ -134,7 +163,7 @@ fn run() -> Result<(), ()> {
         if command == "serve" {
             return serve(Path::new(config_path), signer_identity);
         }
-        if command != "dependencies-health" {
+        if command != "dependencies-health" && command != "recover-safe" {
             return Err(());
         }
         let config = load_gitd_config(Path::new(config_path)).map_err(|_| ())?;
@@ -190,7 +219,14 @@ fn run() -> Result<(), ()> {
             recover_admitted_repository(&config, repository, &admitted, &mut receipt_authority)
                 .map_err(|_| ())?;
         }
-        println!("dependencies-ready");
+        println!(
+            "{}",
+            if command == "recover-safe" {
+                "safe-recovery-complete"
+            } else {
+                "dependencies-ready"
+            }
+        );
         return Ok(());
     }
     let [
@@ -207,7 +243,7 @@ fn run() -> Result<(), ()> {
     ] = arguments.as_slice()
     else {
         eprintln!(
-            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
+            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | recovery-status CONFIG | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | recover-safe CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
         );
         std::process::exit(64);
     };

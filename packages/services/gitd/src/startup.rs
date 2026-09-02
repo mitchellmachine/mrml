@@ -49,6 +49,15 @@ pub struct RepositoryRecoverySummary {
     pub completed_journals: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RepositoryRecoveryStatus {
+    pub recover_receipt: u32,
+    pub mark_complete: u32,
+    pub discard_before_activation: u32,
+    pub reverify_before_activation: u32,
+    pub manual_uncertain: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepositoryRecoveryError {
     Path,
@@ -58,6 +67,40 @@ pub enum RepositoryRecoveryError {
     PreActivationReverificationRequired,
     ManualUncertain,
     Count,
+}
+
+pub fn inspect_admitted_repository_recovery(
+    config: &GitdConfig,
+    admitted: &AdmittedRepository,
+) -> Result<RepositoryRecoveryStatus, RepositoryRecoveryError> {
+    let journals = admitted.paths.state.join("receive-journals");
+    let plain_receipts = admitted.paths.receipts.join("plain");
+    let store = LinuxDurableReceiveStore::open(
+        recovery_path(&journals)?,
+        recovery_path(&admitted.paths.quarantine)?,
+        recovery_path(&admitted.paths.state)?,
+        recovery_path(&plain_receipts)?,
+        ObjectFormat::Sha256,
+        config.max_body_bytes,
+    )
+    .map_err(|_| RepositoryRecoveryError::Open)?;
+    let actions = store
+        .recovery_actions()
+        .map_err(|_| RepositoryRecoveryError::Journal)?;
+    let mut status = RepositoryRecoveryStatus::default();
+    for (_, action) in actions {
+        let counter = match action {
+            RecoveryAction::RecoverAuditReceipt => &mut status.recover_receipt,
+            RecoveryAction::MarkComplete => &mut status.mark_complete,
+            RecoveryAction::DiscardBeforeActivation => &mut status.discard_before_activation,
+            RecoveryAction::ReverifyBeforeActivation => &mut status.reverify_before_activation,
+            RecoveryAction::ManualUncertain => &mut status.manual_uncertain,
+        };
+        *counter = counter
+            .checked_add(1)
+            .ok_or(RepositoryRecoveryError::Count)?;
+    }
+    Ok(status)
 }
 
 pub fn validate_storage_layout(config: &GitdConfig) -> Result<(), StartupValidationError> {
@@ -155,6 +198,10 @@ pub fn recover_admitted_repository(
                 authenticated
                     .recover_audit_receipt(&journal)
                     .map_err(|_| RepositoryRecoveryError::Receipt)?;
+                drop(authenticated);
+                store
+                    .complete_recovered_journal(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
                 summary.authenticated_receipts_recovered = summary
                     .authenticated_receipts_recovered
                     .checked_add(1)
@@ -164,12 +211,18 @@ pub fn recover_admitted_repository(
                 store
                     .recover_audit_receipt(&journal)
                     .map_err(|_| RepositoryRecoveryError::Receipt)?;
+                store
+                    .complete_recovered_journal(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
                 summary.plain_receipts_recovered = summary
                     .plain_receipts_recovered
                     .checked_add(1)
                     .ok_or(RepositoryRecoveryError::Count)?;
             }
             RecoveryAction::MarkComplete => {
+                store
+                    .complete_recovered_journal(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
                 summary.completed_journals = summary
                     .completed_journals
                     .checked_add(1)
@@ -411,6 +464,10 @@ mod tests {
         assert_eq!(
             recover_admitted_repository(&config, &entry, &admitted, &mut TestReceiptAuthority),
             Ok(RepositoryRecoverySummary::default())
+        );
+        assert_eq!(
+            inspect_admitted_repository_recovery(&config, &admitted),
+            Ok(RepositoryRecoveryStatus::default())
         );
         let mut repositories = crate::GitdRepositorySet::new();
         repositories.add(&entry, admitted).unwrap();

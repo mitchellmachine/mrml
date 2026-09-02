@@ -49,8 +49,9 @@ pub use identity::{
 pub use listener::{GitdBoundListeners, GitdListenerError, load_quic_retry_key};
 pub use startup::{
     AdmittedRepository, RepositoryAdmissionError, RepositoryRecoveryError,
-    RepositoryRecoverySummary, RepositoryStoragePaths, StartupValidationError,
-    admit_catalog_repository, recover_admitted_repository, validate_storage_layout,
+    RepositoryRecoveryStatus, RepositoryRecoverySummary, RepositoryStoragePaths,
+    StartupValidationError, admit_catalog_repository, inspect_admitted_repository_recovery,
+    recover_admitted_repository, validate_storage_layout,
 };
 pub use tls_identity::{
     GitdCertdSigningRoute, GitdCertdTlsSigningKey, GitdTlsConfigStore, GitdTlsRefreshError,
