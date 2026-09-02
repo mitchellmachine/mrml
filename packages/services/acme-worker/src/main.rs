@@ -172,6 +172,7 @@ fn application_main() -> Result<(), &'static str> {
         "status" => acmed_status(config, state_authenticator),
         "renew-now-preview" => renew_now_command(config, state_authenticator, false),
         "renew-now" => renew_now_command(config, state_authenticator, true),
+        "dns-cleanup" => dns_cleanup_command(config, state_authenticator),
         "serve" => serve(
             config,
             capability,
@@ -181,9 +182,29 @@ fn application_main() -> Result<(), &'static str> {
         "revoke-preview" => revoke_command(config, capability, state_authenticator, false),
         "revoke" => revoke_command(config, capability, state_authenticator, true),
         _ => Err(
-            "usage: mrml-acmed [serve|check-config|health|status|renew-now-preview|renew-now APPROVAL_SHA256|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
+            "usage: mrml-acmed [serve|check-config|health|status|renew-now-preview|renew-now APPROVAL_SHA256|dns-cleanup confirm-exact-records|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
         ),
     }
+}
+
+fn dns_cleanup_command(
+    config: AcmedConfig,
+    mut authenticator: impl DurableAuthenticator,
+) -> Result<(), &'static str> {
+    if std::env::args().nth(2).as_deref() != Some("confirm-exact-records")
+        || std::env::args().nth(3).is_some()
+    {
+        return Err("dns-cleanup requires the exact confirm-exact-records argument");
+    }
+    if std::env::var("MRML_ACMED_OFFLINE_ADMIN").as_deref() != Ok("1") {
+        return Err("dns-cleanup requires the stopped-worker one-shot administration context");
+    }
+    let mut state = HostedDurableStateStore::open(Path::new(STATE_ROOT))
+        .map_err(|_| "cannot open acmed durable state")?;
+    let mut provider = load_dns_provider(&config)?;
+    cleanup_dns_challenges(&config, &mut provider, &mut state, &mut authenticator)?;
+    println!("persisted DNS-01 records cleaned exactly");
+    Ok(())
 }
 
 fn renew_now_command(

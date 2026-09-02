@@ -34,6 +34,7 @@ git ls-tree -r --name-only "$commit" -- \
   deploy/compose/switch-acme-version.sh deploy/compose/upgrade-acme.sh \
   deploy/compose/rollback-acme.sh \
   deploy/compose/renew-acme.sh \
+  deploy/compose/cleanup-acme-dns.sh \
   deploy/compose/build-offline-acme-bundle.sh \
   deploy/compose/verify-offline-acme-bundle.sh \
   packages/interfaces/certificate packages/libraries/acme \

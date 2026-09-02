@@ -100,6 +100,14 @@ A stale preview is rejected. This command does not bypass candidate validation
 or activation policy; it only advances the next renewal attempt to the current
 time.
 
+After an interrupted order, exact DNS-01 values recorded in authenticated
+challenge receipts can be cleaned with the worker stopped. The provider removes
+only the matching value and preserves unrelated TXT values:
+
+```text
+./cleanup-acme-dns.sh confirm-exact-records
+```
+
 Compose cannot enforce a destination-aware outbound firewall. Apply host or
 upstream egress policy for the configured ACME and DNS-provider origins. The
 networkless certd design ensures that compromise of acmed does not reveal an
