@@ -167,3 +167,40 @@ remains required before any complete-stack production-readiness claim.
 Patent review: **NOT_TRIGGERED**. This change records test evidence and uses
 conventional container archive scanning and offline signature configuration;
 it introduces no new protected mechanism. See `docs/patents/REVIEW_LOG.md`.
+
+## Protected signer and clean image follow-up
+
+The local-only signed commit `d2737102` was checked in the clean detached
+worktree `/tmp/mrml-protected-743e2b11`. Manifest lock and manifest validation
+passed. With host-local socket access enabled, all 7 Linux-library tests, 48
+runtime tests, 223 Git-library tests, 4 Git CLI tests, 2 protected-signer daemon
+tests, 4 authority-library tests, 1 authority-binary test, 29 Gitd-library
+tests, and 1 Gitd-binary test passed. Initial sandboxed runs of the socket tests
+failed at local bind, then passed unchanged with local socket access; this is an
+execution-environment distinction rather than claimed network evidence.
+
+The exact clean commit produced network-disabled, digest-pinned production
+images with these identities:
+
+```text
+mrml-git-authority binary sha256:b0c30159d42772c2c1d344201caf299a7e1acf7e0de5983e8901a49a74537e16
+mrml-gitd binary sha256:272d68092a37de52217d43de0cb221680dac42b62999a535cc65d6cfc5455a68
+mrml/git-authority:d2737102 image id sha256:5f9a1dd387cfabb45ade05248af5d49426384761c244392261fd1391f7acbe6a
+mrml/git-authority:d2737102 manifest sha256:233c4cfba68683dad4567298029239b5447448b600a1fda36b24a3ed64548e57
+mrml/gitd:d2737102 image id sha256:638eb9b592b0447fa1d26143dc82b53b3a549ba023b752130d672423486001fb
+mrml/gitd:d2737102 manifest sha256:6e79d91be8c2c093703a4cc3bdd161ccae3adce8aa65ab7dc9b7f3ba4e8dd203
+authority archive sha256:2213d42c4dd9b015a313c7e2e4868a6b5a3c71ef8c6411ca30e9e8b0be1a73b0
+authority SPDX JSON sha256:382e279fb635e9102c3c59ede2ab45ae313477bc3eb6e3cb9d95ed1058fe31df
+Gitd archive sha256:35e8a9d9fc303839ff7157f379050b26506b173b37d6cb9fdad32992211b1e2c
+Gitd SPDX JSON sha256:2d1a9784058b41fa817cf7f95bf9f0f146b2f7f9b53f63e9e9ea6843adc02af1
+```
+
+Image policy, Compose static invariants, and shell syntax checks passed. Podman
+reported the exact fixed users and entrypoints. Syft 1.51.0 scanned each exact
+exported archive into valid SPDX 2.3 JSON with 12 package records. The package
+inventory contained the distroless runtime set and no Rust toolchain, Git,
+OpenSSH, GnuPG, curl, wget, Python, Perl, or package manager.
+
+This follow-up adds a separate purpose-limited protected signer and completes
+the client proof-generation route, but it does not change the remaining real
+VPS, full certd-backed stack, or 256 MiB transfer evidence boundary above.
