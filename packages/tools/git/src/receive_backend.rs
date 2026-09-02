@@ -4,11 +4,12 @@ use mrml_runtime::Vector;
 
 use crate::{
     build_verified_fast_forward_transaction, durably_activate_verified_receive,
-    read_receive_pack_commands, reserve_push_disk_before_body, verify_policy_classified_history,
+    read_receive_pack_commands, reserve_push_disk_before_body,
+    verify_conventional_introduced_history, verify_policy_classified_history,
     verify_protected_introduced_history, write_receive_pack_report, ActiveRefState, AuditReceipt,
-    AuthenticatedReceiveStore, BoundedWrite, DurableReceiveError, GitdCoreError,
-    HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore, Object,
-    ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
+    AuthenticatedReceiveStore, BoundedWrite, DurableReceiveError, DurableReceiveStore,
+    GitdCoreError, HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore,
+    Object, ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
     QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, ReceiveRefStatus,
     Repository, SignaturePurpose, SmartGitOperation, SmartGitRequest, SmartGitResponse,
     TrustPolicyState, VerifiedCommitProof, VerifiedLegacyCommitProof, VerifiedRefTransaction,
@@ -91,9 +92,32 @@ pub fn finish_prepared_protected_receive(
     output: &mut dyn BoundedWrite,
     initial_budget: WorkBudget,
 ) -> Result<SmartGitResponse, GitdCoreError> {
+    finish_prepared_receive(prepared, store, output, initial_budget)
+}
+
+/// Complete a conventional receive using the repository store's
+/// checksum-protected audit receipt. No protected-history or receipt-signing
+/// authority is involved in this profile.
+pub fn finish_prepared_conventional_receive(
+    prepared: PreparedProtectedReceive,
+    store: &mut LinuxDurableReceiveStore,
+    output: &mut dyn BoundedWrite,
+    initial_budget: WorkBudget,
+) -> Result<SmartGitResponse, GitdCoreError> {
+    finish_prepared_receive(prepared, store, output, initial_budget)
+}
+
+fn finish_prepared_receive(
+    mut prepared: PreparedProtectedReceive,
+    store: &mut dyn DurableReceiveStore,
+    output: &mut dyn BoundedWrite,
+    initial_budget: WorkBudget,
+) -> Result<SmartGitResponse, GitdCoreError> {
     let request = prepared.request.clone();
     let mut protocol = prepared.protocol_budget;
-    let receipt = activate_prepared_protected_receive(prepared, store)?;
+    let receipt =
+        durably_activate_verified_receive(&mut prepared.transaction, &prepared.verified, store)
+            .map_err(map_durable_error)?;
     let mut statuses = Vector::new();
     statuses
         .try_reserve_exact(request.candidate.updates.len())
@@ -120,6 +144,39 @@ pub fn finish_prepared_protected_receive(
     })
 }
 
+/// Prepare a conventional fast-forward receive after edge authentication and
+/// repository authorization. Every introduced commit and pack object is still
+/// traversed and bounded, but commit contents are not signature authority.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_conventional_receive(
+    smart_request: SmartGitRequest,
+    active: &ActiveRefState,
+    active_objects: &Repository,
+    store: &LinuxDurableReceiveStore,
+    transaction_id: QuarantineTransactionId,
+    quarantine_limits: QuarantineLimits,
+    history_limits: HistoryVerificationLimits,
+    ordinary_free_bytes: u64,
+    input: &mut dyn crate::BoundedRead,
+    work_budget: WorkBudget,
+) -> Result<PreparedProtectedReceive, GitdCoreError> {
+    prepare_receive_internal(
+        smart_request,
+        active,
+        active_objects,
+        store,
+        None,
+        None,
+        false,
+        transaction_id,
+        quarantine_limits,
+        history_limits,
+        ordinary_free_bytes,
+        input,
+        work_budget,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_protected_receive(
     smart_request: SmartGitRequest,
@@ -134,12 +191,12 @@ pub fn prepare_protected_receive(
     input: &mut dyn crate::BoundedRead,
     work_budget: WorkBudget,
 ) -> Result<PreparedProtectedReceive, GitdCoreError> {
-    prepare_protected_receive_internal(
+    prepare_receive_internal(
         smart_request,
         active,
         active_objects,
         store,
-        verifier,
+        Some(verifier),
         None,
         false,
         transaction_id,
@@ -166,12 +223,12 @@ pub fn prepare_policy_classified_receive(
     input: &mut dyn crate::BoundedRead,
     work_budget: WorkBudget,
 ) -> Result<PreparedProtectedReceive, GitdCoreError> {
-    prepare_protected_receive_internal(
+    prepare_receive_internal(
         smart_request,
         active,
         active_objects,
         store,
-        verifier,
+        Some(verifier),
         Some(policy),
         false,
         transaction_id,
@@ -198,12 +255,12 @@ pub(crate) fn prepare_authority_classified_receive(
     input: &mut dyn crate::BoundedRead,
     work_budget: WorkBudget,
 ) -> Result<PreparedProtectedReceive, GitdCoreError> {
-    prepare_protected_receive_internal(
+    prepare_receive_internal(
         smart_request,
         active,
         active_objects,
         store,
-        verifier,
+        Some(verifier),
         Some(policy),
         true,
         transaction_id,
@@ -216,12 +273,12 @@ pub(crate) fn prepare_authority_classified_receive(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare_protected_receive_internal(
+fn prepare_receive_internal(
     smart_request: SmartGitRequest,
     active: &ActiveRefState,
     active_objects: &Repository,
     store: &LinuxDurableReceiveStore,
-    verifier: &mut dyn ProtectedCommitVerifier,
+    mut verifier: Option<&mut dyn ProtectedCommitVerifier>,
     policy: Option<&TrustPolicyState>,
     require_transaction_authorization: bool,
     transaction_id: QuarantineTransactionId,
@@ -261,7 +318,10 @@ fn prepare_protected_receive_internal(
         return Err(GitdCoreError::Unsupported);
     }
     if require_transaction_authorization {
-        verifier.authorize_transaction(&request.candidate)?;
+        verifier
+            .as_deref_mut()
+            .ok_or(GitdCoreError::Authorization)?
+            .authorize_transaction(&request.candidate)?;
     }
     for update in &request.candidate.updates {
         let old = update.expected_old.ok_or(GitdCoreError::Unsupported)?;
@@ -360,8 +420,14 @@ fn prepare_protected_receive_internal(
                 .map(|commit| commit.parents)
                 .map_err(|_| HistoryVerificationError::MissingCommit)
         };
-        let verifier = core::cell::RefCell::new(&mut *verifier);
-        let range = if let Some(policy) = policy {
+        let range = if verifier.is_none() {
+            verify_conventional_introduced_history(context, old, new, history_limits, read_parents)
+        } else if let Some(policy) = policy {
+            let verifier = core::cell::RefCell::new(
+                verifier
+                    .as_deref_mut()
+                    .ok_or(GitdCoreError::Authorization)?,
+            );
             verify_policy_classified_history(
                 policy,
                 context,
@@ -389,6 +455,11 @@ fn prepare_protected_receive_internal(
                 },
             )
         } else {
+            let verifier = core::cell::RefCell::new(
+                verifier
+                    .as_deref_mut()
+                    .ok_or(GitdCoreError::Authorization)?,
+            );
             verify_protected_introduced_history(
                 context,
                 old,
@@ -761,7 +832,7 @@ mod tests {
             expected: new,
         };
         assert!(matches!(
-            prepare_protected_receive_internal(
+            prepare_receive_internal(
                 SmartGitRequest {
                     repository: identity.clone(),
                     repository_generation: RepositoryGeneration(7),
@@ -771,7 +842,7 @@ mod tests {
                 &active,
                 &repository,
                 &store,
-                &mut unauthorized_verifier,
+                Some(&mut unauthorized_verifier),
                 None,
                 true,
                 QuarantineTransactionId([30u8; 16]),

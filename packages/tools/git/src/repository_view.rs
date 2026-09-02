@@ -444,6 +444,45 @@ impl GitdCoreBackend for FilesystemRepositoryView {
 }
 
 impl FilesystemRepositoryView {
+    /// Executes one conventional fast-forward receive against the same
+    /// authenticated object and ref stores used by reads. Edge authentication
+    /// and profile authorization must already have succeeded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_conventional_receive(
+        &mut self,
+        request: SmartGitRequest,
+        store: &mut crate::LinuxDurableReceiveStore,
+        transaction: crate::QuarantineTransactionId,
+        quarantine_limits: crate::QuarantineLimits,
+        history_limits: crate::HistoryVerificationLimits,
+        ordinary_free_bytes: u64,
+        input: &mut dyn BoundedRead,
+        output: &mut dyn BoundedWrite,
+        work_budget: WorkBudget,
+    ) -> Result<SmartGitResponse, GitdCoreError> {
+        let active = self.refs.load().map_err(|_| GitdCoreError::Storage)?;
+        if active.repository != self.identity
+            || request.repository != self.identity
+            || request.repository_generation != active.repository_generation
+            || request.object_format != active.object_format
+        {
+            return Err(GitdCoreError::StaleGeneration);
+        }
+        let prepared = crate::prepare_conventional_receive(
+            request,
+            &active,
+            &self.objects,
+            store,
+            transaction,
+            quarantine_limits,
+            history_limits,
+            ordinary_free_bytes,
+            input,
+            work_budget,
+        )?;
+        crate::finish_prepared_conventional_receive(prepared, store, output, work_budget)
+    }
+
     /// Executes one protected receive against the same authenticated object
     /// and ref stores used by reads. Callers retain authority, policy, storage,
     /// resource, and transaction-ID ownership.

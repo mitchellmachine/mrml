@@ -146,8 +146,8 @@ pub use quarantine::{
 };
 pub use receive_backend::{
     PreparedProtectedReceive, ProtectedCommitVerifier, activate_prepared_protected_receive,
-    finish_prepared_protected_receive, prepare_policy_classified_receive,
-    prepare_protected_receive,
+    finish_prepared_conventional_receive, finish_prepared_protected_receive,
+    prepare_conventional_receive, prepare_policy_classified_receive, prepare_protected_receive,
 };
 pub use receive_journal::{
     JournalRefUpdate, MAX_RECEIVE_JOURNAL_BYTES, ReceiveJournalError, ReceiveJournalRecord,
@@ -214,8 +214,8 @@ pub(crate) use verification::verify_introduced_history;
 pub use verification::{
     DEFAULT_MAX_INTRODUCED_COMMITS, HistoryVerificationError, HistoryVerificationLimits,
     ProtectedHistoryContext, VerifiedCommitProof, VerifiedCommitRange, VerifiedGitObjectProof,
-    VerifiedLegacyCommitProof, verify_policy_classified_history,
-    verify_protected_introduced_history,
+    VerifiedLegacyCommitProof, verify_conventional_introduced_history,
+    verify_policy_classified_history, verify_protected_introduced_history,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]

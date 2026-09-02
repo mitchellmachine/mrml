@@ -184,6 +184,39 @@ where
     Ok(range)
 }
 
+/// Verifies every commit introduced by a conventional fast-forward without
+/// treating commit contents as authorization. The opaque result is bound to
+/// the exact repository generations so it cannot be replayed across
+/// repositories or policy changes.
+pub fn verify_conventional_introduced_history<R>(
+    context: ProtectedHistoryContext<'_>,
+    old: ObjectId,
+    new: ObjectId,
+    limits: HistoryVerificationLimits,
+    read_parents: R,
+) -> Result<VerifiedCommitRange, HistoryVerificationError>
+where
+    R: FnMut(ObjectId) -> Result<Vector<ObjectId>, HistoryVerificationError>,
+{
+    if context.repository_generation.0 == 0
+        || context.trust_generation.0 == 0
+        || context.revocation_generation.0 == 0
+        || context.purpose != SignaturePurpose::GitCommit
+        || old.format() != context.object_format
+        || new.format() != context.object_format
+    {
+        return Err(HistoryVerificationError::Signature);
+    }
+    let mut range = verify_introduced_history(old, new, limits, read_parents, |_| Ok(()))?;
+    range.repository = Some(context.repository.clone());
+    range.repository_generation = context.repository_generation;
+    range.trust_generation = context.trust_generation;
+    range.revocation_generation = context.revocation_generation;
+    range.purpose = context.purpose;
+    range.object_format = context.object_format;
+    Ok(range)
+}
+
 /// Verifies an introduced range under the policy's immutable graph cutover.
 /// Only the checkpoint and its ancestors may use legacy-v4 evidence; every
 /// other introduced commit requires a full hybrid proof. The cutover itself
@@ -491,6 +524,32 @@ mod tests {
             purpose: SignaturePurpose::GitCommit,
             object_format: ObjectFormat::Sha1,
         }
+    }
+
+    #[test]
+    fn conventional_history_is_complete_and_exact_generation_bound() {
+        let repository = RepositoryIdentity::parse("owner/conventional").unwrap();
+        let context = context(&repository);
+        let range = verify_conventional_introduced_history(
+            context,
+            id(2),
+            id(5),
+            HistoryVerificationLimits::default(),
+            graph,
+        )
+        .unwrap();
+        assert_eq!(range.introduced(), &[id(3), id(4), id(5)]);
+        assert!(range.matches_context(&context));
+        assert_eq!(
+            verify_conventional_introduced_history(
+                context,
+                id(3),
+                id(4),
+                HistoryVerificationLimits::default(),
+                graph,
+            ),
+            Err(HistoryVerificationError::NotFastForward)
+        );
     }
 
     #[test]

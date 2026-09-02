@@ -10,10 +10,11 @@ use mrml_http::{
     WorkBudget,
 };
 
-use crate::{AdmittedRepository, DeploymentRepository, GitdConfig};
+use crate::{AdmittedRepository, DeploymentRepository, DeploymentRepositoryProfile, GitdConfig};
 
 pub struct ProductionReceiveRepository {
-    policy: PathBuf,
+    profile: DeploymentRepositoryProfile,
+    policy: Option<PathBuf>,
     journals: PathBuf,
     quarantine: PathBuf,
     state: PathBuf,
@@ -24,6 +25,10 @@ pub struct ProductionReceiveRepository {
 }
 
 impl ProductionReceiveRepository {
+    pub const fn requires_authority(&self) -> bool {
+        matches!(self.profile, DeploymentRepositoryProfile::Protected)
+    }
+
     pub fn new(
         config: &GitdConfig,
         entry: &DeploymentRepository,
@@ -34,17 +39,23 @@ impl ProductionReceiveRepository {
             .as_str()
             .split_once('/')
             .ok_or(BackendError::MalformedIdentifier)?;
-        let policy = config.policy_root.join(owner).join(repository);
-        if !policy.is_dir()
-            || policy
-                .symlink_metadata()
-                .map_err(|_| BackendError::Storage)?
-                .file_type()
-                .is_symlink()
-        {
-            return Err(BackendError::Storage);
-        }
+        let policy = if entry.profile.class == DeploymentRepositoryProfile::Protected {
+            let policy = config.policy_root.join(owner).join(repository);
+            if !policy.is_dir()
+                || policy
+                    .symlink_metadata()
+                    .map_err(|_| BackendError::Storage)?
+                    .file_type()
+                    .is_symlink()
+            {
+                return Err(BackendError::Storage);
+            }
+            Some(policy)
+        } else {
+            None
+        };
         Ok(Self {
+            profile: entry.profile.class,
             policy,
             journals: admitted.paths.state.join("receive-journals"),
             quarantine: admitted.paths.quarantine.clone(),
@@ -59,7 +70,7 @@ impl ProductionReceiveRepository {
     pub fn execute(
         &self,
         view: &mut mrml_git::FilesystemRepositoryView,
-        authority: &mut (dyn ProtectedReceiveAuthority + Send),
+        authority: Option<&mut (dyn ProtectedReceiveAuthority + Send)>,
         request: SmartGitRequest,
         input: &mut dyn BoundedRead,
         output: &mut dyn BoundedWrite,
@@ -68,9 +79,6 @@ impl ProductionReceiveRepository {
         if request.operation != SmartGitOperation::ReceivePack {
             return Err(BackendError::Unsupported);
         }
-        let policy = LinuxDurableTrustPolicyStore::open(path(&self.policy)?)
-            .and_then(|store| store.load())
-            .map_err(|_| BackendError::Private)?;
         let mut store = LinuxDurableReceiveStore::open(
             path(&self.journals)?,
             path(&self.quarantine)?,
@@ -89,15 +97,27 @@ impl ProductionReceiveRepository {
             .max_body_bytes
             .checked_mul(4)
             .ok_or(BackendError::ResourceLimit)?;
-        let response = view
-            .execute_protected_receive(
-                mrml_git::SmartGitRequest {
-                    repository: mrml_git::RepositoryIdentity::parse(request.repository.as_str())
-                        .map_err(map_core_error)?,
-                    repository_generation: mrml_git::RepositoryGeneration(request.generation.0),
-                    operation: mrml_git::SmartGitOperation::ReceivePack,
-                    object_format: ObjectFormat::Sha256,
-                },
+        let core_request = mrml_git::SmartGitRequest {
+            repository: mrml_git::RepositoryIdentity::parse(request.repository.as_str())
+                .map_err(map_core_error)?,
+            repository_generation: mrml_git::RepositoryGeneration(request.generation.0),
+            operation: mrml_git::SmartGitOperation::ReceivePack,
+            object_format: ObjectFormat::Sha256,
+        };
+        let core_budget = mrml_git::WorkBudget {
+            max_input_bytes: budget.max_input_bytes,
+            max_output_bytes: budget.max_output_bytes,
+            max_memory_bytes: budget.max_memory_bytes,
+            max_work_units: budget.max_work_units,
+        };
+        let response = if self.profile == DeploymentRepositoryProfile::Protected {
+            let authority = authority.ok_or(BackendError::Unsupported)?;
+            let policy_path = self.policy.as_ref().ok_or(BackendError::Private)?;
+            let policy = LinuxDurableTrustPolicyStore::open(path(policy_path)?)
+                .and_then(|store| store.load())
+                .map_err(|_| BackendError::Private)?;
+            view.execute_protected_receive(
+                core_request,
                 &mut store,
                 &policy,
                 path(&self.authenticated_receipts)?,
@@ -108,14 +128,22 @@ impl ProductionReceiveRepository {
                 available_bytes(&self.quarantine)?,
                 &mut ReadBridge(input),
                 &mut WriteBridge(output),
-                mrml_git::WorkBudget {
-                    max_input_bytes: budget.max_input_bytes,
-                    max_output_bytes: budget.max_output_bytes,
-                    max_memory_bytes: budget.max_memory_bytes,
-                    max_work_units: budget.max_work_units,
-                },
+                core_budget,
             )
-            .map_err(map_core_error)?;
+        } else {
+            view.execute_conventional_receive(
+                core_request,
+                &mut store,
+                QuarantineTransactionId(transaction),
+                quarantine_limits,
+                HistoryVerificationLimits::default(),
+                available_bytes(&self.quarantine)?,
+                &mut ReadBridge(input),
+                &mut WriteBridge(output),
+                core_budget,
+            )
+        }
+        .map_err(map_core_error)?;
         Ok(SmartGitResponse {
             generation: mrml_http::RepositoryGeneration(response.repository_generation.0),
             bytes_read: response.bytes_read,

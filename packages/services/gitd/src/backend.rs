@@ -251,20 +251,23 @@ impl GitdBackend for SharedGitdRepositorySet {
                 .2
                 .as_ref()
                 .ok_or(BackendError::Unsupported)?;
-            let mut authority = self
-                .authority
-                .as_ref()
-                .ok_or(BackendError::Unsupported)?
-                .lock()
-                .map_err(|_| BackendError::Storage)?;
-            return receive.execute(
-                adapter.core_mut(),
-                authority.as_mut(),
-                request,
-                input,
-                output,
-                budget,
-            );
+            if receive.requires_authority() {
+                let mut authority = self
+                    .authority
+                    .as_ref()
+                    .ok_or(BackendError::Unsupported)?
+                    .lock()
+                    .map_err(|_| BackendError::Storage)?;
+                return receive.execute(
+                    adapter.core_mut(),
+                    Some(authority.as_mut()),
+                    request,
+                    input,
+                    output,
+                    budget,
+                );
+            }
+            return receive.execute(adapter.core_mut(), None, request, input, output, budget);
         }
         adapter.smart_git(request, input, output, budget)
     }
@@ -358,20 +361,23 @@ impl GitdBackend for GitdRepositorySet {
         if request.operation == mrml_http::SmartGitOperation::ReceivePack {
             let (_, adapter, receive) = &mut self.repositories[index];
             let receive = receive.as_ref().ok_or(BackendError::Unsupported)?;
-            let mut authority = self
-                .authority
-                .as_ref()
-                .ok_or(BackendError::Unsupported)?
-                .lock()
-                .map_err(|_| BackendError::Storage)?;
-            return receive.execute(
-                adapter.core_mut(),
-                authority.as_mut(),
-                request,
-                input,
-                output,
-                budget,
-            );
+            if receive.requires_authority() {
+                let mut authority = self
+                    .authority
+                    .as_ref()
+                    .ok_or(BackendError::Unsupported)?
+                    .lock()
+                    .map_err(|_| BackendError::Storage)?;
+                return receive.execute(
+                    adapter.core_mut(),
+                    Some(authority.as_mut()),
+                    request,
+                    input,
+                    output,
+                    budget,
+                );
+            }
+            return receive.execute(adapter.core_mut(), None, request, input, output, budget);
         }
         self.repositories[index]
             .1
