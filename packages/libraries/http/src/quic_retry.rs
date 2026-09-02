@@ -292,9 +292,43 @@ impl QuicRetryTokenManager {
         now: u64,
         purpose: QuicRetryPurpose,
     ) -> Result<(), QuicError> {
+        self.verify_and_consume_inner(
+            token,
+            peer,
+            Some(original_destination_id),
+            now,
+            purpose,
+        )?;
+        Ok(())
+    }
+
+    /// Authenticates a Retry token and recovers the original destination ID
+    /// that preceded the server-selected Retry destination ID.
+    pub fn verify_retry_and_consume(
+        &mut self,
+        token: &[u8],
+        peer: SocketAddress,
+        now: u64,
+    ) -> Result<Vector<u8>, QuicError> {
+        self.verify_and_consume_inner(
+            token,
+            peer,
+            None,
+            now,
+            QuicRetryPurpose::AddressValidation,
+        )
+    }
+
+    fn verify_and_consume_inner(
+        &mut self,
+        token: &[u8],
+        peer: SocketAddress,
+        expected_original_destination_id: Option<&[u8]>,
+        now: u64,
+        purpose: QuicRetryPurpose,
+    ) -> Result<Vector<u8>, QuicError> {
         if token.len() < 1 + 8 + NONCE_LENGTH + FIXED_PLAINTEXT_LENGTH + TAG_LENGTH
             || token.len() > MAX_TOKEN_LENGTH
-            || original_destination_id.len() > MAX_CONNECTION_ID_LENGTH
             || token[0] != TOKEN_VERSION
         {
             return Err(QuicError::InvalidPacket);
@@ -345,7 +379,9 @@ impl QuicRetryTokenManager {
             || plain[9..13] != peer.ip
             || plain[13..15] != peer.port.to_be_bytes()
             || plain.len() != FIXED_PLAINTEXT_LENGTH + id_length
-            || plain[16..] != *original_destination_id
+            || id_length > MAX_CONNECTION_ID_LENGTH
+            || expected_original_destination_id
+                .is_some_and(|expected| plain[16..] != *expected)
             || now < issued_at
             || now > expires_at
         {
@@ -371,7 +407,12 @@ impl QuicRetryTokenManager {
         }
         self.consumed
             .try_push(ConsumedToken { digest, expires_at })
-            .map_err(|_| QuicError::Allocation)
+            .map_err(|_| QuicError::Allocation)?;
+        let mut original_destination_id = Vector::new();
+        original_destination_id
+            .try_extend_from_slice(&plain[16..])
+            .map_err(|_| QuicError::Allocation)?;
+        Ok(original_destination_id)
     }
 }
 
@@ -462,6 +503,35 @@ mod tests {
                 110,
                 QuicRetryPurpose::AddressValidation
             ),
+            Err(QuicError::ProtocolViolation)
+        );
+    }
+
+    #[test]
+    fn retry_verification_recovers_authenticated_original_destination_id() {
+        let mut manager = QuicRetryTokenManager::new(
+            QuicRetryKey {
+                generation: 8,
+                key: [0x82; 16],
+            },
+            30,
+        )
+        .unwrap();
+        let token = manager
+            .issue_with_nonce(
+                peer(4433),
+                b"original-dcid",
+                100,
+                QuicRetryPurpose::AddressValidation,
+                [9; 12],
+            )
+            .unwrap();
+        assert_eq!(
+            manager.verify_retry_and_consume(&token, peer(4433), 110),
+            Ok((*b"original-dcid").into())
+        );
+        assert_eq!(
+            manager.verify_retry_and_consume(&token, peer(4433), 110),
             Err(QuicError::ProtocolViolation)
         );
     }
