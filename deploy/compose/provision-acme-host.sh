@@ -74,7 +74,42 @@ make_dir "$root/backups" 21005 21005 0700
 
 make_secret "$root/secrets/certd/certd-unlock.key" 21003 21003
 make_secret "$root/secrets/acmed/acmed-state.key" 21004 21004
-make_secret "$root/secrets/admin/backup-auth.key" 21005 21005
+
+create_backup_key_copies() {
+  admin_copy=$root/secrets/admin/backup-auth.key
+  certd_copy=$root/secrets/certd/backup-auth.key
+  acmed_copy=$root/secrets/acmed/backup-auth.key
+  if [ ! -e "$admin_copy" ]; then
+    [ ! -e "$certd_copy" ] && [ ! -e "$acmed_copy" ] || {
+      echo "backup authentication copies are incomplete" >&2
+      exit 1
+    }
+    temporary=$root/secrets/admin/backup-auth.key.new.$$
+    umask 077
+    dd if=/dev/urandom of="$temporary" bs=32 count=1 status=none
+    chown 21005:21005 "$temporary"
+    chmod 0400 "$temporary"
+    mv -n "$temporary" "$admin_copy"
+    [ ! -e "$temporary" ] || { rm -f "$temporary"; exit 1; }
+  elif { [ -e "$certd_copy" ] && [ ! -e "$acmed_copy" ]; } ||
+       { [ ! -e "$certd_copy" ] && [ -e "$acmed_copy" ]; }; then
+    echo "backup authentication copies are incomplete" >&2
+    exit 1
+  fi
+  if [ ! -e "$certd_copy" ]; then
+    install -o 21003 -g 21003 -m 0400 "$admin_copy" "$certd_copy"
+  fi
+  if [ ! -e "$acmed_copy" ]; then
+    install -o 21004 -g 21004 -m 0400 "$admin_copy" "$acmed_copy"
+  fi
+  make_secret "$admin_copy" 21005 21005
+  make_secret "$certd_copy" 21003 21003
+  make_secret "$acmed_copy" 21004 21004
+  cmp -s "$admin_copy" "$certd_copy" || { echo "certd backup authentication copy differs" >&2; exit 1; }
+  cmp -s "$admin_copy" "$acmed_copy" || { echo "acmed backup authentication copy differs" >&2; exit 1; }
+}
+
+create_backup_key_copies
 
 create_channel_pair() {
   name=$1 peer_uid=$2 peer_gid=$3

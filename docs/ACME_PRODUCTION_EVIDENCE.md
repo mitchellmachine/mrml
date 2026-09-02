@@ -60,8 +60,9 @@ bounded transfer, verification, and clean-target restore with focused tests.
 The production Compose topology does not yet wire a real multi-principal
 one-shot backup provider spanning certd-owned encrypted key state, acmed-owned
 authenticated lifecycle state, publication records, and channel metadata.
-`backup-auth.key` is separately provisioned for UID/GID `21005:21005` and is
-mounted into neither daemon. A root `tar` wrapper is not an acceptable
+`backup-auth.key` is separately provisioned as equal mode-`0400` copies for the
+certd, acmed, and administration identities. The service copies are mounted
+only into future stopped-service backup operations, never either daemon. A root `tar` wrapper is not an acceptable
 substitute because it would bypass the use-only provider boundary and would not
 prove record/key/generation consistency before activation.
 

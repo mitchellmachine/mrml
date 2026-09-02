@@ -49,8 +49,10 @@ sudo deploy/compose/provision-acme-host.sh
 
 The script creates a fresh certd unlock key, acmed state-authentication key, and
 paired channel capability files. It also creates a distinct backup-authentication
-key owned only by the one-shot administration identity; that key is not mounted
-into certd or acmed. It deliberately does not invent the Cloudflare API token or
+capability with equal, mode-`0400` copies owned by certd, acmed, and the one-shot
+administration identity. The service copies are reserved for stopped-service
+backup commands and are not mounted into either long-running container. It
+deliberately does not invent the Cloudflare API token or
 production policy files. Install `cloudflare-api-token` as `21004:21004` mode
 `0400`; install `certd.json` and `acmed.json` as `0:0` mode `0444`; then rerun
 the script. Docker Compose bind mounts do not encrypt secrets.

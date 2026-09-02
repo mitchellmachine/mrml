@@ -63,4 +63,7 @@ require 'MRML_ACMED_OFFLINE_ADMIN=1' deploy/compose/revoke-acme.sh
 require 'certd and acmed must both configure' deploy/compose/rotate-acme-key.sh
 require 'stop acmed certd' deploy/compose/rotate-acme-key.sh
 require 'secrets/admin/backup-auth.key' deploy/compose/provision-acme-host.sh
+require 'secrets/certd/backup-auth.key' deploy/compose/provision-acme-host.sh
+require 'secrets/acmed/backup-auth.key' deploy/compose/provision-acme-host.sh
+require 'backup authentication copy differs' deploy/compose/provision-acme-host.sh
 reject 'backup-auth.key' "$compose"
