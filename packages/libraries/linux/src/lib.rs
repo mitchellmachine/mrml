@@ -150,6 +150,13 @@ unsafe extern "C" {
         value: *const c_void,
         length: u32,
     ) -> c_int;
+    fn getsockopt(
+        socket: c_int,
+        level: c_int,
+        name: c_int,
+        value: *mut c_void,
+        length: *mut u32,
+    ) -> c_int;
     fn pthread_create(
         thread: *mut usize,
         attributes: *const PthreadAttr,
@@ -464,6 +471,103 @@ impl NativeTcpStream {
 
 #[cfg(unix)]
 impl Drop for NativeTcpStream {
+    fn drop(&mut self) {
+        let _ = unsafe { close(self.0) };
+    }
+}
+
+#[repr(C)]
+#[cfg(unix)]
+struct SockAddrUnix {
+    family: u16,
+    path: [u8; 108],
+}
+
+#[repr(C)]
+#[cfg(unix)]
+struct PeerCredentials {
+    pid: c_int,
+    uid: u32,
+    gid: u32,
+}
+
+/// Linux AF_UNIX client used by no-std capability transports.
+#[cfg(unix)]
+pub struct NativeUnixStream(c_int);
+
+#[cfg(unix)]
+unsafe impl Send for NativeUnixStream {}
+
+#[cfg(unix)]
+impl NativeUnixStream {
+    pub fn connect_path(path: &[u8]) -> Option<Self> {
+        if path.is_empty() || path.len() > 107 || path.contains(&0) {
+            return None;
+        }
+        let handle = unsafe { socket(1, 1, 0) };
+        if handle < 0 {
+            return None;
+        }
+        let mut address = SockAddrUnix {
+            family: 1,
+            path: [0; 108],
+        };
+        address.path[..path.len()].copy_from_slice(path);
+        let length = u32::try_from(2 + path.len() + 1).ok()?;
+        if unsafe { connect(handle, (&address as *const SockAddrUnix).cast(), length) } != 0 {
+            let _ = unsafe { close(handle) };
+            None
+        } else {
+            Some(Self(handle))
+        }
+    }
+
+    pub fn peer_credentials(&self) -> Option<(u32, u32)> {
+        let mut credentials = PeerCredentials { pid: 0, uid: 0, gid: 0 };
+        let mut length = core::mem::size_of::<PeerCredentials>() as u32;
+        let result = unsafe {
+            getsockopt(
+                self.0,
+                1,
+                17,
+                (&mut credentials as *mut PeerCredentials).cast(),
+                &mut length,
+            )
+        };
+        (result == 0 && length as usize == core::mem::size_of::<PeerCredentials>())
+            .then_some((credentials.uid, credentials.gid))
+    }
+
+    pub fn read(&mut self, buffer: &mut [u8]) -> Option<usize> {
+        let amount = unsafe { read(self.0, buffer.as_mut_ptr().cast(), buffer.len()) };
+        (amount >= 0).then_some(amount as usize)
+    }
+
+    pub fn write(&mut self, buffer: &[u8]) -> Option<usize> {
+        let amount = unsafe { write(self.0, buffer.as_ptr().cast(), buffer.len()) };
+        (amount >= 0).then_some(amount as usize)
+    }
+
+    pub fn set_timeout_millis(&self, read_timeout: bool, milliseconds: u64) -> bool {
+        let value = TimeVal {
+            seconds: (milliseconds / 1000) as isize,
+            microseconds: ((milliseconds % 1000) * 1000) as isize,
+        };
+        let option = if read_timeout { 20 } else { 21 };
+        (unsafe {
+            setsockopt(
+                self.0,
+                1,
+                option,
+                (&value as *const TimeVal).cast(),
+                core::mem::size_of::<TimeVal>() as u32,
+            )
+        }) == 0
+    }
+}
+
+#[cfg(unix)]
+impl Drop for NativeUnixStream {
     fn drop(&mut self) {
         let _ = unsafe { close(self.0) };
     }

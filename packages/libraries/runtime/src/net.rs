@@ -66,6 +66,62 @@ pub struct TcpStream {
     native: mrml_linux::NativeTcpStream,
 }
 
+#[cfg(target_os = "linux")]
+pub struct UnixStream {
+    native: mrml_linux::NativeUnixStream,
+}
+
+#[cfg(target_os = "linux")]
+impl UnixStream {
+    pub fn connect(path: &str) -> Result<Self, NetError> {
+        mrml_linux::NativeUnixStream::connect_path(path.as_bytes())
+            .map(|native| Self { native })
+            .ok_or(NetError::ConnectFailed)
+    }
+
+    pub fn peer_credentials(&self) -> Result<(u32, u32), NetError> {
+        self.native
+            .peer_credentials()
+            .ok_or(NetError::ConnectFailed)
+    }
+
+    pub fn read_exact(&mut self, mut buffer: &mut [u8]) -> Result<(), NetError> {
+        while !buffer.is_empty() {
+            let read = self.native.read(buffer).ok_or(NetError::ReadFailed)?;
+            if read == 0 {
+                return Err(NetError::ReadFailed);
+            }
+            buffer = &mut buffer[read..];
+        }
+        Ok(())
+    }
+
+    pub fn write_all(&mut self, mut buffer: &[u8]) -> Result<(), NetError> {
+        while !buffer.is_empty() {
+            let written = self.native.write(buffer).ok_or(NetError::WriteFailed)?;
+            if written == 0 {
+                return Err(NetError::WriteFailed);
+            }
+            buffer = &buffer[written..];
+        }
+        Ok(())
+    }
+
+    pub fn set_read_timeout_millis(&self, milliseconds: u64) -> Result<(), NetError> {
+        self.native
+            .set_timeout_millis(true, milliseconds)
+            .then_some(())
+            .ok_or(NetError::TimeoutFailed)
+    }
+
+    pub fn set_write_timeout_millis(&self, milliseconds: u64) -> Result<(), NetError> {
+        self.native
+            .set_timeout_millis(false, milliseconds)
+            .then_some(())
+            .ok_or(NetError::TimeoutFailed)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SocketAddress {
     pub ip: [u8; 4],

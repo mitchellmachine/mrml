@@ -32,6 +32,8 @@ mod pack_file;
 mod pack_index;
 mod pack_set;
 mod protected_push;
+#[cfg(target_os = "linux")]
+mod protected_signer_unix;
 mod quarantine;
 mod receive_backend;
 mod receive_journal;
@@ -141,6 +143,11 @@ pub use pack_set::{
 pub use protected_push::{
     CapabilityVerifiedProofSigner, HybridCommitSignatures, HybridCommitSigningProvider,
     ProtectedCommitProofSigner, ProtectedCommitSigningRequest, sign_protected_introduced_history,
+};
+#[cfg(target_os = "linux")]
+pub use protected_signer_unix::{
+    ProtectedSignerCapability, ProtectedSignerPeer, UnixProtectedCommitSigningProvider,
+    UnixProtectedSignerError,
 };
 pub use quarantine::{
     ActivationSnapshot, AuditReceipt, DEFAULT_MAX_EXPANDED_OBJECT_BYTES,

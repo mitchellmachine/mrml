@@ -32,6 +32,8 @@ pub use file::{
     remove_file, rename_file, write_file, write_new_file, write_secret_file,
 };
 pub use map::OrderedMap;
+#[cfg(target_os = "linux")]
+pub use net::UnixStream;
 pub use net::{NetError, SocketAddress, TcpListener, TcpStream, UdpSocket};
 pub use output::{write_stderr, write_stdout};
 pub use owned::Owned;
