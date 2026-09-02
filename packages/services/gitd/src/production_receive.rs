@@ -191,6 +191,10 @@ fn path(path: &Path) -> Result<&str, BackendError> {
 }
 
 fn map_core_error(error: mrml_git::GitdCoreError) -> BackendError {
+    eprintln!(
+        "component=mrml-gitd event={}",
+        core_receive_error_event(error)
+    );
     match error {
         mrml_git::GitdCoreError::MalformedIdentifier => BackendError::MalformedIdentifier,
         mrml_git::GitdCoreError::MalformedPath => BackendError::MalformedPath,
@@ -208,6 +212,25 @@ fn map_core_error(error: mrml_git::GitdCoreError) -> BackendError {
         mrml_git::GitdCoreError::Storage | mrml_git::GitdCoreError::UncertainCommit => {
             BackendError::Storage
         }
+    }
+}
+
+const fn core_receive_error_event(error: mrml_git::GitdCoreError) -> &'static str {
+    match error {
+        mrml_git::GitdCoreError::MalformedIdentifier => "receive_core_malformed_identifier",
+        mrml_git::GitdCoreError::MalformedPath => "receive_core_malformed_path",
+        mrml_git::GitdCoreError::MalformedInput => "receive_core_malformed_input",
+        mrml_git::GitdCoreError::MalformedRef => "receive_core_malformed_ref",
+        mrml_git::GitdCoreError::StaleGeneration => "receive_core_stale_generation",
+        mrml_git::GitdCoreError::Resource => "receive_core_resource_limit",
+        mrml_git::GitdCoreError::Unsupported => "receive_core_unsupported",
+        mrml_git::GitdCoreError::Authorization => "receive_core_authorization",
+        mrml_git::GitdCoreError::Ancestry => "receive_core_ancestry",
+        mrml_git::GitdCoreError::Signature => "receive_core_signature",
+        mrml_git::GitdCoreError::Policy => "receive_core_policy",
+        mrml_git::GitdCoreError::ObjectValidation => "receive_core_object_validation",
+        mrml_git::GitdCoreError::Storage => "receive_core_storage",
+        mrml_git::GitdCoreError::UncertainCommit => "receive_core_uncertain_commit",
     }
 }
 
