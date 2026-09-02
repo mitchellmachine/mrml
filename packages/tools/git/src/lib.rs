@@ -17,6 +17,7 @@ mod detached_commit_proof;
 mod detached_commit_proof_file;
 mod diff;
 mod gitd_core;
+mod https_pack;
 mod https_remote;
 mod hybrid_signing;
 mod index;
@@ -98,6 +99,7 @@ pub use https_remote::{
     HttpsDiscovery, HttpsRefAdvertisement, HttpsRemote, HttpsRemoteError, HttpsTransport,
     SmartGitService,
 };
+pub use https_pack::{HttpsPackError, PackOutput, V2PackResponseDecoder};
 pub use hybrid_signing::{sign_ml_dsa_65_git_payload, verify_ml_dsa_65_git_payload};
 pub use index::{Index, IndexEntry, IndexError};
 pub use local_repack::LocalRepackResult;
