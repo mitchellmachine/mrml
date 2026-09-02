@@ -12165,3 +12165,14 @@ elements, MultiTLS multiplexing, route-selected multi-vantage CA validation,
 CMPv2/private-network challenge proxying, 5G certificate brokerage, or public
 CA operation. Engineering classification: **REVIEWED_NOT_BLOCKING**; formal
 legal FTO: **NOT_PERFORMED**.
+# 2026-09-01 — Git production daemon and offline deployment composition
+
+Patent review: **NOT_TRIGGERED**. This increment composes existing bounded
+Smart Git, TLS, QUIC, protected-receive, repository-recovery, and capability
+channels into production processes and adds conventional digest-pinned
+containers, filesystem provisioning, cold archive/restore, and immutable image
+deployment scripts. It introduces no new compression candidate selection,
+distributed deduplication, cryptographic primitive, or protocol mechanism.
+The existing triggered Git compression/cache/compaction screen and its
+guardrails remain controlling; see
+[`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).

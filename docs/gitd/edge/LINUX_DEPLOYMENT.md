@@ -1,10 +1,12 @@
 # Linux deployment adapter
 
-Status: **PARTIALLY IMPLEMENTED**. A safe host-layout provisioner and separate
-minimal Gitd/Git-authority image definitions exist. The production process must bind UDP 443, retain sole
-ownership of the socket reactor, load non-exportable signing/token operations,
-drop ambient privilege, enforce file and memory quotas, expose bounded health
-metrics, and stop accepting work before graceful drain.
+Status: **PARTIALLY IMPLEMENTED**. The image-only Compose fragment, safe host
+provisioner, separate minimal images, offline release recipe, cold backup and
+restore, and immutable image upgrade/rollback operators exist. `mrml-gitd`
+composes authenticated repository recovery, authority and certificate channels,
+one TLS-generation store, bounded HTTP/2 workers, and the sole QUIC UDP reactor
+before reporting application readiness. The host publishes only TCP and UDP 443
+to Gitd's unprivileged internal port.
 
 A bounded filesystem-backed persistent cache adapter is implemented with
 file-and-directory durability barriers and quota pruning. Its root is supplied
@@ -22,18 +24,22 @@ certd material, ACME credentials, or build tools. The static
 `deploy/compose/test-git-images.sh` gate verifies pinned stages, intended users
 and entrypoints, and rejects representative cross-service secret/binary
 references. It passed under hosted Linux. No image build or runtime execution
-was performed in this evidence, and no production Git Compose service is yet
-claimed because `mrml-gitd` still lacks its public serve/listener mode.
+was performed in this evidence because Docker is unavailable on the current
+host. The daemon and Compose service exist, but source-level evidence is not
+container, public-network, physical-host, or real-certificate evidence.
 
 `GitdBoundListeners` now provides atomic process ownership of TCP and UDP on one
 exact configured IPv4 port. It validates the QUIC endpoint's 65,536-connection
 ceiling, binds TCP, resolves the actual port (supporting isolated ephemeral test
 binds), and binds the QUIC endpoint to that same port; any port/UDP/QUIC failure
 drops the partial TCP listener and returns no bundle. A hosted loopback test
-proved simultaneous TCP/UDP ownership and over-limit refusal. This is a socket
-capability primitive, not readiness evidence: HTTP/2 and HTTP/3 accept loops,
-request dispatch, drain, and public-host binding remain to
-be composed after all startup gates.
+proved simultaneous TCP/UDP ownership and over-limit refusal. HTTP/2 and HTTP/3
+now dispatch to the same authenticated backend. QUIC admission uses an
+authenticated Retry before substantial connection state. Fatal dependency or
+listener failure marks readiness false and enters worker drain. POSIX
+termination handling and a native live-process Compose health probe remain
+incomplete; the present Compose check revalidates static production
+configuration and storage, not process liveness.
 
 Before UDP admission, the endpoint receives a distinct generated retry key and
 nonzero generation. Gitd configures a 30-second one-use retry-token manager,
@@ -53,6 +59,17 @@ recorded SHA-256 checksum, requires each identity/SBOM artifact, and verifies
 both image archives with the bundled public key. Hosted shell evidence covers
 syntax and early invalid-version/output refusal only; Docker, Syft, Cosign, and
 the complete offline recipe have not yet run in this environment.
+
+`backup-git.sh` accepts only a stopped stack and captures authoritative Gitd,
+authority, policy, receipt, journal, verifier, and secret state while excluding
+the disposable cache. Restore accepts only a new empty deployment root, rejects
+links and special files, checks the detached digest, preserves numeric
+ownership, and reruns provisioning invariants without activating services. The
+immutable version switcher requires both preloaded image tags, uses `--no-build
+--pull never`, waits for Gitd and the authority to report healthy, and records
+the activated version atomically. Rollback changes images only; it never
+silently rolls repository data or security generations backward. Root/Docker
+execution of these workflows remains unperformed in the current evidence.
 
 Patent review: **NOT_TRIGGERED**. Digest-pinned multistage containers,
 unprivileged users, minimal copied artifacts, and static image-policy checks are
