@@ -152,7 +152,7 @@ pub fn create_hosted_component_backup(
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(0o640)
         .custom_flags(LINUX_O_NOFOLLOW)
         .open(output)
         .map_err(|error| {
@@ -518,6 +518,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(descriptor.file_count, 2);
+        assert_eq!(
+            fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
         assert_eq!(
             verify_hosted_component_backup(HostedBackupRole::Certd, &[0x41; 32], &output).unwrap(),
             descriptor

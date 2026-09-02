@@ -27,14 +27,15 @@ use mrml_certificate::{
     ConstrainedAcmeJwsRequest, Dns01Provider, Dns01PublicationRequest, DnsObservationClass,
     DnsObservationRoute, DnsPropagationObserver, DnsPropagationPolicy, DurableAuthenticator,
     DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind, DurableStateStore,
-    HostedDnsObservationEndpoint, HostedDnsPropagationQuery, HostedDurableStateStore, HostedSecret,
-    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES,
-    MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES, PRODUCTION_SECRET_MODE, RENEWAL_SCHEDULE_BYTES,
-    RenewalEntropy, RenewalSchedule, SchedulerError, TlsIdentityId, UnixCertdSession,
+    HostedBackupRole, HostedBackupSource, HostedDnsObservationEndpoint, HostedDnsPropagationQuery,
+    HostedDurableStateStore, HostedSecret, MAX_CERTD_CHANNEL_PAYLOAD_BYTES,
+    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES, MAX_DURABLE_PAYLOAD, MAX_DURABLE_RECORD_BYTES,
+    PRODUCTION_SECRET_MODE, RENEWAL_SCHEDULE_BYTES, RenewalEntropy, RenewalSchedule,
+    SchedulerError, TlsIdentityId, UnixCertdSession, create_hosted_component_backup,
     decode_certd_candidate_request, decode_certd_channel_request, encode_certd_account_key_request,
     encode_certd_candidate_request, encode_certd_channel_request, encode_certd_jws_request,
     encode_certd_tls_key_request, load_durable_authenticator, p256_public_key_is_valid,
-    retrieve_certificate_chain,
+    retrieve_certificate_chain, verify_hosted_component_backup,
 };
 use std::io::Read;
 use std::path::Path;
@@ -55,6 +56,8 @@ const STATE_KEY: &str = "/run/secrets/acmed-state.key";
 const DNS_TOKEN: &str = "/run/secrets/cloudflare-api-token";
 const CHANNEL_CAPABILITY: &str = "/run/secrets/certd-acmed.cap";
 const CERTD_SOCKET: &str = "/run/mrml/certd-acmed/certd.sock";
+const BACKUP_CAPABILITY: &str = "/run/secrets/backup-auth.key";
+const BACKUP_ROOT: &str = "/var/lib/mrml/backups";
 const MAX_FRAME_BYTES: usize = CERTD_CHANNEL_HEADER_BYTES + MAX_CERTD_CHANNEL_PAYLOAD_BYTES;
 const AUTHORITATIVE_DNS_ROUTE_CAPABILITY: u64 = 1;
 const RECURSIVE_DNS_ROUTE_CAPABILITY: u64 = 2;
@@ -178,6 +181,8 @@ fn application_main() -> Result<(), &'static str> {
             );
             Ok(())
         }
+        "backup-create" => backup_component_command(true),
+        "backup-verify" => backup_component_command(false),
         "health" => acmed_health(config, capability, state_authenticator),
         "status" => acmed_status(config, state_authenticator),
         "renew-now-preview" => renew_now_command(config, state_authenticator, false),
@@ -192,9 +197,73 @@ fn application_main() -> Result<(), &'static str> {
         "revoke-preview" => revoke_command(config, capability, state_authenticator, false),
         "revoke" => revoke_command(config, capability, state_authenticator, true),
         _ => Err(
-            "usage: mrml-acmed [serve|check-config|config-status|health|status|renew-now-preview|renew-now APPROVAL_SHA256|dns-cleanup confirm-exact-records|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
+            "usage: mrml-acmed [serve|check-config|config-status|health|status|backup-create GENERATION|backup-verify GENERATION|renew-now-preview|renew-now APPROVAL_SHA256|dns-cleanup confirm-exact-records|revoke-preview REASON|revoke REASON APPROVAL_SHA256]",
         ),
     }
+}
+
+fn backup_component_command(create: bool) -> Result<(), &'static str> {
+    if std::env::var("MRML_ACMED_OFFLINE_BACKUP").as_deref() != Ok("1") {
+        return Err("backup operation requires the stopped-acmed one-shot context");
+    }
+    let generation = std::env::args()
+        .nth(2)
+        .ok_or("backup generation is required")?
+        .parse::<u64>()
+        .map_err(|_| "backup generation must be a nonzero decimal integer")?;
+    if generation == 0 || std::env::args().nth(3).is_some() {
+        return Err("backup generation must be a nonzero decimal integer");
+    }
+    let secret = HostedSecret::open(
+        Path::new(BACKUP_CAPABILITY),
+        ACMED_UID,
+        PRODUCTION_SECRET_MODE,
+        32,
+    )
+    .map_err(|_| "invalid acmed backup capability")?;
+    let mut key: [u8; 32] = secret
+        .expose()
+        .try_into()
+        .map_err(|_| "invalid acmed backup capability")?;
+    let path = std::path::PathBuf::from(std::format!("{}/acmed-{}.mrb", BACKUP_ROOT, generation));
+    let result = if create {
+        create_hosted_component_backup(
+            HostedBackupRole::Acmed,
+            generation,
+            ACMED_UID,
+            &[
+                HostedBackupSource {
+                    source: Path::new(STATE_ROOT),
+                    archive_name: "acmed",
+                },
+                HostedBackupSource {
+                    source: Path::new("/var/lib/mrml/challenges"),
+                    archive_name: "challenges",
+                },
+                HostedBackupSource {
+                    source: Path::new(STATE_KEY),
+                    archive_name: "secrets/acmed-state.key",
+                },
+                HostedBackupSource {
+                    source: Path::new(CHANNEL_CAPABILITY),
+                    archive_name: "secrets/certd-acmed.cap",
+                },
+            ],
+            &key,
+            &path,
+        )
+    } else {
+        verify_hosted_component_backup(HostedBackupRole::Acmed, &key, &path)
+    };
+    mrml_crypto::erase_secret_bytes(&mut key);
+    let descriptor = result.map_err(|_| "acmed backup component operation failed")?;
+    println!(
+        "role=acmed generation={} files={} plaintext_sha256={}",
+        descriptor.generation,
+        descriptor.file_count,
+        hex(&descriptor.plaintext_digest)
+    );
+    Ok(())
 }
 
 fn dns_cleanup_command(

@@ -63,6 +63,11 @@ role, generation, sorted paths, modes, per-file digests, file count, and the
 complete plaintext digest; source and input scans reject symlinks, hard links,
 unsafe modes, traversal, duplicates, oversized files/scans, wrong roles, wrong
 keys, and ciphertext substitution. Secret-bearing scratch is cleared.
+Stopped-service `backup-create` and `backup-verify` commands are wired into both
+production binaries, and `backup-acme.sh` stops both daemons, creates the two
+same-generation components under their respective UIDs, verifies each, and
+restarts the services on success or failure. This remains component evidence,
+not a completed backup/restore result.
 The production Compose topology does not yet wire a real multi-principal
 one-shot backup provider spanning certd-owned encrypted key state, acmed-owned
 authenticated lifecycle state, publication records, and channel metadata.

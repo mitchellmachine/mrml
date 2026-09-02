@@ -133,6 +133,20 @@ immediate replacement issuance respectively:
 ./rotate-acme-key.sh tls EXPECTED_NEXT_GENERATION
 ```
 
+Stopped-service component backup is available as the first half of the
+multi-principal backup flow. It creates distinct encrypted, authenticated certd
+and acmed components at one exact generation and immediately verifies both:
+
+```text
+./backup-acme.sh NONZERO_BACKUP_GENERATION
+```
+
+The components contain each service's own state and recovery secrets but are
+AES-GCM protected by the separately provisioned backup capability. They are not
+yet a complete restorable backup: do not move them off-host as a completed
+recovery set until the combined authenticated manifest and clean-target restore
+receipt are implemented.
+
 Compose cannot enforce a destination-aware outbound firewall. Apply host or
 upstream egress policy for the configured ACME and DNS-provider origins. The
 networkless certd design ensures that compromise of acmed does not reveal an
