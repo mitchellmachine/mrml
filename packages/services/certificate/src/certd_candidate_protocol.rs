@@ -1,11 +1,11 @@
 use crate::{MAX_CERTD_CHANNEL_PAYLOAD_BYTES, PemCertificateChain};
-use mrml_acme::CertificateProfile;
+use mrml_acme::{AriCertificateId, CertificateProfile, MAX_ARI_CERTIFICATE_ID};
 
 const MAGIC: &[u8; 8] = b"MRMLCCV1";
 const HEADER_BYTES: usize = 96;
 const STATE_MAGIC: &[u8; 8] = b"MRMLCSV1";
 const ACTIVATION_MAGIC: &[u8; 8] = b"MRMLCAV1";
-pub const CERTD_CANDIDATE_STATE_BYTES: usize = 208;
+pub const CERTD_CANDIDATE_STATE_BYTES: usize = 352;
 pub const CERTD_ACTIVATION_REQUEST_BYTES: usize = 120;
 pub const MAX_CERTD_CANDIDATE_CHAIN_BYTES: usize = MAX_CERTD_CHANNEL_PAYLOAD_BYTES - HEADER_BYTES;
 
@@ -26,6 +26,9 @@ pub enum CertdCandidateProtocolError {
     InvalidProfile,
     InvalidChain,
     OutputTooSmall,
+    InvalidStateHeader,
+    InvalidStateCertificateId,
+    NoncanonicalState,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +52,9 @@ pub struct CertdCandidateState {
     pub not_before: u64,
     pub not_after: u64,
     pub request_digest: [u8; 32],
+    pub ari_certificate_id: AriCertificateId,
+    pub created_at_unix: u64,
+    pub previous_identity_generation: u64,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -123,6 +129,7 @@ impl CertdCandidateState {
             || self.leaf_spki_digest == [0; 32]
             || self.not_before >= self.not_after
             || self.request_digest == [0; 32]
+            || self.created_at_unix == 0
         {
             return Err(CertdCandidateProtocolError::InvalidRequest);
         }
@@ -140,6 +147,11 @@ impl CertdCandidateState {
         output[160..168].copy_from_slice(&self.not_before.to_be_bytes());
         output[168..176].copy_from_slice(&self.not_after.to_be_bytes());
         output[176..208].copy_from_slice(&self.request_digest);
+        let certificate_id = self.ari_certificate_id.as_str().as_bytes();
+        output[208] = certificate_id.len() as u8;
+        output[216..216 + certificate_id.len()].copy_from_slice(certificate_id);
+        output[336..344].copy_from_slice(&self.created_at_unix.to_be_bytes());
+        output[344..352].copy_from_slice(&self.previous_identity_generation.to_be_bytes());
         Ok(CERTD_CANDIDATE_STATE_BYTES)
     }
 
@@ -147,9 +159,21 @@ impl CertdCandidateState {
         if input.len() != CERTD_CANDIDATE_STATE_BYTES
             || input.get(..8) != Some(STATE_MAGIC)
             || input[9..16].iter().any(|byte| *byte != 0)
+            || input[209..216].iter().any(|byte| *byte != 0)
         {
-            return Err(CertdCandidateProtocolError::InvalidRequest);
+            return Err(CertdCandidateProtocolError::InvalidStateHeader);
         }
+        let certificate_id_length = usize::from(input[208]);
+        if certificate_id_length == 0
+            || certificate_id_length > MAX_ARI_CERTIFICATE_ID
+            || input[216 + certificate_id_length..336]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            return Err(CertdCandidateProtocolError::InvalidStateCertificateId);
+        }
+        let certificate_id = core::str::from_utf8(&input[216..216 + certificate_id_length])
+            .map_err(|_| CertdCandidateProtocolError::InvalidStateCertificateId)?;
         let state = Self {
             stage: match input[8] {
                 1 => CertdCandidateStage::Staged,
@@ -167,11 +191,19 @@ impl CertdCandidateState {
             not_before: read_u64(&input[160..168])?,
             not_after: read_u64(&input[168..176])?,
             request_digest: copy(&input[176..208])?,
+            ari_certificate_id: AriCertificateId::parse(certificate_id)
+                .map_err(|_| CertdCandidateProtocolError::InvalidStateCertificateId)?,
+            created_at_unix: read_u64(&input[336..344])?,
+            previous_identity_generation: u64::from_be_bytes(
+                input[344..352]
+                    .try_into()
+                    .map_err(|_| CertdCandidateProtocolError::InvalidRequest)?,
+            ),
         };
         let mut canonical = [0u8; CERTD_CANDIDATE_STATE_BYTES];
         state.encode(&mut canonical)?;
         if canonical != input {
-            return Err(CertdCandidateProtocolError::InvalidRequest);
+            return Err(CertdCandidateProtocolError::NoncanonicalState);
         }
         Ok(state)
     }
@@ -386,9 +418,16 @@ mod tests {
             not_before: 9,
             not_after: 10,
             request_digest: [11; 32],
+            ari_certificate_id: AriCertificateId::derive(&[1, 2, 3], &[0, 0x80]).unwrap(),
+            created_at_unix: 14,
+            previous_identity_generation: 0,
         };
         let mut encoded = [0u8; CERTD_CANDIDATE_STATE_BYTES];
         state.encode(&mut encoded).unwrap();
+        let id_length = usize::from(encoded[208]);
+        let id = core::str::from_utf8(&encoded[216..216 + id_length]).unwrap();
+        assert!(AriCertificateId::parse(id).unwrap() == state.ari_certificate_id);
+        assert!(encoded[216 + id_length..336].iter().all(|byte| *byte == 0));
         assert!(CertdCandidateState::decode(&encoded).unwrap() == state);
         encoded[9] = 1;
         assert!(CertdCandidateState::decode(&encoded).is_err());

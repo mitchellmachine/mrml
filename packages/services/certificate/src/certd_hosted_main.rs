@@ -420,6 +420,8 @@ fn dispatch_channel_request(
                     verified.not_before,
                     verified.not_after,
                     request.order_url_digest,
+                    verified.ari_certificate_id,
+                    now_unix,
                 )
                 .map_err(|_| ())?;
                 *candidate = Some(StagedCandidate {
@@ -451,6 +453,13 @@ fn dispatch_channel_request(
             }
             output[..32].copy_from_slice(&request.chain_digest);
             Ok(32)
+        }
+        CertdChannelOperation::GetCertificateLifecycleStatus => {
+            if !payload.is_empty() {
+                return Err(());
+            }
+            let (active, _) = load_active_candidate(state).map_err(|_| ())?;
+            active.encode(output).map_err(|_| ())
         }
         _ => Err(()),
     }
@@ -736,6 +745,8 @@ fn persist_staged_candidate(
     not_before: u64,
     not_after: u64,
     order_url_digest: [u8; 32],
+    ari_certificate_id: mrml_acme::AriCertificateId,
+    created_at_unix: u64,
 ) -> Result<(), &'static str> {
     let candidate_state = CertdCandidateState {
         stage: CertdCandidateStage::Staged,
@@ -750,6 +761,9 @@ fn persist_staged_candidate(
         not_before,
         not_after,
         request_digest: Sha256::digest(request),
+        ari_certificate_id,
+        created_at_unix,
+        previous_identity_generation: 0,
     };
     let object = DurableObjectId(state.config.identity);
     let mut durable_state = state
