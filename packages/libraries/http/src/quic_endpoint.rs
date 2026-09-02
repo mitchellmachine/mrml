@@ -622,6 +622,14 @@ impl QuicServerEndpoint {
         self.connections.len()
     }
 
+    pub fn drain_connections(&mut self) -> usize {
+        let count = self.connections.len();
+        while let Some(connection) = self.connections.last().map(|entry| entry.handle) {
+            let _ = self.remove_connection(connection);
+        }
+        count
+    }
+
     pub fn metrics(&self) -> QuicEndpointMetrics {
         self.metrics
     }

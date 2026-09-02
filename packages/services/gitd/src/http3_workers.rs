@@ -213,6 +213,10 @@ impl GitdHttp3WorkerPool {
         Ok(self.metrics())
     }
 
+    pub(crate) fn finish_drain(&mut self) -> Result<(), GitdHttp3WorkerError> {
+        self.retire()
+    }
+
     fn retire(&mut self) -> Result<(), GitdHttp3WorkerError> {
         self.begin_drain();
         self.jobs.take();
