@@ -1,4 +1,6 @@
-use mrml_runtime::{Shared, SocketAddress, UdpSocket, Vector};
+use mrml_runtime::{
+    Sender, Shared, SocketAddress, TrySendError, UdpSocket, Vector, blocking_channel,
+};
 
 use crate::quic::{
     PacketReceiveState, ReceivedPacket, initial_token, initial_version_and_destination_id,
@@ -6,7 +8,9 @@ use crate::quic::{
 use crate::quic_retry::{
     QuicAdmissionController, QuicAdmissionDecision, QuicRetryPurpose, QuicRetryTokenManager,
 };
+use crate::quic_connection::QuicRoutedDatagram;
 use crate::{GitdResourceController, GitdWorkClass, QuicError, QuicVersion, SourceIdentity};
+use crate::QuicServerListener;
 
 const MAX_DATAGRAM: usize = 65_527;
 const MAX_CONNECTION_ID: usize = 20;
@@ -85,6 +89,7 @@ struct EndpointConnection {
     handshake_packets: PacketReceiveState,
     application_packets: PacketReceiveState,
     resource_connection_admitted: bool,
+    inbound: Option<Sender<QuicRoutedDatagram>>,
 }
 
 struct RetiredConnectionId {
@@ -396,6 +401,7 @@ impl QuicServerEndpoint {
                     handshake_packets: PacketReceiveState::new(),
                     application_packets: PacketReceiveState::new(),
                     resource_connection_admitted: false,
+                    inbound: None,
                 })
                 .map_err(|_| QuicError::Allocation)?;
         }
@@ -526,6 +532,102 @@ impl QuicServerEndpoint {
                 .map_err(|_| QuicError::SocketRead)?;
             if let Some(datagram) = self.dispatch_datagram(peer, &datagram[..amount])? {
                 return Ok(datagram);
+            }
+        }
+    }
+
+    /// Returns the next syntactically valid Initial while routing datagrams for
+    /// known connections into their bounded queues. A saturated connection is
+    /// treated as connection-local packet loss and cannot stall the endpoint.
+    pub fn receive_new_initial(&mut self) -> Result<QuicEndpointDatagram, QuicError> {
+        loop {
+            let datagram = self.receive()?;
+            if matches!(datagram.route, QuicEndpointRoute::NewInitial { .. }) {
+                return Ok(datagram);
+            }
+            match self.route_routed_datagram(datagram) {
+                Ok(()) | Err(QuicError::FlowControl | QuicError::ConnectionId) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Creates one bounded connection-local receive queue and transfers the
+    /// admitted Initial into it. The endpoint remains the only UDP reader.
+    pub fn begin_routed_handshake(
+        &mut self,
+        datagram: QuicEndpointDatagram,
+        connection: QuicConnectionHandle,
+        queue_capacity: usize,
+    ) -> Result<QuicServerListener, QuicError> {
+        if queue_capacity == 0 || queue_capacity > 256 {
+            return Err(QuicError::Limit);
+        }
+        let QuicEndpointRoute::NewInitial {
+            original_destination_id,
+            ..
+        } = &datagram.route
+        else {
+            return Err(QuicError::ProtocolViolation);
+        };
+        let socket = self.socket.as_ref().ok_or(QuicError::SocketBind)?.clone();
+        let (inbound, receiver) = blocking_channel(queue_capacity);
+        let (listener, server_connection_id) =
+            QuicServerListener::from_routed_datagrams(socket, receiver)?;
+        self.register_handshake(original_destination_id, connection, datagram.peer)?;
+        if let Err(error) =
+            self.register_handshake(&server_connection_id, connection, datagram.peer)
+        {
+            let _ = self.remove_connection(connection);
+            return Err(error);
+        }
+        let entry = self
+            .connections
+            .iter_mut()
+            .find(|entry| entry.handle == connection)
+            .ok_or(QuicError::ConnectionId)?;
+        entry.inbound = Some(inbound.clone());
+        let routed = QuicRoutedDatagram {
+            peer: datagram.peer,
+            bytes: datagram.bytes,
+        };
+        if inbound.try_send(routed).is_err() {
+            let _ = self.remove_connection(connection);
+            return Err(QuicError::FlowControl);
+        }
+        Ok(listener)
+    }
+
+    pub fn route_routed_datagram(
+        &mut self,
+        datagram: QuicEndpointDatagram,
+    ) -> Result<(), QuicError> {
+        let connection = match datagram.route {
+            QuicEndpointRoute::Handshake(connection)
+            | QuicEndpointRoute::Established { connection, .. } => connection,
+            QuicEndpointRoute::NewInitial { .. } => {
+                return Err(QuicError::ProtocolViolation);
+            }
+        };
+        let entry = self
+            .connections
+            .iter()
+            .find(|entry| entry.handle == connection)
+            .ok_or(QuicError::ConnectionId)?;
+        let inbound = entry.inbound.as_ref().ok_or(QuicError::ConnectionId)?;
+        let routed = QuicRoutedDatagram {
+            peer: datagram.peer,
+            bytes: datagram.bytes,
+        };
+        match inbound.try_send(routed) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                self.metrics.datagrams_dropped = self.metrics.datagrams_dropped.saturating_add(1);
+                Err(QuicError::FlowControl)
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                let _ = self.remove_connection(connection);
+                Err(QuicError::ConnectionId)
             }
         }
     }
@@ -681,6 +783,63 @@ mod tests {
             resource_handshake_permits: Vector::new(),
             metrics: QuicEndpointMetrics::default(),
         }
+    }
+
+    fn initial_datagram(destination_id: &[u8]) -> Vector<u8> {
+        let mut owned_destination_id = Vector::new();
+        owned_destination_id
+            .try_extend_from_slice(destination_id)
+            .unwrap();
+        let initial = InitialPacket {
+            destination_id: owned_destination_id,
+            source_id: [5, 6, 7, 8].into(),
+            packet_number: 0,
+            payload: [0; 1150].into(),
+        };
+        let keys = QuicInitialKeys::derive_for(
+            QuicVersion::V2,
+            &initial.destination_id,
+            QuicRole::Client,
+        )
+        .unwrap();
+        initial.seal_padded_for(QuicVersion::V2, &keys).unwrap()
+    }
+
+    #[test]
+    fn routed_handshake_queue_is_bounded_and_disconnect_retires_connection() {
+        let socket = UdpSocket::bind([127, 0, 0, 1], 0).unwrap();
+        let mut endpoint = QuicServerEndpoint::from_socket(socket, 1, 4).unwrap();
+        let connection = QuicConnectionHandle(41);
+        let initial = initial_datagram(&[1, 2, 3, 4]);
+        let datagram = endpoint
+            .dispatch_datagram(peer(443), &initial)
+            .unwrap()
+            .unwrap();
+        let listener = endpoint
+            .begin_routed_handshake(datagram, connection, 1)
+            .unwrap();
+        assert_eq!(endpoint.connection_count(), 1);
+
+        let queued = endpoint
+            .dispatch_datagram(peer(443), &initial)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            endpoint.route_routed_datagram(queued),
+            Err(QuicError::FlowControl)
+        );
+        assert_eq!(endpoint.metrics().datagrams_dropped, 1);
+
+        drop(listener);
+        let disconnected = endpoint
+            .dispatch_datagram(peer(443), &initial)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            endpoint.route_routed_datagram(disconnected),
+            Err(QuicError::ConnectionId)
+        );
+        assert_eq!(endpoint.connection_count(), 0);
     }
 
     #[test]

@@ -1,4 +1,6 @@
-use mrml_runtime::{Instant, Shared, SocketAddress, TcpStream, UdpSocket, Vector};
+use mrml_runtime::{
+    Instant, Receiver, Shared, SocketAddress, TcpStream, UdpSocket, Vector,
+};
 use mrml_tls::{QuicTlsClientHandshake, QuicTlsServerHandshake, TlsError, TlsServerConfig};
 
 use crate::quic::{
@@ -132,8 +134,58 @@ fn handshake_message(bytes: &[u8], at: usize) -> Result<Option<&[u8]>, QuicError
     Ok(Some(&bytes[at..end]))
 }
 
+pub(crate) struct QuicRoutedDatagram {
+    pub peer: SocketAddress,
+    pub bytes: Vector<u8>,
+}
+
+enum QuicDatagramTransport {
+    Direct(Shared<UdpSocket>),
+    Routed {
+        socket: Shared<UdpSocket>,
+        inbound: Receiver<QuicRoutedDatagram>,
+    },
+}
+
+impl QuicDatagramTransport {
+    fn socket(&self) -> &UdpSocket {
+        match self {
+            Self::Direct(socket) | Self::Routed { socket, .. } => socket,
+        }
+    }
+
+    fn local_port(&self) -> Result<u16, mrml_runtime::NetError> {
+        self.socket().local_port()
+    }
+
+    fn send_to(
+        &self,
+        bytes: &[u8],
+        peer: SocketAddress,
+    ) -> Result<usize, mrml_runtime::NetError> {
+        self.socket().send_to(bytes, peer)
+    }
+
+    fn receive_from(
+        &self,
+        buffer: &mut [u8],
+    ) -> Result<(usize, SocketAddress), mrml_runtime::NetError> {
+        match self {
+            Self::Direct(socket) => socket.receive_from(buffer),
+            Self::Routed { inbound, .. } => {
+                let datagram = inbound.recv().map_err(|_| mrml_runtime::NetError::ReadFailed)?;
+                if datagram.bytes.len() > buffer.len() {
+                    return Err(mrml_runtime::NetError::ReadFailed);
+                }
+                buffer[..datagram.bytes.len()].copy_from_slice(&datagram.bytes);
+                Ok((datagram.bytes.len(), datagram.peer))
+            }
+        }
+    }
+}
+
 pub struct QuicConnection {
-    socket: Shared<UdpSocket>,
+    socket: QuicDatagramTransport,
     peer: SocketAddress,
     local_id: Vector<u8>,
     peer_id: Vector<u8>,
@@ -676,7 +728,7 @@ impl QuicClientConnection {
         let state = QuicConnectionState::new(QuicRole::Client, &peer_parameters);
         let recovery = QuicRecovery::new(peer_parameters.max_udp_payload_size)?;
         let mut connection = QuicConnection {
-            socket,
+            socket: QuicDatagramTransport::Direct(socket),
             peer,
             local_id: source_id,
             peer_id,
@@ -730,8 +782,9 @@ impl QuicClientConnection {
 }
 
 pub struct QuicServerListener {
-    socket: Shared<UdpSocket>,
+    socket: QuicDatagramTransport,
     parameters: QuicTransportParameters,
+    server_connection_id: Option<Vector<u8>>,
 }
 impl QuicServerListener {
     pub fn bind(ip: [u8; 4], port: u16) -> Result<Self, QuicError> {
@@ -743,9 +796,25 @@ impl QuicServerListener {
             .set_write_timeout_millis(30_000)
             .map_err(|_| QuicError::Io)?;
         Ok(Self {
-            socket,
+            socket: QuicDatagramTransport::Direct(socket),
             parameters: QuicTransportParameters::default(),
+            server_connection_id: None,
         })
+    }
+
+    pub(crate) fn from_routed_datagrams(
+        socket: Shared<UdpSocket>,
+        inbound: Receiver<QuicRoutedDatagram>,
+    ) -> Result<(Self, Vector<u8>), QuicError> {
+        let server_connection_id = random_connection_id()?;
+        Ok((
+            Self {
+                socket: QuicDatagramTransport::Routed { socket, inbound },
+                parameters: QuicTransportParameters::default(),
+                server_connection_id: Some(server_connection_id.clone()),
+            },
+            server_connection_id,
+        ))
     }
     pub fn local_port(&self) -> Result<u16, QuicError> {
         self.socket.local_port().map_err(|_| QuicError::Io)
@@ -809,7 +878,10 @@ impl QuicServerListener {
         let original_destination_id =
             original_destination_id.ok_or(QuicError::ProtocolViolation)?;
         let version = version.ok_or(QuicError::ProtocolViolation)?;
-        let server_id = random_connection_id()?;
+        let server_id = match self.server_connection_id {
+            Some(server_connection_id) => server_connection_id,
+            None => random_connection_id()?,
+        };
         let mut local_parameters = self.parameters.clone();
         local_parameters.original_destination_connection_id = Some(original_destination_id.clone());
         local_parameters.initial_source_connection_id = server_id.clone();
