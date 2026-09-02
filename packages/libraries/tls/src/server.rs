@@ -1,6 +1,6 @@
 use crate::{
-    finished_verify_data, hybrid_server_share, KeySchedule, RecordKeys, TlsError, Transcript,
-    TLS_AES_128_GCM_SHA256, X25519_MLKEM768,
+    KeySchedule, RecordKeys, TLS_AES_128_GCM_SHA256, TlsError, Transcript, X25519_MLKEM768,
+    finished_verify_data, hybrid_server_share,
 };
 use mrml_crypto::{rsa_pss_sha256_sign, x25519_public, x25519_shared};
 use mrml_runtime::{Shared, TcpStream, Text, Vector};
@@ -805,12 +805,21 @@ pub struct TlsServerStream {
     negotiated_protocol: Option<Text>,
 }
 impl TlsServerStream {
-    pub fn accept(mut stream: TcpStream, config: &TlsServerConfig) -> Result<Self, TlsError> {
+    pub fn accept(stream: TcpStream, config: &TlsServerConfig) -> Result<Self, TlsError> {
+        Self::accept_with_timeout(stream, config, 30_000)
+    }
+
+    pub fn accept_with_timeout(
+        mut stream: TcpStream,
+        config: &TlsServerConfig,
+        timeout_millis: u64,
+    ) -> Result<Self, TlsError> {
+        validate_server_timeout(timeout_millis)?;
         stream
-            .set_read_timeout_millis(30_000)
+            .set_read_timeout_millis(timeout_millis)
             .map_err(|_| TlsError::Io)?;
         stream
-            .set_write_timeout_millis(30_000)
+            .set_write_timeout_millis(timeout_millis)
             .map_err(|_| TlsError::Io)?;
         let first = record(&mut stream)?;
         if first[0] != 22 {
@@ -1049,9 +1058,25 @@ impl TlsServerStream {
     }
 }
 
+fn validate_server_timeout(timeout_millis: u64) -> Result<(), TlsError> {
+    if !(1_000..=300_000).contains(&timeout_millis) {
+        Err(TlsError::Io)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_connection_timeout_is_bounded() {
+        assert_eq!(validate_server_timeout(999), Err(TlsError::Io));
+        assert_eq!(validate_server_timeout(1_000), Ok(()));
+        assert_eq!(validate_server_timeout(300_000), Ok(()));
+        assert_eq!(validate_server_timeout(300_001), Err(TlsError::Io));
+    }
     use core::sync::atomic::{AtomicBool, Ordering};
 
     struct UseOnlySigner {
@@ -1117,10 +1142,12 @@ mod tests {
             require_configured_server_name(&config, None),
             Err(TlsError::Handshake)
         );
-        assert!(TlsServerConfig::from_der_chain(&[b"certificate"])
-            .unwrap()
-            .require_server_name("bad_name")
-            .is_err());
+        assert!(
+            TlsServerConfig::from_der_chain(&[b"certificate"])
+                .unwrap()
+                .require_server_name("bad_name")
+                .is_err()
+        );
     }
 
     #[test]
@@ -1149,20 +1176,24 @@ mod tests {
         assert!(compatibility_change_cipher_spec(&[20, 3, 3, 0, 1, 2]).is_err());
     }
     use crate::TlsClientStream;
-    use mrml_runtime::{environment_variable, read_file, TcpListener};
+    use mrml_runtime::{TcpListener, environment_variable, read_file};
 
     #[test]
     fn pem_decoder_rejects_non_base64_and_trailing_data() {
-        assert!(pem_blocks(
-            b"-----BEGIN CERTIFICATE-----\nYWJj!\n-----END CERTIFICATE-----",
-            b"CERTIFICATE"
-        )
-        .is_err());
-        assert!(pem_blocks(
-            b"-----BEGIN CERTIFICATE-----\nYQ==Y\n-----END CERTIFICATE-----",
-            b"CERTIFICATE"
-        )
-        .is_err());
+        assert!(
+            pem_blocks(
+                b"-----BEGIN CERTIFICATE-----\nYWJj!\n-----END CERTIFICATE-----",
+                b"CERTIFICATE"
+            )
+            .is_err()
+        );
+        assert!(
+            pem_blocks(
+                b"-----BEGIN CERTIFICATE-----\nYQ==Y\n-----END CERTIFICATE-----",
+                b"CERTIFICATE"
+            )
+            .is_err()
+        );
     }
 
     #[cfg(unix)]
@@ -1253,15 +1284,17 @@ mod tests {
         let config = mrml_runtime::Shared::new(TlsServerConfig::from_pem(&cert, &key).unwrap());
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
-        assert!(mrml_runtime::spawn_detached(move || {
-            let socket = listener.accept().unwrap();
-            let mut tls = TlsServerStream::accept(socket, &config).unwrap();
-            let mut request = [0; 4];
-            assert_eq!(tls.read(&mut request).unwrap(), 4);
-            assert_eq!(&request, b"ping");
-            tls.write_all(b"pong").unwrap();
-        })
-        .is_ok());
+        assert!(
+            mrml_runtime::spawn_detached(move || {
+                let socket = listener.accept().unwrap();
+                let mut tls = TlsServerStream::accept(socket, &config).unwrap();
+                let mut request = [0; 4];
+                assert_eq!(tls.read(&mut request).unwrap(), 4);
+                assert_eq!(&request, b"ping");
+                tls.write_all(b"pong").unwrap();
+            })
+            .is_ok()
+        );
         let mut client = TlsClientStream::connect("localhost", port).unwrap();
         assert_eq!(client.negotiated_group(), X25519_MLKEM768);
         client.write_all(b"ping").unwrap();
