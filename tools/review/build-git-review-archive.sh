@@ -18,6 +18,8 @@ fi
 
 git archive --format=tar --prefix="mrml-$commit/" "$commit" >"$archive"
 gzip -n -9 <"$archive" >"$output"
-sha256sum "$output" >"$output.sha256"
+output_directory=$(dirname -- "$output")
+output_name=$(basename -- "$output")
+(cd "$output_directory" && sha256sum "$output_name" >"$output_name.sha256")
 echo "source-only review archive: $output"
 cat "$output.sha256"

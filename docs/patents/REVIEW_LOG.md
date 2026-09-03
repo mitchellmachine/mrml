@@ -21,6 +21,14 @@
   it introduces no new protocol, cryptographic construction, compression
   mechanism, or specialized storage algorithm.
 
+## 2026-09-03: Portable review-archive checksum
+
+- Result: **NOT_TRIGGERED**.
+- Scope: recording the source-review archive checksum against its basename so
+  the sidecar verifies after transfer to a different directory or host.
+- Reason: this is conventional checksum-manifest path handling and introduces
+  no new protected mechanism.
+
 ## 2026-09-02: Bounded large-object DEFLATE profile
 
 - Result: **NOT_TRIGGERED**.
