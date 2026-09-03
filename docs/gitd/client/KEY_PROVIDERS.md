@@ -99,10 +99,21 @@ both hybrid authorizations and durably selects it.
 
 The native SSH proposal advertises `rsa-sha2-256` only; the SHA-1 `ssh-rsa`
 signature algorithm is not negotiable. Duplicate algorithm-list entries fail
-closed, and independent inbound/outbound encrypted packet state refuses another
-packet before a 32-bit sequence could wrap under one key. Full byte/age-based
-rekey orchestration and independent constant-time cryptographic review remain
-open, so the optional SSH transport is not classified as production-ready.
+closed. Independent inbound and outbound encrypted states force a complete
+Curve25519 key exchange after either 1,048,576 packets, 1 GiB of wire bytes, or
+one hour under a key. A fixed eight-packet control reserve permits only the key
+exchange to finish; application packets fail closed while rekey is required,
+and a 32-bit sequence cannot wrap under one key. Rekey preserves the original
+session identifier, verifies the new exchange signature, and revalidates the
+server key against an exact bounded current-plus-next pin set associated with
+the requested host and port. Failure aborts the owning SSH operation.
+
+Socket reads and writes have a 15-second inactivity timeout. Identification and
+key exchange, authentication, and channel setup additionally have 60-second
+phase deadlines; an SSH operation has a four-hour absolute deadline checked at
+every packet boundary. These bounds are implementation evidence, not a claim
+that the custom cryptographic code has received independent constant-time
+validation. That external review remains a residual risk.
 
 Patent review: **NOT_TRIGGERED**. These changes use conventional local
 secret-file confinement, a purpose-limited authenticated Unix channel, provider

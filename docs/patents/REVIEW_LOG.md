@@ -12370,3 +12370,12 @@ cryptographic primitive, compression or delta selection, similarity mechanism,
 cache policy, or storage-selection mechanism. Existing Git patent-screen
 guardrails remain controlling; see
 [`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).
+
+# 2026-09-03 — Native SSH bounded rekey and rotating host pins
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional SSH
+transport packet/byte/age limits, Curve25519 rekeying, phase and operation
+deadlines, sequence preservation, and an exact current-plus-next host-key pin
+set to the existing SSH implementation. It introduces no new cryptographic
+primitive, compression or delta selection, similarity mechanism, cache policy,
+or storage-selection mechanism.

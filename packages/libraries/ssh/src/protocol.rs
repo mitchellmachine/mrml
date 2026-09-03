@@ -1,10 +1,14 @@
 use core::fmt;
-use mrml_crypto::{Sha256, aes128_ctr_xor, hmac_sha256, x25519_public, x25519_shared};
-use mrml_runtime::{Text, Vector};
+use mrml_crypto::{aes128_ctr_xor, hmac_sha256, x25519_public, x25519_shared, Sha256};
+use mrml_runtime::{Instant, Text, Vector};
 
 const MAX_STRING: usize = 1024 * 1024;
 const MAX_IDENTIFICATION_LINES: usize = 50;
 const MAX_IDENTIFICATION_LINE: usize = 255;
+const REKEY_PACKET_LIMIT: u64 = 1 << 20;
+const REKEY_BYTE_LIMIT: u64 = 1 << 30;
+const REKEY_AGE_SECONDS: u64 = 60 * 60;
+const REKEY_CONTROL_PACKET_RESERVE: u64 = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolError {
@@ -19,6 +23,7 @@ pub enum ProtocolError {
     Entropy,
     Authentication,
     SequenceExhausted,
+    RekeyRequired,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -289,19 +294,42 @@ pub struct EncryptedPacketWriter {
     counter: [u8; 16],
     mac_key: [u8; 32],
     sequence: u32,
+    packets: u64,
+    bytes: u64,
+    established: Instant,
 }
 
 impl EncryptedPacketWriter {
-    pub const fn new(key: [u8; 16], counter: [u8; 16], mac_key: [u8; 32]) -> Self {
+    pub fn new(key: [u8; 16], counter: [u8; 16], mac_key: [u8; 32]) -> Self {
+        Self::with_sequence(key, counter, mac_key, 0)
+    }
+    pub fn with_sequence(
+        key: [u8; 16],
+        counter: [u8; 16],
+        mac_key: [u8; 32],
+        sequence: u32,
+    ) -> Self {
         Self {
             key,
             counter,
             mac_key,
-            sequence: 0,
+            sequence,
+            packets: 0,
+            bytes: 0,
+            established: Instant::now(),
         }
     }
     pub fn encode(&mut self, payload: &[u8]) -> Result<Vector<u8>, ProtocolError> {
+        if self.rekey_required() {
+            return Err(ProtocolError::RekeyRequired);
+        }
+        self.encode_control(payload)
+    }
+    pub fn encode_control(&mut self, payload: &[u8]) -> Result<Vector<u8>, ProtocolError> {
         if self.sequence == u32::MAX {
+            return Err(ProtocolError::SequenceExhausted);
+        }
+        if self.packets >= REKEY_PACKET_LIMIT + REKEY_CONTROL_PACKET_RESERVE {
             return Err(ProtocolError::SequenceExhausted);
         }
         let plain = encode_plain_packet(payload, 16)?;
@@ -314,7 +342,20 @@ impl EncryptedPacketWriter {
             .map_err(|_| ProtocolError::Length)?;
         output.extend(mac);
         self.sequence += 1;
+        self.packets += 1;
+        self.bytes = self
+            .bytes
+            .checked_add(output.len() as u64)
+            .ok_or(ProtocolError::SequenceExhausted)?;
         Ok(output)
+    }
+    pub fn rekey_required(&self) -> bool {
+        self.packets >= REKEY_PACKET_LIMIT
+            || self.bytes >= REKEY_BYTE_LIMIT
+            || self.established.elapsed().as_secs() >= REKEY_AGE_SECONDS
+    }
+    pub const fn next_sequence(&self) -> u32 {
+        self.sequence
     }
 }
 
@@ -323,19 +364,42 @@ pub struct EncryptedPacketReader {
     counter: [u8; 16],
     mac_key: [u8; 32],
     sequence: u32,
+    packets: u64,
+    bytes: u64,
+    established: Instant,
 }
 
 impl EncryptedPacketReader {
-    pub const fn new(key: [u8; 16], counter: [u8; 16], mac_key: [u8; 32]) -> Self {
+    pub fn new(key: [u8; 16], counter: [u8; 16], mac_key: [u8; 32]) -> Self {
+        Self::with_sequence(key, counter, mac_key, 0)
+    }
+    pub fn with_sequence(
+        key: [u8; 16],
+        counter: [u8; 16],
+        mac_key: [u8; 32],
+        sequence: u32,
+    ) -> Self {
         Self {
             key,
             counter,
             mac_key,
-            sequence: 0,
+            sequence,
+            packets: 0,
+            bytes: 0,
+            established: Instant::now(),
         }
     }
     pub fn decode(&mut self, source: &[u8]) -> Result<(Vector<u8>, usize), ProtocolError> {
+        if self.rekey_required() {
+            return Err(ProtocolError::RekeyRequired);
+        }
+        self.decode_control(source)
+    }
+    pub fn decode_control(&mut self, source: &[u8]) -> Result<(Vector<u8>, usize), ProtocolError> {
         if self.sequence == u32::MAX {
+            return Err(ProtocolError::SequenceExhausted);
+        }
+        if self.packets >= REKEY_PACKET_LIMIT + REKEY_CONTROL_PACKET_RESERVE {
             return Err(ProtocolError::SequenceExhausted);
         }
         if source.len() < 16 + 32 {
@@ -381,6 +445,11 @@ impl EncryptedPacketReader {
         owned.extend(payload.iter().copied());
         self.counter = next;
         self.sequence += 1;
+        self.packets += 1;
+        self.bytes = self
+            .bytes
+            .checked_add(total as u64)
+            .ok_or(ProtocolError::SequenceExhausted)?;
         Ok((owned, total))
     }
     pub fn wire_length(&self, first_block: &[u8; 16]) -> Result<usize, ProtocolError> {
@@ -397,6 +466,14 @@ impl EncryptedPacketReader {
             return Err(ProtocolError::InvalidPacket);
         }
         encrypted.checked_add(32).ok_or(ProtocolError::Length)
+    }
+    pub fn rekey_required(&self) -> bool {
+        self.packets >= REKEY_PACKET_LIMIT
+            || self.bytes >= REKEY_BYTE_LIMIT
+            || self.established.elapsed().as_secs() >= REKEY_AGE_SECONDS
+    }
+    pub const fn next_sequence(&self) -> u32 {
+        self.sequence
     }
 }
 
@@ -482,6 +559,7 @@ impl fmt::Display for ProtocolError {
             Self::Entropy => "operating-system entropy is unavailable",
             Self::Authentication => "SSH packet authentication failed",
             Self::SequenceExhausted => "SSH packet sequence exhausted before rekey",
+            Self::RekeyRequired => "SSH transport rekey is required",
         })
     }
 }
@@ -591,5 +669,35 @@ mod tests {
             Err(ProtocolError::SequenceExhausted)
         );
         assert_eq!(reader.sequence, u32::MAX);
+    }
+
+    #[test]
+    fn independent_packet_and_byte_budgets_require_rekey_with_control_reserve() {
+        let mut writer = EncryptedPacketWriter::new([1; 16], [2; 16], [3; 32]);
+        writer.packets = REKEY_PACKET_LIMIT;
+        assert!(writer.rekey_required());
+        assert_eq!(
+            writer.encode(b"application"),
+            Err(ProtocolError::RekeyRequired)
+        );
+        assert!(writer.encode_control(&[20]).is_ok());
+        assert_eq!(writer.packets, REKEY_PACKET_LIMIT + 1);
+
+        let mut byte_writer = EncryptedPacketWriter::new([1; 16], [2; 16], [3; 32]);
+        byte_writer.bytes = REKEY_BYTE_LIMIT;
+        assert!(byte_writer.rekey_required());
+        assert_eq!(
+            byte_writer.encode(b"application"),
+            Err(ProtocolError::RekeyRequired)
+        );
+
+        let mut source = EncryptedPacketWriter::new([1; 16], [2; 16], [3; 32]);
+        let packet = source.encode_control(&[20]).unwrap();
+        let mut reader = EncryptedPacketReader::new([1; 16], [2; 16], [3; 32]);
+        reader.packets = REKEY_PACKET_LIMIT;
+        assert!(reader.rekey_required());
+        assert_eq!(reader.decode(&packet), Err(ProtocolError::RekeyRequired));
+        assert_eq!(&*reader.decode_control(&packet).unwrap().0, &[20]);
+        assert_eq!(reader.packets, REKEY_PACKET_LIMIT + 1);
     }
 }

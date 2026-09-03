@@ -1,34 +1,46 @@
 use crate::{
-    BinaryReader, BinaryWriter, ChannelEvent, ChannelState, EncryptedPacketReader,
-    EncryptedPacketWriter, GitService, Identification, ProtocolError, RsaPrivateKey,
     build_channel_data, build_channel_eof, build_channel_open, build_exec_request, build_kex_init,
     build_publickey_auth, build_window_adjust, decode_plain_packet, derive_exchange_keys,
     encode_plain_packet, negotiate_kex_init, parse_channel_event, parse_identification,
-    verify_rsa_sha2_256,
+    verify_rsa_sha2_256, BinaryReader, BinaryWriter, ChannelEvent, ChannelState,
+    EncryptedPacketReader, EncryptedPacketWriter, GitService, Identification, ProtocolError,
+    RsaPrivateKey,
 };
 use core::fmt;
-use mrml_runtime::{TcpStream, Vector};
+use mrml_runtime::{Instant, TcpStream, Vector};
 
 const CLIENT_ID: &[u8] = b"SSH-2.0-mrml_0.4\r\n";
 const MAX_BANNER: usize = 50 * 257;
+const IO_IDLE_TIMEOUT_MILLIS: u64 = 15_000;
+const HANDSHAKE_DEADLINE_SECONDS: u64 = 60;
+const AUTHENTICATION_DEADLINE_SECONDS: u64 = 60;
+const CHANNEL_DEADLINE_SECONDS: u64 = 60;
+const TOTAL_OPERATION_DEADLINE_SECONDS: u64 = 4 * 60 * 60;
 
 pub struct SshWire {
     stream: TcpStream,
     reader: Option<EncryptedPacketReader>,
     writer: Option<EncryptedPacketWriter>,
+    operation_started: Instant,
+    phase_started: Instant,
+    phase_deadline_seconds: u64,
 }
 impl SshWire {
     pub fn connect(host: &str, port: u16) -> Result<(Self, Identification), WireError> {
+        let operation_started = Instant::now();
         let mut stream = TcpStream::connect_host(host, port).map_err(|_| WireError::Connect)?;
         stream
-            .set_read_timeout_millis(15_000)
+            .set_read_timeout_millis(IO_IDLE_TIMEOUT_MILLIS)
             .map_err(|_| WireError::Timeout)?;
         stream
-            .set_write_timeout_millis(15_000)
+            .set_write_timeout_millis(IO_IDLE_TIMEOUT_MILLIS)
             .map_err(|_| WireError::Timeout)?;
         stream.write_all(CLIENT_ID).map_err(|_| WireError::Write)?;
         let mut banner = Vector::new();
         loop {
+            if operation_started.elapsed().as_secs() >= HANDSHAKE_DEADLINE_SECONDS {
+                return Err(WireError::Deadline);
+            }
             if banner.len() >= MAX_BANNER {
                 return Err(WireError::Protocol(ProtocolError::InvalidIdentification));
             }
@@ -42,6 +54,9 @@ impl SshWire {
                             stream,
                             reader: None,
                             writer: None,
+                            operation_started,
+                            phase_started: operation_started,
+                            phase_deadline_seconds: HANDSHAKE_DEADLINE_SECONDS,
                         },
                         id,
                     ));
@@ -60,15 +75,38 @@ impl SshWire {
         self.writer = Some(writer);
     }
     pub fn send(&mut self, payload: &[u8]) -> Result<(), WireError> {
+        self.check_deadlines()?;
         let packet = match self.writer.as_mut() {
             Some(writer) => writer.encode(payload),
             None => encode_plain_packet(payload, 8),
         }
         .map_err(WireError::Protocol)?;
-        self.stream.write_all(&packet).map_err(|_| WireError::Write)
+        self.stream
+            .write_all(&packet)
+            .map_err(|_| WireError::Write)?;
+        self.check_deadlines()
+    }
+    fn send_rekey_control(&mut self, payload: &[u8]) -> Result<(), WireError> {
+        self.check_deadlines()?;
+        let packet = match self.writer.as_mut() {
+            Some(writer) => writer.encode_control(payload),
+            None => encode_plain_packet(payload, 8),
+        }
+        .map_err(WireError::Protocol)?;
+        self.stream
+            .write_all(&packet)
+            .map_err(|_| WireError::Write)?;
+        self.check_deadlines()
     }
     pub fn receive(&mut self) -> Result<Vector<u8>, WireError> {
-        if let Some(reader) = self.reader.as_mut() {
+        self.receive_packet(false)
+    }
+    fn receive_rekey_control(&mut self) -> Result<Vector<u8>, WireError> {
+        self.receive_packet(true)
+    }
+    fn receive_packet(&mut self, rekey_control: bool) -> Result<Vector<u8>, WireError> {
+        self.check_deadlines()?;
+        let payload = if let Some(reader) = self.reader.as_mut() {
             let mut first = [0u8; 16];
             self.stream
                 .read_exact(&mut first)
@@ -81,10 +119,12 @@ impl SshWire {
             self.stream
                 .read_exact(&mut wire[16..])
                 .map_err(|_| WireError::Read)?;
-            reader
-                .decode(&wire)
-                .map(|pair| pair.0)
-                .map_err(WireError::Protocol)
+            let decoded = if rekey_control {
+                reader.decode_control(&wire)
+            } else {
+                reader.decode(&wire)
+            };
+            decoded.map(|pair| pair.0).map_err(WireError::Protocol)
         } else {
             let mut header = [0u8; 4];
             self.stream
@@ -106,6 +146,42 @@ impl SshWire {
             let mut owned = Vector::new();
             owned.extend(payload.iter().copied());
             Ok(owned)
+        }?;
+        self.check_deadlines()?;
+        Ok(payload)
+    }
+    fn rekey_required(&self) -> bool {
+        self.reader
+            .as_ref()
+            .is_some_and(EncryptedPacketReader::rekey_required)
+            || self
+                .writer
+                .as_ref()
+                .is_some_and(EncryptedPacketWriter::rekey_required)
+    }
+    fn next_sequences(&self) -> Result<(u32, u32), WireError> {
+        Ok((
+            self.reader
+                .as_ref()
+                .ok_or(WireError::State)?
+                .next_sequence(),
+            self.writer
+                .as_ref()
+                .ok_or(WireError::State)?
+                .next_sequence(),
+        ))
+    }
+    fn begin_phase(&mut self, seconds: u64) {
+        self.phase_started = Instant::now();
+        self.phase_deadline_seconds = seconds;
+    }
+    fn check_deadlines(&self) -> Result<(), WireError> {
+        if self.operation_started.elapsed().as_secs() >= TOTAL_OPERATION_DEADLINE_SECONDS
+            || self.phase_started.elapsed().as_secs() >= self.phase_deadline_seconds
+        {
+            Err(WireError::Deadline)
+        } else {
+            Ok(())
         }
     }
 }
@@ -113,6 +189,10 @@ impl SshWire {
 pub struct AuthenticatedSsh {
     pub wire: SshWire,
     pub session_id: [u8; 32],
+    client_identification: Vector<u8>,
+    server_identification: Vector<u8>,
+    current_host_key: Vector<u8>,
+    next_host_key: Option<Vector<u8>>,
 }
 impl AuthenticatedSsh {
     pub fn connect(
@@ -122,6 +202,23 @@ impl AuthenticatedSsh {
         key: &RsaPrivateKey,
         expected_host_key: &[u8],
     ) -> Result<Self, WireError> {
+        Self::connect_with_host_key_pins(host, port, user, key, expected_host_key, None)
+    }
+
+    pub fn connect_with_host_key_pins(
+        host: &str,
+        port: u16,
+        user: &str,
+        key: &RsaPrivateKey,
+        current_host_key: &[u8],
+        next_host_key: Option<&[u8]>,
+    ) -> Result<Self, WireError> {
+        if current_host_key.is_empty()
+            || current_host_key.len() > 1024 * 1024
+            || next_host_key.is_some_and(|pin| pin.is_empty() || pin.len() > 1024 * 1024)
+        {
+            return Err(WireError::Protocol(ProtocolError::InvalidPublicKey));
+        }
         let (mut wire, server_id) = SshWire::connect(host, port)?;
         let client_kex = build_kex_init().map_err(WireError::Protocol)?;
         wire.send(&client_kex)?;
@@ -146,7 +243,7 @@ impl AuthenticatedSsh {
             .try_into()
             .map_err(|_| WireError::Protocol(ProtocolError::InvalidPublicKey))?;
         let signature = reader.string().map_err(WireError::Protocol)?;
-        if reader.remaining() != 0 || !constant_time_equal(host_key, expected_host_key) {
+        if reader.remaining() != 0 || !host_key_matches(host_key, current_host_key, next_host_key) {
             return Err(WireError::Protocol(ProtocolError::Authentication));
         }
         let client_id = &CLIENT_ID[..CLIENT_ID.len() - 2];
@@ -178,6 +275,7 @@ impl AuthenticatedSsh {
             EncryptedPacketReader::new(server_key, keys.server_iv, keys.server_mac),
             EncryptedPacketWriter::new(client_key, keys.client_iv, keys.client_mac),
         );
+        wire.begin_phase(AUTHENTICATION_DEADLINE_SECONDS);
         let mut service = BinaryWriter::new();
         service.byte(5);
         service
@@ -199,10 +297,124 @@ impl AuthenticatedSsh {
         if response.first().copied() != Some(52) {
             return Err(WireError::Protocol(ProtocolError::Authentication));
         }
+        let mut current_pin = Vector::new();
+        current_pin.extend(current_host_key.iter().copied());
+        let next_pin = next_host_key.map(|pin| {
+            let mut stored = Vector::new();
+            stored.extend(pin.iter().copied());
+            stored
+        });
         Ok(Self {
             wire,
             session_id: keys.exchange_hash,
+            client_identification: {
+                let mut stored = Vector::new();
+                stored.extend(client_id.iter().copied());
+                stored
+            },
+            server_identification: server_line,
+            current_host_key: current_pin,
+            next_host_key: next_pin,
         })
+    }
+
+    fn send(&mut self, payload: &[u8]) -> Result<(), WireError> {
+        if self.wire.rekey_required() {
+            self.rekey(None)?;
+        }
+        self.wire.send(payload)
+    }
+
+    fn receive(&mut self) -> Result<Vector<u8>, WireError> {
+        loop {
+            if self.wire.rekey_required() {
+                self.rekey(None)?;
+            }
+            let payload = self.wire.receive()?;
+            if payload.first().copied() == Some(20) {
+                self.rekey(Some(payload))?;
+            } else {
+                return Ok(payload);
+            }
+        }
+    }
+
+    fn rekey(&mut self, server_kex: Option<Vector<u8>>) -> Result<(), WireError> {
+        let client_kex = build_kex_init().map_err(WireError::Protocol)?;
+        self.wire.send_rekey_control(&client_kex)?;
+        let server_kex = match server_kex {
+            Some(server_kex) => server_kex,
+            None => self.wire.receive_rekey_control()?,
+        };
+        negotiate_kex_init(&server_kex).map_err(WireError::Protocol)?;
+        let mut secret = [0u8; 32];
+        mrml_runtime::fill_random(&mut secret)
+            .map_err(|_| WireError::Protocol(ProtocolError::Entropy))?;
+        let client_public = mrml_crypto::x25519_public(secret);
+        let mut init = BinaryWriter::new();
+        init.byte(30);
+        init.string(&client_public).map_err(WireError::Protocol)?;
+        self.wire.send_rekey_control(&init.finish())?;
+        let reply = self.wire.receive_rekey_control()?;
+        let mut reader = BinaryReader::new(&reply);
+        if reader.byte().map_err(WireError::Protocol)? != 31 {
+            return Err(WireError::Protocol(ProtocolError::InvalidPacket));
+        }
+        let host_key = reader.string().map_err(WireError::Protocol)?;
+        let server_public_slice = reader.string().map_err(WireError::Protocol)?;
+        let server_public: [u8; 32] = server_public_slice
+            .try_into()
+            .map_err(|_| WireError::Protocol(ProtocolError::InvalidPublicKey))?;
+        let signature = reader.string().map_err(WireError::Protocol)?;
+        if reader.remaining() != 0
+            || !host_key_matches(
+                host_key,
+                &self.current_host_key,
+                self.next_host_key.as_deref(),
+            )
+        {
+            return Err(WireError::Protocol(ProtocolError::Authentication));
+        }
+        let transcript = transcript(
+            &self.client_identification,
+            &self.server_identification,
+            &client_kex,
+            &server_kex,
+            host_key,
+            &client_public,
+            &server_public,
+        )
+        .map_err(WireError::Protocol)?;
+        let keys =
+            derive_exchange_keys(secret, server_public, &[&transcript], Some(self.session_id))
+                .map_err(WireError::Protocol)?;
+        verify_rsa_sha2_256(host_key, &keys.exchange_hash, signature)
+            .map_err(WireError::Protocol)?;
+        self.wire.send_rekey_control(&[21])?;
+        let newkeys = self.wire.receive_rekey_control()?;
+        if &*newkeys != [21] {
+            return Err(WireError::Protocol(ProtocolError::InvalidPacket));
+        }
+        let (reader_sequence, writer_sequence) = self.wire.next_sequences()?;
+        let mut client_key = [0u8; 16];
+        client_key.copy_from_slice(&keys.client_key[..16]);
+        let mut server_key = [0u8; 16];
+        server_key.copy_from_slice(&keys.server_key[..16]);
+        self.wire.enable_encryption(
+            EncryptedPacketReader::with_sequence(
+                server_key,
+                keys.server_iv,
+                keys.server_mac,
+                reader_sequence,
+            ),
+            EncryptedPacketWriter::with_sequence(
+                client_key,
+                keys.client_iv,
+                keys.client_mac,
+                writer_sequence,
+            ),
+        );
+        Ok(())
     }
 }
 
@@ -216,14 +428,16 @@ impl GitChannel {
         service: GitService,
         path: &str,
     ) -> Result<Self, WireError> {
-        ssh.wire
-            .send(&build_channel_open(0).map_err(WireError::Protocol)?)?;
-        let opened = parse_channel_event(&ssh.wire.receive()?).map_err(WireError::Protocol)?;
+        ssh.wire.begin_phase(CHANNEL_DEADLINE_SECONDS);
+        ssh.send(&build_channel_open(0).map_err(WireError::Protocol)?)?;
+        let opened = parse_channel_event(&ssh.receive()?).map_err(WireError::Protocol)?;
         let state = ChannelState::confirmed(0, &opened).map_err(WireError::Protocol)?;
-        ssh.wire
-            .send(&build_exec_request(state.remote, service, path).map_err(WireError::Protocol)?)?;
-        match parse_channel_event(&ssh.wire.receive()?).map_err(WireError::Protocol)? {
-            ChannelEvent::Success(id) if id == state.local => Ok(Self { ssh, state }),
+        ssh.send(&build_exec_request(state.remote, service, path).map_err(WireError::Protocol)?)?;
+        match parse_channel_event(&ssh.receive()?).map_err(WireError::Protocol)? {
+            ChannelEvent::Success(id) if id == state.local => {
+                ssh.wire.begin_phase(TOTAL_OPERATION_DEADLINE_SECONDS);
+                Ok(Self { ssh, state })
+            }
             _ => Err(WireError::Protocol(ProtocolError::Authentication)),
         }
     }
@@ -240,7 +454,7 @@ impl GitChannel {
                 .min(self.state.send_packet as usize)
                 .min(self.state.send_window as usize);
             self.state.accept_send(count).map_err(WireError::Protocol)?;
-            self.ssh.wire.send(
+            self.ssh.send(
                 &build_channel_data(self.state.remote, &bytes[..count])
                     .map_err(WireError::Protocol)?,
             )?;
@@ -249,10 +463,10 @@ impl GitChannel {
         Ok(())
     }
     pub fn send_eof(&mut self) -> Result<(), WireError> {
-        self.ssh.wire.send(&build_channel_eof(self.state.remote))
+        self.ssh.send(&build_channel_eof(self.state.remote))
     }
     pub fn receive_event(&mut self) -> Result<ChannelEvent, WireError> {
-        let event = parse_channel_event(&self.ssh.wire.receive()?).map_err(WireError::Protocol)?;
+        let event = parse_channel_event(&self.ssh.receive()?).map_err(WireError::Protocol)?;
         match &event {
             ChannelEvent::WindowAdjusted { recipient, bytes } if *recipient == self.state.local => {
                 self.state.add_window(*bytes).map_err(WireError::Protocol)?
@@ -266,7 +480,7 @@ impl GitChannel {
                     .map_err(WireError::Protocol)?;
                 if self.state.receive_window < 1024 * 1024 {
                     let replenish = 2 * 1024 * 1024 - self.state.receive_window;
-                    self.ssh.wire.send(
+                    self.ssh.send(
                         &build_window_adjust(self.state.remote, replenish)
                             .map_err(WireError::Protocol)?,
                     )?;
@@ -325,6 +539,13 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
     }
     same_length && difference == 0
 }
+fn host_key_matches(candidate: &[u8], current: &[u8], next: Option<&[u8]>) -> bool {
+    let current_matches = constant_time_equal(candidate, current);
+    let next_matches = next
+        .map(|pin| constant_time_equal(candidate, pin))
+        .unwrap_or(false);
+    current_matches | next_matches
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WireError {
@@ -332,6 +553,8 @@ pub enum WireError {
     Timeout,
     Read,
     Write,
+    State,
+    Deadline,
     Protocol(ProtocolError),
 }
 impl fmt::Display for WireError {
@@ -342,6 +565,8 @@ impl fmt::Display for WireError {
             Self::Timeout => f.write_str("failed to configure SSH timeout"),
             Self::Read => f.write_str("failed to read SSH stream"),
             Self::Write => f.write_str("failed to write SSH stream"),
+            Self::State => f.write_str("SSH transport is not encrypted"),
+            Self::Deadline => f.write_str("SSH operation deadline exceeded"),
         }
     }
 }
@@ -351,32 +576,44 @@ impl core::error::Error for WireError {}
 mod tests {
     use super::*;
     use mrml_runtime::TcpListener;
+
+    #[test]
+    fn current_and_next_host_key_pins_are_exact_and_bounded() {
+        assert!(host_key_matches(b"current", b"current", Some(b"next")));
+        assert!(host_key_matches(b"next", b"current", Some(b"next")));
+        assert!(!host_key_matches(
+            b"current-extra",
+            b"current",
+            Some(b"next")
+        ));
+        assert!(!host_key_matches(b"unknown", b"current", Some(b"next")));
+        assert!(!host_key_matches(b"next", b"current", None));
+    }
+
     #[test]
     fn loopback_exchanges_identification_and_plain_packet() {
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
-        assert!(
-            mrml_runtime::spawn_detached(move || {
-                let mut stream = listener.accept().unwrap();
-                let mut id = [0u8; CLIENT_ID.len()];
-                stream.read_exact(&mut id).unwrap();
-                assert_eq!(&id, CLIENT_ID);
-                stream
-                    .write_all(b"banner\r\nSSH-2.0-test_server\r\n")
-                    .unwrap();
-                let mut header = [0u8; 4];
-                stream.read_exact(&mut header).unwrap();
-                let length = u32::from_be_bytes(header) as usize;
-                let mut packet = Vector::new();
-                packet.extend(header);
-                packet.try_resize(length + 4, 0).unwrap();
-                stream.read_exact(&mut packet[4..]).unwrap();
-                assert_eq!(decode_plain_packet(&packet, 8).unwrap().0, b"hello");
-                let response = encode_plain_packet(b"world", 8).unwrap();
-                stream.write_all(&response).unwrap();
-            })
-            .is_ok()
-        );
+        assert!(mrml_runtime::spawn_detached(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut id = [0u8; CLIENT_ID.len()];
+            stream.read_exact(&mut id).unwrap();
+            assert_eq!(&id, CLIENT_ID);
+            stream
+                .write_all(b"banner\r\nSSH-2.0-test_server\r\n")
+                .unwrap();
+            let mut header = [0u8; 4];
+            stream.read_exact(&mut header).unwrap();
+            let length = u32::from_be_bytes(header) as usize;
+            let mut packet = Vector::new();
+            packet.extend(header);
+            packet.try_resize(length + 4, 0).unwrap();
+            stream.read_exact(&mut packet[4..]).unwrap();
+            assert_eq!(decode_plain_packet(&packet, 8).unwrap().0, b"hello");
+            let response = encode_plain_packet(b"world", 8).unwrap();
+            stream.write_all(&response).unwrap();
+        })
+        .is_ok());
         let (mut wire, id) = SshWire::connect("127.0.0.1", port).unwrap();
         assert_eq!(id.software, "test_server");
         wire.send(b"hello").unwrap();
