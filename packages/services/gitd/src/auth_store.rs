@@ -174,18 +174,38 @@ fn replace_token_store(
             .custom_flags(O_NOFOLLOW)
             .open(&temporary)
             .map_err(|_| AuthenticationStoreError::Open)?;
+        test_process_exit_at_boundary(1);
         file.write_all(&bytes)
-            .and_then(|()| file.sync_all())
             .map_err(|_| AuthenticationStoreError::Read)?;
+        test_process_exit_at_boundary(2);
+        file.sync_all().map_err(|_| AuthenticationStoreError::Read)?;
+        test_process_exit_at_boundary(3);
         std::fs::rename(&temporary, path).map_err(|_| AuthenticationStoreError::Open)?;
+        test_process_exit_at_boundary(4);
         std::fs::File::open(parent)
             .and_then(|directory| directory.sync_all())
-            .map_err(|_| AuthenticationStoreError::Read)
+            .map_err(|_| AuthenticationStoreError::Read)?;
+        test_process_exit_at_boundary(5);
+        Ok(())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(not(test))]
+fn test_process_exit_at_boundary(_: u8) {}
+
+#[cfg(test)]
+fn test_process_exit_at_boundary(boundary: u8) {
+    if std::env::var("MRML_TEST_TOKEN_STORE_EXIT_BOUNDARY")
+        .ok()
+        .and_then(|value| value.parse::<u8>().ok())
+        == Some(boundary)
+    {
+        std::process::exit(91);
+    }
 }
 
 fn lock_token_administration(
@@ -608,5 +628,194 @@ mod tests {
         );
         assert_eq!(current.generation(), 3);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_issue_and_revoke_serialize_without_lost_updates() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-gitd-auth-issue-revoke-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = fs::metadata(&root).unwrap().uid();
+        let pepper_path = root.join("pepper");
+        fs::write(&pepper_path, [0x75; 32]).unwrap();
+        fs::set_permissions(&pepper_path, fs::Permissions::from_mode(0o400)).unwrap();
+        let store_path = root.join("tokens.v2");
+        initialize_empty_token_store(&store_path, &pepper_path, uid).unwrap();
+        let mut existing = issue_access_token(
+            &store_path,
+            &pepper_path,
+            uid,
+            RepositoryIdentity::parse("owner/repository").unwrap(),
+            AccessScopes::READ,
+            10,
+            20,
+            3,
+            "existing",
+        )
+        .unwrap();
+        let existing = existing.reveal_once().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let issue_store = store_path.clone();
+        let issue_pepper = pepper_path.clone();
+        let issue_barrier = barrier.clone();
+        let issue = std::thread::spawn(move || {
+            issue_barrier.wait();
+            issue_access_token(
+                &issue_store,
+                &issue_pepper,
+                uid,
+                RepositoryIdentity::parse("owner/repository").unwrap(),
+                AccessScopes::WRITE,
+                10,
+                20,
+                3,
+                "concurrent-issue",
+            )
+            .map(|_| ())
+        });
+        let revoke_store = store_path.clone();
+        let revoke_pepper = pepper_path.clone();
+        let revoke_barrier = barrier.clone();
+        let revoke = std::thread::spawn(move || {
+            revoke_barrier.wait();
+            revoke_access_token(&revoke_store, &revoke_pepper, uid, &existing)
+        });
+        barrier.wait();
+        assert_eq!(issue.join().unwrap(), Ok(()));
+        assert_eq!(revoke.join().unwrap(), Ok(true));
+        let mut pepper = read_pepper(&pepper_path, uid).unwrap();
+        let authority = TokenAuthority::new(pepper).unwrap();
+        erase_secret_bytes(&mut pepper);
+        let (generation, records) = authority
+            .decode_record_snapshot(&fs::read(&store_path).unwrap())
+            .unwrap();
+        assert_eq!(generation, 4);
+        assert_eq!(records.len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_duplicate_revocations_advance_exactly_once() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-gitd-auth-revoke-revoke-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = fs::metadata(&root).unwrap().uid();
+        let pepper_path = root.join("pepper");
+        fs::write(&pepper_path, [0x76; 32]).unwrap();
+        fs::set_permissions(&pepper_path, fs::Permissions::from_mode(0o400)).unwrap();
+        let store_path = root.join("tokens.v2");
+        initialize_empty_token_store(&store_path, &pepper_path, uid).unwrap();
+        let mut token = issue_access_token(
+            &store_path,
+            &pepper_path,
+            uid,
+            RepositoryIdentity::parse("owner/repository").unwrap(),
+            AccessScopes::READ,
+            10,
+            20,
+            3,
+            "duplicate-revoke",
+        )
+        .unwrap();
+        let token = token.reveal_once().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let store_path = store_path.clone();
+            let pepper_path = pepper_path.clone();
+            let barrier = barrier.clone();
+            let token = token.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                revoke_access_token(&store_path, &pepper_path, uid, &token)
+            }));
+        }
+        barrier.wait();
+        let mut results = [workers.remove(0).join().unwrap(), workers.remove(0).join().unwrap()];
+        results.sort_unstable_by_key(|result| match result {
+            Ok(value) => *value as u8,
+            Err(_) => 2,
+        });
+        assert_eq!(results, [Ok(false), Ok(true)]);
+        let mut pepper = read_pepper(&pepper_path, uid).unwrap();
+        let authority = TokenAuthority::new(pepper).unwrap();
+        erase_secret_bytes(&mut pepper);
+        let (generation, records) = authority
+            .decode_record_snapshot(&fs::read(&store_path).unwrap())
+            .unwrap();
+        assert_eq!(generation, 3);
+        assert!(records.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn token_store_recovers_process_exit_at_every_replace_boundary() {
+        const CHILD_ROOT: &str = "MRML_TEST_TOKEN_STORE_EXIT_ROOT";
+        if let (Ok(root), Ok(_)) = (
+            std::env::var(CHILD_ROOT),
+            std::env::var("MRML_TEST_TOKEN_STORE_EXIT_BOUNDARY"),
+        ) {
+            let root = std::path::PathBuf::from(root);
+            let uid = fs::metadata(&root).unwrap().uid();
+            let result = issue_access_token(
+                &root.join("tokens.v2"),
+                &root.join("pepper"),
+                uid,
+                RepositoryIdentity::parse("owner/repository").unwrap(),
+                AccessScopes::READ,
+                10,
+                20,
+                3,
+                "fault-injected",
+            );
+            panic!("fault-injected child reached the end: {result:?}");
+        }
+
+        for boundary in 1u8..=5 {
+            let root = std::env::temp_dir().join(format!(
+                "mrml-gitd-auth-exit-{}-{boundary}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&root);
+            fs::create_dir(&root).unwrap();
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+            let uid = fs::metadata(&root).unwrap().uid();
+            let pepper_path = root.join("pepper");
+            fs::write(&pepper_path, [0x77; 32]).unwrap();
+            fs::set_permissions(&pepper_path, fs::Permissions::from_mode(0o400)).unwrap();
+            let store_path = root.join("tokens.v2");
+            initialize_empty_token_store(&store_path, &pepper_path, uid).unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("auth_store::tests::token_store_recovers_process_exit_at_every_replace_boundary")
+                .arg("--nocapture")
+                .env(CHILD_ROOT, &root)
+                .env("MRML_TEST_TOKEN_STORE_EXIT_BOUNDARY", boundary.to_string())
+                .status()
+                .unwrap();
+            // The MRML test launcher reports an inner test process's deliberate
+            // nonzero exit as its own test-failure status.
+            assert_eq!(status.code(), Some(101));
+            let mut pepper = read_pepper(&pepper_path, uid).unwrap();
+            let authority = TokenAuthority::new(pepper).unwrap();
+            erase_secret_bytes(&mut pepper);
+            let (generation, records) = authority
+                .decode_record_snapshot(&fs::read(&store_path).unwrap())
+                .unwrap();
+            if boundary < 4 {
+                assert_eq!((generation, records.len()), (1, 0));
+            } else {
+                assert_eq!((generation, records.len()), (2, 1));
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }
