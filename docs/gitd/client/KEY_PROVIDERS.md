@@ -79,6 +79,24 @@ message-signing, key-export, lifecycle, or repository-write operation. SIGINT or
 SIGTERM wakes the listener, erases loaded secret buffers, and removes only the
 exact socket inode created by that process.
 
+The same binary provides a cold, offline owner operation for policy rotation:
+
+```text
+mrml-git-protected-signer sign-key-rotation OWNER_UID REPOSITORY TRUST_GENERATION OPENPGP_SEED OPENPGP_CREATED_AT ML_DSA_PUBLIC ML_DSA_SECRET NEXT_POLICY OPENPGP_PUBLIC_OUTPUT OPENPGP_SIGNATURE_OUTPUT ML_DSA_SIGNATURE_OUTPUT
+```
+
+It parses the complete canonical next policy, requires its repository to match,
+constructs only the `KeyRotation`/SHA-256 hybrid transcript at the explicit trust
+generation, verifies that the ML-DSA public and secret inputs agree, and writes a
+bare OpenPGP-v6 public key plus both detached signatures. Outputs are absolute,
+owner-controlled, mode-`0600`, no-overwrite files followed by file and directory
+sync. The operation has no socket, network, repository-write, generic-signing,
+or private-key-export path. Run it once with the currently authorized signer and
+once with the candidate signer; the two OpenPGP public outputs identify which
+signature came from which generation. The candidate policy remains data until
+the separately stopped, volume-fed authority transition independently verifies
+both hybrid authorizations and durably selects it.
+
 The native SSH proposal advertises `rsa-sha2-256` only; the SHA-1 `ssh-rsa`
 signature algorithm is not negotiable. Duplicate algorithm-list entries fail
 closed, and independent inbound/outbound encrypted packet state refuses another

@@ -8,8 +8,8 @@ use mrml_git::{
     AuthorizedHybridPair, GitObjectType, HybridCommitSignatures, ObjectFormat,
     ProtectedSignerCapability, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
     SignaturePurpose, TrustGeneration, UnixProtectedSignerError, canonical_hybrid_transcript,
-    decode_protected_signer_request, encode_loose_object_with_format,
-    encode_protected_signer_response,
+    decode_protected_signer_request, encode_loose_object_with_format, encode_protected_signer_response,
+    parse_trust_policy, MAX_ENCODED_TRUST_POLICY_BYTES,
 };
 use mrml_openpgp::{
     DigestAlgorithm, MAX_OPENPGP_SIGNATURE_BYTES, SigningKeyV6, sign_detached_v6_ascii_with_salt,
@@ -75,6 +75,37 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
+    if let [
+        _,
+        command,
+        owner_uid,
+        repository,
+        trust_generation,
+        openpgp_seed,
+        openpgp_created_at,
+        ml_dsa_public,
+        ml_dsa_secret,
+        next_policy,
+        openpgp_public_output,
+        openpgp_signature_output,
+        ml_dsa_signature_output,
+    ] = arguments.as_slice()
+        && command == "sign-key-rotation"
+    {
+        return sign_key_rotation(
+            owner_uid.parse().map_err(|_| ())?,
+            repository,
+            trust_generation.parse().map_err(|_| ())?,
+            Path::new(openpgp_seed),
+            openpgp_created_at.parse().map_err(|_| ())?,
+            Path::new(ml_dsa_public),
+            Path::new(ml_dsa_secret),
+            Path::new(next_policy),
+            Path::new(openpgp_public_output),
+            Path::new(openpgp_signature_output),
+            Path::new(ml_dsa_signature_output),
+        );
+    }
     let config = parse_arguments(&arguments)?;
     let mut capability_bytes = read_secret(&config.capability_file, 32, config.owner_uid)?;
     let mut capability_array = [0; 32];
@@ -118,6 +149,114 @@ fn run() -> Result<(), ()> {
         &ml_dsa,
         &terminating,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_key_rotation(
+    owner_uid: u32,
+    repository: &str,
+    trust_generation: u64,
+    openpgp_seed_path: &Path,
+    openpgp_created_at: u32,
+    ml_dsa_public_path: &Path,
+    ml_dsa_secret_path: &Path,
+    next_policy_path: &Path,
+    openpgp_public_output: &Path,
+    openpgp_signature_output: &Path,
+    ml_dsa_signature_output: &Path,
+) -> Result<(), ()> {
+    if owner_uid == 0 || trust_generation == 0 || openpgp_created_at == 0 {
+        return Err(());
+    }
+    let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
+    let next_policy_bytes = read_public_bounded(
+        next_policy_path,
+        1,
+        MAX_ENCODED_TRUST_POLICY_BYTES,
+        owner_uid,
+    )?;
+    let next_policy = parse_trust_policy(&next_policy_bytes).map_err(|_| ())?;
+    if next_policy.repository() != &repository {
+        return Err(());
+    }
+    validate_new_public_output(openpgp_public_output, owner_uid)?;
+    validate_new_public_output(openpgp_signature_output, owner_uid)?;
+    validate_new_public_output(ml_dsa_signature_output, owner_uid)?;
+    let mut seed_bytes = read_secret(openpgp_seed_path, 32, owner_uid)?;
+    let mut seed = [0; 32];
+    seed.copy_from_slice(&seed_bytes);
+    erase_secret_bytes(&mut seed_bytes);
+    let openpgp = SigningKeyV6::from_seed(seed, openpgp_created_at).map_err(|_| ())?;
+    erase_secret_bytes(&mut seed);
+    let ml_dsa_public = read_public(
+        ml_dsa_public_path,
+        ML_DSA_65_PUBLIC_KEY_BYTES,
+        owner_uid,
+    )?;
+    let mut ml_dsa_secret = read_secret(
+        ml_dsa_secret_path,
+        ML_DSA_65_SECRET_KEY_BYTES,
+        owner_uid,
+    )?;
+    validate_ml_dsa_pair(&ml_dsa_public, &ml_dsa_secret)?;
+    let public_ml_dsa: &[u8; ML_DSA_65_PUBLIC_KEY_BYTES] =
+        ml_dsa_public.as_slice().try_into().map_err(|_| ())?;
+    let pair = AuthorizedHybridPair::bind(&openpgp.public_key(), public_ml_dsa);
+    let transcript = canonical_hybrid_transcript(
+        &repository,
+        ObjectFormat::Sha256,
+        GitObjectType::KeyRotation,
+        SignaturePurpose::KeyRotation,
+        TrustGeneration(trust_generation),
+        pair,
+        &next_policy_bytes,
+    )
+    .map_err(|_| ())?;
+    let mut salt = [0; 32];
+    let mut randomizer = [0; 32];
+    mrml_runtime::fill_random(&mut salt).map_err(|_| ())?;
+    mrml_runtime::fill_random(&mut randomizer).map_err(|_| ())?;
+    let mut openpgp_signature = [0; MAX_OPENPGP_SIGNATURE_BYTES];
+    let openpgp_length = sign_detached_v6_ascii_with_salt(
+        &openpgp,
+        &transcript,
+        DigestAlgorithm::Sha512,
+        mrml_runtime::unix_time_seconds().ok_or(())?,
+        &salt,
+        &mut openpgp_signature,
+    )
+    .map_err(|_| ())?;
+    let mut ml_dsa_signature = [0; ML_DSA_65_SIGNATURE_BYTES];
+    let signing_result = ml_dsa_65_sign(
+        &ml_dsa_secret,
+        b"mrml.git.hybrid.v1",
+        &transcript,
+        &randomizer,
+        &mut ml_dsa_signature,
+    );
+    erase_secret_bytes(&mut ml_dsa_secret);
+    erase_secret_bytes(&mut salt);
+    erase_secret_bytes(&mut randomizer);
+    signing_result.map_err(|_| ())?;
+    let mut openpgp_public = [0; mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES];
+    let openpgp_public_length = openpgp
+        .public_key()
+        .encode_ascii(&mut openpgp_public)
+        .map_err(|_| ())?;
+    write_new_public(
+        openpgp_public_output,
+        &openpgp_public[..openpgp_public_length],
+        owner_uid,
+    )?;
+    write_new_public(
+        openpgp_signature_output,
+        &openpgp_signature[..openpgp_length],
+        owner_uid,
+    )?;
+    write_new_public(ml_dsa_signature_output, &ml_dsa_signature, owner_uid)?;
+    erase_secret_bytes(&mut ml_dsa_signature);
+    println!("key-rotation authorization written");
+    Ok(())
 }
 
 fn validate_ml_dsa_pair(public: &[u8], secret: &[u8]) -> Result<(), ()> {
@@ -471,6 +610,79 @@ fn read_public(path: &Path, exact: usize, expected_owner: u32) -> Result<Vec<u8>
     Ok(bytes)
 }
 
+fn read_public_bounded(
+    path: &Path,
+    minimum: usize,
+    maximum: usize,
+    expected_owner: u32,
+) -> Result<Vec<u8>, ()> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| ())?;
+    let metadata = file.metadata().map_err(|_| ())?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() != 1
+        || metadata.uid() != expected_owner
+        || metadata.mode() & 0o022 != 0
+        || metadata.len() < minimum as u64
+        || metadata.len() > maximum as u64
+    {
+        return Err(());
+    }
+    let mut bytes = vec![0; metadata.len() as usize];
+    file.read_exact(&mut bytes).map_err(|_| ())?;
+    Ok(bytes)
+}
+
+fn validate_new_public_output(path: &Path, expected_owner: u32) -> Result<(), ()> {
+    if !path.is_absolute() || fs::symlink_metadata(path).is_ok() {
+        return Err(());
+    }
+    let parent = path.parent().ok_or(())?;
+    let metadata = fs::symlink_metadata(parent).map_err(|_| ())?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_dir()
+        || metadata.uid() != expected_owner
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn write_new_public(path: &Path, bytes: &[u8], expected_owner: u32) -> Result<(), ()> {
+    validate_new_public_output(path, expected_owner)?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| ())?;
+    output.write_all(bytes).map_err(|_| ())?;
+    output.sync_all().map_err(|_| ())?;
+    drop(output);
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != expected_owner
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.len() != bytes.len() as u64
+    {
+        return Err(());
+    }
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path.parent().ok_or(())?)
+        .map_err(|_| ())?;
+    directory.sync_all().map_err(|_| ())
+}
+
 fn read_secret(path: &Path, exact: usize, expected_owner: u32) -> Result<SecretBuffer, ()> {
     let mut file = OpenOptions::new()
         .read(true)
@@ -542,6 +754,11 @@ fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> Result<(), ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_git::{
+        FullRefName, HybridVerificationRequest, PolicyPairStatus, TrustPolicyCandidate,
+        TrustPolicyState, encode_trust_policy, verify_hybrid_signature,
+    };
+    use mrml_runtime::Vector;
 
     #[test]
     fn ml_dsa_startup_check_rejects_a_substituted_public_key() {
@@ -599,6 +816,128 @@ mod tests {
         assert!(!signatures.openpgp().is_empty());
         assert_eq!(signatures.ml_dsa().len(), ML_DSA_65_SIGNATURE_BYTES);
         erase_secret_bytes(&mut ml_secret);
+    }
+
+    #[test]
+    fn one_shot_key_rotation_outputs_are_exact_and_independently_verified() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-key-rotation-signer-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let owner_uid = fs::metadata(&root).unwrap().uid();
+        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        let openpgp_seed = [0x21; 32];
+        let openpgp = SigningKeyV6::from_seed(openpgp_seed, 1_700_000_000).unwrap();
+        let mut ml_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut ml_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
+        mrml_crypto::ml_dsa_65_keygen(&[0x22; 32], &mut ml_public, &mut ml_secret).unwrap();
+        let pair = AuthorizedHybridPair::bind(&openpgp.public_key(), &ml_public);
+        let policy = TrustPolicyState::establish(TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(2),
+            previous_policy_digest: [0; 64],
+            revocation_generation: RevocationGeneration(2),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: false,
+            legacy_checkpoint: None,
+            hybrid_cutover: None,
+            emergency_policy_digest: None,
+            active_pairs: [pair].into(),
+            pair_statuses: [PolicyPairStatus::new(pair, 1, u64::MAX, None).unwrap()].into(),
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        })
+        .unwrap();
+        let policy_bytes = encode_trust_policy(&policy).unwrap();
+        let seed_path = root.join("openpgp.seed");
+        let ml_public_path = root.join("ml.pub");
+        let ml_secret_path = root.join("ml.secret");
+        let policy_path = root.join("next-policy.bin");
+        write_test_input(&seed_path, &openpgp_seed, 0o600);
+        write_test_input(&ml_public_path, &ml_public, 0o600);
+        write_test_input(&ml_secret_path, &ml_secret, 0o600);
+        write_test_input(&policy_path, &policy_bytes, 0o600);
+        erase_secret_bytes(&mut ml_secret);
+        let openpgp_public_output = root.join("openpgp.asc");
+        let openpgp_signature_output = root.join("openpgp.sig");
+        let ml_signature_output = root.join("ml.sig");
+        sign_key_rotation(
+            owner_uid,
+            repository.as_str(),
+            2,
+            &seed_path,
+            1_700_000_000,
+            &ml_public_path,
+            &ml_secret_path,
+            &policy_path,
+            &openpgp_public_output,
+            &openpgp_signature_output,
+            &ml_signature_output,
+        )
+        .unwrap();
+        assert!(
+            sign_key_rotation(
+                owner_uid,
+                repository.as_str(),
+                2,
+                &seed_path,
+                1_700_000_000,
+                &ml_public_path,
+                &ml_secret_path,
+                &policy_path,
+                &openpgp_public_output,
+                &openpgp_signature_output,
+                &ml_signature_output,
+            )
+            .is_err()
+        );
+        let openpgp_public_bytes = fs::read(&openpgp_public_output).unwrap();
+        let mut public_scratch = vec![0; mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES];
+        let exported_openpgp = mrml_openpgp::parse_public_key_v6_ascii(
+            &openpgp_public_bytes,
+            &mut public_scratch,
+        )
+        .unwrap();
+        assert_eq!(exported_openpgp, openpgp.public_key());
+        let openpgp_signature = fs::read(&openpgp_signature_output).unwrap();
+        let ml_signature = fs::read(&ml_signature_output).unwrap();
+        let now = mrml_runtime::unix_time_seconds().unwrap();
+        let verification_policy = policy
+            .active_verification_policy_at(pair, now, true)
+            .unwrap();
+        let request = HybridVerificationRequest {
+            repository: &repository,
+            object_format: ObjectFormat::Sha256,
+            object_type: GitObjectType::KeyRotation,
+            purpose: SignaturePurpose::KeyRotation,
+            trust_generation: TrustGeneration(2),
+            revocation_generation: RevocationGeneration(2),
+            payload: &policy_bytes,
+            openpgp_signature: &openpgp_signature,
+            ml_dsa_signature: &ml_signature,
+        };
+        let mut signature_scratch = vec![0; MAX_OPENPGP_SIGNATURE_BYTES];
+        verify_hybrid_signature(
+            &verification_policy,
+            &exported_openpgp,
+            &ml_public,
+            &request,
+            &mut signature_scratch,
+        )
+        .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_test_input(path: &Path, bytes: &[u8], mode: u32) {
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
     }
 
     #[test]

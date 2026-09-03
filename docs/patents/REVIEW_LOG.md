@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-09-03: Offline purpose-limited key-rotation signing
+
+- Result: **NOT_TRIGGERED**.
+- Scope: a cold signer operation restricted to the existing canonical
+  `KeyRotation` hybrid transcript, with no-overwrite public-key and detached-
+  signature outputs.
+- Reason: this composes existing OpenPGP-v6, ML-DSA-65, canonical transcript,
+  secret-loading, and durable-file mechanisms without a new cryptographic
+  construction, protocol, or key-selection technique.
+
 ## 2026-09-03: Bare OpenPGP v6 public-key export
 
 - Result: **NOT_TRIGGERED**.
