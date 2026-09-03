@@ -12,10 +12,10 @@ use mrml_git::{
     verify_hybrid_signature, AuthorizedHybridPair, DurableDetachedCommitProofDirectory,
     DurableDetachedHybridCommitVerifier, GitObjectType, GitdCoreError, HybridVerificationRequest,
     LinuxDurableTrustPolicyStore, ProtectedCommitVerifier, ProtectedHistoryContext,
-    RepositoryGeneration, SignaturePurpose, TrustPolicyState,
+    RepositoryGeneration, RepositoryIdentity, SignaturePurpose, TrustPolicyState,
 };
 use mrml_openpgp::{PublicKeyV6, MAX_OPENPGP_SIGNATURE_BYTES};
-use mrml_runtime::Vector;
+use mrml_runtime::{SpinMutex, Vector};
 
 use crate::{
     AuthorityCandidateContext, AuthorityCandidateStatus, AuthorityGenerationStore,
@@ -24,6 +24,7 @@ use crate::{
 };
 
 const RECEIPT_SIGNATURE_BYTES: usize = 64;
+const MAX_AUTHORITY_REPOSITORIES: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthorityDispatchError {
@@ -31,6 +32,64 @@ pub enum AuthorityDispatchError {
     Unauthorized,
     Unavailable,
     Resource,
+}
+
+fn authority_request_repository(
+    operation: AuthorityOperation,
+    payload: &[u8],
+) -> Result<RepositoryIdentity, AuthorityDispatchError> {
+    let repository = match operation {
+        AuthorityOperation::AuthorizeReceive => {
+            parse_authority_receive(payload).map_err(map_git_error)?.repository
+        }
+        AuthorityOperation::AuthorizeRefTransaction => {
+            parse_authority_ref_transaction(payload)
+                .map_err(map_git_error)?
+                .transaction
+                .repository
+        }
+        AuthorityOperation::VerifyCommit => {
+            parse_authority_commit(payload).map_err(map_git_error)?.repository
+        }
+        AuthorityOperation::InstallProof | AuthorityOperation::VerifyProof => {
+            parse_authority_proof_install(payload)
+                .map_err(map_git_error)?
+                .repository
+        }
+        AuthorityOperation::InstallCandidateProof => {
+            let request = parse_authority_candidate_proof(payload).map_err(map_git_error)?;
+            if request.candidate.repository != request.proof.repository {
+                return Err(AuthorityDispatchError::Unauthorized);
+            }
+            request.candidate.repository
+        }
+        AuthorityOperation::QueryCandidateById => {
+            parse_authority_candidate_lookup(payload)
+                .map_err(map_git_error)?
+                .repository
+        }
+        AuthorityOperation::BeginCandidate
+        | AuthorityOperation::SealCandidateProofSet
+        | AuthorityOperation::AuthorizeCandidate
+        | AuthorityOperation::StartCandidateActivation
+        | AuthorityOperation::CommitCandidate
+        | AuthorityOperation::AbortCandidate
+        | AuthorityOperation::QueryCandidate
+        | AuthorityOperation::PersistCandidateReceipt
+        | AuthorityOperation::CompleteCandidate => {
+            parse_authority_candidate(payload).map_err(map_git_error)?.repository
+        }
+        AuthorityOperation::SignReceipt | AuthorityOperation::VerifyReceipt => {
+            let request = parse_authority_receipt(payload).map_err(map_git_error)?;
+            parse_authenticated_audit_receipt_transcript(&request.transcript)
+                .map_err(|_| AuthorityDispatchError::Malformed)?
+                .repository
+        }
+        AuthorityOperation::Health | AuthorityOperation::VerifyLegacyCommit => {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+    };
+    Ok(repository)
 }
 
 pub struct ProductionAuthority {
@@ -45,7 +104,68 @@ pub struct ProductionAuthority {
     candidates: Option<LinuxAuthorityCandidateStore>,
 }
 
+pub struct ProductionAuthorityCatalog {
+    authorities: Vector<(RepositoryIdentity, SpinMutex<ProductionAuthority>)>,
+}
+
+impl ProductionAuthorityCatalog {
+    pub fn new(
+        authorities: Vector<(RepositoryIdentity, ProductionAuthority)>,
+    ) -> Result<Self, AuthorityDispatchError> {
+        if authorities.is_empty() || authorities.len() > MAX_AUTHORITY_REPOSITORIES {
+            return Err(AuthorityDispatchError::Resource);
+        }
+        let mut indexed = Vector::new();
+        indexed
+            .try_reserve_exact(authorities.len())
+            .map_err(|_| AuthorityDispatchError::Resource)?;
+        for (repository, authority) in authorities {
+            if authority.repository()? != repository
+                || indexed
+                    .last()
+                    .is_some_and(|(previous, _)| previous >= &repository)
+            {
+                return Err(AuthorityDispatchError::Unauthorized);
+            }
+            indexed.push((repository, SpinMutex::new(authority)));
+        }
+        Ok(Self {
+            authorities: indexed,
+        })
+    }
+
+    pub fn dispatch(
+        &self,
+        operation: AuthorityOperation,
+        payload: &[u8],
+        validation_time: u64,
+    ) -> Result<Vector<u8>, AuthorityDispatchError> {
+        if operation == AuthorityOperation::Health {
+            if !payload.is_empty() {
+                return Err(AuthorityDispatchError::Malformed);
+            }
+            for (_, authority) in &self.authorities {
+                let mut authority = authority.lock();
+                authority.set_validation_time(validation_time)?;
+                authority.dispatch(operation, payload)?;
+            }
+            return Ok((*b"ready-v1").into());
+        }
+        let repository = authority_request_repository(operation, payload)?;
+        let index = self
+            .authorities
+            .binary_search_by(|(candidate, _)| candidate.cmp(&repository))
+            .map_err(|_| AuthorityDispatchError::Unauthorized)?;
+        let mut authority = self.authorities[index].1.lock();
+        authority.set_validation_time(validation_time)?;
+        authority.dispatch(operation, payload)
+    }
+}
+
 impl ProductionAuthority {
+    pub fn repository(&self) -> Result<RepositoryIdentity, AuthorityDispatchError> {
+        self.current_policy().map(|policy| policy.repository().clone())
+    }
     pub fn new(
         policy: LinuxDurableTrustPolicyStore,
         proofs: DurableDetachedCommitProofDirectory,
@@ -759,6 +879,154 @@ mod tests {
     };
     use mrml_runtime::{join_path, Vector};
     use std::os::unix::fs::MetadataExt;
+
+    fn catalog_authority(
+        root: &str,
+        repository: &str,
+        seed: u8,
+    ) -> (ProductionAuthority, TrustPolicyState) {
+        mrml_runtime::create_dir_all(root).unwrap();
+        let repository = RepositoryIdentity::parse(repository).unwrap();
+        let openpgp = SigningKeyV6::from_seed([seed; 32], 1_700_000_000).unwrap();
+        let public = openpgp.public_key();
+        let mut ml_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut ml_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&[seed.wrapping_add(1); 32], &mut ml_public, &mut ml_secret).unwrap();
+        let pair = AuthorizedHybridPair::bind(&public, &ml_public);
+        let policy = TrustPolicyState::establish(TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(4),
+            previous_policy_digest: [0; 64],
+            revocation_generation: RevocationGeneration(8),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: true,
+            legacy_checkpoint: None,
+            hybrid_cutover: Some(ObjectId::from_bytes(ObjectFormat::Sha256, &[seed; 32]).unwrap()),
+            emergency_policy_digest: None,
+            active_pairs: [pair].into(),
+            pair_statuses: [
+                PolicyPairStatus::new(pair, 1_700_000_000, 1_800_000_000, None).unwrap(),
+            ]
+            .into(),
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        })
+        .unwrap();
+        let policy_store =
+            LinuxDurableTrustPolicyStore::create(&join_path(root, "policy"), &policy).unwrap();
+        let proofs = DurableDetachedCommitProofDirectory::open(&join_path(root, "proofs")).unwrap();
+        let authority = ProductionAuthority::new_with_generation_store(
+            policy_store,
+            proofs,
+            public,
+            ml_public,
+            [seed.wrapping_add(2); 32],
+            1_700_000_002,
+            Box::new(MemoryAuthorityGenerationStore::new(
+                repository,
+                RepositoryGeneration(3),
+            )),
+        )
+        .unwrap();
+        erase_secret_bytes(&mut ml_secret);
+        (authority, policy)
+    }
+
+    #[test]
+    fn catalog_routes_exact_repositories_and_isolates_stalled_locks() {
+        let root = join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-authority-catalog-{}", mrml_runtime::process_id()),
+        );
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let first_root = join_path(&root, "first");
+        let second_root = join_path(&root, "second");
+        let (first, first_policy) = catalog_authority(&first_root, "owner/first", 0x31);
+        let (second, second_policy) = catalog_authority(&second_root, "owner/second", 0x41);
+        let catalog = std::sync::Arc::new(
+            ProductionAuthorityCatalog::new(
+                [
+                    (RepositoryIdentity::parse("owner/first").unwrap(), first),
+                    (RepositoryIdentity::parse("owner/second").unwrap(), second),
+                ]
+                .into(),
+            )
+            .unwrap(),
+        );
+        let receive = |repository: &str, policy: &TrustPolicyState| {
+            encode_authority_receive(&ProtectedReceiveAuthorization {
+                repository: RepositoryIdentity::parse(repository).unwrap(),
+                repository_generation: RepositoryGeneration(3),
+                trust_generation: TrustGeneration(4),
+                revocation_generation: RevocationGeneration(8),
+                policy_digest: policy.digest(),
+            })
+            .unwrap()
+        };
+        let first_request = receive("owner/first", &first_policy);
+        let second_request = receive("owner/second", &second_policy);
+        assert_eq!(
+            catalog.dispatch(
+                AuthorityOperation::AuthorizeReceive,
+                &first_request,
+                1_700_000_003,
+            ),
+            Ok(Vector::new())
+        );
+        assert_eq!(
+            catalog.dispatch(
+                AuthorityOperation::AuthorizeReceive,
+                &second_request,
+                1_700_000_003,
+            ),
+            Ok(Vector::new())
+        );
+
+        let first_guard = catalog.authorities[0].1.lock();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let second_catalog = catalog.clone();
+        let second_worker = std::thread::spawn(move || {
+            sender
+                .send(second_catalog.dispatch(
+                    AuthorityOperation::AuthorizeReceive,
+                    &second_request,
+                    1_700_000_004,
+                ))
+                .unwrap();
+        });
+        assert_eq!(
+            receiver.recv_timeout(std::time::Duration::from_secs(1)),
+            Ok(Ok(Vector::new()))
+        );
+        second_worker.join().unwrap();
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let first_catalog = catalog.clone();
+        let first_worker = std::thread::spawn(move || {
+            sender
+                .send(first_catalog.dispatch(
+                    AuthorityOperation::AuthorizeReceive,
+                    &first_request,
+                    1_700_000_004,
+                ))
+                .unwrap();
+        });
+        assert_eq!(
+            receiver.recv_timeout(std::time::Duration::from_millis(25)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        drop(first_guard);
+        assert_eq!(
+            receiver.recv_timeout(std::time::Duration::from_secs(1)),
+            Ok(Ok(Vector::new()))
+        );
+        first_worker.join().unwrap();
+        mrml_runtime::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn exact_policy_refs_and_receipts_dispatch_fail_closed() {

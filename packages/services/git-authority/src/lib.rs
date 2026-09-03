@@ -7,7 +7,7 @@ mod generation;
 #[cfg(target_os = "linux")]
 mod unix;
 
-pub use authority::{AuthorityDispatchError, ProductionAuthority};
+pub use authority::{AuthorityDispatchError, ProductionAuthority, ProductionAuthorityCatalog};
 pub use candidate::{
     CandidateStoreError, LinuxAuthorityCandidateStore,
 };
