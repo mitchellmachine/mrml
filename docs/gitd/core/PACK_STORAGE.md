@@ -4,15 +4,19 @@ Status: **PARTIALLY IMPLEMENTED**. Existing bounded whole-buffer compatibility
 parsing, a constant-memory file authentication scan, and the first-party
 authenticated pack-index v2 module are implemented.
 
-The pack encoder now emits a deterministic first-party zlib level-9 stream with
-one dynamic-Huffman DEFLATE block and bounded LZ77 matching. Its hash chains
-retain a 32 KiB window, inspect no more than 4,096 candidates at each input
-position, and emit matches no longer than 258 bytes. The canonical dynamic
-literal/length, distance, and code-length tables are deterministic fixed
-profile parameters rather than workload-selected codecs. Empty,
-incompressible, repetitive, and window-boundary inputs round-trip through the
-first-party inflater on Linux. A controlled Python zlib probe also decompressed
-a loose object emitted by the first-party encoder. Upstream Git 2.55.0
+The pack encoder uses a deterministic first-party zlib profile. Objects through
+1 MiB use one dynamic-Huffman DEFLATE block and bounded LZ77 matching; larger
+objects use linear-time RFC 1951 stored blocks. The fixed public-length
+threshold prevents adversarial or low-entropy hash-chain collisions from
+monopolizing a worker and never inspects content-derived compressibility. The
+dynamic profile retains a 32 KiB window, inspects no more than 4,096 candidates
+at each input position, and emits matches no longer than 258 bytes. Empty,
+incompressible, repetitive, window-boundary, and above-threshold inputs
+round-trip through the first-party inflater on Linux. The large-object tradeoff
+is explicitly greater wire/storage size for compressible inputs; object bytes,
+object IDs, and decoding of earlier packs are unchanged. A controlled Python
+zlib probe also decompressed a loose object emitted by the first-party encoder.
+Upstream Git 2.55.0
 `index-pack --stdin --strict -v` accepted a generated two-object pack containing
 the dynamic streams and an OFS delta and resolved that delta. These are
 controlled interoperability oracles, not runtime dependencies.

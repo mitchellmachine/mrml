@@ -7,6 +7,7 @@ const HASH_SIZE: usize = 1 << 15;
 const MAX_CHAIN: usize = 4096;
 const MAX_MATCH: usize = 258;
 const MIN_MATCH: usize = 3;
+const MAX_DYNAMIC_BYTES: usize = 1024 * 1024;
 
 struct Bits {
     bytes: Vector<u8>,
@@ -47,13 +48,37 @@ impl Bits {
     }
 }
 
-/// Encodes one deterministic zlib level-9 stream with a bounded LZ77 search
-/// and a dynamic-Huffman DEFLATE block. Only the 32 KiB DEFLATE window is
-/// retained and at most `MAX_CHAIN` candidates are inspected at each input
-/// position. The codec and all search/table parameters are fixed; input data
-/// never selects another codec or profile.
+/// Encodes one deterministic zlib stream. Inputs through 1 MiB use the bounded
+/// level-9 LZ77/dynamic-Huffman profile; larger inputs use linear-time stored
+/// blocks so adversarial collision chains cannot monopolize a service worker.
+/// The threshold is fixed and depends only on the already bounded public object
+/// length, never on content-derived compressibility or an adaptive heuristic.
 pub(crate) fn encode_zlib(source: &[u8]) -> Vector<u8> {
-    encode_zlib_with_profile(source, HuffmanProfile::Dynamic)
+    if source.len() > MAX_DYNAMIC_BYTES {
+        encode_zlib_stored(source)
+    } else {
+        encode_zlib_with_profile(source, HuffmanProfile::Dynamic)
+    }
+}
+
+fn encode_zlib_stored(source: &[u8]) -> Vector<u8> {
+    let mut output = Vector::new();
+    output.extend([0x78, 0x01]);
+    let mut offset = 0usize;
+    while offset < source.len() || (source.is_empty() && offset == 0) {
+        let length = (source.len() - offset).min(u16::MAX as usize);
+        let final_block = offset + length == source.len();
+        output.push(u8::from(final_block));
+        output.extend((length as u16).to_le_bytes());
+        output.extend((!(length as u16)).to_le_bytes());
+        output.extend(source[offset..offset + length].iter().copied());
+        offset += length;
+        if final_block {
+            break;
+        }
+    }
+    output.extend(adler32(source).to_be_bytes());
+    output
 }
 
 /// First-party fixed-Huffman compatibility profile. Canonical pack storage
@@ -138,9 +163,7 @@ fn find_match(
         if distance > WINDOW {
             break;
         }
-        if best.0 != 0
-            && best.0 < limit
-            && source[candidate + best.0] != source[position + best.0]
+        if best.0 != 0 && best.0 < limit && source[candidate + best.0] != source[position + best.0]
         {
             let next = previous[candidate & (WINDOW - 1)];
             if next >= candidate {
@@ -378,6 +401,16 @@ mod tests {
         let mut input: Vector<u8> = (0..WINDOW).map(|value| value as u8).collect();
         input.extend([0, 1, 2]);
         assert_eq!(inflate_zlib(&encode_zlib(&input)).unwrap(), input);
+    }
+
+    #[test]
+    fn large_inputs_use_bounded_linear_stored_blocks() {
+        let input: Vector<u8> = core::iter::repeat_n(b'x', MAX_DYNAMIC_BYTES + 1).collect();
+        let encoded = encode_zlib(&input);
+        assert_eq!(&encoded[..2], &[0x78, 0x01]);
+        assert_eq!(encoded[2], 0);
+        assert!(encoded.len() > input.len());
+        assert_eq!(inflate_zlib(&encoded).unwrap(), input);
     }
 
     #[test]

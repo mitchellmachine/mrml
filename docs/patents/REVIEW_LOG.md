@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-09-02: Bounded large-object DEFLATE profile
+
+- Result: **NOT_TRIGGERED**.
+- Scope: a fixed 1 MiB public-length threshold selecting ordinary RFC 1951
+  stored blocks instead of the existing bounded dynamic-Huffman/LZ77 encoder.
+- Reason: stored DEFLATE blocks are an already-implemented standards mechanism;
+  this removes compression work and introduces no new similarity, dictionary,
+  entropy-coding, or adaptive-selection technique. The existing Git compression
+  screen and guardrails remain controlling; see
+  [`docs/gitd/core/PATENT_SCREEN.md`](../gitd/core/PATENT_SCREEN.md).
+
 ## 2026-09-02: Docker-managed Git/certificate deployment volumes
 
 - Result: **NOT_TRIGGERED**.
