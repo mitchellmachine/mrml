@@ -280,6 +280,11 @@ pub enum BackendError {
 }
 
 pub trait GitdBackend {
+    fn candidate_status(
+        &self,
+        repository: &RepositoryIdentity,
+        candidate_id: [u8; 16],
+    ) -> Result<Vector<u8>, BackendError>;
     fn repository_generation(
         &self,
         repository: &RepositoryIdentity,
@@ -1167,6 +1172,37 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         let repo_name = pieces[1].strip_suffix(".git").unwrap_or(pieces[1]);
         let repository =
             RepositoryIdentity::parse(&mrml_runtime::mrml_format!("{}/{}", pieces[0], repo_name))?;
+        if pieces[1].ends_with(".git")
+            && pieces.len() == 4
+            && pieces[2] == "mrml-candidate-v1"
+        {
+            if request.method != "GET"
+                || request.scheme != "https"
+                || request.target.as_str() != target
+            {
+                return Err(BackendError::NotFound);
+            }
+            let now = mrml_runtime::unix_time_seconds().ok_or(BackendError::Storage)?;
+            self.authentication
+                .as_ref()
+                .ok_or(BackendError::Private)?
+                .authorize(&request.headers, &repository, RepositoryAction::Write, now)
+                .map_err(|_| BackendError::Private)?;
+            let candidate_id = parse_candidate_id(pieces[3])?;
+            let body = self.backend.candidate_status(&repository, candidate_id)?;
+            if body.is_empty() || body.len() > 256 * 1024 {
+                return Err(BackendError::Storage);
+            }
+            let mut response = self.text(
+                200,
+                "application/vnd.mrml.git-candidate-status-v1",
+                &body,
+                true,
+            )?;
+            set_header(&mut response.headers, "cache-control", "no-store")?;
+            set_header(&mut response.headers, "pragma", "no-cache")?;
+            return Ok(response);
+        }
         let generation = self.backend.repository_generation(&repository)?;
         if pieces[1].ends_with(".git") {
             return self.git_route(request, repository, generation, &pieces[2..]);
@@ -1387,6 +1423,30 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             headers: Vector::new(),
             body: Vector::new(),
         })
+    }
+}
+
+fn parse_candidate_id(input: &str) -> Result<[u8; 16], BackendError> {
+    if input.len() != 32 {
+        return Err(BackendError::NotFound);
+    }
+    let mut output = [0u8; 16];
+    for (index, pair) in input.as_bytes().chunks_exact(2).enumerate() {
+        let high = lowercase_hex(pair[0]).ok_or(BackendError::NotFound)?;
+        let low = lowercase_hex(pair[1]).ok_or(BackendError::NotFound)?;
+        output[index] = (high << 4) | low;
+    }
+    if output == [0; 16] {
+        return Err(BackendError::NotFound);
+    }
+    Ok(output)
+}
+
+const fn lowercase_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
     }
 }
 
@@ -2166,6 +2226,22 @@ mod tests {
     }
 
     impl GitdBackend for MockBackend {
+        fn candidate_status(
+            &self,
+            _repository: &RepositoryIdentity,
+            candidate_id: [u8; 16],
+        ) -> Result<Vector<u8>, BackendError> {
+            if candidate_id == [0x11; 16] {
+                let mut response = Vector::new();
+                response
+                    .try_extend_from_slice(b"candidate-status")
+                    .map_err(|_| BackendError::ResourceLimit)?;
+                Ok(response)
+            } else {
+                Err(BackendError::NotFound)
+            }
+        }
+
         fn repository_generation(
             &self,
             _repository: &RepositoryIdentity,
@@ -2348,6 +2424,33 @@ mod tests {
             )
             .unwrap(),
         );
+        let candidate_target =
+            "/mitchellrenouf/mrml.git/mrml-candidate-v1/11111111111111111111111111111111";
+        let mut candidate_request = request("GET", candidate_target, false);
+        candidate_request.headers.push(Header {
+            name: "authorization".into(),
+            value: mrml_runtime::mrml_format!("Bearer {token}"),
+        });
+        let candidate_response = server.handle(&candidate_request);
+        assert_eq!(candidate_response.status, 200);
+        assert_eq!(&candidate_response.body[..], b"candidate-status");
+        assert!(candidate_response.headers.iter().any(|header| {
+            header.name == "content-type"
+                && header.value == "application/vnd.mrml.git-candidate-status-v1"
+        }));
+        assert_eq!(server.handle(&request("GET", candidate_target, false)).status, 404);
+        for malformed in [
+            "/mitchellrenouf/mrml.git/mrml-candidate-v1/00000000000000000000000000000000",
+            "/mitchellrenouf/mrml.git/mrml-candidate-v1/1111111111111111111111111111111",
+            "/mitchellrenouf/mrml.git/mrml-candidate-v1/1111111111111111111111111111111A",
+        ] {
+            let mut malformed_request = request("GET", malformed, false);
+            malformed_request.headers.push(Header {
+                name: "authorization".into(),
+                value: mrml_runtime::mrml_format!("Bearer {token}"),
+            });
+            assert_eq!(server.handle(&malformed_request).status, 404);
+        }
         for (method, target, request_type, response_type) in [
             (
                 "GET",

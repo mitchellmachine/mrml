@@ -20,6 +20,8 @@ const RECEIPT_MAGIC: &[u8; 8] = b"MRGARPV1";
 const CANDIDATE_MAGIC: &[u8; 8] = b"MRGACD01";
 const CANDIDATE_STATUS_MAGIC: &[u8; 8] = b"MRGACS01";
 const CANDIDATE_LOOKUP_MAGIC: &[u8; 8] = b"MRGACL01";
+const CANDIDATE_RESULT_MAGIC: &[u8; 8] = b"MRGCSR01";
+const MAX_AUTHORITY_CANDIDATE_BYTES: usize = 1024;
 pub const MAX_AUTHORITY_COMMIT_BYTES: usize = 1024 * 1024;
 pub const MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES: usize = 128 * 1024;
 
@@ -58,6 +60,76 @@ pub struct AuthorityCandidateProofRequest {
 pub struct AuthorityCandidateLookup {
     pub repository: RepositoryIdentity,
     pub id: QuarantineTransactionId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorityCandidateStatusResult {
+    pub record: AuthorityCandidateRecord,
+    pub authenticated_receipt: Option<Vector<u8>>,
+}
+
+pub fn encode_authority_candidate_status_result(
+    result: &AuthorityCandidateStatusResult,
+) -> Result<Vector<u8>, GitdCoreError> {
+    validate_candidate_status_result(result)?;
+    let record = encode_authority_candidate_record(&result.record)?;
+    let receipt = result.authenticated_receipt.as_deref().unwrap_or(&[]);
+    let mut output = Vector::new();
+    append(&mut output, CANDIDATE_RESULT_MAGIC)?;
+    append_counted(&mut output, &record)?;
+    append(&mut output, &(receipt.len() as u32).to_be_bytes())?;
+    append(&mut output, receipt)?;
+    Ok(output)
+}
+
+pub fn parse_authority_candidate_status_result(
+    input: &[u8],
+) -> Result<AuthorityCandidateStatusResult, GitdCoreError> {
+    let mut cursor = Cursor::new(input);
+    cursor.magic(CANDIDATE_RESULT_MAGIC)?;
+    let record = parse_authority_candidate_record(
+        cursor.counted_bytes(MAX_AUTHORITY_CANDIDATE_BYTES)?,
+    )?;
+    let receipt_length = usize::try_from(cursor.u32()?).map_err(|_| GitdCoreError::Resource)?;
+    if receipt_length > crate::MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES {
+        return Err(GitdCoreError::Resource);
+    }
+    let receipt = cursor.take(receipt_length)?;
+    cursor.finish()?;
+    let mut authenticated_receipt = None;
+    if !receipt.is_empty() {
+        let mut owned = Vector::new();
+        append(&mut owned, receipt)?;
+        authenticated_receipt = Some(owned);
+    }
+    let result = AuthorityCandidateStatusResult {
+        record,
+        authenticated_receipt,
+    };
+    validate_candidate_status_result(&result)?;
+    Ok(result)
+}
+
+fn validate_candidate_status_result(
+    result: &AuthorityCandidateStatusResult,
+) -> Result<(), GitdCoreError> {
+    let requires_receipt = matches!(
+        result.record.status,
+        AuthorityCandidateStatus::ReceiptPersisted | AuthorityCandidateStatus::Completed
+    );
+    if requires_receipt != result.authenticated_receipt.is_some() {
+        return Err(GitdCoreError::Authorization);
+    }
+    if let Some(encoded) = result.authenticated_receipt.as_deref() {
+        let receipt = crate::parse_authenticated_audit_receipt(encoded)
+            .map_err(|_| GitdCoreError::Authorization)?;
+        if receipt.receipt.transaction != result.record.context.id
+            || receipt.receipt.repository != result.record.context.repository
+        {
+            return Err(GitdCoreError::Authorization);
+        }
+    }
+    Ok(())
 }
 
 pub fn encode_authority_candidate_lookup(
@@ -740,6 +812,21 @@ mod tests {
                 id: candidate.id,
             }
         );
+        let status = AuthorityCandidateStatusResult {
+            record: AuthorityCandidateRecord {
+                context: candidate.clone(),
+                status: AuthorityCandidateStatus::Receiving,
+            },
+            authenticated_receipt: None,
+        };
+        let encoded_status = encode_authority_candidate_status_result(&status).unwrap();
+        assert_eq!(
+            parse_authority_candidate_status_result(&encoded_status).unwrap(),
+            status
+        );
+        for end in 0..encoded_status.len() {
+            assert!(parse_authority_candidate_status_result(&encoded_status[..end]).is_err());
+        }
         let encoded = encode_authority_candidate(&candidate).unwrap();
         assert_eq!(parse_authority_candidate(&encoded).unwrap(), candidate);
         for end in 0..encoded.len() {

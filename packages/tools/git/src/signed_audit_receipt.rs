@@ -413,6 +413,18 @@ pub fn authority_receipt_signature_transcript(payload: &[u8]) -> Result<Vector<u
     Ok(output)
 }
 
+pub fn encode_authenticated_audit_receipt(
+    authenticated: &AuthenticatedAuditReceipt,
+) -> Result<Vector<u8>, DurableFailure> {
+    let canonical = encode_audit_receipt(&authenticated.receipt)
+        .map_err(|_| DurableFailure::AuditReceipt)?;
+    encode_authenticated(
+        &canonical,
+        authenticated.signer_identity,
+        &authenticated.signature,
+    )
+}
+
 fn encode_authenticated(
     canonical: &[u8],
     signer_identity: [u8; 64],

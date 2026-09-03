@@ -91,6 +91,14 @@ impl mrml_git::BoundedWrite for WriteBridge<'_> {
 }
 
 impl<B: GitdCoreBackend> GitdBackend for GitdCoreAdapter<B> {
+    fn candidate_status(
+        &self,
+        _repository: &RepositoryIdentity,
+        _candidate_id: [u8; 16],
+    ) -> Result<mrml_runtime::Vector<u8>, BackendError> {
+        Err(BackendError::NotFound)
+    }
+
     fn repository_generation(
         &self,
         repository: &RepositoryIdentity,

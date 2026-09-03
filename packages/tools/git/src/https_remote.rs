@@ -230,6 +230,71 @@ impl HttpsRemote {
         self.discover_receive_pack_with_authorization(authorization)
     }
 
+    pub fn candidate_status_authenticated<P: crate::HttpsCredentialProvider + ?Sized>(
+        &self,
+        candidate_id: crate::QuarantineTransactionId,
+        provider: &mut P,
+    ) -> Result<crate::AuthorityCandidateStatusResult, HttpsRemoteError> {
+        if candidate_id.0 == [0; 16] {
+            return Err(HttpsRemoteError::Protocol);
+        }
+        let scope = self.credential_scope(crate::HttpsCredentialAction::Write)?;
+        let credential = provider
+            .credential(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        let authorization = credential
+            .authorization_for(&scope)
+            .map_err(|_| HttpsRemoteError::Credential)?;
+        let mut id = Text::new();
+        for byte in candidate_id.0 {
+            use core::fmt::Write;
+            write!(&mut id, "{byte:02x}").map_err(|_| HttpsRemoteError::Protocol)?;
+        }
+        let target = mrml_runtime::mrml_format!(
+            "{}/mrml-candidate-v1/{id}",
+            self.repository_path
+        );
+        let authority = self.authority();
+        let headers = request_headers(
+            "application/vnd.mrml.git-candidate-status-v1",
+            None,
+            Some(authorization),
+        );
+        let (status, response_headers, body) = match self.transport {
+            HttpsTransport::Http2 => {
+                let mut connection = Http2ClientConnection::connect(&self.host, self.port)
+                    .map_err(HttpsRemoteError::Transport)?;
+                let response = connection
+                    .request("GET", &authority, &target, &headers)
+                    .map_err(HttpsRemoteError::Transport)?;
+                (response.status, response.headers, response.body)
+            }
+            HttpsTransport::Http3V2 => {
+                let mut connection = Http3ClientConnection::connect_v2(&self.host, self.port)
+                    .map_err(HttpsRemoteError::Transport)?;
+                let response = connection
+                    .request("GET", &authority, &target, &headers)
+                    .map_err(HttpsRemoteError::Transport)?;
+                (response.status, response.headers, response.body)
+            }
+        };
+        validate_service_response(
+            status,
+            &response_headers,
+            &body,
+            "application/vnd.mrml.git-candidate-status-v1",
+        )?;
+        let result = crate::parse_authority_candidate_status_result(&body)
+            .map_err(|_| HttpsRemoteError::Protocol)?;
+        let repository = self.repository_identity()?;
+        if result.record.context.id != candidate_id
+            || result.record.context.repository != repository
+        {
+            return Err(HttpsRemoteError::Protocol);
+        }
+        Ok(result)
+    }
+
     pub fn list_refs(&self) -> Result<HttpsRefAdvertisement, HttpsRemoteError> {
         self.list_refs_with_authorization(None)
     }

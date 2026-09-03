@@ -31,6 +31,46 @@ impl ProductionReceiveRepository {
         matches!(self.profile, DeploymentRepositoryProfile::Protected)
     }
 
+    pub fn candidate_status(
+        &self,
+        repository: &mrml_git::RepositoryIdentity,
+        id: QuarantineTransactionId,
+        authority: &mut dyn ProtectedReceiveAuthority,
+    ) -> Result<mrml_runtime::Vector<u8>, BackendError> {
+        if !self.requires_authority() {
+            return Err(BackendError::NotFound);
+        }
+        let record = authority
+            .query_candidate_by_id(repository, id)
+            .map_err(|_| BackendError::NotFound)?;
+        let authenticated_receipt = if matches!(
+            record.status,
+            mrml_git::AuthorityCandidateStatus::ReceiptPersisted
+                | mrml_git::AuthorityCandidateStatus::Completed
+        ) {
+            let directory = mrml_git::AuthenticatedAuditReceiptDirectory::open(path(
+                &self.authenticated_receipts,
+            )?)
+            .map_err(|_| BackendError::NotFound)?;
+            let receipt = directory
+                .load(id, authority)
+                .map_err(|_| BackendError::NotFound)?;
+            Some(
+                mrml_git::encode_authenticated_audit_receipt(&receipt)
+                    .map_err(|_| BackendError::Storage)?,
+            )
+        } else {
+            None
+        };
+        mrml_git::encode_authority_candidate_status_result(
+            &mrml_git::AuthorityCandidateStatusResult {
+                record,
+                authenticated_receipt,
+            },
+        )
+        .map_err(|_| BackendError::Storage)
+    }
+
     pub fn new(
         config: &GitdConfig,
         entry: &DeploymentRepository,

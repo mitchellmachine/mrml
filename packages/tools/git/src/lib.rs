@@ -78,15 +78,17 @@ pub use authority_client::{
     AUTHORITY_OP_VERIFY_RECEIPT, ProtectedAuthorityRpc, RemoteProtectedReceiveAuthority,
 };
 pub use authority_wire::{
-    AuthorityCandidateLookup, AuthorityCandidateProofRequest, AuthorityCommitRequest,
-    AuthorityProofInstallRequest, AuthorityReceiptRequest,
+    AuthorityCandidateLookup, AuthorityCandidateProofRequest, AuthorityCandidateStatusResult,
+    AuthorityCommitRequest, AuthorityProofInstallRequest, AuthorityReceiptRequest,
     AuthorityRefTransactionRequest, MAX_AUTHORITY_COMMIT_BYTES,
     MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES, encode_authority_candidate,
     encode_authority_candidate_lookup, encode_authority_candidate_proof,
     encode_authority_candidate_record, encode_authority_commit, encode_authority_proof_install,
+    encode_authority_candidate_status_result,
     encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
     parse_authority_candidate, parse_authority_candidate_lookup, parse_authority_candidate_proof,
     parse_authority_candidate_record, parse_authority_commit,
+    parse_authority_candidate_status_result,
     parse_authority_proof_install, parse_authority_receipt, parse_authority_receive,
     parse_authority_ref_transaction,
 };
@@ -218,6 +220,7 @@ pub use signed_audit_receipt::{
     AuditReceiptAuthority, AuthenticatedAuditReceipt, AuthenticatedAuditReceiptDirectory,
     AuthenticatedReceiveStore, MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES,
     authenticated_audit_receipt_transcript, authority_receipt_signature_transcript,
+    encode_authenticated_audit_receipt,
     parse_authenticated_audit_receipt, parse_authenticated_audit_receipt_transcript,
     verify_signer_generation_advancement,
 };

@@ -6,6 +6,7 @@ use mrml_http::{
     RevocationGeneration, SmartGitRequest, SmartGitResponse, TreePage, TrustGeneration,
     VerificationSummary, WorkBudget,
 };
+use mrml_runtime::Vector;
 
 use crate::{
     AdmittedRepository, DeploymentRepository, GitdConfig, GitdCoreAdapter,
@@ -144,6 +145,34 @@ impl SharedGitdRepositorySet {
 }
 
 impl GitdBackend for SharedGitdRepositorySet {
+    fn candidate_status(
+        &self,
+        repository: &RepositoryIdentity,
+        candidate_id: [u8; 16],
+    ) -> Result<Vector<u8>, BackendError> {
+        let index = self.index(repository)?;
+        let receive = self.repositories[index]
+            .2
+            .as_ref()
+            .ok_or(BackendError::NotFound)?;
+        if !receive.requires_authority() {
+            return Err(BackendError::NotFound);
+        }
+        let mut authority = self
+            .authority
+            .as_ref()
+            .ok_or(BackendError::NotFound)?
+            .lock()
+            .map_err(|_| BackendError::Storage)?;
+        let repository = mrml_git::RepositoryIdentity::parse(repository.as_str())
+            .map_err(|_| BackendError::NotFound)?;
+        receive.candidate_status(
+            &repository,
+            mrml_git::QuarantineTransactionId(candidate_id),
+            authority.as_mut(),
+        )
+    }
+
     fn repository_generation(
         &self,
         repository: &RepositoryIdentity,
@@ -280,6 +309,37 @@ impl Default for GitdRepositorySet {
 }
 
 impl GitdBackend for GitdRepositorySet {
+    fn candidate_status(
+        &self,
+        repository: &RepositoryIdentity,
+        candidate_id: [u8; 16],
+    ) -> Result<Vector<u8>, BackendError> {
+        let index = self
+            .repositories
+            .binary_search_by(|(identity, _, _)| identity.cmp(repository))
+            .map_err(|_| BackendError::NotFound)?;
+        let receive = self.repositories[index]
+            .2
+            .as_ref()
+            .ok_or(BackendError::NotFound)?;
+        if !receive.requires_authority() {
+            return Err(BackendError::NotFound);
+        }
+        let mut authority = self
+            .authority
+            .as_ref()
+            .ok_or(BackendError::NotFound)?
+            .lock()
+            .map_err(|_| BackendError::Storage)?;
+        let repository = mrml_git::RepositoryIdentity::parse(repository.as_str())
+            .map_err(|_| BackendError::NotFound)?;
+        receive.candidate_status(
+            &repository,
+            mrml_git::QuarantineTransactionId(candidate_id),
+            authority.as_mut(),
+        )
+    }
+
     fn repository_generation(
         &self,
         repository: &RepositoryIdentity,

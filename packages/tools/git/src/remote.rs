@@ -571,8 +571,7 @@ pub fn push_https_protected_authenticated(
             });
         }
         output.finish()?;
-        let authenticated_receipt = remote
-            .push_protected_pack_file_authenticated(
+        let authenticated_receipt = match remote.push_protected_pack_file_authenticated(
                 old,
                 new,
                 &reference,
@@ -582,7 +581,44 @@ pub fn push_https_protected_authenticated(
                 &proofs,
                 credential_provider,
             )
-            .map_err(|_| PushError::Https)?;
+        {
+            Ok(receipt) => receipt,
+            Err(_) => {
+                let status = remote
+                    .candidate_status_authenticated(candidate_id, credential_provider)
+                    .map_err(|_| PushError::Https)?;
+                if status.record.context.current_generation
+                    != discovery.repository_generation
+                    || status.record.context.next_generation.0
+                        != discovery
+                            .repository_generation
+                            .0
+                            .checked_add(1)
+                            .ok_or(PushError::Protocol)?
+                    || status.record.context.trust_generation != discovery.trust_generation
+                    || status.record.context.revocation_generation
+                        != discovery.revocation_generation
+                {
+                    return Err(PushError::Protocol);
+                }
+                match status.record.status {
+                    crate::AuthorityCandidateStatus::ReceiptPersisted
+                    | crate::AuthorityCandidateStatus::Completed => status
+                        .authenticated_receipt
+                        .ok_or(PushError::Protocol)?,
+                    crate::AuthorityCandidateStatus::Aborted
+                    | crate::AuthorityCandidateStatus::Receiving
+                    | crate::AuthorityCandidateStatus::ProofsSealed
+                    | crate::AuthorityCandidateStatus::Authorized => {
+                        return Err(PushError::Remote);
+                    }
+                    crate::AuthorityCandidateStatus::ActivationStarted
+                    | crate::AuthorityCandidateStatus::Activated => {
+                        return Err(PushError::Https);
+                    }
+                }
+            }
+        };
         let receipt = crate::parse_authenticated_audit_receipt(&authenticated_receipt)
             .map_err(|_| PushError::Protocol)?;
         if receipt.receipt.transaction != candidate_id
