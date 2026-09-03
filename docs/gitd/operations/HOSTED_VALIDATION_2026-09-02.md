@@ -442,3 +442,83 @@ per-operation timeouts, and in-memory transaction cleanup. They introduce no
 new cryptographic primitive, compression selection, similarity mechanism,
 cache policy, or storage-selection mechanism. See
 `docs/patents/REVIEW_LOG.md`.
+
+## Managed-volume VPS provisioning follow-up
+
+Production Compose now gives every service data set, runtime socket directory,
+secret, and configuration file its own explicitly named Docker volume. No
+production service uses a host bind mount. The Git and ACME provisioners create
+the complete 22-volume set, inspect the exact engine-reported mountpoint shape,
+initialize owner and mode only for a newly created volume, and fail closed when
+an existing volume does not match the declared owner or mode. A separate
+stopped-service installer places each secret or configuration input into its
+purpose-specific volume, refuses a running consumer, and refuses overwrite.
+
+The owner-authorized Ubuntu VPS at `mrml.ca` ran Docker Engine 29.6.1 and
+Compose 5.3.1. Both provisioners completed twice against the same 22 volumes,
+demonstrating creation and idempotent validation. The combined Git and ACME
+Compose model rendered successfully using only those volumes. Installing the
+checked-in Gitd example configuration into a stopped service volume produced
+root ownership and mode `0444`; a second installation was rejected. This was
+an installer-path test, not production configuration, and no service was
+started.
+
+The Git backup command then archived the separately scoped Gitd and authority
+data, secret, and configuration volumes. Its checksum sidecar verified, and
+the corrected archive contained the expected logical paths for repositories,
+state, quarantine, receipts, policies, service secrets, and service
+configuration. Restore preflight verified the checksum and rejected the
+already-existing repository volume before mutation. A destructive full restore
+was not performed because the existing test volumes were retained pending
+explicit owner approval; full restore therefore remains unproven.
+
+Public deployment also remains blocked by real configuration rather than
+container storage. `mrml.ca` resolves to the VPS, but `git.mrml.ca` has no A
+record and the zone uses OVH nameservers, while the implemented DNS-01 adapter
+is Cloudflare-specific. No supported provider token or zone identifier was
+supplied. Owner-selected production OpenPGP and ML-DSA trust keys were also not
+supplied. Test fixtures are not substituted for owner trust roots. Images may
+be loaded and retained stopped, but this evidence does not authorize or claim a
+public TLS deployment.
+
+Patent review: **NOT_TRIGGERED**. Named container volumes, exact ownership and
+mode checks, stopped-consumer input installation, conventional archive backup,
+checksum verification, and no-overwrite restore preflight introduce no new
+protected mechanism. See `docs/patents/REVIEW_LOG.md`.
+
+## Bounded-compression clone completion
+
+Signed local commit `6a373415` applies a fixed public-length policy to native
+Git object compression: objects at or below 1 MiB retain the deterministic
+dynamic-Huffman/LZ77 encoder, while larger objects use RFC 1951 stored blocks.
+This bounds encoder work on large incompressible inputs and deliberately trades
+archive size and bandwidth for predictable compression time. The Git suite
+passed 228 library, four CLI, and three protected-signer tests, including a
+large-input stored-block regression.
+
+An exact `6a373415` Gitd image and exact release client then completed a fresh
+H2 clone of the protected repository containing four independent 64 MiB
+incompressible blobs. The command exited zero, installed branch `main` at
+`a8df7b942d71dc14b86122c37884a77a0c9cb2b9d47427aa00d9cd7481f9f20f`,
+reported zero ahead and zero behind, and reported a clean index and worktree.
+Every restored payload matched its source SHA-256 digest:
+
+```text
+74a2500349e10eb91073623d93d6b0d960073d407acf18434ad1f8b97d81c54b
+db6bd32d084e1b5fdf37c1af286370aea8d6b80a2882e7c5cba0ed381f85a57b
+eb60a02c65f43d67197d08aad6eaf368060b6728de9f04a59a254d8a07691b94
+c10c3224d17e4f39d5d20605bc614777c363ae886fbd5356979dd69dfe177f4f
+```
+
+The uninterrupted controlled local run transferred 268,456,731 source bytes
+in 8,133 seconds, or 33,008 source bytes per second. Podman cgroup samples
+reported a Gitd peak of 146,104,320 bytes, 35 processes/threads, and 98.13% of
+one CPU; authority peaked at 1,654,784 bytes and two processes/threads. The
+evidence SHA-256 manifest verified. This proves correctness and bounded memory
+for the tested hosted H2 clone, but the throughput remains a material
+performance risk and no production throughput SLA is claimed. It is not H3,
+public-network, VPS, power-loss, or physical-hardware transfer evidence.
+
+Patent review: **NOT_TRIGGERED**. The fixed threshold selects conventional RFC
+1951 stored blocks by public object length and introduces no new compression,
+similarity, or storage-selection mechanism. See `docs/patents/REVIEW_LOG.md`.
