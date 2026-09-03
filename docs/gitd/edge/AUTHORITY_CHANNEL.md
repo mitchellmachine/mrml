@@ -50,5 +50,22 @@ current process still loads one repository's policy and proof directories at
 startup; a complete dynamic multi-repository catalog and candidate transaction
 state remain required before production-candidate classification.
 
+The authority library now has a durable candidate journal foundation. Every
+record binds a nonzero 128-bit candidate identifier to the exact repository,
+current and next repository generations, trust and revocation generations,
+policy digest, ref-update digest, introduced-commit-set digest, arrival-pack
+digest, proof-set digest, and activation digest. Candidate state advances only
+through the ordered `receiving`, `proofs-sealed`, `authorized`,
+`activation-started`, `activated`, `receipt-persisted`, and `completed` states;
+an abort is accepted only before durable activation. Records are owner-only,
+checksum-bound, atomically replaced, directory-synced, and re-read after every
+transition. Reusing an identifier with another repository or context fails
+closed, and exact repeated operations are idempotent.
+
+This journal is not yet connected to the authority RPC operations or proof
+directory, so candidate-local proof visibility, activation-evidence validation,
+and recovery-driven receipt finalization remain required. Until that wiring and
+its failure-path tests exist, protected receive is not candidate-transactional.
+
 Patent review: **NOT_TRIGGERED**. This is conventional authenticated local RPC
 composition and replay sequencing. See `docs/patents/REVIEW_LOG.md`.

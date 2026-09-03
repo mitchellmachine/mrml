@@ -12458,3 +12458,11 @@ records, checksums, an advisory single-writer lock, atomic replacement, and
 directory synchronization to persist an exact monotonic repository generation.
 It adds no cryptographic primitive, consensus protocol, or patent-sensitive
 selection mechanism.
+
+# 2026-09-03 — Durable protected-receive candidate journal
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional
+checksummed records, create-new reservation, ordered state transitions, atomic
+file replacement, and directory synchronization to exact protected-receive
+candidate context. It adds no cryptographic primitive, consensus protocol,
+compression or storage-selection method, or patent-sensitive mechanism.
