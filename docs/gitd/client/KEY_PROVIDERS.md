@@ -75,7 +75,7 @@ cannot read signer keys or durable signer state. Start the daemon as the
 key-owning non-root user:
 
 ```text
-mrml-git-protected-signer serve SOCKET CAPABILITY CLIENT_UID CLIENT_GID OWNER_UID SOCKET_GID REPOSITORY REPOSITORY_GENERATION TRUST_GENERATION REVOCATION_GENERATION OPENPGP_SEED OPENPGP_CREATED_AT ML_DSA_PUBLIC ML_DSA_SECRET
+mrml-git-protected-signer serve SOCKET CAPABILITY CLIENT_UID CLIENT_GID OWNER_UID SOCKET_GID REPOSITORY REPOSITORY_GENERATION TRUST_GENERATION REVOCATION_GENERATION STATE_FILE AUTHORITY_RECEIPT_PUBLIC OPENPGP_SEED OPENPGP_CREATED_AT ML_DSA_PUBLIC ML_DSA_SECRET
 ```
 
 The socket path and key paths identify resources but grant no signing authority.
@@ -94,6 +94,15 @@ captured from one connection therefore fails under the next connection's random
 session. The deliberately single-request session also bounds concurrency and
 eliminates an in-session replay window rather than treating an echoed request ID
 as replay prevention.
+
+After a protected receive durably activates, the client relays the returned
+authority-signed receipt over a distinct authenticated operation. The signer
+verifies the authority Ed25519 signature, signer identity, repository, and exact
+current/trust/revocation generations before atomically replacing and
+directory-syncing its checksummed generation state. It sends success only after
+reopening the new state. A replay or skipped generation is rejected, including
+after daemon restart; bootstrap generation arguments cannot roll an existing
+state volume backward.
 
 An external readiness probe authenticates both the Unix peer and the v2 hello:
 

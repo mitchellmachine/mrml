@@ -565,7 +565,7 @@ pub fn push_https_protected_authenticated(
             });
         }
         output.finish()?;
-        remote
+        let authenticated_receipt = remote
             .push_protected_pack_file_authenticated(
                 old,
                 new,
@@ -576,6 +576,9 @@ pub fn push_https_protected_authenticated(
                 credential_provider,
             )
             .map_err(|_| PushError::Https)?;
+        proof_signer
+            .advance_repository_generation(&authenticated_receipt)
+            .map_err(|_| PushError::Protocol)?;
         repository
             .update_remote_ref(remote_name, &reference, new)
             .map_err(|_| PushError::Repository)?;

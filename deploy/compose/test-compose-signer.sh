@@ -31,6 +31,8 @@ require 'mrml-git-signer-state:' "$compose"
 require 'mrml-git-signer-keys:' "$compose"
 require 'mrml-git-signer-channel:' "$compose"
 require 'mrml-runtime-git-signer:' "$compose"
+require '/var/lib/mrml/git-protected-signer/state/generation.state' "$compose"
+require '/var/lib/mrml/git-protected-signer/keys/authority-receipt-public.bin' "$compose"
 if grep -Eq '(^|[[:space:]])ports:' "$compose"; then
   echo "protected signer must publish no ports" >&2
   exit 1
@@ -43,5 +45,6 @@ require '"$path/.mrml-volume"' deploy/compose/provision-git-signer-host.sh
 require 'client and signer UID must differ' deploy/compose/provision-git-signer-host.sh
 require 'signer channel copies differ' deploy/compose/provision-git-signer-host.sh
 require 'mrml-git-signer-keys' deploy/compose/install-volume-inputs.sh
+require 'authority-receipt-public.bin' deploy/compose/install-volume-inputs.sh
 
 echo "protected signer Compose and image isolation policy PASS"

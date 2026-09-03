@@ -100,7 +100,7 @@ impl<'a, P: HybridCommitSigningProvider> CapabilityVerifiedProofSigner<'a, P> {
     }
 }
 
-impl<P: HybridCommitSigningProvider> ProtectedCommitProofSigner
+impl<P: HybridCommitSigningProvider + ProtectedSignerGenerationAdvancer> ProtectedCommitProofSigner
     for CapabilityVerifiedProofSigner<'_, P>
 {
     fn sign_commit(
@@ -147,6 +147,20 @@ impl<P: HybridCommitSigningProvider> ProtectedCommitProofSigner
             .map_err(|_| HistoryVerificationError::Signature)?;
         DetachedCommitProofRecord::new(commit, &signatures.openpgp, &signatures.ml_dsa)
     }
+
+    fn advance_repository_generation(
+        &mut self,
+        authenticated_receipt: &[u8],
+    ) -> Result<(), HistoryVerificationError> {
+        self.provider.advance_repository_generation(authenticated_receipt)
+    }
+}
+
+pub trait ProtectedSignerGenerationAdvancer {
+    fn advance_repository_generation(
+        &mut self,
+        authenticated_receipt: &[u8],
+    ) -> Result<(), HistoryVerificationError>;
 }
 
 /// Narrow signing-use boundary for one exact protected Git commit. Providers
@@ -160,6 +174,11 @@ pub trait ProtectedCommitProofSigner {
         commit: ObjectId,
         exact_contents: &[u8],
     ) -> Result<DetachedCommitProofRecord, HistoryVerificationError>;
+
+    fn advance_repository_generation(
+        &mut self,
+        authenticated_receipt: &[u8],
+    ) -> Result<(), HistoryVerificationError>;
 }
 
 /// Traverse the entire introduced history, including every merge-side parent,
@@ -250,6 +269,15 @@ mod tests {
         }
     }
 
+    impl ProtectedSignerGenerationAdvancer for InvalidCapabilityProvider {
+        fn advance_repository_generation(
+            &mut self,
+            _: &[u8],
+        ) -> Result<(), HistoryVerificationError> {
+            Err(HistoryVerificationError::Signature)
+        }
+    }
+
     impl ProtectedCommitProofSigner for RecordingSigner {
         fn sign_commit(
             &mut self,
@@ -263,6 +291,13 @@ mod tests {
                 &[3; 64],
                 &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES],
             )
+        }
+
+        fn advance_repository_generation(
+            &mut self,
+            _: &[u8],
+        ) -> Result<(), HistoryVerificationError> {
+            Ok(())
         }
     }
 

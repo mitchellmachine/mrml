@@ -36,6 +36,8 @@ services:
       - "${MRML_REPOSITORY_GENERATION:?set MRML_REPOSITORY_GENERATION}"
       - "${MRML_TRUST_GENERATION:?set MRML_TRUST_GENERATION}"
       - "${MRML_REVOCATION_GENERATION:?set MRML_REVOCATION_GENERATION}"
+      - /var/lib/mrml/git-protected-signer/state/generation.state
+      - /var/lib/mrml/git-protected-signer/keys/authority-receipt-public.bin
       - /var/lib/mrml/git-protected-signer/keys/openpgp.seed
       - "${MRML_OPENPGP_CREATED_AT:?set MRML_OPENPGP_CREATED_AT}"
       - /var/lib/mrml/git-protected-signer/keys/ml-dsa-public.bin

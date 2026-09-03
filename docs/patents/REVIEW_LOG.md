@@ -12442,3 +12442,11 @@ Patent review: **NOT_TRIGGERED**. This increment transports the existing
 purpose-separated signed receipt in a bounded, explicitly negotiated Smart Git
 packet-line after durable activation. It adds no cryptographic primitive,
 compression, selection, or storage mechanism.
+
+# 2026-09-03 — Receipt-driven protected signer generations
+
+Patent review: **NOT_TRIGGERED**. This increment uses the existing Ed25519
+receipt verification, conventional authenticated local IPC, monotonic counters,
+and atomic file replacement to advance signer state after a durable receive. It
+adds no cryptographic primitive, consensus protocol, or patent-sensitive
+selection mechanism.

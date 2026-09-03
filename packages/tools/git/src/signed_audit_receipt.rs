@@ -1,6 +1,6 @@
 //! Purpose-separated authenticated audit receipts for protected receive.
 
-use mrml_crypto::Sha256;
+use mrml_crypto::{Sha256, ed25519_verify};
 use mrml_runtime::{
     File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory,
 };
@@ -28,6 +28,45 @@ pub struct AuthenticatedAuditReceipt {
     pub receipt: AuditReceipt,
     pub signer_identity: [u8; 64],
     pub signature: Vector<u8>,
+}
+
+/// Verify that an authority-authenticated receipt advances exactly the signer
+/// state that authorized the just-completed protected push. Receipt bytes are
+/// data until this check succeeds; the relay has no generation authority.
+pub fn verify_signer_generation_advancement(
+    encoded: &[u8],
+    authority_public_key: &[u8; 32],
+    authority_identity: &[u8; 64],
+    repository: &crate::RepositoryIdentity,
+    repository_generation: crate::RepositoryGeneration,
+    trust_generation: crate::TrustGeneration,
+    revocation_generation: crate::RevocationGeneration,
+) -> Result<crate::RepositoryGeneration, DurableFailure> {
+    let authenticated = parse_authenticated_audit_receipt(encoded)?;
+    if &authenticated.signer_identity != authority_identity
+        || &authenticated.receipt.repository != repository
+        || authenticated.receipt.repository_generation != repository_generation
+        || authenticated.receipt.trust_generation != trust_generation
+        || authenticated.receipt.revocation_generation != revocation_generation
+        || authenticated.receipt.activated_repository_generation.0
+            != repository_generation
+                .0
+                .checked_add(1)
+                .ok_or(DurableFailure::AuditReceipt)?
+    {
+        return Err(DurableFailure::AuditReceipt);
+    }
+    let signature: &[u8; 64] = (&authenticated.signature[..])
+        .try_into()
+        .map_err(|_| DurableFailure::AuditReceipt)?;
+    let canonical = encode_audit_receipt(&authenticated.receipt)
+        .map_err(|_| DurableFailure::AuditReceipt)?;
+    let transcript = authenticated_audit_receipt_transcript(&canonical)
+        .map_err(|_| DurableFailure::AuditReceipt)?;
+    if !ed25519_verify(authority_public_key, &transcript, signature) {
+        return Err(DurableFailure::AuditReceipt);
+    }
+    Ok(authenticated.receipt.activated_repository_generation)
 }
 
 pub struct AuthenticatedAuditReceiptDirectory {
@@ -450,6 +489,56 @@ mod tests {
         assert_eq!(
             authority.verify(&signed_transcript, &parsed.signature),
             Err(())
+        );
+    }
+
+    #[test]
+    fn signer_advancement_requires_exact_state_and_authority_signature() {
+        let receipt = fixture();
+        let canonical = encode_audit_receipt(&receipt).unwrap();
+        let transcript = authenticated_audit_receipt_transcript(&canonical).unwrap();
+        let seed = [91u8; 32];
+        let public = mrml_crypto::ed25519_public(&seed);
+        let signature = mrml_crypto::ed25519_sign(&seed, &transcript);
+        let identity = [17u8; 64];
+        let encoded = encode_authenticated(&canonical, identity, &signature).unwrap();
+        assert_eq!(
+            verify_signer_generation_advancement(
+                &encoded,
+                &public,
+                &identity,
+                &receipt.repository,
+                receipt.repository_generation,
+                receipt.trust_generation,
+                receipt.revocation_generation,
+            ),
+            Ok(receipt.activated_repository_generation)
+        );
+        assert_eq!(
+            verify_signer_generation_advancement(
+                &encoded,
+                &public,
+                &identity,
+                &receipt.repository,
+                receipt.activated_repository_generation,
+                receipt.trust_generation,
+                receipt.revocation_generation,
+            ),
+            Err(DurableFailure::AuditReceipt)
+        );
+        let mut wrong_public = public;
+        wrong_public[0] ^= 1;
+        assert_eq!(
+            verify_signer_generation_advancement(
+                &encoded,
+                &wrong_public,
+                &identity,
+                &receipt.repository,
+                receipt.repository_generation,
+                receipt.trust_generation,
+                receipt.revocation_generation,
+            ),
+            Err(DurableFailure::AuditReceipt)
         );
     }
 

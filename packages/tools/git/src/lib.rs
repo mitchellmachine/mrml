@@ -142,14 +142,16 @@ pub use pack_set::{
 };
 pub use protected_push::{
     CapabilityVerifiedProofSigner, HybridCommitSignatures, HybridCommitSigningProvider,
-    ProtectedCommitProofSigner, ProtectedCommitSigningRequest, sign_protected_introduced_history,
+    ProtectedCommitProofSigner, ProtectedCommitSigningRequest, ProtectedSignerGenerationAdvancer,
+    sign_protected_introduced_history,
 };
 #[cfg(target_os = "linux")]
 pub use protected_signer_unix::{
-    ProtectedSignerCapability, ProtectedSignerPeer, ProtectedSignerRequest,
-    ProtectedSignerSession, UnixProtectedCommitSigningProvider, UnixProtectedSignerError,
-    decode_protected_signer_hello, decode_protected_signer_request,
-    encode_protected_signer_hello, encode_protected_signer_response,
+    OP_ADVANCE_GENERATION, ProtectedSignerAdvanceRequest, ProtectedSignerCapability,
+    ProtectedSignerPeer, ProtectedSignerRequest, ProtectedSignerSession,
+    UnixProtectedCommitSigningProvider, UnixProtectedSignerError, decode_advance_request,
+    decode_protected_signer_hello, decode_protected_signer_request, encode_advance_response,
+    encode_protected_signer_hello, encode_protected_signer_response, protected_signer_operation,
 };
 pub use quarantine::{
     ActivationSnapshot, AuditReceipt, DEFAULT_MAX_EXPANDED_OBJECT_BYTES,
@@ -198,6 +200,7 @@ pub use signed_audit_receipt::{
     AuditReceiptAuthority, AuthenticatedAuditReceipt, AuthenticatedAuditReceiptDirectory,
     AuthenticatedReceiveStore, MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES,
     authenticated_audit_receipt_transcript, parse_authenticated_audit_receipt,
+    verify_signer_generation_advancement,
 };
 pub use smart_protocol::{
     MAX_PKT_LINE_BYTES, MAX_V2_ARGUMENTS, MAX_V2_REF_PREFIXES, PktLine, ProtocolBudget,
