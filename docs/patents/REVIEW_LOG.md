@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-09-03: Exact trust-policy transition binding
+
+- Result: **NOT_TRIGGERED**.
+- Scope: requiring both already-verified hybrid key-rotation authorizations to
+  bind the SHA3-512 digest of the exact canonical next trust-policy bytes, and
+  persisting an ordinary authorized transition with the existing durable
+  generation-lock protocol.
+- Reason: this closes a missing message-binding check and composes existing
+  cryptographic and durable-file mechanisms; it introduces no new
+  cryptographic construction, protocol, storage algorithm, or specialized
+  recovery technique.
+
 ## 2026-09-03: Volume-backed deployment operations
 
 - Result: **NOT_TRIGGERED**.

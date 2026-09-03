@@ -85,6 +85,86 @@ impl LinuxDurableTrustPolicyStore {
         parse_file(&bytes)
     }
 
+    /// Selects one normally authorized next trust generation. Both verified
+    /// authorizations bind the exact canonical candidate bytes before this
+    /// durable boundary is entered.
+    pub fn transition(
+        &self,
+        expected_generation: TrustGeneration,
+        expected_digest: [u8; 64],
+        candidate: TrustPolicyState,
+        previous_authorization: &crate::VerifiedHybridSignature,
+        new_authorization: &crate::VerifiedHybridSignature,
+    ) -> Result<TrustPolicyState, TrustPolicyFileError> {
+        let lock = File::create_new(&self.lock).map_err(|_| TrustPolicyFileError::StaleLock)?;
+        lock.sync().map_err(|_| TrustPolicyFileError::Durability)?;
+        drop(lock);
+        sync_policy_directory(&self.root)?;
+
+        let result = self.transition_while_locked(
+            expected_generation,
+            expected_digest,
+            candidate,
+            previous_authorization,
+            new_authorization,
+        );
+        match result {
+            Ok(next) => {
+                remove_file(&self.lock).map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+                sync_policy_directory(&self.root)
+                    .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+                Ok(next)
+            }
+            Err(error) => {
+                if matches!(
+                    error,
+                    TrustPolicyFileError::StaleGeneration | TrustPolicyFileError::Policy(_)
+                ) {
+                    let _ = remove_file(&self.lock);
+                    let _ = sync_policy_directory(&self.root);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn transition_while_locked(
+        &self,
+        expected_generation: TrustGeneration,
+        expected_digest: [u8; 64],
+        candidate: TrustPolicyState,
+        previous_authorization: &crate::VerifiedHybridSignature,
+        new_authorization: &crate::VerifiedHybridSignature,
+    ) -> Result<TrustPolicyState, TrustPolicyFileError> {
+        let current = self.load()?;
+        if current.generation() != expected_generation || current.digest() != expected_digest {
+            return Err(TrustPolicyFileError::StaleGeneration);
+        }
+        let next = current
+            .transition(candidate.as_candidate(), previous_authorization, new_authorization)
+            .map_err(TrustPolicyFileError::Policy)?;
+        let bytes = encode_file(&next)?;
+        let mut temporary =
+            File::create_new(&self.temporary).map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+        temporary
+            .write_all(&bytes)
+            .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+        temporary
+            .sync()
+            .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+        drop(temporary);
+        rename_file(&self.temporary, &self.active)
+            .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+        sync_policy_directory(&self.root).map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+        let reopened = self
+            .load()
+            .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+        if reopened != next {
+            return Err(TrustPolicyFileError::UncertainCommit);
+        }
+        Ok(next)
+    }
+
     /// Consumes one authenticated emergency authorization and selects its exact
     /// next policy generation. Replay fails against the reread current digest
     /// and generation before any temporary file is created.

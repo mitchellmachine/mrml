@@ -522,6 +522,7 @@ pub struct TrustPolicyState {
     revoked_ml_dsa: Vector<[u8; 64]>,
 }
 
+#[derive(Clone)]
 pub struct TrustPolicyCandidate {
     pub repository: RepositoryIdentity,
     pub generation: TrustGeneration,
@@ -1265,6 +1266,9 @@ impl TrustPolicyState {
         new_authorization: &VerifiedHybridSignature,
     ) -> Result<Self, HybridPolicyError> {
         validate_candidate(&candidate)?;
+        let candidate_payload_digest = Sha3_512::digest(&encode_trust_policy(
+            &TrustPolicyState::from_candidate(candidate.clone()),
+        )?);
         if candidate.repository != self.repository {
             return Err(HybridPolicyError::TrustRootBroadened);
         }
@@ -1373,6 +1377,7 @@ impl TrustPolicyState {
             || previous_authorization.purpose != SignaturePurpose::KeyRotation
             || previous_authorization.object_type != GitObjectType::KeyRotation
             || previous_authorization.trust_generation != self.generation
+            || previous_authorization.payload_digest != candidate_payload_digest
             || !self.active_pairs.contains(&previous_authorization.pair)
         {
             return Err(HybridPolicyError::MissingPreviousAuthorization);
@@ -1381,6 +1386,7 @@ impl TrustPolicyState {
             || new_authorization.purpose != SignaturePurpose::KeyRotation
             || new_authorization.object_type != GitObjectType::KeyRotation
             || new_authorization.trust_generation != candidate.generation
+            || new_authorization.payload_digest != candidate_payload_digest
             || !candidate.active_pairs.contains(&new_authorization.pair)
         {
             return Err(HybridPolicyError::MissingNewAuthorization);
@@ -1622,6 +1628,28 @@ impl TrustPolicyState {
 
     pub fn active_pairs(&self) -> &[AuthorizedHybridPair] {
         &self.active_pairs
+    }
+
+    pub(crate) fn as_candidate(&self) -> TrustPolicyCandidate {
+        TrustPolicyCandidate {
+            repository: self.repository.clone(),
+            generation: self.generation,
+            previous_policy_digest: self.previous_policy_digest,
+            revocation_generation: self.revocation_generation,
+            protected_refs: self.protected_refs.clone(),
+            allow_sha1: self.allowed_object_formats & 1 != 0,
+            allow_sha256: self.allowed_object_formats & 2 != 0,
+            hybrid_required: self.hybrid_required,
+            legacy_checkpoint: self.legacy_checkpoint,
+            hybrid_cutover: self.hybrid_cutover,
+            emergency_policy_digest: self.emergency_policy_digest,
+            active_pairs: self.active_pairs.clone(),
+            pair_statuses: self.pair_statuses.clone(),
+            legacy_v4_statuses: self.legacy_v4_statuses.clone(),
+            revoked_legacy_v4: self.revoked_legacy_v4.clone(),
+            revoked_openpgp: self.revoked_openpgp.clone(),
+            revoked_ml_dsa: self.revoked_ml_dsa.clone(),
+        }
     }
 
     pub fn pair_statuses(&self) -> &[PolicyPairStatus] {
@@ -2641,8 +2669,6 @@ mod tests {
             parse_trust_policy(&wrong_magic),
             Err(HybridPolicyError::InvalidPolicy)
         );
-        let old_proof = rotation_proof(&repository, TrustGeneration(1), old_pair);
-        let new_proof = rotation_proof(&repository, TrustGeneration(2), new_pair);
         let candidate = TrustPolicyCandidate {
             repository: repository.clone(),
             generation: TrustGeneration(2),
@@ -2673,6 +2699,31 @@ mod tests {
             revoked_openpgp: [old_pair.openpgp_fingerprint].into(),
             revoked_ml_dsa: [old_pair.ml_dsa_key_digest].into(),
         };
+        let payload_digest = Sha3_512::digest(
+            &encode_trust_policy(&TrustPolicyState::from_candidate(candidate.clone())).unwrap(),
+        );
+        let old_proof = rotation_proof(
+            &repository,
+            TrustGeneration(1),
+            old_pair,
+            payload_digest,
+        );
+        let new_proof = rotation_proof(
+            &repository,
+            TrustGeneration(2),
+            new_pair,
+            payload_digest,
+        );
+        let substituted = rotation_proof(
+            &repository,
+            TrustGeneration(1),
+            old_pair,
+            [0x55; 64],
+        );
+        assert_eq!(
+            initial.transition(candidate.clone(), &substituted, &new_proof),
+            Err(HybridPolicyError::MissingPreviousAuthorization)
+        );
         let rotated = initial
             .transition(candidate, &old_proof, &new_proof)
             .unwrap();
@@ -2756,8 +2807,8 @@ mod tests {
             assert!(parse_trust_policy(&encoded[..end]).is_err());
         }
 
-        let proof = rotation_proof(&repository, TrustGeneration(1), pair);
-        let next_proof = rotation_proof(&repository, TrustGeneration(2), pair);
+        let proof = rotation_proof(&repository, TrustGeneration(1), pair, [0; 64]);
+        let next_proof = rotation_proof(&repository, TrustGeneration(2), pair, [0; 64]);
         let candidate = |status| TrustPolicyCandidate {
             repository: repository.clone(),
             generation: TrustGeneration(2),
@@ -2785,12 +2836,28 @@ mod tests {
             ),
             Err(HybridPolicyError::PolicyRollback)
         );
+        let narrowed_candidate =
+            candidate(PolicyPairStatus::new(pair, 10, 90, None).unwrap());
+        let narrowed_digest = Sha3_512::digest(
+            &encode_trust_policy(&TrustPolicyState::from_candidate(narrowed_candidate.clone()))
+                .unwrap(),
+        );
         assert!(
             initial
                 .transition(
-                    candidate(PolicyPairStatus::new(pair, 10, 90, None).unwrap()),
-                    &proof,
-                    &next_proof
+                    narrowed_candidate,
+                    &rotation_proof(
+                        &repository,
+                        TrustGeneration(1),
+                        pair,
+                        narrowed_digest,
+                    ),
+                    &rotation_proof(
+                        &repository,
+                        TrustGeneration(2),
+                        pair,
+                        narrowed_digest,
+                    ),
                 )
                 .is_ok()
         );
@@ -3077,8 +3144,8 @@ mod tests {
             assert!(parse_trust_policy(&encoded[..end]).is_err());
         }
 
-        let proof = rotation_proof(&repository, TrustGeneration(1), pair);
-        let next_proof = rotation_proof(&repository, TrustGeneration(2), pair);
+        let proof = rotation_proof(&repository, TrustGeneration(1), pair, [0; 64]);
+        let next_proof = rotation_proof(&repository, TrustGeneration(2), pair, [0; 64]);
         let candidate = |statuses: Vector<LegacyV4KeyStatus>, revoked| TrustPolicyCandidate {
             repository: repository.clone(),
             generation: TrustGeneration(2),
@@ -3128,18 +3195,23 @@ mod tests {
             ),
             Err(HybridPolicyError::InvalidPolicy)
         );
+        let narrowed_candidate = candidate(
+            [
+                LegacyV4KeyStatus::new(first, 10, 90, Some(70)).unwrap(),
+                LegacyV4KeyStatus::new(second, 20, 120, Some(80)).unwrap(),
+            ]
+            .into(),
+            [first].into(),
+        );
+        let narrowed_digest = Sha3_512::digest(
+            &encode_trust_policy(&TrustPolicyState::from_candidate(narrowed_candidate.clone()))
+                .unwrap(),
+        );
         let narrowed = initial
             .transition(
-                candidate(
-                    [
-                        LegacyV4KeyStatus::new(first, 10, 90, Some(70)).unwrap(),
-                        LegacyV4KeyStatus::new(second, 20, 120, Some(80)).unwrap(),
-                    ]
-                    .into(),
-                    [first].into(),
-                ),
-                &proof,
-                &next_proof,
+                narrowed_candidate,
+                &rotation_proof(&repository, TrustGeneration(1), pair, narrowed_digest),
+                &rotation_proof(&repository, TrustGeneration(2), pair, narrowed_digest),
             )
             .unwrap();
         assert!(!narrowed.legacy_v4_authorized_at(first, 50));
@@ -3311,13 +3383,14 @@ mod tests {
         repository: &RepositoryIdentity,
         generation: TrustGeneration,
         pair: AuthorizedHybridPair,
+        payload_digest: [u8; 64],
     ) -> VerifiedHybridSignature {
         VerifiedHybridSignature {
             trust_generation: generation,
             revocation_generation: RevocationGeneration(generation.0),
             pair,
             repository_digest: repository_digest(repository),
-            payload_digest: [0; 64],
+            payload_digest,
             purpose: SignaturePurpose::KeyRotation,
             object_type: GitObjectType::KeyRotation,
         }
