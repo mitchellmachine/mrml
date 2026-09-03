@@ -9,8 +9,10 @@ mod unix;
 
 pub use authority::{AuthorityDispatchError, ProductionAuthority};
 pub use candidate::{
-    AuthorityCandidateContext, AuthorityCandidateRecord, AuthorityCandidateStatus,
     CandidateStoreError, LinuxAuthorityCandidateStore,
+};
+pub use mrml_git::{
+    AuthorityCandidateContext, AuthorityCandidateRecord, AuthorityCandidateStatus,
 };
 pub use channel::{
     decode_frame, encode_frame, AuthorityCapability, AuthorityError, AuthorityFrame,

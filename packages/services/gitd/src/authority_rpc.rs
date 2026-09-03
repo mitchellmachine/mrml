@@ -157,6 +157,15 @@ const fn authority_denied_event(operation: AuthorityOperation) -> &'static str {
         AuthorityOperation::SignReceipt => "authority_receipt_sign_denied",
         AuthorityOperation::VerifyReceipt => "authority_receipt_verify_denied",
         AuthorityOperation::InstallProof => "authority_proof_install_denied",
+        AuthorityOperation::BeginCandidate => "authority_candidate_begin_denied",
+        AuthorityOperation::SealCandidateProofSet => "authority_candidate_seal_denied",
+        AuthorityOperation::AuthorizeCandidate => "authority_candidate_authorize_denied",
+        AuthorityOperation::StartCandidateActivation => "authority_candidate_start_denied",
+        AuthorityOperation::CommitCandidate => "authority_candidate_commit_denied",
+        AuthorityOperation::AbortCandidate => "authority_candidate_abort_denied",
+        AuthorityOperation::QueryCandidate => "authority_candidate_query_denied",
+        AuthorityOperation::PersistCandidateReceipt => "authority_candidate_receipt_denied",
+        AuthorityOperation::CompleteCandidate => "authority_candidate_complete_denied",
     }
 }
 

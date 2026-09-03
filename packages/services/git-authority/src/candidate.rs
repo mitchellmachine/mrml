@@ -1,5 +1,6 @@
 use mrml_crypto::Sha256;
 use mrml_git::{
+    AuthorityCandidateContext, AuthorityCandidateRecord, AuthorityCandidateStatus,
     QuarantineTransactionId, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
     TrustGeneration,
 };
@@ -13,98 +14,6 @@ const DOMAIN: &[u8] = b"MRML git authority candidate journal v1\0";
 const O_NOFOLLOW: i32 = 0x20_000;
 const MAX_REPOSITORY_BYTES: usize = 255;
 const FIXED_BYTES: usize = 8 + 16 + 2 + 8 * 4 + 64 * 6 + 1 + 32;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-#[repr(u8)]
-pub enum AuthorityCandidateStatus {
-    Receiving = 1,
-    ProofsSealed = 2,
-    Authorized = 3,
-    ActivationStarted = 4,
-    Activated = 5,
-    ReceiptPersisted = 6,
-    Completed = 7,
-    Aborted = 8,
-}
-
-impl AuthorityCandidateStatus {
-    fn parse(value: u8) -> Result<Self, CandidateStoreError> {
-        Ok(match value {
-            1 => Self::Receiving,
-            2 => Self::ProofsSealed,
-            3 => Self::Authorized,
-            4 => Self::ActivationStarted,
-            5 => Self::Activated,
-            6 => Self::ReceiptPersisted,
-            7 => Self::Completed,
-            8 => Self::Aborted,
-            _ => return Err(CandidateStoreError::Invalid),
-        })
-    }
-
-    fn permits(self, next: Self) -> bool {
-        next == Self::Aborted
-            && matches!(
-                self,
-                Self::Receiving
-                    | Self::ProofsSealed
-                    | Self::Authorized
-                    | Self::ActivationStarted
-            )
-            || matches!(
-                (self, next),
-                (Self::Receiving, Self::ProofsSealed)
-                    | (Self::ProofsSealed, Self::Authorized)
-                    | (Self::Authorized, Self::ActivationStarted)
-                    | (Self::ActivationStarted, Self::Activated)
-                    | (Self::Activated, Self::ReceiptPersisted)
-                    | (Self::ReceiptPersisted, Self::Completed)
-            )
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthorityCandidateContext {
-    pub id: QuarantineTransactionId,
-    pub repository: RepositoryIdentity,
-    pub current_generation: RepositoryGeneration,
-    pub next_generation: RepositoryGeneration,
-    pub trust_generation: TrustGeneration,
-    pub revocation_generation: RevocationGeneration,
-    pub policy_digest: [u8; 64],
-    pub ref_update_digest: [u8; 64],
-    pub introduced_commit_set_digest: [u8; 64],
-    pub arrival_pack_digest: [u8; 64],
-    pub proof_set_digest: [u8; 64],
-    pub activation_digest: [u8; 64],
-}
-
-impl AuthorityCandidateContext {
-    fn validate(&self) -> Result<(), CandidateStoreError> {
-        if self.id.0 == [0; 16]
-            || self.current_generation.0 == 0
-            || self.current_generation.0.checked_add(1) != Some(self.next_generation.0)
-            || self.trust_generation.0 == 0
-            || self.repository.as_str().is_empty()
-            || self.repository.as_str().len() > MAX_REPOSITORY_BYTES
-            || self.policy_digest == [0; 64]
-            || self.ref_update_digest == [0; 64]
-            || self.introduced_commit_set_digest == [0; 64]
-            || self.arrival_pack_digest == [0; 64]
-            || self.proof_set_digest == [0; 64]
-            || self.activation_digest == [0; 64]
-        {
-            return Err(CandidateStoreError::Invalid);
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthorityCandidateRecord {
-    pub context: AuthorityCandidateContext,
-    pub status: AuthorityCandidateStatus,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CandidateStoreError {
@@ -134,7 +43,7 @@ impl LinuxAuthorityCandidateStore {
         &self,
         context: AuthorityCandidateContext,
     ) -> Result<AuthorityCandidateRecord, CandidateStoreError> {
-        context.validate()?;
+        validate_context(&context)?;
         let record = AuthorityCandidateRecord {
             context,
             status: AuthorityCandidateStatus::Receiving,
@@ -193,7 +102,7 @@ impl LinuxAuthorityCandidateStore {
         expected: AuthorityCandidateStatus,
         next: AuthorityCandidateStatus,
     ) -> Result<AuthorityCandidateRecord, CandidateStoreError> {
-        context.validate()?;
+        validate_context(context)?;
         let current = self.query(context.id)?;
         if &current.context != context {
             return Err(CandidateStoreError::Stale);
@@ -251,7 +160,7 @@ impl LinuxAuthorityCandidateStore {
 }
 
 fn encode(record: &AuthorityCandidateRecord) -> Result<Vec<u8>, CandidateStoreError> {
-    record.context.validate()?;
+    validate_context(&record.context)?;
     let repository = record.context.repository.as_str().as_bytes();
     let mut output = Vec::with_capacity(FIXED_BYTES + repository.len());
     output.extend_from_slice(MAGIC);
@@ -335,14 +244,36 @@ fn decode(
         proof_set_digest: digest()?,
         activation_digest: digest()?,
     };
-    let status = AuthorityCandidateStatus::parse(*take(input, &mut cursor, 1)?
-        .first()
-        .ok_or(CandidateStoreError::Invalid)?)?;
+    let status = AuthorityCandidateStatus::from_code(
+        *take(input, &mut cursor, 1)?
+            .first()
+            .ok_or(CandidateStoreError::Invalid)?,
+    )
+    .ok_or(CandidateStoreError::Invalid)?;
     if cursor != checksum_at {
         return Err(CandidateStoreError::Invalid);
     }
-    context.validate()?;
+    validate_context(&context)?;
     Ok(AuthorityCandidateRecord { context, status })
+}
+
+fn validate_context(context: &AuthorityCandidateContext) -> Result<(), CandidateStoreError> {
+    if context.id.0 == [0; 16]
+        || context.current_generation.0 == 0
+        || context.current_generation.0.checked_add(1) != Some(context.next_generation.0)
+        || context.trust_generation.0 == 0
+        || context.repository.as_str().is_empty()
+        || context.repository.as_str().len() > MAX_REPOSITORY_BYTES
+        || context.policy_digest == [0; 64]
+        || context.ref_update_digest == [0; 64]
+        || context.introduced_commit_set_digest == [0; 64]
+        || context.arrival_pack_digest == [0; 64]
+        || context.proof_set_digest == [0; 64]
+        || context.activation_digest == [0; 64]
+    {
+        return Err(CandidateStoreError::Invalid);
+    }
+    Ok(())
 }
 
 fn take<'a>(

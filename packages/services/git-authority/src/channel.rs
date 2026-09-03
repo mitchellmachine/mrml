@@ -24,6 +24,15 @@ pub enum AuthorityOperation {
     SignReceipt = 6,
     VerifyReceipt = 7,
     InstallProof = 8,
+    BeginCandidate = 9,
+    SealCandidateProofSet = 10,
+    AuthorizeCandidate = 11,
+    StartCandidateActivation = 12,
+    CommitCandidate = 13,
+    AbortCandidate = 14,
+    QueryCandidate = 15,
+    PersistCandidateReceipt = 16,
+    CompleteCandidate = 17,
 }
 
 impl AuthorityOperation {
@@ -37,6 +46,15 @@ impl AuthorityOperation {
             6 => Self::SignReceipt,
             7 => Self::VerifyReceipt,
             8 => Self::InstallProof,
+            9 => Self::BeginCandidate,
+            10 => Self::SealCandidateProofSet,
+            11 => Self::AuthorizeCandidate,
+            12 => Self::StartCandidateActivation,
+            13 => Self::CommitCandidate,
+            14 => Self::AbortCandidate,
+            15 => Self::QueryCandidate,
+            16 => Self::PersistCandidateReceipt,
+            17 => Self::CompleteCandidate,
             _ => return None,
         })
     }

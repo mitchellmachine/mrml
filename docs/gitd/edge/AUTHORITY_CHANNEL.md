@@ -62,10 +62,23 @@ checksum-bound, atomically replaced, directory-synced, and re-read after every
 transition. Reusing an identifier with another repository or context fails
 closed, and exact repeated operations are idempotent.
 
-This journal is not yet connected to the authority RPC operations or proof
-directory, so candidate-local proof visibility, activation-evidence validation,
-and recovery-driven receipt finalization remain required. Until that wiring and
-its failure-path tests exist, protected receive is not candidate-transactional.
+Authenticated authority operations now expose begin, proof-set seal,
+authorization, activation start, activation commit, abort, exact query, receipt
+persistence, and completion transitions over this shared canonical context.
+Production startup opens the candidate journal beside the generation catalog.
+Only `CommitCandidate` can advance the durable repository generation, and it is
+idempotently recoverable if the activated journal record reached storage before
+the generation replacement. Production receipt signing requires the matching
+activated candidate, exact generation transition, and a SHA3-512 activation
+digest over the authenticated receipt transcript; it then advances the journal
+to `receipt-persisted` before returning the deterministic signature.
+
+The receive pipeline does not yet calculate this complete context or route proof
+installation through candidate-local directories, so these operations are not
+yet invoked by a live protected receive. Candidate-local proof visibility, the
+Gitd abort guard, activation-evidence construction, and recovery-driven receipt
+completion remain required. Until that wiring and its failure-path tests exist,
+protected receive is not candidate-transactional.
 
 Patent review: **NOT_TRIGGERED**. This is conventional authenticated local RPC
 composition and replay sequencing. See `docs/patents/REVIEW_LOG.md`.

@@ -40,12 +40,22 @@ an existing conflicting record. A differently randomized but valid signature is
 accepted only when the already-stored proof independently verifies for the same
 exact commit context. Thus untrusted network data cannot occupy an immutable
 proof slot before cryptographic verification.
-Legacy proof verification remains unavailable. Receipt signing is an isolated
-HMAC operation with a dedicated key and domain; verify is independently called
-before the caller may complete activation. Startup refuses unavailable policy,
-inactive keys, zero generations, malformed public keys, or insecure secret
-files. The Gitd adapter and deployment configuration are composed; receive-wire
-proof carriage and production client signer routing remain incomplete.
+
+Candidate operations carry one canonical context binding the candidate ID,
+repository, current/next repository generations, trust/revocation generations,
+policy, refs, introduced commits, arrival pack, proof set, and activation
+digests. The daemon persists and re-reads ordered candidate transitions. Only a
+matching activation commit advances the repository generation. Receipt signing
+then requires that exact activated candidate and activation transcript digest,
+and advances the journal before returning a purpose-separated Ed25519
+signature. Exact commit and receipt retries are idempotent; cross-context reuse,
+skips, rollback, and abort after activation fail closed.
+
+Legacy proof verification remains unavailable. Startup refuses unavailable
+policy, inactive keys, zero generations, malformed public keys, or insecure
+secret files. The Gitd adapter and deployment configuration are composed, but
+the receive pipeline does not yet invoke the candidate operations and proof
+records are not yet candidate-local.
 
 Patent review: **NOT_TRIGGERED**. This change uses conventional bounded Unix
 socket framing, peer credentials, SHA-256, and HMAC authentication rather than

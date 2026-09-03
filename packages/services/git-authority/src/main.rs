@@ -8,7 +8,8 @@ use mrml_git_authority::{
     decode_frame, encode_frame, AuthorityCapability, AuthorityDispatchError, AuthorityFrame,
     AuthorityFrameKind, AuthorityListener, AuthorityOperation, AuthorityPeer,
     AuthorityReplayWindow, AuthoritySession, ProductionAuthority, AUTHORITY_CAPABILITY_BYTES,
-    AUTHORITY_HEADER_BYTES, LinuxAuthorityGenerationStore, MAX_AUTHORITY_PAYLOAD_BYTES,
+    AUTHORITY_HEADER_BYTES, LinuxAuthorityCandidateStore, LinuxAuthorityGenerationStore,
+    MAX_AUTHORITY_PAYLOAD_BYTES,
 };
 use mrml_openpgp::{
     MAX_OPENPGP_PUBLIC_KEY_BYTES, MAX_OPENPGP_SIGNATURE_BYTES, parse_public_key_v6_ascii,
@@ -523,7 +524,18 @@ fn load_authority(
         mrml_git::RepositoryGeneration(repository_generation),
     )
     .map_err(|_| ())?;
-    let authority = ProductionAuthority::new_with_generation_store(
+    let candidate_path = Path::new(generation_path)
+        .parent()
+        .ok_or(())?
+        .join("candidates");
+    fs::create_dir_all(&candidate_path).map_err(|_| ())?;
+    fs::set_permissions(&candidate_path, fs::Permissions::from_mode(0o700)).map_err(|_| ())?;
+    let candidates = LinuxAuthorityCandidateStore::open(
+        candidate_path.to_str().ok_or(())?,
+        authority_uid,
+    )
+    .map_err(|_| ())?;
+    let authority = ProductionAuthority::new_with_stores(
         policy,
         proofs,
         openpgp_key,
@@ -531,6 +543,7 @@ fn load_authority(
         receipt_key,
         validation_time,
         Box::new(generations),
+        Some(candidates),
     )
     .map_err(|_| ())?;
     erase_secret_bytes(&mut receipt_key);

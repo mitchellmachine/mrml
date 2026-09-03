@@ -4,10 +4,11 @@ use mrml_runtime::Vector;
 
 use crate::gitd_core::{MAX_REF_NAME_BYTES, MAX_REPOSITORY_IDENTITY_BYTES};
 use crate::{
+    AuthorityCandidateContext, AuthorityCandidateRecord, AuthorityCandidateStatus,
     CandidateRefTransaction, CandidateRefUpdate, DetachedCommitProofRecord, FullRefName,
     GitdCoreError, ObjectFormat, ObjectId, ProtectedHistoryContext, ProtectedReceiveAuthorization,
-    RepositoryGeneration, RepositoryIdentity, RevocationGeneration, SignaturePurpose,
-    TrustGeneration,
+    QuarantineTransactionId, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
+    SignaturePurpose, TrustGeneration,
 };
 
 const RECEIVE_MAGIC: &[u8; 8] = b"MRGARCV1";
@@ -15,6 +16,8 @@ const REFS_MAGIC: &[u8; 8] = b"MRGARFV1";
 const COMMIT_MAGIC: &[u8; 8] = b"MRGACMV1";
 const PROOF_MAGIC: &[u8; 8] = b"MRGAPF01";
 const RECEIPT_MAGIC: &[u8; 8] = b"MRGARPV1";
+const CANDIDATE_MAGIC: &[u8; 8] = b"MRGACD01";
+const CANDIDATE_STATUS_MAGIC: &[u8; 8] = b"MRGACS01";
 pub const MAX_AUTHORITY_COMMIT_BYTES: usize = 1024 * 1024;
 pub const MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES: usize = 128 * 1024;
 
@@ -108,6 +111,113 @@ pub struct AuthorityRefTransactionRequest {
 pub struct AuthorityReceiptRequest {
     pub transcript: Vector<u8>,
     pub signature: Vector<u8>,
+}
+
+pub fn encode_authority_candidate(
+    context: &AuthorityCandidateContext,
+) -> Result<Vector<u8>, GitdCoreError> {
+    validate_candidate_context(context)?;
+    let mut output = Vector::new();
+    append(&mut output, CANDIDATE_MAGIC)?;
+    append(&mut output, &context.id.0)?;
+    encode_context(
+        &mut output,
+        &context.repository,
+        context.current_generation,
+        context.trust_generation,
+        context.revocation_generation,
+    )?;
+    append(&mut output, &context.next_generation.0.to_be_bytes())?;
+    append(&mut output, &context.policy_digest)?;
+    append(&mut output, &context.ref_update_digest)?;
+    append(&mut output, &context.introduced_commit_set_digest)?;
+    append(&mut output, &context.arrival_pack_digest)?;
+    append(&mut output, &context.proof_set_digest)?;
+    append(&mut output, &context.activation_digest)?;
+    Ok(output)
+}
+
+pub fn parse_authority_candidate(
+    input: &[u8],
+) -> Result<AuthorityCandidateContext, GitdCoreError> {
+    let mut cursor = Cursor::new(input);
+    cursor.magic(CANDIDATE_MAGIC)?;
+    let mut id = [0; 16];
+    id.copy_from_slice(cursor.take(16)?);
+    let (repository, current_generation, trust_generation, revocation_generation) =
+        cursor.context()?;
+    let next_generation = RepositoryGeneration(cursor.u64()?);
+    let mut digest = || -> Result<[u8; 64], GitdCoreError> {
+        cursor
+            .take(64)?
+            .try_into()
+            .map_err(|_| GitdCoreError::MalformedInput)
+    };
+    let context = AuthorityCandidateContext {
+        id: QuarantineTransactionId(id),
+        repository,
+        current_generation,
+        next_generation,
+        trust_generation,
+        revocation_generation,
+        policy_digest: digest()?,
+        ref_update_digest: digest()?,
+        introduced_commit_set_digest: digest()?,
+        arrival_pack_digest: digest()?,
+        proof_set_digest: digest()?,
+        activation_digest: digest()?,
+    };
+    cursor.finish()?;
+    validate_candidate_context(&context)?;
+    Ok(context)
+}
+
+pub fn encode_authority_candidate_record(
+    record: &AuthorityCandidateRecord,
+) -> Result<Vector<u8>, GitdCoreError> {
+    let mut output = encode_authority_candidate(&record.context)?;
+    output[..8].copy_from_slice(CANDIDATE_STATUS_MAGIC);
+    output.push(record.status as u8);
+    Ok(output)
+}
+
+pub fn parse_authority_candidate_record(
+    input: &[u8],
+) -> Result<AuthorityCandidateRecord, GitdCoreError> {
+    if input.len() < 9 || &input[..8] != CANDIDATE_STATUS_MAGIC {
+        return Err(GitdCoreError::MalformedInput);
+    }
+    let status = AuthorityCandidateStatus::from_code(
+        *input.last().ok_or(GitdCoreError::MalformedInput)?,
+    )
+    .ok_or(GitdCoreError::MalformedInput)?;
+    let mut context = Vector::new();
+    context
+        .try_extend_from_slice(&input[..input.len() - 1])
+        .map_err(|_| GitdCoreError::Resource)?;
+    context[..8].copy_from_slice(CANDIDATE_MAGIC);
+    Ok(AuthorityCandidateRecord {
+        context: parse_authority_candidate(&context)?,
+        status,
+    })
+}
+
+fn validate_candidate_context(
+    context: &AuthorityCandidateContext,
+) -> Result<(), GitdCoreError> {
+    if context.id.0 == [0; 16]
+        || context.current_generation.0 == 0
+        || context.current_generation.0.checked_add(1) != Some(context.next_generation.0)
+        || context.policy_digest == [0; 64]
+        || context.ref_update_digest == [0; 64]
+        || context.introduced_commit_set_digest == [0; 64]
+        || context.arrival_pack_digest == [0; 64]
+        || context.proof_set_digest == [0; 64]
+        || context.activation_digest == [0; 64]
+    {
+        return Err(GitdCoreError::Authorization);
+    }
+    Ok(())
 }
 
 pub fn encode_authority_receive(
@@ -506,6 +616,45 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn candidate() -> AuthorityCandidateContext {
+        AuthorityCandidateContext {
+            id: QuarantineTransactionId([7; 16]),
+            repository: RepositoryIdentity::parse("owner/repository").unwrap(),
+            current_generation: RepositoryGeneration(3),
+            next_generation: RepositoryGeneration(4),
+            trust_generation: TrustGeneration(5),
+            revocation_generation: RevocationGeneration(6),
+            policy_digest: [1; 64],
+            ref_update_digest: [2; 64],
+            introduced_commit_set_digest: [3; 64],
+            arrival_pack_digest: [4; 64],
+            proof_set_digest: [5; 64],
+            activation_digest: [6; 64],
+        }
+    }
+
+    #[test]
+    fn exact_candidate_context_and_status_round_trip() {
+        let candidate = candidate();
+        let encoded = encode_authority_candidate(&candidate).unwrap();
+        assert_eq!(parse_authority_candidate(&encoded).unwrap(), candidate);
+        for end in 0..encoded.len() {
+            assert!(parse_authority_candidate(&encoded[..end]).is_err());
+        }
+        let record = AuthorityCandidateRecord {
+            context: candidate.clone(),
+            status: AuthorityCandidateStatus::Activated,
+        };
+        assert_eq!(
+            parse_authority_candidate_record(&encode_authority_candidate_record(&record).unwrap())
+                .unwrap(),
+            record
+        );
+        let mut conflicting = candidate;
+        conflicting.next_generation = RepositoryGeneration(5);
+        assert!(encode_authority_candidate(&conflicting).is_err());
+    }
 
     #[test]
     fn exact_receive_and_ref_transactions_round_trip() {

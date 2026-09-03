@@ -3,7 +3,8 @@ use mrml_crypto::{
     ML_DSA_65_PUBLIC_KEY_BYTES,
 };
 use mrml_git::{
-    authority_receipt_signature_transcript, bind_verified_commit_proof, parse_authority_commit,
+    authority_receipt_signature_transcript, bind_verified_commit_proof,
+    encode_authority_candidate_record, parse_authority_candidate, parse_authority_commit,
     parse_authority_proof_install,
     parse_authority_receipt, parse_authority_receive, parse_authority_ref_transaction,
     parse_authenticated_audit_receipt_transcript,
@@ -16,7 +17,8 @@ use mrml_openpgp::{PublicKeyV6, MAX_OPENPGP_SIGNATURE_BYTES};
 use mrml_runtime::Vector;
 
 use crate::{
-    AuthorityGenerationStore, AuthorityOperation, GenerationStoreError,
+    AuthorityCandidateContext, AuthorityCandidateStatus, AuthorityGenerationStore,
+    AuthorityOperation, CandidateStoreError, GenerationStoreError, LinuxAuthorityCandidateStore,
     MemoryAuthorityGenerationStore,
 };
 
@@ -39,6 +41,7 @@ pub struct ProductionAuthority {
     signer_identity: [u8; 64],
     validation_time: u64,
     generations: Box<dyn AuthorityGenerationStore>,
+    candidates: Option<LinuxAuthorityCandidateStore>,
 }
 
 impl ProductionAuthority {
@@ -79,6 +82,29 @@ impl ProductionAuthority {
         validation_time: u64,
         generations: Box<dyn AuthorityGenerationStore>,
     ) -> Result<Self, AuthorityDispatchError> {
+        Self::new_with_stores(
+            policy,
+            proofs,
+            openpgp_key,
+            ml_dsa_key,
+            receipt_key,
+            validation_time,
+            generations,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_stores(
+        policy: LinuxDurableTrustPolicyStore,
+        proofs: DurableDetachedCommitProofDirectory,
+        openpgp_key: PublicKeyV6,
+        ml_dsa_key: [u8; ML_DSA_65_PUBLIC_KEY_BYTES],
+        receipt_key: [u8; 32],
+        validation_time: u64,
+        generations: Box<dyn AuthorityGenerationStore>,
+        candidates: Option<LinuxAuthorityCandidateStore>,
+    ) -> Result<Self, AuthorityDispatchError> {
         if receipt_key == [0; 32] || validation_time == 0 {
             return Err(AuthorityDispatchError::Unavailable);
         }
@@ -102,6 +128,7 @@ impl ProductionAuthority {
             signer_identity,
             validation_time,
             generations,
+            candidates,
         })
     }
 
@@ -138,8 +165,174 @@ impl ProductionAuthority {
             AuthorityOperation::SignReceipt => self.sign_receipt(payload),
             AuthorityOperation::VerifyReceipt => self.verify_receipt(payload),
             AuthorityOperation::InstallProof => self.install_proof(payload),
+            AuthorityOperation::BeginCandidate => self.begin_candidate(payload),
+            AuthorityOperation::SealCandidateProofSet => self.transition_candidate(
+                payload,
+                AuthorityCandidateStatus::Receiving,
+                AuthorityCandidateStatus::ProofsSealed,
+            ),
+            AuthorityOperation::AuthorizeCandidate => self.transition_candidate(
+                payload,
+                AuthorityCandidateStatus::ProofsSealed,
+                AuthorityCandidateStatus::Authorized,
+            ),
+            AuthorityOperation::StartCandidateActivation => self.transition_candidate(
+                payload,
+                AuthorityCandidateStatus::Authorized,
+                AuthorityCandidateStatus::ActivationStarted,
+            ),
+            AuthorityOperation::CommitCandidate => self.commit_candidate(payload),
+            AuthorityOperation::AbortCandidate => self.abort_candidate(payload),
+            AuthorityOperation::QueryCandidate => self.query_candidate(payload),
+            AuthorityOperation::PersistCandidateReceipt => self.transition_candidate(
+                payload,
+                AuthorityCandidateStatus::Activated,
+                AuthorityCandidateStatus::ReceiptPersisted,
+            ),
+            AuthorityOperation::CompleteCandidate => self.transition_candidate(
+                payload,
+                AuthorityCandidateStatus::ReceiptPersisted,
+                AuthorityCandidateStatus::Completed,
+            ),
             AuthorityOperation::Health => Err(AuthorityDispatchError::Malformed),
         }
+    }
+
+    fn policy_checked_candidate_context(
+        &self,
+        payload: &[u8],
+    ) -> Result<AuthorityCandidateContext, AuthorityDispatchError> {
+        let context = parse_authority_candidate(payload).map_err(map_git_error)?;
+        let policy = self.current_policy()?;
+        if context.repository != *policy.repository()
+            || context.current_generation.0.checked_add(1) != Some(context.next_generation.0)
+            || context.trust_generation != policy.generation()
+            || context.revocation_generation != policy.revocation_generation()
+            || context.policy_digest != policy.digest()
+        {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        Ok(context)
+    }
+
+    fn candidate_store(&self) -> Result<&LinuxAuthorityCandidateStore, AuthorityDispatchError> {
+        self.candidates
+            .as_ref()
+            .ok_or(AuthorityDispatchError::Unavailable)
+    }
+
+    fn begin_candidate(&self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let context = self.policy_checked_candidate_context(payload)?;
+        if self.current_generation(&context.repository)? != context.current_generation {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        self.candidate_store()?
+            .begin(context)
+            .map_err(map_candidate_error)?;
+        Ok(Vector::new())
+    }
+
+    fn transition_candidate(
+        &self,
+        payload: &[u8],
+        expected: AuthorityCandidateStatus,
+        next: AuthorityCandidateStatus,
+    ) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let context = self.policy_checked_candidate_context(payload)?;
+        let required_generation = if matches!(
+            expected,
+            AuthorityCandidateStatus::Activated | AuthorityCandidateStatus::ReceiptPersisted
+        ) {
+            context.next_generation
+        } else {
+            context.current_generation
+        };
+        if self.current_generation(&context.repository)? != required_generation {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        self.candidate_store()?
+            .transition(&context, expected, next)
+            .map_err(map_candidate_error)?;
+        Ok(Vector::new())
+    }
+
+    fn commit_candidate(&mut self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let context = self.policy_checked_candidate_context(payload)?;
+        let record = self
+            .candidate_store()?
+            .query(context.id)
+            .map_err(map_candidate_error)?;
+        if record.context != context {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        let generation = self.current_generation(&context.repository)?;
+        match (record.status, generation) {
+            (AuthorityCandidateStatus::ActivationStarted, current)
+                if current == context.current_generation =>
+            {
+                self.candidate_store()?
+                    .transition(
+                        &context,
+                        AuthorityCandidateStatus::ActivationStarted,
+                        AuthorityCandidateStatus::Activated,
+                    )
+                    .map_err(map_candidate_error)?;
+                self.generations
+                    .commit_next(
+                        &context.repository,
+                        context.current_generation,
+                        context.next_generation,
+                    )
+                    .map_err(map_generation_error)?;
+            }
+            (AuthorityCandidateStatus::Activated, current)
+                if current == context.current_generation =>
+            {
+                // Recovery after the activated journal record was synced but
+                // before the repository-generation replacement completed.
+                self.generations
+                    .commit_next(
+                        &context.repository,
+                        context.current_generation,
+                        context.next_generation,
+                    )
+                    .map_err(map_generation_error)?;
+            }
+            (AuthorityCandidateStatus::Activated, current)
+                if current == context.next_generation => {}
+            _ => return Err(AuthorityDispatchError::Unauthorized),
+        }
+        Ok(Vector::new())
+    }
+
+    fn abort_candidate(&self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let context = parse_authority_candidate(payload).map_err(map_git_error)?;
+        let current = self
+            .candidate_store()?
+            .query(context.id)
+            .map_err(map_candidate_error)?;
+        if current.context != context {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        if current.status == AuthorityCandidateStatus::Aborted {
+            return Ok(Vector::new());
+        }
+        self.candidate_store()?
+            .transition(&context, current.status, AuthorityCandidateStatus::Aborted)
+            .map_err(map_candidate_error)?;
+        Ok(Vector::new())
+    }
+
+    fn query_candidate(&self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let context = parse_authority_candidate(payload).map_err(map_git_error)?;
+        let record = self
+            .candidate_store()?
+            .query(context.id)
+            .map_err(map_candidate_error)?;
+        if record.context != context {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        encode_authority_candidate_record(&record).map_err(map_git_error)
     }
 
     fn health(&self) -> Result<Vector<u8>, AuthorityDispatchError> {
@@ -304,25 +497,66 @@ impl ProductionAuthority {
         let policy = self.current_policy()?;
         let current = self.current_generation(policy.repository())?;
         if receipt.repository != *policy.repository()
-            || receipt.repository_generation != current
-            || receipt.activated_repository_generation.0 != current.0.checked_add(1).ok_or(
-                AuthorityDispatchError::Resource,
-            )?
             || receipt.trust_generation != policy.generation()
             || receipt.revocation_generation != policy.revocation_generation()
         {
             return Err(AuthorityDispatchError::Unauthorized);
         }
+        let candidate = if let Some(candidates) = &self.candidates {
+            let record = candidates
+                .query(receipt.transaction)
+                .map_err(map_candidate_error)?;
+            if record.context.repository != receipt.repository
+                || record.context.current_generation != receipt.repository_generation
+                || record.context.next_generation != receipt.activated_repository_generation
+                || record.context.trust_generation != receipt.trust_generation
+                || record.context.revocation_generation != receipt.revocation_generation
+                || record.context.policy_digest != policy.digest()
+                || record.context.activation_digest != Sha3_512::digest(&request.transcript)
+                || current != record.context.next_generation
+                || !matches!(
+                    record.status,
+                    AuthorityCandidateStatus::Activated
+                        | AuthorityCandidateStatus::ReceiptPersisted
+                )
+            {
+                return Err(AuthorityDispatchError::Unauthorized);
+            }
+            Some(record)
+        } else {
+            if receipt.repository_generation != current
+                || receipt.activated_repository_generation.0
+                    != current
+                        .0
+                        .checked_add(1)
+                        .ok_or(AuthorityDispatchError::Resource)?
+            {
+                return Err(AuthorityDispatchError::Unauthorized);
+            }
+            None
+        };
         let transcript = authority_receipt_signature_transcript(&request.transcript)
             .map_err(|_| AuthorityDispatchError::Resource)?;
         let signature = ed25519_sign(&self.receipt_key, &transcript);
-        self.generations
-            .commit_next(
-                policy.repository(),
-                current,
-                receipt.activated_repository_generation,
-            )
-            .map_err(map_generation_error)?;
+        if let Some(record) = candidate {
+            if record.status == AuthorityCandidateStatus::Activated {
+                self.candidate_store()?
+                    .transition(
+                        &record.context,
+                        AuthorityCandidateStatus::Activated,
+                        AuthorityCandidateStatus::ReceiptPersisted,
+                    )
+                    .map_err(map_candidate_error)?;
+            }
+        } else {
+            self.generations
+                .commit_next(
+                    policy.repository(),
+                    current,
+                    receipt.activated_repository_generation,
+                )
+                .map_err(map_generation_error)?;
+        }
         let mut output = Vector::new();
         output
             .try_extend_from_slice(&signature)
@@ -371,6 +605,16 @@ fn map_generation_error(error: GenerationStoreError) -> AuthorityDispatchError {
     }
 }
 
+fn map_candidate_error(error: CandidateStoreError) -> AuthorityDispatchError {
+    match error {
+        CandidateStoreError::AlreadyExists
+        | CandidateStoreError::Invalid
+        | CandidateStoreError::Missing
+        | CandidateStoreError::Stale => AuthorityDispatchError::Unauthorized,
+        CandidateStoreError::Unavailable => AuthorityDispatchError::Unavailable,
+    }
+}
+
 impl Drop for ProductionAuthority {
     fn drop(&mut self) {
         erase_secret_bytes(&mut self.receipt_key);
@@ -396,18 +640,21 @@ mod tests {
     };
     use mrml_git::{
         authenticated_audit_receipt_transcript, canonical_hybrid_transcript,
-        encode_audit_receipt, encode_authority_commit, encode_authority_receipt,
-        encode_authority_receive, encode_authority_ref_transaction, encode_loose_object_with_format,
-        AuditReceipt, CandidateRefTransaction, CandidateRefUpdate, DetachedCommitProofRecord,
-        FullRefName, GitObjectType, ObjectFormat, ObjectId, ObjectKind, PolicyPairStatus,
-        ProtectedReceiveAuthorization, QuarantineTransactionId, RepositoryGeneration,
-        RepositoryIdentity, RevocationGeneration, TrustGeneration, TrustPolicyCandidate,
+        encode_audit_receipt, encode_authority_candidate, encode_authority_commit,
+        encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
+        encode_loose_object_with_format, parse_authority_candidate_record, AuditReceipt,
+        AuthorityCandidateContext, AuthorityCandidateStatus, CandidateRefTransaction,
+        CandidateRefUpdate, DetachedCommitProofRecord, FullRefName, GitObjectType, ObjectFormat,
+        ObjectId, ObjectKind, PolicyPairStatus, ProtectedReceiveAuthorization,
+        QuarantineTransactionId, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
+        TrustGeneration, TrustPolicyCandidate,
     };
     use mrml_openpgp::{
         sign_detached_v6_ascii_with_salt, DigestAlgorithm, SigningKeyV6,
         MAX_OPENPGP_SIGNATURE_BYTES,
     };
     use mrml_runtime::{join_path, Vector};
+    use std::os::unix::fs::MetadataExt;
 
     #[test]
     fn exact_policy_refs_and_receipts_dispatch_fail_closed() {
@@ -500,14 +747,23 @@ mod tests {
             &ml_signature,
         )
         .unwrap();
-        let mut authority = ProductionAuthority::new(
+        let candidate_root = join_path(&root, "candidates");
+        mrml_runtime::create_dir_all(&candidate_root).unwrap();
+        let candidate_owner = std::fs::metadata(&*candidate_root).unwrap().uid();
+        let candidate_store =
+            LinuxAuthorityCandidateStore::open(&candidate_root, candidate_owner).unwrap();
+        let mut authority = ProductionAuthority::new_with_stores(
             policy_store,
             proofs,
             public,
             ml_public,
             [0x33; 32],
             1_700_000_002,
-            RepositoryGeneration(3),
+            Box::new(MemoryAuthorityGenerationStore::new(
+                repository.clone(),
+                RepositoryGeneration(3),
+            )),
+            Some(candidate_store),
         )
         .unwrap();
         let receive = ProtectedReceiveAuthorization {
@@ -589,6 +845,64 @@ mod tests {
             ),
             Err(AuthorityDispatchError::Unauthorized)
         );
+        let candidate = AuthorityCandidateContext {
+            id: QuarantineTransactionId([30; 16]),
+            repository: transaction.repository.clone(),
+            current_generation: RepositoryGeneration(3),
+            next_generation: RepositoryGeneration(4),
+            trust_generation: TrustGeneration(4),
+            revocation_generation: RevocationGeneration(8),
+            policy_digest: policy.digest(),
+            ref_update_digest: [1; 64],
+            introduced_commit_set_digest: [2; 64],
+            arrival_pack_digest: [3; 64],
+            proof_set_digest: [4; 64],
+            activation_digest: [5; 64],
+        };
+        let candidate_request = encode_authority_candidate(&candidate).unwrap();
+        assert_eq!(
+            authority.dispatch(AuthorityOperation::BeginCandidate, &candidate_request),
+            Ok(Vector::new())
+        );
+        assert_eq!(
+            parse_authority_candidate_record(
+                &authority
+                    .dispatch(AuthorityOperation::QueryCandidate, &candidate_request)
+                    .unwrap()
+            )
+            .unwrap()
+            .status,
+            AuthorityCandidateStatus::Receiving
+        );
+        assert_eq!(
+            authority.dispatch(
+                AuthorityOperation::SealCandidateProofSet,
+                &candidate_request
+            ),
+            Ok(Vector::new())
+        );
+        assert_eq!(
+            authority.dispatch(AuthorityOperation::AuthorizeCandidate, &candidate_request),
+            Ok(Vector::new())
+        );
+        assert_eq!(
+            authority.dispatch(AuthorityOperation::AbortCandidate, &candidate_request),
+            Ok(Vector::new())
+        );
+        assert_eq!(
+            authority.dispatch(AuthorityOperation::AbortCandidate, &candidate_request),
+            Ok(Vector::new())
+        );
+        assert_eq!(
+            parse_authority_candidate_record(
+                &authority
+                    .dispatch(AuthorityOperation::QueryCandidate, &candidate_request)
+                    .unwrap()
+            )
+            .unwrap()
+            .status,
+            AuthorityCandidateStatus::Aborted
+        );
         let receipt = AuditReceipt {
             transaction: QuarantineTransactionId([31; 16]),
             repository: transaction.repository.clone(),
@@ -606,6 +920,40 @@ mod tests {
         let canonical_receipt = encode_audit_receipt(&receipt).unwrap();
         let receipt_transcript =
             authenticated_audit_receipt_transcript(&canonical_receipt).unwrap();
+        let receipt_candidate = AuthorityCandidateContext {
+            id: receipt.transaction,
+            repository: receipt.repository.clone(),
+            current_generation: receipt.repository_generation,
+            next_generation: receipt.activated_repository_generation,
+            trust_generation: receipt.trust_generation,
+            revocation_generation: receipt.revocation_generation,
+            policy_digest: policy.digest(),
+            ref_update_digest: [11; 64],
+            introduced_commit_set_digest: [12; 64],
+            arrival_pack_digest: [13; 64],
+            proof_set_digest: [14; 64],
+            activation_digest: Sha3_512::digest(&receipt_transcript),
+        };
+        let receipt_candidate_request = encode_authority_candidate(&receipt_candidate).unwrap();
+        for operation in [
+            AuthorityOperation::BeginCandidate,
+            AuthorityOperation::SealCandidateProofSet,
+            AuthorityOperation::AuthorizeCandidate,
+            AuthorityOperation::StartCandidateActivation,
+            AuthorityOperation::CommitCandidate,
+        ] {
+            assert_eq!(
+                authority.dispatch(operation, &receipt_candidate_request),
+                Ok(Vector::new())
+            );
+        }
+        assert_eq!(
+            authority.dispatch(
+                AuthorityOperation::CommitCandidate,
+                &receipt_candidate_request
+            ),
+            Ok(Vector::new())
+        );
         let sign_request = encode_authority_receipt(&receipt_transcript, &[]).unwrap();
         let signature = authority
             .dispatch(AuthorityOperation::SignReceipt, &sign_request)
@@ -613,7 +961,14 @@ mod tests {
         assert_eq!(signature.len(), RECEIPT_SIGNATURE_BYTES);
         assert_eq!(
             authority.dispatch(AuthorityOperation::SignReceipt, &sign_request),
-            Err(AuthorityDispatchError::Unauthorized)
+            Ok(signature.clone())
+        );
+        assert_eq!(
+            authority.dispatch(
+                AuthorityOperation::CompleteCandidate,
+                &receipt_candidate_request
+            ),
+            Ok(Vector::new())
         );
         assert_eq!(
             authority.dispatch(
