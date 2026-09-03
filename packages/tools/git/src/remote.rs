@@ -545,6 +545,12 @@ pub fn push_https_protected_authenticated(
         proof_signer,
     )
     .map_err(|_| PushError::Protocol)?;
+    let mut candidate_id = [0u8; 16];
+    mrml_runtime::fill_random(&mut candidate_id).map_err(|_| PushError::Repository)?;
+    if candidate_id == [0; 16] {
+        return Err(PushError::Repository);
+    }
+    let candidate_id = crate::QuarantineTransactionId(candidate_id);
     let pack_path = mrml_runtime::join_path(
         &repository.git_dir,
         &mrml_runtime::mrml_format!("mrml-push-{}.pack", mrml_runtime::process_id()),
@@ -572,10 +578,31 @@ pub fn push_https_protected_authenticated(
                 &reference,
                 &pack_path,
                 discovery,
+                candidate_id,
                 &proofs,
                 credential_provider,
             )
             .map_err(|_| PushError::Https)?;
+        let receipt = crate::parse_authenticated_audit_receipt(&authenticated_receipt)
+            .map_err(|_| PushError::Protocol)?;
+        if receipt.receipt.transaction != candidate_id
+            || receipt.receipt.repository != identity
+            || receipt.receipt.repository_generation != discovery.repository_generation
+            || receipt.receipt.trust_generation != discovery.trust_generation
+            || receipt.receipt.revocation_generation != discovery.revocation_generation
+            || receipt.receipt.activated_repository_generation.0
+                != discovery
+                    .repository_generation
+                    .0
+                    .checked_add(1)
+                    .ok_or(PushError::Protocol)?
+            || receipt.receipt.updates.len() != 1
+            || reference != receipt.receipt.updates[0].0.as_str()
+            || receipt.receipt.updates[0].1 != old
+            || receipt.receipt.updates[0].2 != new
+        {
+            return Err(PushError::Protocol);
+        }
         proof_signer
             .advance_repository_generation(&authenticated_receipt)
             .map_err(|_| PushError::Protocol)?;

@@ -166,6 +166,16 @@ and a simulated crash-stale lock. Windows remains fail-closed pending a runtime
 directory flush primitive. Process-kill at every syscall boundary, power-loss,
 and physical-filesystem atomicity evidence remain open.
 
+Protected receive commands now carry a client-generated nonzero 128-bit
+candidate identifier as exact lowercase hexadecimal. The parser rejects missing,
+duplicate, zero, malformed, or uppercase identifiers for proof-bearing requests,
+and this identifier—not the edge's conventional server-generated fallback—is
+used by the quarantine journal, authority candidate, and signed receipt. A
+successful client also exact-matches the returned receipt's candidate,
+repository, generations, ref, old object, and new object before advancing its
+signer state. The authenticated status query and automatic reconnect path needed
+to resolve a missing response remain **PARTIALLY IMPLEMENTED**.
+
 Canonical compaction uses the same active-ref lock and `MRPKSET1`/`MRREFS02`
 authority as receive rather than a parallel selector. The replacement pack and
 index are fully authenticated and durably installed before the next manifest is

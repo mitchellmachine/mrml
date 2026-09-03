@@ -384,12 +384,24 @@ pub fn protected_push_command_prefix(
     new: ObjectId,
     reference: &str,
 ) -> Result<Vector<u8>, TransportError> {
+    protected_push_command_prefix_with_candidate(old, new, reference, None)
+}
+
+fn protected_push_command_prefix_with_candidate(
+    old: ObjectId,
+    new: ObjectId,
+    reference: &str,
+    candidate_id: Option<crate::QuarantineTransactionId>,
+) -> Result<Vector<u8>, TransportError> {
     validate_ref(reference)?;
     if old == new || old.format() != ObjectFormat::Sha256 || new.format() != ObjectFormat::Sha256 {
         return Err(TransportError::InvalidObjectId);
     }
+    let candidate = candidate_id
+        .map(|id| mrml_runtime::mrml_format!(" mrml-candidate-v1={}", candidate_id_hex(id)))
+        .unwrap_or_default();
     let line = mrml_runtime::mrml_format!(
-        "{old} {new} {reference}\0report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1 object-format=sha256\n"
+        "{old} {new} {reference}\0report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1 object-format=sha256{candidate}\n"
     );
     let mut output = Vector::new();
     encode_packet(line.as_bytes(), &mut output)?;
@@ -404,6 +416,7 @@ pub fn protected_push_command_with_proofs(
     old: ObjectId,
     new: ObjectId,
     reference: &str,
+    candidate_id: crate::QuarantineTransactionId,
     proofs: &[crate::DetachedCommitProofRecord],
 ) -> Result<Vector<u8>, TransportError> {
     if proofs.is_empty()
@@ -414,7 +427,11 @@ pub fn protected_push_command_with_proofs(
     {
         return Err(TransportError::TooLarge);
     }
-    let mut output = protected_push_command_prefix(old, new, reference)?;
+    if candidate_id.0 == [0; 16] {
+        return Err(TransportError::InvalidObjectId);
+    }
+    let mut output =
+        protected_push_command_prefix_with_candidate(old, new, reference, Some(candidate_id))?;
     output.truncate(output.len() - 4);
     output
         .try_extend_from_slice(b"0001")
@@ -445,6 +462,16 @@ pub fn protected_push_command_with_proofs(
         .try_extend_from_slice(b"0000")
         .map_err(|_| TransportError::TooLarge)?;
     Ok(output)
+}
+
+fn candidate_id_hex(id: crate::QuarantineTransactionId) -> mrml_runtime::Text {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = mrml_runtime::Text::new();
+    for byte in id.0 {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 15) as usize] as char);
+    }
+    output
 }
 
 pub fn parse_push_response(source: &[u8], reference: &str) -> Result<(), TransportError> {

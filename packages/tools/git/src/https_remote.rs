@@ -436,6 +436,7 @@ impl HttpsRemote {
         reference: &str,
         pack_path: &str,
         expected: ProtectedReceiveDiscovery,
+        candidate_id: crate::QuarantineTransactionId,
         proofs: &[crate::DetachedCommitProofRecord],
         provider: &mut P,
     ) -> Result<Vector<u8>, HttpsRemoteError> {
@@ -449,8 +450,14 @@ impl HttpsRemote {
         if self.discover_receive_pack_with_authorization(authorization)? != expected {
             return Err(HttpsRemoteError::Protocol);
         }
-        let prefix = crate::protected_push_command_with_proofs(old, new, reference, proofs)
-            .map_err(|_| HttpsRemoteError::Protocol)?;
+        let prefix = crate::protected_push_command_with_proofs(
+            old,
+            new,
+            reference,
+            candidate_id,
+            proofs,
+        )
+        .map_err(|_| HttpsRemoteError::Protocol)?;
         self.push_pack_file_with_authorization(
             reference,
             pack_path,
@@ -892,7 +899,7 @@ fn parse_protected_receive_discovery(
     if line(0)? != "version 2"
         || line(1)? != "object-format=sha256"
         || line(2)?
-            != "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1"
+            != "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1 mrml-candidate-v1"
     {
         return Err(HttpsRemoteError::Protocol);
     }
@@ -1050,7 +1057,7 @@ mod tests {
         let body = discovery_body(&[
             "version 2\n",
             "object-format=sha256\n",
-            "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1\n",
+            "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1 mrml-candidate-v1\n",
             "mrml-receive-context=7:11:13\n",
         ]);
         assert_eq!(
@@ -1067,7 +1074,7 @@ mod tests {
                 parse_protected_receive_discovery(&discovery_body(&[
                     "version 2\n",
                     "object-format=sha256\n",
-                    "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1\n",
+                    "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1 mrml-candidate-v1\n",
                     malformed.as_str(),
                 ])),
                 Err(HttpsRemoteError::Protocol)

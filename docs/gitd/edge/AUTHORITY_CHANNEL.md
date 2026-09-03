@@ -101,5 +101,12 @@ commit rather than buffering every commit body. Automated restart recovery for
 all incomplete candidate states remains required before the overall protected
 push lifecycle is production-complete.
 
+The protected Smart Git capability advertisement now includes
+`mrml-candidate-v1`. Each protected client generates the nonzero 128-bit value,
+encodes it canonically in the receive command, and requires the signed receipt
+to return that exact transaction together with the expected repository,
+generation transition, ref, and object IDs. This establishes the stable handle
+needed for reconnect reconciliation; the status route itself is not yet wired.
+
 Patent review: **NOT_TRIGGERED**. This is conventional authenticated local RPC
 composition and replay sequencing. See `docs/patents/REVIEW_LOG.md`.

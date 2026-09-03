@@ -4,8 +4,8 @@ use mrml_runtime::{Text, Vector};
 
 use crate::{
     BoundedRead, BoundedWrite, CandidateRefTransaction, CandidateRefUpdate, FullRefName,
-    GitdCoreError, ObjectFormat, ObjectId, RepositoryGeneration, RepositoryIdentity,
-    RevocationGeneration, TrustGeneration, WorkBudget,
+    GitdCoreError, ObjectFormat, ObjectId, QuarantineTransactionId, RepositoryGeneration,
+    RepositoryIdentity, RevocationGeneration, TrustGeneration, WorkBudget,
 };
 
 /// Git's four-byte hexadecimal length includes the header itself. Although the
@@ -44,6 +44,7 @@ pub enum ProtocolV2Request {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReceivePackRequest {
     pub candidate: CandidateRefTransaction,
+    pub candidate_id: Option<QuarantineTransactionId>,
     pub proofs: Vector<crate::DetachedCommitProofRecord>,
     pub report_status_v2: bool,
     pub atomic: bool,
@@ -218,6 +219,7 @@ pub fn read_receive_pack_commands(
                         revocation_generation,
                         updates,
                     },
+                    candidate_id: capabilities.candidate_id,
                     proofs: Vector::new(),
                     report_status_v2: capabilities.report_status_v2,
                     atomic: capabilities.atomic,
@@ -233,6 +235,7 @@ pub fn read_receive_pack_commands(
                     || !capabilities.atomic
                     || !capabilities.mrml_proof_v1
                     || !capabilities.mrml_receipt_v1
+                    || capabilities.candidate_id.is_none()
                 {
                     return Err(GitdCoreError::Unsupported);
                 }
@@ -245,6 +248,7 @@ pub fn read_receive_pack_commands(
                         revocation_generation,
                         updates,
                     },
+                    candidate_id: capabilities.candidate_id,
                     proofs,
                     report_status_v2: capabilities.report_status_v2,
                     atomic: capabilities.atomic,
@@ -348,6 +352,7 @@ struct ReceiveCapabilities {
     ofs_delta: bool,
     mrml_proof_v1: bool,
     mrml_receipt_v1: bool,
+    candidate_id: Option<QuarantineTransactionId>,
 }
 
 fn parse_receive_capabilities(
@@ -367,6 +372,14 @@ fn parse_receive_capabilities(
             b"ofs-delta" => set_once(&mut output.ofs_delta)?,
             b"mrml-proof-v1" => set_once(&mut output.mrml_proof_v1)?,
             b"mrml-receipt-v1" => set_once(&mut output.mrml_receipt_v1)?,
+            _ if capability.starts_with(b"mrml-candidate-v1=") => {
+                if output.candidate_id.is_some() {
+                    return Err(GitdCoreError::MalformedInput);
+                }
+                output.candidate_id = Some(parse_candidate_id(
+                    &capability[b"mrml-candidate-v1=".len()..],
+                )?);
+            }
             _ if capability.starts_with(b"object-format=") => {
                 set_once(&mut saw_object_format)?;
                 let expected = match format {
@@ -384,6 +397,28 @@ fn parse_receive_capabilities(
         return Err(GitdCoreError::MalformedInput);
     }
     Ok(output)
+}
+
+fn parse_candidate_id(bytes: &[u8]) -> Result<QuarantineTransactionId, GitdCoreError> {
+    if bytes.len() != 32 {
+        return Err(GitdCoreError::MalformedInput);
+    }
+    let mut id = [0u8; 16];
+    for (index, pair) in bytes.chunks_exact(2).enumerate() {
+        id[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+    }
+    if id == [0; 16] {
+        return Err(GitdCoreError::MalformedInput);
+    }
+    Ok(QuarantineTransactionId(id))
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, GitdCoreError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err(GitdCoreError::MalformedInput),
+    }
 }
 
 fn parse_receive_command(
@@ -465,7 +500,7 @@ pub fn write_v2_receive_capability_advertisement(
     for line in [
         b"version 2\n".as_slice(),
         b"object-format=sha256\n",
-        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1\n",
+        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1 mrml-candidate-v1\n",
     ] {
         write_pkt_line(output, &PktLine::Data(copy_bytes(line)?), budget)?;
     }
@@ -490,7 +525,7 @@ pub fn write_v2_protected_receive_capability_advertisement(
     for line in [
         b"version 2\n".as_slice(),
         b"object-format=sha256\n",
-        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1\n",
+        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1 mrml-candidate-v1\n",
     ] {
         write_pkt_line(output, &PktLine::Data(copy_bytes(line)?), budget)?;
     }
@@ -1253,6 +1288,7 @@ mod tests {
             old,
             new,
             "refs/heads/main",
+            QuarantineTransactionId([7; 16]),
             core::slice::from_ref(&proof),
         )
         .unwrap();
@@ -1264,6 +1300,10 @@ mod tests {
         };
         let parsed = receive(&mut reader).unwrap();
         assert_eq!(&parsed.proofs[..], &[proof]);
+        assert_eq!(
+            parsed.candidate_id,
+            Some(QuarantineTransactionId([7; 16]))
+        );
         assert_eq!(&reader.bytes[reader.offset..], b"PACKtrailing");
     }
 
@@ -1313,6 +1353,27 @@ mod tests {
             ),
             Err(GitdCoreError::Unsupported)
         );
+    }
+
+    #[test]
+    fn protected_candidate_capability_is_exact_nonzero_lowercase_hex() {
+        let valid = parse_receive_capabilities(
+            b"report-status-v2 atomic mrml-proof-v1 mrml-receipt-v1 mrml-candidate-v1=07070707070707070707070707070707 object-format=sha256",
+            ObjectFormat::Sha256,
+        )
+        .unwrap();
+        assert_eq!(
+            valid.candidate_id,
+            Some(QuarantineTransactionId([7; 16]))
+        );
+        for invalid in [
+            b"report-status-v2 atomic mrml-candidate-v1=00000000000000000000000000000000 object-format=sha256".as_slice(),
+            b"report-status-v2 atomic mrml-candidate-v1=0707070707070707070707070707070 object-format=sha256",
+            b"report-status-v2 atomic mrml-candidate-v1=0707070707070707070707070707070A object-format=sha256",
+            b"report-status-v2 atomic mrml-candidate-v1=0707070707070707070707070707070g object-format=sha256",
+        ] {
+            assert!(parse_receive_capabilities(invalid, ObjectFormat::Sha256).is_err());
+        }
     }
 
     #[test]

@@ -436,6 +436,14 @@ fn prepare_receive_internal(
         false,
         &mut protocol_budget,
     )?;
+    let transaction_id = if request.proofs.is_empty() {
+        if request.candidate_id.is_some() {
+            return Err(GitdCoreError::Unsupported);
+        }
+        transaction_id
+    } else {
+        request.candidate_id.ok_or(GitdCoreError::Authorization)?
+    };
     if !request.atomic || !request.report_status_v2 || request.delete_refs {
         return Err(GitdCoreError::Unsupported);
     }
