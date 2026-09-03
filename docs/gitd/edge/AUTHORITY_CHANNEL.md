@@ -92,9 +92,14 @@ activation, preventing a separate preauthorization representation from drifting
 from durable evidence. Graph verification now uses the authority's non-mutating
 `VerifyProof` operation, so a rejected or incomplete receive no longer installs
 generally visible proof state before candidate begin. The remaining second-stage
-candidate-bound installation, durable candidate-local proof directory, sealed-set
-verification, and commit/abort recovery are still mandatory before protected
-receive is fully candidate-transactional.
+pass re-reads one introduced commit at a time, sends the complete candidate-bound
+proof request, and durably installs it only below that candidate. The authority
+reopens the ordered proof ledger and every immutable proof and recomputes the
+exact proof-set digest before accepting `SealCandidateProofSet`. This preserves
+memory proportional to bounded graph identifiers plus the largest admitted
+commit rather than buffering every commit body. Automated restart recovery for
+all incomplete candidate states remains required before the overall protected
+push lifecycle is production-complete.
 
 Patent review: **NOT_TRIGGERED**. This is conventional authenticated local RPC
 composition and replay sequencing. See `docs/patents/REVIEW_LOG.md`.

@@ -44,6 +44,15 @@ pub trait ProtectedReceiveAuthority: ProtectedCommitVerifier + AuditReceiptAutho
         context: &crate::AuthorityCandidateContext,
     ) -> Result<(), GitdCoreError>;
 
+    fn install_candidate_proof(
+        &mut self,
+        candidate: &crate::AuthorityCandidateContext,
+        context: crate::ProtectedHistoryContext<'_>,
+        commit: crate::ObjectId,
+        exact_contents: &[u8],
+        proof: &crate::DetachedCommitProofRecord,
+    ) -> Result<(), GitdCoreError>;
+
     fn seal_candidate_proof_set(
         &mut self,
         context: &crate::AuthorityCandidateContext,
@@ -188,6 +197,15 @@ impl ReceivePackCore {
         let receipt_directory = AuthenticatedAuditReceiptDirectory::open(signed_receipts_path)
             .map_err(|_| GitdCoreError::Storage)?;
         authority.begin_candidate(&candidate)?;
+        if let Err(error) = prepared.install_candidate_proofs(
+            store,
+            active_objects,
+            authority,
+            &candidate,
+        ) {
+            let _ = authority.abort_candidate(&candidate);
+            return Err(error);
+        }
         if let Err(error) = authority
             .seal_candidate_proof_set(&candidate)
             .and_then(|_| authority.authorize_candidate(&candidate))

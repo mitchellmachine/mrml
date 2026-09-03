@@ -15,6 +15,7 @@ const RECEIVE_MAGIC: &[u8; 8] = b"MRGARCV1";
 const REFS_MAGIC: &[u8; 8] = b"MRGARFV1";
 const COMMIT_MAGIC: &[u8; 8] = b"MRGACMV1";
 const PROOF_MAGIC: &[u8; 8] = b"MRGAPF01";
+const CANDIDATE_PROOF_MAGIC: &[u8; 8] = b"MRGCPF01";
 const RECEIPT_MAGIC: &[u8; 8] = b"MRGARPV1";
 const CANDIDATE_MAGIC: &[u8; 8] = b"MRGACD01";
 const CANDIDATE_STATUS_MAGIC: &[u8; 8] = b"MRGACS01";
@@ -44,6 +45,42 @@ pub struct AuthorityProofInstallRequest {
     pub commit: ObjectId,
     pub exact_contents: Vector<u8>,
     pub proof: DetachedCommitProofRecord,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorityCandidateProofRequest {
+    pub candidate: AuthorityCandidateContext,
+    pub proof: AuthorityProofInstallRequest,
+}
+
+pub fn encode_authority_candidate_proof(
+    candidate: &AuthorityCandidateContext,
+    context: ProtectedHistoryContext<'_>,
+    commit: ObjectId,
+    exact_contents: &[u8],
+    proof: &DetachedCommitProofRecord,
+) -> Result<Vector<u8>, GitdCoreError> {
+    let candidate = encode_authority_candidate(candidate)?;
+    let proof = encode_authority_proof_install(context, commit, exact_contents, proof)?;
+    let mut output = Vector::new();
+    append(&mut output, CANDIDATE_PROOF_MAGIC)?;
+    append_counted(&mut output, &candidate)?;
+    append_large_counted(&mut output, &proof)?;
+    Ok(output)
+}
+
+pub fn parse_authority_candidate_proof(
+    input: &[u8],
+) -> Result<AuthorityCandidateProofRequest, GitdCoreError> {
+    let mut cursor = Cursor::new(input);
+    cursor.magic(CANDIDATE_PROOF_MAGIC)?;
+    let candidate = cursor.counted_bytes(1024)?;
+    let proof = cursor.large_counted_bytes(MAX_AUTHORITY_COMMIT_BYTES + 8 * 1024)?;
+    cursor.finish()?;
+    Ok(AuthorityCandidateProofRequest {
+        candidate: parse_authority_candidate(&candidate)?,
+        proof: parse_authority_proof_install(&proof)?,
+    })
 }
 
 pub fn encode_authority_proof_install(
@@ -483,6 +520,14 @@ fn append_counted(output: &mut Vector<u8>, bytes: &[u8]) -> Result<(), GitdCoreE
     append(output, bytes)
 }
 
+fn append_large_counted(output: &mut Vector<u8>, bytes: &[u8]) -> Result<(), GitdCoreError> {
+    if bytes.is_empty() || bytes.len() > u32::MAX as usize {
+        return Err(GitdCoreError::Resource);
+    }
+    append(output, &(bytes.len() as u32).to_be_bytes())?;
+    append(output, bytes)
+}
+
 fn append(output: &mut Vector<u8>, bytes: &[u8]) -> Result<(), GitdCoreError> {
     output
         .try_extend_from_slice(bytes)
@@ -564,6 +609,13 @@ impl<'a> Cursor<'a> {
     }
     fn counted_bytes(&mut self, maximum: usize) -> Result<&'a [u8], GitdCoreError> {
         let length = usize::from(self.u16()?);
+        if length == 0 || length > maximum {
+            return Err(GitdCoreError::Resource);
+        }
+        self.take(length)
+    }
+    fn large_counted_bytes(&mut self, maximum: usize) -> Result<&'a [u8], GitdCoreError> {
+        let length = usize::try_from(self.u32()?).map_err(|_| GitdCoreError::Resource)?;
         if length == 0 || length > maximum {
             return Err(GitdCoreError::Resource);
         }
@@ -654,6 +706,42 @@ mod tests {
         let mut conflicting = candidate;
         conflicting.next_generation = RepositoryGeneration(5);
         assert!(encode_authority_candidate(&conflicting).is_err());
+    }
+
+    #[test]
+    fn candidate_proof_binds_complete_candidate_and_commit_request() {
+        let candidate = candidate();
+        let commit = ObjectId::from_bytes(ObjectFormat::Sha256, &[8; 32]).unwrap();
+        let context = ProtectedHistoryContext {
+            repository: &candidate.repository,
+            repository_generation: candidate.current_generation,
+            trust_generation: candidate.trust_generation,
+            revocation_generation: candidate.revocation_generation,
+            purpose: SignaturePurpose::GitCommit,
+            object_format: ObjectFormat::Sha256,
+        };
+        let proof = DetachedCommitProofRecord::new(
+            commit,
+            &[3; 64],
+            &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES],
+        )
+        .unwrap();
+        let encoded = encode_authority_candidate_proof(
+            &candidate,
+            context,
+            commit,
+            b"tree contents",
+            &proof,
+        )
+        .unwrap();
+        let parsed = parse_authority_candidate_proof(&encoded).unwrap();
+        assert_eq!(parsed.candidate, candidate);
+        assert_eq!(parsed.proof.commit, commit);
+        assert_eq!(&parsed.proof.exact_contents[..], b"tree contents");
+        assert_eq!(parsed.proof.proof, proof);
+        for end in 0..encoded.len() {
+            assert!(parse_authority_candidate_proof(&encoded[..end]).is_err());
+        }
     }
 
     #[test]

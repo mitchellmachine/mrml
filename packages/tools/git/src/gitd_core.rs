@@ -356,6 +356,7 @@ pub struct VerifiedRefTransaction {
     trust_generation: TrustGeneration,
     revocation_generation: RevocationGeneration,
     introduced_commit_set_digest: [u8; 64],
+    introduced_commits: Vector<ObjectId>,
     updates: Vector<VerifiedRefUpdate>,
 }
 
@@ -382,6 +383,12 @@ impl VerifiedRefTransaction {
 
     pub const fn introduced_commit_set_digest(&self) -> [u8; 64] {
         self.introduced_commit_set_digest
+    }
+
+    /// Canonical sorted unique introduced set retained for bounded second-stage
+    /// authority work. The digest above authenticates these exact identifiers.
+    pub fn introduced_commits(&self) -> &[ObjectId] {
+        &self.introduced_commits
     }
 }
 
@@ -477,6 +484,7 @@ pub fn build_verified_fast_forward_transaction(
         trust_generation: candidate.trust_generation,
         revocation_generation: candidate.revocation_generation,
         introduced_commit_set_digest: introduced_hash.finalize(),
+        introduced_commits: unique_introduced,
         updates,
     })
 }
@@ -775,5 +783,6 @@ mod tests {
         let verified = build_verified_fast_forward_transaction(candidate, &[range]).unwrap();
         assert_eq!(verified.repository_generation(), RepositoryGeneration(3));
         assert_eq!(verified.updates()[0].proposed_new(), Some(new));
+        assert_eq!(verified.introduced_commits(), &[new]);
     }
 }

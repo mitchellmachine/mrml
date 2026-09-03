@@ -1,7 +1,7 @@
 //! Protected receive authority adapter over a narrow authenticated RPC.
 
 use crate::{
-    encode_authority_candidate, encode_authority_proof_install,
+    encode_authority_candidate, encode_authority_candidate_proof, encode_authority_proof_install,
     encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
     parse_authority_candidate_record, AuditReceiptAuthority, AuthorityCandidateContext,
     AuthorityCandidateRecord, CandidateRefTransaction, DetachedCommitProofRecord, GitdCoreError,
@@ -26,6 +26,7 @@ pub const AUTHORITY_OP_QUERY_CANDIDATE: u8 = 15;
 pub const AUTHORITY_OP_PERSIST_CANDIDATE_RECEIPT: u8 = 16;
 pub const AUTHORITY_OP_COMPLETE_CANDIDATE: u8 = 17;
 pub const AUTHORITY_OP_VERIFY_PROOF: u8 = 18;
+pub const AUTHORITY_OP_INSTALL_CANDIDATE_PROOF: u8 = 19;
 const MAX_AUTHORITY_RESULT_BYTES: usize = 1024;
 
 /// Transport-only capability. Implementations must authenticate the peer,
@@ -85,6 +86,24 @@ impl<T: ProtectedAuthorityRpc> RemoteProtectedReceiveAuthority<T> {
     ) -> Result<(), GitdCoreError> {
         let encoded = encode_authority_proof_install(context, commit, exact_contents, proof)?;
         self.empty_response(AUTHORITY_OP_VERIFY_PROOF, &encoded)
+    }
+
+    pub fn install_candidate_commit_proof(
+        &mut self,
+        candidate: &AuthorityCandidateContext,
+        context: ProtectedHistoryContext<'_>,
+        commit: ObjectId,
+        exact_contents: &[u8],
+        proof: &DetachedCommitProofRecord,
+    ) -> Result<(), GitdCoreError> {
+        let encoded = encode_authority_candidate_proof(
+            candidate,
+            context,
+            commit,
+            exact_contents,
+            proof,
+        )?;
+        self.empty_response(AUTHORITY_OP_INSTALL_CANDIDATE_PROOF, &encoded)
     }
 
     pub fn begin_candidate(
@@ -192,6 +211,23 @@ impl<T: ProtectedAuthorityRpc> ProtectedReceiveAuthority for RemoteProtectedRece
         context: &AuthorityCandidateContext,
     ) -> Result<(), GitdCoreError> {
         Self::begin_candidate(self, context)
+    }
+
+    fn install_candidate_proof(
+        &mut self,
+        candidate: &AuthorityCandidateContext,
+        context: ProtectedHistoryContext<'_>,
+        commit: ObjectId,
+        exact_contents: &[u8],
+        proof: &DetachedCommitProofRecord,
+    ) -> Result<(), GitdCoreError> {
+        self.install_candidate_commit_proof(
+            candidate,
+            context,
+            commit,
+            exact_contents,
+            proof,
+        )
     }
 
     fn seal_candidate_proof_set(
@@ -338,8 +374,9 @@ impl<T: ProtectedAuthorityRpc> AuditReceiptAuthority for RemoteProtectedReceiveA
 mod tests {
     use super::*;
     use crate::{
-        encode_authority_candidate_record, parse_authority_candidate, parse_authority_commit,
-        parse_authority_proof_install, parse_authority_receive, AuthorityCandidateStatus,
+        encode_authority_candidate_record, parse_authority_candidate,
+        parse_authority_candidate_proof, parse_authority_commit, parse_authority_proof_install,
+        parse_authority_receive, AuthorityCandidateStatus,
         ObjectFormat, QuarantineTransactionId, RepositoryGeneration, RepositoryIdentity,
         RevocationGeneration, SignaturePurpose, TrustGeneration,
     };
@@ -372,6 +409,10 @@ mod tests {
                 }
                 AUTHORITY_OP_INSTALL_PROOF | AUTHORITY_OP_VERIFY_PROOF => {
                     parse_authority_proof_install(request).map_err(|_| ())?;
+                    Ok(0)
+                }
+                AUTHORITY_OP_INSTALL_CANDIDATE_PROOF => {
+                    parse_authority_candidate_proof(request).map_err(|_| ())?;
                     Ok(0)
                 }
                 AUTHORITY_OP_BEGIN_CANDIDATE
@@ -461,6 +502,15 @@ mod tests {
             activation_digest: [6; 64],
         };
         allowed.begin_candidate(&candidate).unwrap();
+        allowed
+            .install_candidate_commit_proof(
+                &candidate,
+                context,
+                commit,
+                b"commit bytes",
+                &proof,
+            )
+            .unwrap();
         assert_eq!(
             allowed.query_candidate(&candidate).unwrap().status,
             AuthorityCandidateStatus::Receiving

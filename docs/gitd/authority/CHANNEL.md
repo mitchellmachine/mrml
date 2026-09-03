@@ -42,7 +42,9 @@ exact commit context. Thus untrusted network data cannot occupy an immutable
 proof slot before cryptographic verification. `VerifyProof` performs the same
 policy, transcript, signature, and object-ID checks without inserting into the
 global proof directory. The live receive graph uses this non-mutating operation
-while its exact candidate context is still being constructed.
+while its exact candidate context is still being constructed. When candidate
+journaling is configured, the legacy global `InstallProof` operation is rejected;
+new proof persistence must use an active candidate.
 
 Candidate operations carry one canonical context binding the candidate ID,
 repository, current/next repository generations, trust/revocation generations,
@@ -54,13 +56,21 @@ and advances the journal before returning a purpose-separated Ed25519
 signature. Exact commit and receipt retries are idempotent; cross-context reuse,
 skips, rollback, and abort after activation fail closed.
 
+Candidate proofs use a distinct authenticated operation that binds both the
+complete candidate context and the existing exact proof-verification request.
+While the candidate is `receiving`, verified records are written only beneath
+its owner-only candidate directory and an ordered checksummed proof ledger is
+durably replaced. Sealing reopens every immutable proof, rejects unexpected
+directory entries, and recomputes the canonical proof-set digest before the
+journal may advance. Aborted candidate proofs never enter the generally visible
+proof directory.
+
 Legacy proof verification remains unavailable. Startup refuses unavailable
 policy, inactive keys, zero generations, malformed public keys, or insecure
 secret files. The Gitd adapter and deployment configuration are composed, and
-the receive pipeline now invokes the candidate lifecycle around durable
-activation and receipt persistence. Proof records are not yet candidate-local,
-and the live path deliberately does not install them globally, so durable
-candidate proof retention and full proof transactionality remain incomplete.
+the receive pipeline now invokes the candidate lifecycle around proof retention,
+durable activation, and receipt persistence. Automated restart reconciliation
+of every incomplete candidate state remains incomplete.
 
 Patent review: **NOT_TRIGGERED**. This change uses conventional bounded Unix
 socket framing, peer credentials, SHA-256, and HMAC authentication rather than

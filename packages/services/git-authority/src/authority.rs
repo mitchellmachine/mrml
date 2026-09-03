@@ -5,8 +5,8 @@ use mrml_crypto::{
 use mrml_git::{
     authority_receipt_signature_transcript, bind_verified_commit_proof,
     candidate_activation_digest,
-    encode_authority_candidate_record, parse_authority_candidate, parse_authority_commit,
-    parse_authority_proof_install,
+    encode_authority_candidate_record, parse_authority_candidate, parse_authority_candidate_proof,
+    parse_authority_commit, parse_authority_proof_install,
     parse_authority_receipt, parse_authority_receive, parse_authority_ref_transaction,
     parse_authenticated_audit_receipt_transcript,
     verify_hybrid_signature, AuthorizedHybridPair, DurableDetachedCommitProofDirectory,
@@ -167,12 +167,9 @@ impl ProductionAuthority {
             AuthorityOperation::VerifyReceipt => self.verify_receipt(payload),
             AuthorityOperation::InstallProof => self.install_proof(payload),
             AuthorityOperation::VerifyProof => self.verify_proof(payload),
+            AuthorityOperation::InstallCandidateProof => self.install_candidate_proof(payload),
             AuthorityOperation::BeginCandidate => self.begin_candidate(payload),
-            AuthorityOperation::SealCandidateProofSet => self.transition_candidate(
-                payload,
-                AuthorityCandidateStatus::Receiving,
-                AuthorityCandidateStatus::ProofsSealed,
-            ),
+            AuthorityOperation::SealCandidateProofSet => self.seal_candidate_proofs(payload),
             AuthorityOperation::AuthorizeCandidate => self.transition_candidate(
                 payload,
                 AuthorityCandidateStatus::ProofsSealed,
@@ -426,6 +423,9 @@ impl ProductionAuthority {
     }
 
     fn install_proof(&mut self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
+        if self.candidates.is_some() {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
         let request = parse_authority_proof_install(payload).map_err(map_git_error)?;
         self.verify_proof_request(&request)?;
         let context = ProtectedHistoryContext {
@@ -450,6 +450,44 @@ impl ProductionAuthority {
         let request = parse_authority_proof_install(payload).map_err(map_git_error)?;
         self.verify_proof_request(&request)?;
         Ok(Vector::new())
+    }
+
+    fn install_candidate_proof(
+        &self,
+        payload: &[u8],
+    ) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let request = parse_authority_candidate_proof(payload).map_err(map_git_error)?;
+        let encoded_candidate = mrml_git::encode_authority_candidate(&request.candidate)
+            .map_err(map_git_error)?;
+        let candidate = self.policy_checked_candidate_context(&encoded_candidate)?;
+        self.verify_proof_request(&request.proof)?;
+        let proof_context = ProtectedHistoryContext {
+            repository: &request.proof.repository,
+            repository_generation: request.proof.repository_generation,
+            trust_generation: request.proof.trust_generation,
+            revocation_generation: request.proof.revocation_generation,
+            purpose: request.proof.purpose,
+            object_format: request.proof.object_format,
+        };
+        self.candidate_store()?
+            .install_proof(&candidate, proof_context, &request.proof.proof)
+            .map_err(map_candidate_error)?;
+        Ok(Vector::new())
+    }
+
+    fn seal_candidate_proofs(
+        &self,
+        payload: &[u8],
+    ) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let context = self.policy_checked_candidate_context(payload)?;
+        self.candidate_store()?
+            .seal_proofs(&context)
+            .map_err(map_candidate_error)?;
+        self.transition_candidate(
+            payload,
+            AuthorityCandidateStatus::Receiving,
+            AuthorityCandidateStatus::ProofsSealed,
+        )
     }
 
     fn verify_proof_request(
@@ -684,7 +722,8 @@ mod tests {
         ml_dsa_65_keygen, ml_dsa_65_sign, ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES,
     };
     use mrml_git::{
-        authenticated_audit_receipt_transcript, canonical_hybrid_transcript,
+        authenticated_audit_receipt_transcript, candidate_proof_set_digest,
+        canonical_hybrid_transcript,
         encode_audit_receipt, encode_authority_candidate, encode_authority_commit,
         encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
         encode_loose_object_with_format, parse_authority_candidate_record, AuditReceipt,
@@ -833,7 +872,7 @@ mod tests {
         );
         assert_eq!(
             authority.dispatch(AuthorityOperation::InstallProof, &encoded_proof),
-            Ok(Vector::new())
+            Err(AuthorityDispatchError::Unauthorized)
         );
         assert_eq!(
             authority.dispatch(
@@ -864,7 +903,7 @@ mod tests {
                 AuthorityOperation::VerifyCommit,
                 &encode_authority_commit(context, commit, contents).unwrap()
             ),
-            Ok(Vector::new())
+            Err(AuthorityDispatchError::Unauthorized)
         );
         assert_eq!(
             authority.dispatch(
@@ -874,7 +913,7 @@ mod tests {
             Err(AuthorityDispatchError::Unauthorized)
         );
         let transaction = CandidateRefTransaction {
-            repository,
+            repository: repository.clone(),
             repository_generation: RepositoryGeneration(3),
             trust_generation: TrustGeneration(4),
             revocation_generation: RevocationGeneration(8),
@@ -910,7 +949,7 @@ mod tests {
             ref_update_digest: [1; 64],
             introduced_commit_set_digest: [2; 64],
             arrival_pack_digest: [3; 64],
-            proof_set_digest: [4; 64],
+            proof_set_digest: candidate_proof_set_digest(core::slice::from_ref(&proof)).unwrap(),
             activation_digest: [5; 64],
         };
         let candidate_request = encode_authority_candidate(&candidate).unwrap();
@@ -927,6 +966,20 @@ mod tests {
             .unwrap()
             .status,
             AuthorityCandidateStatus::Receiving
+        );
+        assert_eq!(
+            authority.dispatch(
+                AuthorityOperation::InstallCandidateProof,
+                &mrml_git::encode_authority_candidate_proof(
+                    &candidate,
+                    context,
+                    commit,
+                    contents,
+                    &proof,
+                )
+                .unwrap()
+            ),
+            Ok(Vector::new())
         );
         assert_eq!(
             authority.dispatch(
@@ -985,12 +1038,37 @@ mod tests {
             ref_update_digest: [11; 64],
             introduced_commit_set_digest: [12; 64],
             arrival_pack_digest: [13; 64],
-            proof_set_digest: [14; 64],
+            proof_set_digest: candidate_proof_set_digest(core::slice::from_ref(&proof)).unwrap(),
             activation_digest: candidate_activation_digest(&receipt_transcript),
         };
         let receipt_candidate_request = encode_authority_candidate(&receipt_candidate).unwrap();
+        assert_eq!(
+            authority.dispatch(AuthorityOperation::BeginCandidate, &receipt_candidate_request),
+            Ok(Vector::new())
+        );
+        let receipt_proof_context = ProtectedHistoryContext {
+            repository: &repository,
+            repository_generation: receipt.repository_generation,
+            trust_generation: receipt.trust_generation,
+            revocation_generation: receipt.revocation_generation,
+            purpose: SignaturePurpose::GitCommit,
+            object_format: ObjectFormat::Sha256,
+        };
+        assert_eq!(
+            authority.dispatch(
+                AuthorityOperation::InstallCandidateProof,
+                &mrml_git::encode_authority_candidate_proof(
+                    &receipt_candidate,
+                    receipt_proof_context,
+                    commit,
+                    contents,
+                    &proof,
+                )
+                .unwrap()
+            ),
+            Ok(Vector::new())
+        );
         for operation in [
-            AuthorityOperation::BeginCandidate,
             AuthorityOperation::SealCandidateProofSet,
             AuthorityOperation::AuthorizeCandidate,
             AuthorityOperation::StartCandidateActivation,

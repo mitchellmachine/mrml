@@ -134,6 +134,48 @@ impl PreparedProtectedReceive {
     pub const fn protocol_budget(&self) -> ProtocolBudget {
         self.protocol_budget
     }
+
+    pub(crate) fn install_candidate_proofs(
+        &self,
+        store: &LinuxDurableReceiveStore,
+        active_objects: &Repository,
+        authority: &mut dyn crate::ProtectedReceiveAuthority,
+        candidate: &AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError> {
+        if candidate.introduced_commit_set_digest
+            != self.verified.introduced_commit_set_digest()
+            || candidate.proof_set_digest != candidate_proof_set_digest(&self.request.proofs)?
+        {
+            return Err(GitdCoreError::Authorization);
+        }
+        let context = ProtectedHistoryContext {
+            repository: self.verified.repository(),
+            repository_generation: self.verified.repository_generation(),
+            trust_generation: self.verified.trust_generation(),
+            revocation_generation: self.verified.revocation_generation(),
+            purpose: SignaturePurpose::GitCommit,
+            object_format: ObjectFormat::Sha256,
+        };
+        for proof in &self.request.proofs {
+            let commit = proof.commit();
+            if self.verified.introduced_commits().binary_search(&commit).is_err() {
+                return Err(GitdCoreError::Authorization);
+            }
+            let object = received_or_active(store, self.transaction.id(), active_objects, commit)
+                .map_err(map_history_error)?;
+            if object.kind != ObjectKind::Commit {
+                return Err(GitdCoreError::ObjectValidation);
+            }
+            authority.install_candidate_proof(
+                candidate,
+                context,
+                commit,
+                &object.contents,
+                proof,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Activate an already verified protected receive through the only durable
