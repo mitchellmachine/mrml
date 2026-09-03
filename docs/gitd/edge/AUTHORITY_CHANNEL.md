@@ -73,12 +73,14 @@ activated candidate, exact generation transition, and a SHA3-512 activation
 digest over the authenticated receipt transcript; it then advances the journal
 to `receipt-persisted` before returning the deterministic signature.
 
-The live receive composition does not yet invoke this complete context or route
-proof installation through candidate-local directories, so these operations
-are not yet invoked by a protected receive. Candidate-local proof visibility, the
-Gitd abort guard, activation-evidence construction, and recovery-driven receipt
-completion remain required. Until that wiring and its failure-path tests exist,
-protected receive is not candidate-transactional.
+The live receive composition now begins, seals, and authorizes this exact
+candidate after pack, graph, and proof verification. Its authenticated receive
+store starts activation immediately before the underlying atomic ref update,
+commits the candidate only after that update returns durable success, and
+completes it after the signed receipt is durable. A drop guard sends an
+idempotent abort on every other exit; the authority rejects that abort after
+activation, preserving uncertain-state recovery instead of relabeling it as a
+definite rejection.
 
 The preparation layer now retains the authenticated quarantine pack/index
 summary and exposes construction of the complete candidate context. Canonical,
@@ -87,9 +89,11 @@ ordered verified ref updates, ordered detached proof set, authenticated pack and
 index checksums plus exact sizes/counts, and the expected authenticated receipt
 transcript. The expected receipt is produced by the same helper used after
 activation, preventing a separate preauthorization representation from drifting
-from durable evidence. Live protected-receive composition still requires the
-two-stage graph/proof verification needed to begin the candidate before any
-proof becomes authority-visible.
+from durable evidence. Proof installation is still performed through the older
+globally visible operation during graph verification, before candidate begin.
+The remaining two-stage graph/proof verification and candidate-local proof
+directory are therefore mandatory before protected receive is fully
+candidate-transactional.
 
 Patent review: **NOT_TRIGGERED**. This is conventional authenticated local RPC
 composition and replay sequencing. See `docs/patents/REVIEW_LOG.md`.

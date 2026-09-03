@@ -174,6 +174,55 @@ impl<T: ProtectedAuthorityRpc> ProtectedReceiveAuthority for RemoteProtectedRece
         let encoded = encode_authority_ref_transaction(transaction, policy_digest)?;
         self.empty_response(AUTHORITY_OP_AUTHORIZE_REF_TRANSACTION, &encoded)
     }
+
+    fn begin_candidate(
+        &mut self,
+        context: &AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError> {
+        Self::begin_candidate(self, context)
+    }
+
+    fn seal_candidate_proof_set(
+        &mut self,
+        context: &AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError> {
+        Self::seal_candidate_proof_set(self, context)
+    }
+
+    fn authorize_candidate(
+        &mut self,
+        context: &AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError> {
+        Self::authorize_candidate(self, context)
+    }
+
+    fn start_candidate_activation(
+        &mut self,
+        context: &AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError> {
+        Self::start_candidate_activation(self, context)
+    }
+
+    fn commit_candidate(
+        &mut self,
+        context: &AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError> {
+        Self::commit_candidate(self, context)
+    }
+
+    fn abort_candidate(
+        &mut self,
+        context: &AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError> {
+        Self::abort_candidate(self, context)
+    }
+
+    fn complete_candidate(
+        &mut self,
+        context: &AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError> {
+        Self::complete_candidate(self, context)
+    }
 }
 
 impl<T: ProtectedAuthorityRpc> ProtectedCommitVerifier for RemoteProtectedReceiveAuthority<T> {

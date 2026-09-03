@@ -6,9 +6,10 @@ use mrml_runtime::{
 };
 
 use crate::{
-    ActivationSnapshot, AuditReceipt, DurableFailure, DurableReceiveStore,
-    LinuxDurableReceiveStore, QuarantineTransaction, QuarantineTransactionId,
-    VerifiedRefTransaction, encode_audit_receipt, parse_audit_receipt,
+    ActivationSnapshot, AuditReceipt, AuthorityCandidateContext, DurableFailure,
+    DurableReceiveStore, LinuxDurableReceiveStore, ProtectedReceiveAuthority,
+    QuarantineTransaction, QuarantineTransactionId, VerifiedRefTransaction, encode_audit_receipt,
+    parse_audit_receipt,
 };
 
 const MAGIC: &[u8; 8] = b"MRARCP01";
@@ -166,8 +167,26 @@ impl AuthenticatedAuditReceiptDirectory {
 pub struct AuthenticatedReceiveStore<'a> {
     inner: &'a mut LinuxDurableReceiveStore,
     receipts: AuthenticatedAuditReceiptDirectory,
-    authority: &'a mut dyn AuditReceiptAuthority,
+    authority: ReceiveReceiptAuthority<'a>,
     last_authenticated_receipt: Option<Vector<u8>>,
+}
+
+enum ReceiveReceiptAuthority<'a> {
+    Receipt(&'a mut dyn AuditReceiptAuthority),
+    Candidate {
+        authority: &'a mut dyn ProtectedReceiveAuthority,
+        context: AuthorityCandidateContext,
+        completed: bool,
+    },
+}
+
+impl ReceiveReceiptAuthority<'_> {
+    fn receipt(&mut self) -> &mut dyn AuditReceiptAuthority {
+        match self {
+            Self::Receipt(authority) => *authority,
+            Self::Candidate { authority, .. } => *authority,
+        }
+    }
 }
 
 impl<'a> AuthenticatedReceiveStore<'a> {
@@ -179,9 +198,41 @@ impl<'a> AuthenticatedReceiveStore<'a> {
         Ok(Self {
             inner,
             receipts: AuthenticatedAuditReceiptDirectory::open(signed_receipts_path)?,
-            authority,
+            authority: ReceiveReceiptAuthority::Receipt(authority),
             last_authenticated_receipt: None,
         })
+    }
+
+    pub fn new_candidate(
+        inner: &'a mut LinuxDurableReceiveStore,
+        signed_receipts_path: &str,
+        authority: &'a mut dyn ProtectedReceiveAuthority,
+        context: AuthorityCandidateContext,
+    ) -> Result<Self, DurableFailure> {
+        Ok(Self::new_candidate_with_receipts(
+            inner,
+            AuthenticatedAuditReceiptDirectory::open(signed_receipts_path)?,
+            authority,
+            context,
+        ))
+    }
+
+    pub(crate) fn new_candidate_with_receipts(
+        inner: &'a mut LinuxDurableReceiveStore,
+        receipts: AuthenticatedAuditReceiptDirectory,
+        authority: &'a mut dyn ProtectedReceiveAuthority,
+        context: AuthorityCandidateContext,
+    ) -> Self {
+        Self {
+            inner,
+            receipts,
+            authority: ReceiveReceiptAuthority::Candidate {
+                authority,
+                context,
+                completed: false,
+            },
+            last_authenticated_receipt: None,
+        }
     }
 
     /// Recovers only a post-activation receipt after the concrete store has
@@ -193,14 +244,16 @@ impl<'a> AuthenticatedReceiveStore<'a> {
         journal: &crate::ReceiveJournalRecord,
     ) -> Result<AuthenticatedAuditReceipt, DurableFailure> {
         let receipt = self.inner.recovery_audit_receipt(journal)?;
-        match self.receipts.load(journal.transaction, self.authority) {
+        match self.receipts.load(journal.transaction, self.authority.receipt()) {
             Ok(existing) if existing.receipt == receipt => return Ok(existing),
             Ok(_) => return Err(DurableFailure::AuditReceipt),
             Err(DurableFailure::AuditReceipt) => {}
             Err(error) => return Err(error),
         }
-        self.receipts.append(&receipt, self.authority)?;
-        let recovered = self.receipts.load(journal.transaction, self.authority)?;
+        self.receipts.append(&receipt, self.authority.receipt())?;
+        let recovered = self
+            .receipts
+            .load(journal.transaction, self.authority.receipt())?;
         if recovered.receipt != receipt {
             return Err(DurableFailure::AuditReceipt);
         }
@@ -235,16 +288,33 @@ impl DurableReceiveStore for AuthenticatedReceiveStore<'_> {
         &mut self,
         verified: &VerifiedRefTransaction,
     ) -> Result<(), DurableFailure> {
-        self.inner.activate_refs_atomically_and_fsync(verified)
+        if let ReceiveReceiptAuthority::Candidate {
+            authority,
+            context,
+            ..
+        } = &mut self.authority
+        {
+            authority
+                .start_candidate_activation(context)
+                .map_err(|_| DurableFailure::AuditReceipt)?;
+            self.inner.activate_refs_atomically_and_fsync(verified)?;
+            authority
+                .commit_candidate(context)
+                .map_err(|_| DurableFailure::AuditReceipt)
+        } else {
+            self.inner.activate_refs_atomically_and_fsync(verified)
+        }
     }
 
     fn append_audit_receipt_and_fsync(
         &mut self,
         receipt: &AuditReceipt,
     ) -> Result<(), DurableFailure> {
-        self.receipts.append(receipt, self.authority)?;
+        self.receipts.append(receipt, self.authority.receipt())?;
         let canonical = encode_audit_receipt(receipt).map_err(|_| DurableFailure::AuditReceipt)?;
-        let authenticated = self.receipts.load(receipt.transaction, self.authority)?;
+        let authenticated = self
+            .receipts
+            .load(receipt.transaction, self.authority.receipt())?;
         self.last_authenticated_receipt = Some(encode_authenticated(
             &canonical,
             authenticated.signer_identity,
@@ -272,7 +342,31 @@ impl DurableReceiveStore for AuthenticatedReceiveStore<'_> {
         &mut self,
         transaction: QuarantineTransactionId,
     ) -> Result<(), DurableFailure> {
+        if let ReceiveReceiptAuthority::Candidate {
+            authority,
+            context,
+            completed,
+        } = &mut self.authority
+        {
+            authority
+                .complete_candidate(context)
+                .map_err(|_| DurableFailure::AuditReceipt)?;
+            *completed = true;
+        }
         self.inner.mark_complete_and_fsync(transaction)
+    }
+}
+
+impl Drop for AuthenticatedReceiveStore<'_> {
+    fn drop(&mut self) {
+        if let ReceiveReceiptAuthority::Candidate {
+            authority,
+            context,
+            completed: false,
+        } = &mut self.authority
+        {
+            let _ = authority.abort_candidate(context);
+        }
     }
 }
 

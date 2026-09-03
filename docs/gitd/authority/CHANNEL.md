@@ -53,9 +53,10 @@ skips, rollback, and abort after activation fail closed.
 
 Legacy proof verification remains unavailable. Startup refuses unavailable
 policy, inactive keys, zero generations, malformed public keys, or insecure
-secret files. The Gitd adapter and deployment configuration are composed, but
-the receive pipeline does not yet invoke the candidate operations and proof
-records are not yet candidate-local.
+secret files. The Gitd adapter and deployment configuration are composed, and
+the receive pipeline now invokes the candidate lifecycle around durable
+activation and receipt persistence. Proof records are not yet candidate-local,
+so full proof transactionality remains incomplete.
 
 Patent review: **NOT_TRIGGERED**. This change uses conventional bounded Unix
 socket framing, peer credentials, SHA-256, and HMAC authentication rather than

@@ -2,8 +2,9 @@
 
 use crate::receive_backend::prepare_authority_classified_receive;
 use crate::{
-    ActiveRefState, AuditReceiptAuthority, AuthenticatedReceiveStore, BoundedRead, BoundedWrite,
-    GitdCoreError, HistoryVerificationLimits, LinuxDurableReceiveStore, ProtectedCommitVerifier,
+    ActiveRefState, AuditReceiptAuthority, AuthenticatedAuditReceiptDirectory,
+    AuthenticatedReceiveStore, BoundedRead, BoundedWrite, GitdCoreError,
+    HistoryVerificationLimits, LinuxDurableReceiveStore, ProtectedCommitVerifier,
     QuarantineLimits, QuarantineTransactionId, Repository, RepositoryGeneration,
     RepositoryIdentity, RevocationGeneration, SmartGitRequest, SmartGitResponse, TrustGeneration,
     TrustPolicyState, WorkBudget, finish_prepared_protected_receive,
@@ -36,6 +37,41 @@ pub trait ProtectedReceiveAuthority: ProtectedCommitVerifier + AuditReceiptAutho
         &mut self,
         transaction: &crate::CandidateRefTransaction,
         policy_digest: [u8; 64],
+    ) -> Result<(), GitdCoreError>;
+
+    fn begin_candidate(
+        &mut self,
+        context: &crate::AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError>;
+
+    fn seal_candidate_proof_set(
+        &mut self,
+        context: &crate::AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError>;
+
+    fn authorize_candidate(
+        &mut self,
+        context: &crate::AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError>;
+
+    fn start_candidate_activation(
+        &mut self,
+        context: &crate::AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError>;
+
+    fn commit_candidate(
+        &mut self,
+        context: &crate::AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError>;
+
+    fn abort_candidate(
+        &mut self,
+        context: &crate::AuthorityCandidateContext,
+    ) -> Result<(), GitdCoreError>;
+
+    fn complete_candidate(
+        &mut self,
+        context: &crate::AuthorityCandidateContext,
     ) -> Result<(), GitdCoreError>;
 }
 
@@ -148,7 +184,29 @@ impl ReceivePackCore {
             input,
             self.work_budget,
         )?;
-        self.finish(prepared, store, signed_receipts_path, authority, output)
+        let candidate = prepared.candidate_context(policy.digest())?;
+        let receipt_directory = AuthenticatedAuditReceiptDirectory::open(signed_receipts_path)
+            .map_err(|_| GitdCoreError::Storage)?;
+        authority.begin_candidate(&candidate)?;
+        if let Err(error) = authority
+            .seal_candidate_proof_set(&candidate)
+            .and_then(|_| authority.authorize_candidate(&candidate))
+        {
+            let _ = authority.abort_candidate(&candidate);
+            return Err(error);
+        }
+        let mut authenticated = AuthenticatedReceiveStore::new_candidate_with_receipts(
+            store,
+            receipt_directory,
+            authority,
+            candidate,
+        );
+        finish_prepared_protected_receive(
+            prepared,
+            &mut authenticated,
+            output,
+            self.work_budget,
+        )
     }
 
     /// Parses, quarantines, verifies, durably activates, and reports one atomic
