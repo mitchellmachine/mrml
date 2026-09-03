@@ -57,20 +57,25 @@ The repository selects this route using only non-secret configuration:
     signerProvider = unix-v1
     signerSocket = /run/user/1000/mrml-git-signer.sock
     signerCapabilityFile = /run/user/1000/mrml-git-signer.cap
-    signerUid = 1000
-    signerGid = 1000
+    signerUid = 21006
+    signerGid = 21006
     trustPolicyDirectory = /absolute/trusted/policy/owner/project
     openpgpPublicKeyFile = /absolute/trusted/keys/openpgp-v6.asc
     mlDsaPublicKeyFile = /absolute/trusted/keys/ml-dsa-65.pub
 ```
 
 The capability file and both daemon secret files must be regular, single-link,
-owner-controlled files opened without following the final symlink. Capability
-and secret files require mode `0400` or `0600`; public material must not be
-group/world writable. Start the daemon as the key-owning non-root user:
+signer-owned files opened without following the final symlink. Capability and
+secret files require mode `0400` or `0600`; public material must not be
+group/world writable. The production signer runs as `21006:21006`; its socket
+directory is `21006:21906` mode `2770`, and the socket is `21006:21906` mode
+`0660`. The ordinary Git client receives only membership in group `21906` for
+socket traversal and a separately owned copy of the channel capability. It
+cannot read signer keys or durable signer state. Start the daemon as the
+key-owning non-root user:
 
 ```text
-mrml-git-protected-signer serve SOCKET CAPABILITY CLIENT_UID CLIENT_GID OWNER_UID REPOSITORY REPOSITORY_GENERATION TRUST_GENERATION REVOCATION_GENERATION OPENPGP_SEED OPENPGP_CREATED_AT ML_DSA_PUBLIC ML_DSA_SECRET
+mrml-git-protected-signer serve SOCKET CAPABILITY CLIENT_UID CLIENT_GID OWNER_UID SOCKET_GID REPOSITORY REPOSITORY_GENERATION TRUST_GENERATION REVOCATION_GENERATION OPENPGP_SEED OPENPGP_CREATED_AT ML_DSA_PUBLIC ML_DSA_SECRET
 ```
 
 The socket path and key paths identify resources but grant no signing authority.

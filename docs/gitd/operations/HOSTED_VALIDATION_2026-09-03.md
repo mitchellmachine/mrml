@@ -99,3 +99,45 @@ Reverse-ordered REF chains at depths 10, 25, and 50 pass and assert exactly one
 base load per delta. The complete focused result is 236 Git library, 4 CLI, and
 4 signer tests. These small debug runs each rounded to 0.01 s in the shell timer;
 larger wide-fanout scaling and peak-memory measurements remain pending.
+
+## Protected signer process boundary
+
+The production signer allocation is now distinct from the ordinary Git client:
+UID/GID `21006:21006`, shared socket group `21906`, a `21006:21906` mode-`2770`
+socket directory, and a mode-`0660` socket. Startup verifies the exact directory
+owner, group, setgid bit, and mode and verifies the created socket's type,
+owner, group, and mode. The signer continues to require exact client peer
+credentials and a separately provisioned channel capability.
+
+`Dockerfile.git-protected-signer` contains only the signer executable over the
+digest-pinned distroless runtime. `compose.signer.yaml` gives it no network or
+ports, a read-only root, no capabilities, no-new-privileges, bounded process,
+memory, CPU, descriptor and log resources, and only named state, key, channel,
+and socket volumes. The offline Git bundle now includes, inventories, SBOMs,
+signs, verifies, and loads the third image.
+
+The isolated suite passed 236 library, 4 CLI, and 5 signer tests. A rootless
+Podman runtime probe used four fresh named volumes and distinct identities. UID
+`21007:21007` with supplemental GID `21906` connected and authenticated the
+signer's peer identity; it could not read either private key or write signer
+state. UID `21008:21008` without the socket group and UID `21007:21007` with the
+wrong supplemental group could not connect. The running signer reported no
+network, a read-only root, no-new-privileges, all capabilities dropped, a
+32-process limit, 512 MiB memory limit, one CPU, and only the four named mounts.
+The probe also found that empty-volume image copy-up can replace provisioned
+root metadata. Provisioning now installs an inert signer-owned `.mrml-volume`
+sentinel before Compose can mount each volume.
+
+## Runtime-gated AES instruction diagnostic
+
+AES-128 now expands its key once per record and uses runtime-gated x86-64 AES
+instructions when CPUID reports support, retaining the constant-time software
+fallback. All 55 crypto tests pass, including equality between the hardware and
+fallback paths and the FIPS-197 block vector; strict clippy passes.
+
+The same 268,456,731-byte H2 clone completed over the named-volume-only stack in
+826 seconds (325,008 source bytes/s), then produced a clean tracked checkout and
+the expected four payload hashes. All diagnostic evidence checksums verify. The
+run used an explicitly labeled uncommitted working-tree image, so it establishes
+the performance cause and correctness direction but is not final release or VPS
+acceptance evidence. A clean-commit rerun remains required.

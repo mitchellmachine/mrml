@@ -1,0 +1,52 @@
+services:
+  git-protected-signer:
+    image: "mrml/git-protected-signer:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21006:21006"
+    group_add: ["21906"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    mem_limit: 512m
+    cpus: 1.0
+    restart: unless-stopped
+    stop_grace_period: 15s
+    ulimits:
+      nofile: {soft: 256, hard: 256}
+    logging:
+      driver: local
+      options: {max-size: 5m, max-file: "3"}
+    volumes:
+      - "mrml-git-signer-state:/var/lib/mrml/git-protected-signer/state:rw"
+      - "mrml-git-signer-keys:/var/lib/mrml/git-protected-signer/keys:ro"
+      - "mrml-git-signer-channel:/run/secrets:ro"
+      - "mrml-runtime-git-signer:/run/mrml/git-protected-signer:rw"
+    command:
+      - serve
+      - /run/mrml/git-protected-signer/signer.sock
+      - /run/secrets/signer-channel
+      - "${MRML_GIT_CLIENT_UID:?set MRML_GIT_CLIENT_UID}"
+      - "${MRML_GIT_CLIENT_GID:?set MRML_GIT_CLIENT_GID}"
+      - "21006"
+      - "21906"
+      - "${MRML_PROTECTED_REPOSITORY:?set MRML_PROTECTED_REPOSITORY}"
+      - "${MRML_REPOSITORY_GENERATION:?set MRML_REPOSITORY_GENERATION}"
+      - "${MRML_TRUST_GENERATION:?set MRML_TRUST_GENERATION}"
+      - "${MRML_REVOCATION_GENERATION:?set MRML_REVOCATION_GENERATION}"
+      - /var/lib/mrml/git-protected-signer/keys/openpgp.seed
+      - "${MRML_OPENPGP_CREATED_AT:?set MRML_OPENPGP_CREATED_AT}"
+      - /var/lib/mrml/git-protected-signer/keys/ml-dsa-public.bin
+      - /var/lib/mrml/git-protected-signer/keys/ml-dsa-secret.bin
+
+volumes:
+  mrml-git-signer-state:
+    name: mrml-git-signer-state
+  mrml-git-signer-keys:
+    name: mrml-git-signer-keys
+  mrml-git-signer-channel:
+    name: mrml-git-signer-channel
+  mrml-runtime-git-signer:
+    name: mrml-runtime-git-signer

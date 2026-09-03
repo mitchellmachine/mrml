@@ -34,6 +34,7 @@ struct Configuration {
     client_uid: u32,
     client_gid: u32,
     owner_uid: u32,
+    socket_gid: u32,
     repository: RepositoryIdentity,
     repository_generation: RepositoryGeneration,
     trust_generation: TrustGeneration,
@@ -75,6 +76,15 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
+    if let [_, command, socket, signer_uid, signer_gid] = arguments.as_slice()
+        && command == "socket-health"
+    {
+        return socket_health(
+            Path::new(socket),
+            signer_uid.parse().map_err(|_| ())?,
+            signer_gid.parse().map_err(|_| ())?,
+        );
+    }
     if let [
         _,
         command,
@@ -149,6 +159,31 @@ fn run() -> Result<(), ()> {
         &ml_dsa,
         &terminating,
     )
+}
+
+fn socket_health(path: &Path, signer_uid: u32, signer_gid: u32) -> Result<(), ()> {
+    if signer_uid == 0 || signer_gid == 0 {
+        return Err(());
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(());
+    }
+    let path = path.to_str().ok_or(())?;
+    if !path.starts_with('/') || path.len() > 107 || path.as_bytes().contains(&0) {
+        return Err(());
+    }
+    let stream = UnixStream::connect(path).map_err(|_| ())?;
+    stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(|_| ())?;
+    stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|_| ())?;
+    let peer = stream.peer_cred().map_err(|_| ())?;
+    if peer.uid != signer_uid || peer.gid != signer_gid {
+        return Err(());
+    }
+    println!("ready");
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -291,14 +326,19 @@ fn serve(
     ml_dsa: &[u8],
     terminating: &AtomicBool,
 ) -> Result<(), ()> {
-    validate_socket_path(&config.socket, config.owner_uid)?;
+    validate_socket_path(&config.socket, config.owner_uid, config.socket_gid)?;
     if fs::symlink_metadata(&config.socket).is_ok() {
         return Err(());
     }
     let listener = UnixListener::bind(&config.socket).map_err(|_| ())?;
-    fs::set_permissions(&config.socket, fs::Permissions::from_mode(0o600)).map_err(|_| ())?;
+    fs::set_permissions(&config.socket, fs::Permissions::from_mode(0o660)).map_err(|_| ())?;
     let socket_metadata = fs::symlink_metadata(&config.socket).map_err(|_| ())?;
-    if !socket_metadata.file_type().is_socket() || socket_metadata.file_type().is_symlink() {
+    if !socket_metadata.file_type().is_socket()
+        || socket_metadata.file_type().is_symlink()
+        || socket_metadata.uid() != config.owner_uid
+        || socket_metadata.gid() != config.socket_gid
+        || socket_metadata.mode() & 0o777 != 0o660
+    {
         return Err(());
     }
     let socket_guard = SocketGuard {
@@ -550,6 +590,7 @@ fn parse_arguments(arguments: &[String]) -> Result<Configuration, ()> {
         client_uid,
         client_gid,
         owner_uid,
+        socket_gid,
         repository,
         repository_generation,
         trust_generation,
@@ -578,6 +619,7 @@ fn parse_arguments(arguments: &[String]) -> Result<Configuration, ()> {
         client_uid: u32::try_from(nonzero(client_uid)?).map_err(|_| ())?,
         client_gid: u32::try_from(nonzero(client_gid)?).map_err(|_| ())?,
         owner_uid: u32::try_from(nonzero(owner_uid)?).map_err(|_| ())?,
+        socket_gid: u32::try_from(nonzero(socket_gid)?).map_err(|_| ())?,
         repository: RepositoryIdentity::parse(repository).map_err(|_| ())?,
         repository_generation: RepositoryGeneration(nonzero(repository_generation)?),
         trust_generation: TrustGeneration(nonzero(trust_generation)?),
@@ -706,7 +748,7 @@ fn read_secret(path: &Path, exact: usize, expected_owner: u32) -> Result<SecretB
     Ok(bytes)
 }
 
-fn validate_socket_path(path: &Path, expected_owner: u32) -> Result<(), ()> {
+fn validate_socket_path(path: &Path, expected_owner: u32, expected_group: u32) -> Result<(), ()> {
     if !path.is_absolute()
         || path.as_os_str().as_encoded_bytes().len() > 107
         || path
@@ -724,7 +766,8 @@ fn validate_socket_path(path: &Path, expected_owner: u32) -> Result<(), ()> {
     if !metadata.file_type().is_dir()
         || metadata.file_type().is_symlink()
         || metadata.uid() != expected_owner
-        || metadata.mode() & 0o022 != 0
+        || metadata.gid() != expected_group
+        || metadata.mode() & 0o7777 != 0o2770
     {
         return Err(());
     }
@@ -778,6 +821,7 @@ mod tests {
             "serve",
             "/run/user/1/s.sock",
             "/run/user/1/cap",
+            "1",
             "1",
             "1",
             "1",
@@ -950,6 +994,7 @@ mod tests {
             "1",
             "1",
             "1",
+            "1",
             "owner/repo",
             "1",
             "2",
@@ -962,8 +1007,28 @@ mod tests {
         .map(String::from);
         assert!(parse_arguments(&values).is_ok());
         let mut zero = values;
-        zero[9] = "0".into();
+        zero[10] = "0".into();
         assert!(parse_arguments(&zero).is_err());
         assert!(parse_arguments(&zero[..10]).is_err());
+    }
+
+    #[test]
+    fn socket_directory_requires_exact_owner_group_and_setgid_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-protected-signer-socket-policy-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o2770)).unwrap();
+        let metadata = fs::symlink_metadata(&root).unwrap();
+        let socket = root.join("signer.sock");
+        assert!(validate_socket_path(&socket, metadata.uid(), metadata.gid()).is_ok());
+        assert!(
+            validate_socket_path(&socket, metadata.uid(), metadata.gid().wrapping_add(1)).is_err()
+        );
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(validate_socket_path(&socket, metadata.uid(), metadata.gid()).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }

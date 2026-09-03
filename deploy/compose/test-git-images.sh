@@ -3,6 +3,7 @@ set -eu
 
 gitd=${1:-deploy/compose/Dockerfile.gitd}
 authority=${2:-deploy/compose/Dockerfile.git-authority}
+signer=${3:-deploy/compose/Dockerfile.git-protected-signer}
 
 require() {
     grep -F "$1" "$2" >/dev/null || {
@@ -18,7 +19,7 @@ reject() {
     fi
 }
 
-for dockerfile in "$gitd" "$authority"; do
+for dockerfile in "$gitd" "$authority" "$signer"; do
     [ -f "$dockerfile" ] || exit 1
     [ "$(grep -c '^FROM .*@sha256:' "$dockerfile")" -eq 2 ] || {
         printf '%s\n' "every image stage must use a digest-pinned base: $dockerfile" >&2
@@ -43,5 +44,13 @@ require 'ENTRYPOINT ["/usr/bin/mrml-git-authority"]' "$authority"
 reject "mrml-gitd /" "$authority"
 reject "certd-unlock" "$authority"
 reject "cloudflare" "$authority"
+
+require "USER 21006:21006" "$signer"
+require 'ENTRYPOINT ["/usr/bin/mrml-git-protected-signer"]' "$signer"
+reject "mrml-gitd /" "$signer"
+reject "mrml-git-authority" "$signer"
+reject "curl" "$signer"
+reject "openssh" "$signer"
+reject "gnupg" "$signer"
 
 printf '%s\n' "Git image policies PASS"

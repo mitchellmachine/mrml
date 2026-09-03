@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: $0 gitd CONFIG | authority OPENPGP_PUBLIC ML_DSA_PUBLIC | authority-transition NEXT_POLICY NEXT_OPENPGP NEXT_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE | certd CONFIG TRUST_ROOTS | acmed CONFIG | cloudflare-token TOKEN" >&2
+  echo "usage: $0 gitd CONFIG | authority OPENPGP_PUBLIC ML_DSA_PUBLIC | signer OPENPGP_SEED ML_DSA_PUBLIC ML_DSA_SECRET | authority-transition NEXT_POLICY NEXT_OPENPGP NEXT_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE | certd CONFIG TRUST_ROOTS | acmed CONFIG | cloudflare-token TOKEN" >&2
   exit 2
 }
 
@@ -51,6 +51,13 @@ case ${1:-} in
     destination=$(volume_path mrml-git-authority-config)
     install_file "$2" "$destination/openpgp-public.asc" 21002 21002 0444 1048576
     install_file "$3" "$destination/ml-dsa-public.bin" 21002 21002 0444 1048576
+    ;;
+  signer)
+    [ "$#" -eq 4 ] || usage
+    destination=$(volume_path mrml-git-signer-keys)
+    install_file "$2" "$destination/openpgp.seed" 21006 21006 0400 32
+    install_file "$3" "$destination/ml-dsa-public.bin" 21006 21006 0444 1952
+    install_file "$4" "$destination/ml-dsa-secret.bin" 21006 21006 0400 4032
     ;;
   authority-transition)
     [ "$#" -eq 8 ] || usage

@@ -12402,3 +12402,20 @@ Patent review: **NOT_TRIGGERED**. This increment replaces repeated pending-list
 scans with conventional exact-key maps, sorted reverse-dependency adjacency,
 and a ready queue. It changes no delta format, selection, similarity,
 compression, or cryptographic mechanism.
+
+# 2026-09-03 — Protected signer Unix privilege separation
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional Unix
+user/group ownership, setgid socket-directory permissions, peer credentials,
+named container volumes, and process sandboxing to an existing signing-use
+protocol. It introduces no new signature, key-management, or cryptographic
+mechanism.
+
+# 2026-09-03 — Runtime-gated AES instruction acceleration
+
+Patent review: **NOT_TRIGGERED**. This increment does not change the existing
+AES-128-GCM construction, wire suite, keys, nonces, tags, or fallback. It uses
+the standardized x86-64 AES instruction exposed by the target CPU after an
+explicit CPUID check and otherwise retains the existing constant-time software
+implementation. It is an implementation optimization of the existing
+standardized primitive, not a new cryptographic mechanism.

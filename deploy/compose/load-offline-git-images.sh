@@ -10,7 +10,7 @@ version=$(sed -n 's/^version=//p' "$bundle/images.git.lock")
 case "$version" in ''|*[!A-Za-z0-9._-]*) echo "invalid image-lock version" >&2; exit 1 ;; esac
 [ "$(grep -c '^version=' "$bundle/images.git.lock")" -eq 1 ] || exit 1
 
-for image in git-authority gitd; do
+for image in git-authority gitd git-protected-signer; do
   expected=$(grep -F "image=mrml/$image:$version " "$bundle/images.git.lock")
   [ "$(printf '%s\n' "$expected" | wc -l)" -eq 1 ] && [ -n "$expected" ] || exit 1
   expected_archive=$(printf '%s\n' "$expected" | sed -n 's/.* archive_sha256=\([0-9a-f]\{64\}\) .*/\1/p')
