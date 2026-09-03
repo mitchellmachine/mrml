@@ -46,12 +46,20 @@ the remote channel consumes a strictly advancing request identifier; the
 durable receipt path always calls remote verification after signing and again
 when reopening a stored receipt.
 
-Protected HTTPS receives use the explicit `mrml-proof-v1` capability. The
+Protected HTTPS receives use the explicit `mrml-proof-v1` and
+`mrml-receipt-v1` capabilities. The
 receive discovery additionally returns one canonical
 `mrml-receive-context=<repository>:<trust>:<revocation>` line sourced from the
 authenticated active repository state. The client rejects missing, duplicate,
 zero, non-canonical, or extra generation fields and re-runs discovery before
 upload so a signer result cannot be silently replayed after rotation.
+After durable activation, the server returns the complete authority-signed
+receipt as one bounded binary packet-line inside the negotiated report-status
+response. It never emits a receipt for a failed update. The protected client
+requires exactly one structurally authenticated container before accepting the
+response; cryptographic verification and monotonic signer-state advancement
+remain a separate signer-bound operation so the Git client never receives
+receipt-signing authority.
 
 `ProtectedCommitProofSigner` is limited to exact commit proof creation. Its
 production composition, `CapabilityVerifiedProofSigner`, treats isolated

@@ -389,7 +389,7 @@ pub fn protected_push_command_prefix(
         return Err(TransportError::InvalidObjectId);
     }
     let line = mrml_runtime::mrml_format!(
-        "{old} {new} {reference}\0report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 object-format=sha256\n"
+        "{old} {new} {reference}\0report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1 object-format=sha256\n"
     );
     let mut output = Vector::new();
     encode_packet(line.as_bytes(), &mut output)?;
@@ -495,6 +495,66 @@ pub fn parse_push_response_mode(
         }
     }
     Err(TransportError::RemoteError)
+}
+
+pub fn parse_protected_push_response_mode(
+    source: &[u8],
+    reference: &str,
+    side_band: bool,
+) -> Result<Vector<u8>, TransportError> {
+    validate_ref(reference)?;
+    let report = if side_band {
+        let outer = decode_packets(source)?;
+        let mut report = Vector::new();
+        for packet in outer {
+            let Some(bytes) = packet else { continue };
+            if bytes.is_empty() {
+                continue;
+            }
+            match bytes[0] {
+                1 => report.extend(bytes[1..].iter().copied()),
+                2 => {}
+                3 => return Err(TransportError::RemoteError),
+                _ => return Err(TransportError::InvalidReference),
+            }
+        }
+        report
+    } else {
+        source.iter().copied().collect()
+    };
+    let expected = mrml_runtime::mrml_format!("ok {reference}");
+    let mut unpack = false;
+    let mut updated = false;
+    let mut receipt = None;
+    for packet in decode_packets(&report)? {
+        let Some(bytes) = packet else { continue };
+        if let Some(encoded) = bytes.strip_prefix(b"mrml-receipt-v1 ") {
+            if receipt.is_some()
+                || crate::parse_authenticated_audit_receipt(encoded).is_err()
+            {
+                return Err(TransportError::RemoteError);
+            }
+            receipt = Some(encoded.iter().copied().collect());
+            continue;
+        }
+        let line = core::str::from_utf8(&bytes)
+            .map_err(|_| TransportError::InvalidUtf8)?
+            .trim_end_matches('\n');
+        if line == "unpack ok" && !unpack {
+            unpack = true;
+        } else if expected == line && unpack && !updated {
+            updated = true;
+        } else if line.starts_with("ng ") || line.starts_with("unpack ") {
+            return Err(TransportError::RemoteError);
+        } else {
+            return Err(TransportError::RemoteError);
+        }
+    }
+    if unpack && updated {
+        receipt.ok_or(TransportError::RemoteError)
+    } else {
+        Err(TransportError::RemoteError)
+    }
 }
 
 fn validate_ref(name: &str) -> Result<(), TransportError> {

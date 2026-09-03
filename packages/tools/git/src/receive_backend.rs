@@ -147,7 +147,23 @@ fn finish_prepared_receive(
             error: None,
         });
     }
-    write_receive_pack_report(output, &request, None, &statuses, &mut protocol)
+    let authenticated_receipt = if request.mrml_receipt_v1 {
+        Some(
+            store
+                .authenticated_audit_receipt(receipt.transaction)
+                .ok_or(GitdCoreError::UncertainCommit)?,
+        )
+    } else {
+        None
+    };
+    write_receive_pack_report(
+        output,
+        &request,
+        None,
+        &statuses,
+        authenticated_receipt,
+        &mut protocol,
+    )
         .map_err(|_| GitdCoreError::UncertainCommit)?;
     Ok(SmartGitResponse {
         repository_generation: receipt.activated_repository_generation,

@@ -422,7 +422,9 @@ impl HttpsRemote {
             pack_path,
             authorization,
             prefix,
+            false,
         )
+        .map(|_| ())
     }
 
     pub fn push_protected_pack_file_authenticated<
@@ -436,7 +438,7 @@ impl HttpsRemote {
         expected: ProtectedReceiveDiscovery,
         proofs: &[crate::DetachedCommitProofRecord],
         provider: &mut P,
-    ) -> Result<(), HttpsRemoteError> {
+    ) -> Result<Vector<u8>, HttpsRemoteError> {
         let scope = self.credential_scope(crate::HttpsCredentialAction::Write)?;
         let credential = provider
             .credential(&scope)
@@ -454,7 +456,9 @@ impl HttpsRemote {
             pack_path,
             authorization,
             prefix,
+            true,
         )
+        .and_then(|receipt| receipt.ok_or(HttpsRemoteError::Protocol))
     }
 
     fn push_pack_file_with_authorization(
@@ -463,7 +467,8 @@ impl HttpsRemote {
         pack_path: &str,
         authorization: &str,
         prefix: Vector<u8>,
-    ) -> Result<(), HttpsRemoteError> {
+        protected: bool,
+    ) -> Result<Option<Vector<u8>>, HttpsRemoteError> {
         let file = File::open_regular(pack_path).map_err(|_| HttpsRemoteError::Storage)?;
         let pack_bytes = file.len().map_err(|_| HttpsRemoteError::Storage)?;
         if pack_bytes == 0 || pack_bytes > MAX_PUSH_PACK_BYTES {
@@ -516,8 +521,15 @@ impl HttpsRemote {
             &report.bytes,
             "application/x-git-receive-pack-result",
         )?;
-        crate::parse_push_response_mode(&report.bytes, reference, true)
-            .map_err(|_| HttpsRemoteError::Protocol)
+        if protected {
+            crate::parse_protected_push_response_mode(&report.bytes, reference, true)
+                .map(Some)
+                .map_err(|_| HttpsRemoteError::Protocol)
+        } else {
+            crate::parse_push_response_mode(&report.bytes, reference, true)
+                .map(|()| None)
+                .map_err(|_| HttpsRemoteError::Protocol)
+        }
     }
 
     fn credential_scope(
@@ -880,7 +892,7 @@ fn parse_protected_receive_discovery(
     if line(0)? != "version 2"
         || line(1)? != "object-format=sha256"
         || line(2)?
-            != "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1"
+            != "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1"
     {
         return Err(HttpsRemoteError::Protocol);
     }
@@ -1038,7 +1050,7 @@ mod tests {
         let body = discovery_body(&[
             "version 2\n",
             "object-format=sha256\n",
-            "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1\n",
+            "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1\n",
             "mrml-receive-context=7:11:13\n",
         ]);
         assert_eq!(
@@ -1055,7 +1067,7 @@ mod tests {
                 parse_protected_receive_discovery(&discovery_body(&[
                     "version 2\n",
                     "object-format=sha256\n",
-                    "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1\n",
+                    "receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1\n",
                     malformed.as_str(),
                 ])),
                 Err(HttpsRemoteError::Protocol)

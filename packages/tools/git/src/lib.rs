@@ -208,8 +208,9 @@ pub use smart_protocol::{
 };
 pub use transport::{
     Advertisement, RemoteRef, TransportError, decode_packets, encode_flush, encode_packet,
-    extract_pack_response, fetch_request, parse_advertisement, parse_push_response,
-    parse_push_response_mode, push_request, push_request_mode, push_request_mode_negotiated,
+    extract_pack_response, fetch_request, parse_advertisement, parse_protected_push_response_mode,
+    parse_push_response, parse_push_response_mode, push_request, push_request_mode,
+    push_request_mode_negotiated,
 };
 pub use transport::{protected_push_command_prefix, protected_push_command_with_proofs};
 pub use trust_policy::{

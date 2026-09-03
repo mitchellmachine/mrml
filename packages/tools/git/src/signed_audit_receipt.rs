@@ -126,6 +126,7 @@ pub struct AuthenticatedReceiveStore<'a> {
     inner: &'a mut LinuxDurableReceiveStore,
     receipts: AuthenticatedAuditReceiptDirectory,
     authority: &'a mut dyn AuditReceiptAuthority,
+    last_authenticated_receipt: Option<Vector<u8>>,
 }
 
 impl<'a> AuthenticatedReceiveStore<'a> {
@@ -138,6 +139,7 @@ impl<'a> AuthenticatedReceiveStore<'a> {
             inner,
             receipts: AuthenticatedAuditReceiptDirectory::open(signed_receipts_path)?,
             authority,
+            last_authenticated_receipt: None,
         })
     }
 
@@ -199,7 +201,30 @@ impl DurableReceiveStore for AuthenticatedReceiveStore<'_> {
         &mut self,
         receipt: &AuditReceipt,
     ) -> Result<(), DurableFailure> {
-        self.receipts.append(receipt, self.authority)
+        self.receipts.append(receipt, self.authority)?;
+        let canonical = encode_audit_receipt(receipt).map_err(|_| DurableFailure::AuditReceipt)?;
+        let authenticated = self.receipts.load(receipt.transaction, self.authority)?;
+        self.last_authenticated_receipt = Some(encode_authenticated(
+            &canonical,
+            authenticated.signer_identity,
+            &authenticated.signature,
+        )?);
+        Ok(())
+    }
+
+    fn authenticated_audit_receipt(
+        &self,
+        transaction: QuarantineTransactionId,
+    ) -> Option<&[u8]> {
+        self.last_authenticated_receipt
+            .as_ref()
+            .filter(|_| {
+                self.last_authenticated_receipt
+                    .as_ref()
+                    .and_then(|bytes| parse_authenticated_audit_receipt(bytes).ok())
+                    .is_some_and(|receipt| receipt.receipt.transaction == transaction)
+            })
+            .map(|bytes| &bytes[..])
     }
 
     fn mark_complete_and_fsync(

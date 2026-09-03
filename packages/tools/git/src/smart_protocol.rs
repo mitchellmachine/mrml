@@ -50,6 +50,7 @@ pub struct ReceivePackRequest {
     pub delete_refs: bool,
     pub side_band_64k: bool,
     pub ofs_delta: bool,
+    pub mrml_receipt_v1: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,6 +67,7 @@ pub fn write_receive_pack_report(
     request: &ReceivePackRequest,
     unpack_error: Option<&str>,
     statuses: &[ReceiveRefStatus],
+    authenticated_receipt: Option<&[u8]>,
     budget: &mut ProtocolBudget,
 ) -> Result<(), GitdCoreError> {
     if !request.report_status_v2
@@ -86,6 +88,12 @@ pub fn write_receive_pack_report(
         return Err(GitdCoreError::Policy);
     }
     if unpack_error.is_some() && successes != 0 {
+        return Err(GitdCoreError::Policy);
+    }
+    let receipt_required = request.mrml_receipt_v1
+        && unpack_error.is_none()
+        && successes == statuses.len();
+    if receipt_required != authenticated_receipt.is_some() {
         return Err(GitdCoreError::Policy);
     }
 
@@ -118,6 +126,19 @@ pub fn write_receive_pack_report(
         }
         line.push('\n');
         append_raw_pkt(&mut report, line.as_bytes())?;
+    }
+    if let Some(receipt) = authenticated_receipt {
+        let mut payload = Vector::new();
+        payload
+            .try_reserve_exact(b"mrml-receipt-v1 ".len() + receipt.len())
+            .map_err(|_| GitdCoreError::Resource)?;
+        payload
+            .try_extend_from_slice(b"mrml-receipt-v1 ")
+            .map_err(|_| GitdCoreError::Resource)?;
+        payload
+            .try_extend_from_slice(receipt)
+            .map_err(|_| GitdCoreError::Resource)?;
+        append_raw_pkt(&mut report, &payload)?;
     }
     report
         .try_extend_from_slice(b"0000")
@@ -203,6 +224,7 @@ pub fn read_receive_pack_commands(
                     delete_refs: allow_delete_candidates,
                     side_band_64k: capabilities.side_band_64k,
                     ofs_delta: capabilities.ofs_delta,
+                    mrml_receipt_v1: capabilities.mrml_receipt_v1,
                 });
             }
             PktLine::Delimiter => {
@@ -210,6 +232,7 @@ pub fn read_receive_pack_commands(
                     || !capabilities.report_status_v2
                     || !capabilities.atomic
                     || !capabilities.mrml_proof_v1
+                    || !capabilities.mrml_receipt_v1
                 {
                     return Err(GitdCoreError::Unsupported);
                 }
@@ -228,6 +251,7 @@ pub fn read_receive_pack_commands(
                     delete_refs: allow_delete_candidates,
                     side_band_64k: capabilities.side_band_64k,
                     ofs_delta: capabilities.ofs_delta,
+                    mrml_receipt_v1: capabilities.mrml_receipt_v1,
                 });
             }
             PktLine::Data(line) => line,
@@ -323,6 +347,7 @@ struct ReceiveCapabilities {
     side_band_64k: bool,
     ofs_delta: bool,
     mrml_proof_v1: bool,
+    mrml_receipt_v1: bool,
 }
 
 fn parse_receive_capabilities(
@@ -341,6 +366,7 @@ fn parse_receive_capabilities(
             b"side-band-64k" => set_once(&mut output.side_band_64k)?,
             b"ofs-delta" => set_once(&mut output.ofs_delta)?,
             b"mrml-proof-v1" => set_once(&mut output.mrml_proof_v1)?,
+            b"mrml-receipt-v1" => set_once(&mut output.mrml_receipt_v1)?,
             _ if capability.starts_with(b"object-format=") => {
                 set_once(&mut saw_object_format)?;
                 let expected = match format {
@@ -439,7 +465,7 @@ pub fn write_v2_receive_capability_advertisement(
     for line in [
         b"version 2\n".as_slice(),
         b"object-format=sha256\n",
-        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1\n",
+        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1\n",
     ] {
         write_pkt_line(output, &PktLine::Data(copy_bytes(line)?), budget)?;
     }
@@ -464,7 +490,7 @@ pub fn write_v2_protected_receive_capability_advertisement(
     for line in [
         b"version 2\n".as_slice(),
         b"object-format=sha256\n",
-        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1\n",
+        b"receive=report-status-v2 atomic side-band-64k ofs-delta mrml-proof-v1 mrml-receipt-v1\n",
     ] {
         write_pkt_line(output, &PktLine::Data(copy_bytes(line)?), budget)?;
     }
@@ -1304,7 +1330,14 @@ mod tests {
             bytes: Vector::new(),
             limit: 4096,
         };
-        write_receive_pack_report(&mut sideband, &parsed, None, &statuses, &mut budget(4096))
+        write_receive_pack_report(
+            &mut sideband,
+            &parsed,
+            None,
+            &statuses,
+            None,
+            &mut budget(4096),
+        )
             .unwrap();
         assert_eq!(
             crate::transport::parse_push_response_mode(&sideband.bytes, "refs/heads/main", true),
@@ -1322,6 +1355,7 @@ mod tests {
             &plain_request,
             None,
             &statuses,
+            None,
             &mut budget(4096),
         )
         .unwrap();
@@ -1358,7 +1392,14 @@ mod tests {
             limit: 4096,
         };
         assert_eq!(
-            write_receive_pack_report(&mut writer, &parsed, None, &mixed, &mut budget(4096)),
+            write_receive_pack_report(
+                &mut writer,
+                &parsed,
+                None,
+                &mixed,
+                None,
+                &mut budget(4096),
+            ),
             Err(GitdCoreError::Policy)
         );
         let failed = [
@@ -1372,7 +1413,14 @@ mod tests {
             },
         ];
         assert_eq!(
-            write_receive_pack_report(&mut writer, &parsed, None, &failed, &mut budget(4096)),
+            write_receive_pack_report(
+                &mut writer,
+                &parsed,
+                None,
+                &failed,
+                None,
+                &mut budget(4096),
+            ),
             Err(GitdCoreError::MalformedInput)
         );
         assert!(writer.bytes.is_empty());

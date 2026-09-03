@@ -12435,3 +12435,10 @@ repository's existing audited Ed25519 primitive and purpose-separated canonical
 transcript so verification can be delegated without signing authority. It adds
 no new signature scheme, consensus protocol, storage selection, or
 patent-sensitive mechanism.
+
+# 2026-09-03 — Protected receive receipt delivery
+
+Patent review: **NOT_TRIGGERED**. This increment transports the existing
+purpose-separated signed receipt in a bounded, explicitly negotiated Smart Git
+packet-line after durable activation. It adds no cryptographic primitive,
+compression, selection, or storage mechanism.
