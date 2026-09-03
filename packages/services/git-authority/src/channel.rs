@@ -35,6 +35,7 @@ pub enum AuthorityOperation {
     CompleteCandidate = 17,
     VerifyProof = 18,
     InstallCandidateProof = 19,
+    QueryCandidateById = 20,
 }
 
 impl AuthorityOperation {
@@ -59,6 +60,7 @@ impl AuthorityOperation {
             17 => Self::CompleteCandidate,
             18 => Self::VerifyProof,
             19 => Self::InstallCandidateProof,
+            20 => Self::QueryCandidateById,
             _ => return None,
         })
     }

@@ -5,8 +5,8 @@ use mrml_crypto::{
 use mrml_git::{
     authority_receipt_signature_transcript, bind_verified_commit_proof,
     candidate_activation_digest,
-    encode_authority_candidate_record, parse_authority_candidate, parse_authority_candidate_proof,
-    parse_authority_commit, parse_authority_proof_install,
+    encode_authority_candidate_record, parse_authority_candidate, parse_authority_candidate_lookup,
+    parse_authority_candidate_proof, parse_authority_commit, parse_authority_proof_install,
     parse_authority_receipt, parse_authority_receive, parse_authority_ref_transaction,
     parse_authenticated_audit_receipt_transcript,
     verify_hybrid_signature, AuthorizedHybridPair, DurableDetachedCommitProofDirectory,
@@ -168,6 +168,7 @@ impl ProductionAuthority {
             AuthorityOperation::InstallProof => self.install_proof(payload),
             AuthorityOperation::VerifyProof => self.verify_proof(payload),
             AuthorityOperation::InstallCandidateProof => self.install_candidate_proof(payload),
+            AuthorityOperation::QueryCandidateById => self.query_candidate_by_id(payload),
             AuthorityOperation::BeginCandidate => self.begin_candidate(payload),
             AuthorityOperation::SealCandidateProofSet => self.seal_candidate_proofs(payload),
             AuthorityOperation::AuthorizeCandidate => self.transition_candidate(
@@ -329,6 +330,25 @@ impl ProductionAuthority {
             .query(context.id)
             .map_err(map_candidate_error)?;
         if record.context != context {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        encode_authority_candidate_record(&record).map_err(map_git_error)
+    }
+
+    fn query_candidate_by_id(
+        &self,
+        payload: &[u8],
+    ) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let lookup = parse_authority_candidate_lookup(payload).map_err(map_git_error)?;
+        let policy = self.current_policy()?;
+        if lookup.repository != *policy.repository() {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        let record = self
+            .candidate_store()?
+            .query(lookup.id)
+            .map_err(map_candidate_error)?;
+        if record.context.repository != lookup.repository {
             return Err(AuthorityDispatchError::Unauthorized);
         }
         encode_authority_candidate_record(&record).map_err(map_git_error)
@@ -966,6 +986,23 @@ mod tests {
             .unwrap()
             .status,
             AuthorityCandidateStatus::Receiving
+        );
+        assert_eq!(
+            parse_authority_candidate_record(
+                &authority
+                    .dispatch(
+                        AuthorityOperation::QueryCandidateById,
+                        &mrml_git::encode_authority_candidate_lookup(
+                            &candidate.repository,
+                            candidate.id,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap(),
+            )
+            .unwrap()
+            .context,
+            candidate
         );
         assert_eq!(
             authority.dispatch(

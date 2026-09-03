@@ -82,6 +82,12 @@ pub trait ProtectedReceiveAuthority: ProtectedCommitVerifier + AuditReceiptAutho
         &mut self,
         context: &crate::AuthorityCandidateContext,
     ) -> Result<(), GitdCoreError>;
+
+    fn query_candidate_by_id(
+        &mut self,
+        repository: &crate::RepositoryIdentity,
+        id: crate::QuarantineTransactionId,
+    ) -> Result<crate::AuthorityCandidateRecord, GitdCoreError>;
 }
 
 struct AuthorityVerifier<'a> {

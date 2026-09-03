@@ -19,6 +19,7 @@ const CANDIDATE_PROOF_MAGIC: &[u8; 8] = b"MRGCPF01";
 const RECEIPT_MAGIC: &[u8; 8] = b"MRGARPV1";
 const CANDIDATE_MAGIC: &[u8; 8] = b"MRGACD01";
 const CANDIDATE_STATUS_MAGIC: &[u8; 8] = b"MRGACS01";
+const CANDIDATE_LOOKUP_MAGIC: &[u8; 8] = b"MRGACL01";
 pub const MAX_AUTHORITY_COMMIT_BYTES: usize = 1024 * 1024;
 pub const MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES: usize = 128 * 1024;
 
@@ -51,6 +52,46 @@ pub struct AuthorityProofInstallRequest {
 pub struct AuthorityCandidateProofRequest {
     pub candidate: AuthorityCandidateContext,
     pub proof: AuthorityProofInstallRequest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorityCandidateLookup {
+    pub repository: RepositoryIdentity,
+    pub id: QuarantineTransactionId,
+}
+
+pub fn encode_authority_candidate_lookup(
+    repository: &RepositoryIdentity,
+    id: QuarantineTransactionId,
+) -> Result<Vector<u8>, GitdCoreError> {
+    if id.0 == [0; 16] {
+        return Err(GitdCoreError::Authorization);
+    }
+    let mut output = Vector::new();
+    append(&mut output, CANDIDATE_LOOKUP_MAGIC)?;
+    append_counted(&mut output, repository.as_str().as_bytes())?;
+    append(&mut output, &id.0)?;
+    Ok(output)
+}
+
+pub fn parse_authority_candidate_lookup(
+    input: &[u8],
+) -> Result<AuthorityCandidateLookup, GitdCoreError> {
+    let mut cursor = Cursor::new(input);
+    cursor.magic(CANDIDATE_LOOKUP_MAGIC)?;
+    let repository = RepositoryIdentity::parse(
+        cursor.counted_text(MAX_REPOSITORY_IDENTITY_BYTES)?,
+    )?;
+    let mut id = [0; 16];
+    id.copy_from_slice(cursor.take(16)?);
+    cursor.finish()?;
+    if id == [0; 16] {
+        return Err(GitdCoreError::Authorization);
+    }
+    Ok(AuthorityCandidateLookup {
+        repository,
+        id: QuarantineTransactionId(id),
+    })
 }
 
 pub fn encode_authority_candidate_proof(
@@ -689,6 +730,16 @@ mod tests {
     #[test]
     fn exact_candidate_context_and_status_round_trip() {
         let candidate = candidate();
+        assert_eq!(
+            parse_authority_candidate_lookup(
+                &encode_authority_candidate_lookup(&candidate.repository, candidate.id).unwrap()
+            )
+            .unwrap(),
+            AuthorityCandidateLookup {
+                repository: candidate.repository.clone(),
+                id: candidate.id,
+            }
+        );
         let encoded = encode_authority_candidate(&candidate).unwrap();
         assert_eq!(parse_authority_candidate(&encoded).unwrap(), candidate);
         for end in 0..encoded.len() {

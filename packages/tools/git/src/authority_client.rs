@@ -1,7 +1,8 @@
 //! Protected receive authority adapter over a narrow authenticated RPC.
 
 use crate::{
-    encode_authority_candidate, encode_authority_candidate_proof, encode_authority_proof_install,
+    encode_authority_candidate, encode_authority_candidate_lookup,
+    encode_authority_candidate_proof, encode_authority_proof_install,
     encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
     parse_authority_candidate_record, AuditReceiptAuthority, AuthorityCandidateContext,
     AuthorityCandidateRecord, CandidateRefTransaction, DetachedCommitProofRecord, GitdCoreError,
@@ -27,6 +28,7 @@ pub const AUTHORITY_OP_PERSIST_CANDIDATE_RECEIPT: u8 = 16;
 pub const AUTHORITY_OP_COMPLETE_CANDIDATE: u8 = 17;
 pub const AUTHORITY_OP_VERIFY_PROOF: u8 = 18;
 pub const AUTHORITY_OP_INSTALL_CANDIDATE_PROOF: u8 = 19;
+pub const AUTHORITY_OP_QUERY_CANDIDATE_BY_ID: u8 = 20;
 const MAX_AUTHORITY_RESULT_BYTES: usize = 1024;
 
 /// Transport-only capability. Implementations must authenticate the peer,
@@ -178,6 +180,24 @@ impl<T: ProtectedAuthorityRpc> RemoteProtectedReceiveAuthority<T> {
             .ok_or(GitdCoreError::Authorization)
     }
 
+    pub fn query_candidate_by_id(
+        &mut self,
+        repository: &crate::RepositoryIdentity,
+        id: crate::QuarantineTransactionId,
+    ) -> Result<AuthorityCandidateRecord, GitdCoreError> {
+        let encoded = encode_authority_candidate_lookup(repository, id)?;
+        let mut response = [0u8; MAX_AUTHORITY_RESULT_BYTES];
+        let length = self
+            .transport
+            .call(AUTHORITY_OP_QUERY_CANDIDATE_BY_ID, &encoded, &mut response)
+            .map_err(|_| GitdCoreError::Authorization)?;
+        let record = parse_authority_candidate_record(&response[..length])?;
+        if record.context.repository != *repository || record.context.id != id {
+            return Err(GitdCoreError::Authorization);
+        }
+        Ok(record)
+    }
+
     fn candidate_transition(
         &mut self,
         operation: u8,
@@ -270,6 +290,14 @@ impl<T: ProtectedAuthorityRpc> ProtectedReceiveAuthority for RemoteProtectedRece
         context: &AuthorityCandidateContext,
     ) -> Result<(), GitdCoreError> {
         Self::complete_candidate(self, context)
+    }
+
+    fn query_candidate_by_id(
+        &mut self,
+        repository: &crate::RepositoryIdentity,
+        id: crate::QuarantineTransactionId,
+    ) -> Result<AuthorityCandidateRecord, GitdCoreError> {
+        Self::query_candidate_by_id(self, repository, id)
     }
 }
 
@@ -375,8 +403,8 @@ mod tests {
     use super::*;
     use crate::{
         encode_authority_candidate_record, parse_authority_candidate,
-        parse_authority_candidate_proof, parse_authority_commit, parse_authority_proof_install,
-        parse_authority_receive, AuthorityCandidateStatus,
+        parse_authority_candidate_lookup, parse_authority_candidate_proof, parse_authority_commit,
+        parse_authority_proof_install, parse_authority_receive, AuthorityCandidateStatus,
         ObjectFormat, QuarantineTransactionId, RepositoryGeneration, RepositoryIdentity,
         RevocationGeneration, SignaturePurpose, TrustGeneration,
     };
@@ -430,6 +458,29 @@ mod tests {
                     let context = parse_authority_candidate(request).map_err(|_| ())?;
                     let encoded = encode_authority_candidate_record(&AuthorityCandidateRecord {
                         context,
+                        status: AuthorityCandidateStatus::Receiving,
+                    })
+                    .map_err(|_| ())?;
+                    response[..encoded.len()].copy_from_slice(&encoded);
+                    Ok(encoded.len())
+                }
+                AUTHORITY_OP_QUERY_CANDIDATE_BY_ID => {
+                    let lookup = parse_authority_candidate_lookup(request).map_err(|_| ())?;
+                    let encoded = encode_authority_candidate_record(&AuthorityCandidateRecord {
+                        context: AuthorityCandidateContext {
+                            id: lookup.id,
+                            repository: lookup.repository,
+                            current_generation: RepositoryGeneration(3),
+                            next_generation: RepositoryGeneration(4),
+                            trust_generation: TrustGeneration(4),
+                            revocation_generation: RevocationGeneration(8),
+                            policy_digest: [1; 64],
+                            ref_update_digest: [2; 64],
+                            introduced_commit_set_digest: [3; 64],
+                            arrival_pack_digest: [4; 64],
+                            proof_set_digest: [5; 64],
+                            activation_digest: [6; 64],
+                        },
                         status: AuthorityCandidateStatus::Receiving,
                     })
                     .map_err(|_| ())?;
@@ -514,6 +565,13 @@ mod tests {
         assert_eq!(
             allowed.query_candidate(&candidate).unwrap().status,
             AuthorityCandidateStatus::Receiving
+        );
+        assert_eq!(
+            allowed
+                .query_candidate_by_id(&candidate.repository, candidate.id)
+                .unwrap()
+                .context,
+            candidate
         );
 
         let mut denied = RemoteProtectedReceiveAuthority::new(ExactRpc {
