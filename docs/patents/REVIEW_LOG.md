@@ -12450,3 +12450,11 @@ receipt verification, conventional authenticated local IPC, monotonic counters,
 and atomic file replacement to advance signer state after a durable receive. It
 adds no cryptographic primitive, consensus protocol, or patent-sensitive
 selection mechanism.
+
+# 2026-09-03 — Durable authority repository generation
+
+Patent review: **NOT_TRIGGERED**. This increment uses conventional canonical
+records, checksums, an advisory single-writer lock, atomic replacement, and
+directory synchronization to persist an exact monotonic repository generation.
+It adds no cryptographic primitive, consensus protocol, or patent-sensitive
+selection mechanism.

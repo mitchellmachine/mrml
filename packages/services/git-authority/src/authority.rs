@@ -3,8 +3,10 @@ use mrml_crypto::{
     ML_DSA_65_PUBLIC_KEY_BYTES,
 };
 use mrml_git::{
-    bind_verified_commit_proof, parse_authority_commit, parse_authority_proof_install,
+    authority_receipt_signature_transcript, bind_verified_commit_proof, parse_authority_commit,
+    parse_authority_proof_install,
     parse_authority_receipt, parse_authority_receive, parse_authority_ref_transaction,
+    parse_authenticated_audit_receipt_transcript,
     verify_hybrid_signature, AuthorizedHybridPair, DurableDetachedCommitProofDirectory,
     DurableDetachedHybridCommitVerifier, GitObjectType, GitdCoreError, HybridVerificationRequest,
     LinuxDurableTrustPolicyStore, ProtectedCommitVerifier, ProtectedHistoryContext,
@@ -13,9 +15,11 @@ use mrml_git::{
 use mrml_openpgp::{PublicKeyV6, MAX_OPENPGP_SIGNATURE_BYTES};
 use mrml_runtime::Vector;
 
-use crate::AuthorityOperation;
+use crate::{
+    AuthorityGenerationStore, AuthorityOperation, GenerationStoreError,
+    MemoryAuthorityGenerationStore,
+};
 
-const RECEIPT_DOMAIN: &[u8] = b"MRML git authority receipt signing v1";
 const RECEIPT_SIGNATURE_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,7 +38,7 @@ pub struct ProductionAuthority {
     receipt_key: [u8; 32],
     signer_identity: [u8; 64],
     validation_time: u64,
-    repository_generation: RepositoryGeneration,
+    generations: Box<dyn AuthorityGenerationStore>,
 }
 
 impl ProductionAuthority {
@@ -47,7 +51,35 @@ impl ProductionAuthority {
         validation_time: u64,
         repository_generation: RepositoryGeneration,
     ) -> Result<Self, AuthorityDispatchError> {
-        if receipt_key == [0; 32] || validation_time == 0 || repository_generation.0 == 0 {
+        let repository = policy
+            .load()
+            .map_err(|_| AuthorityDispatchError::Unavailable)?
+            .repository()
+            .clone();
+        Self::new_with_generation_store(
+            policy,
+            proofs,
+            openpgp_key,
+            ml_dsa_key,
+            receipt_key,
+            validation_time,
+            Box::new(MemoryAuthorityGenerationStore::new(
+                repository,
+                repository_generation,
+            )),
+        )
+    }
+
+    pub fn new_with_generation_store(
+        policy: LinuxDurableTrustPolicyStore,
+        proofs: DurableDetachedCommitProofDirectory,
+        openpgp_key: PublicKeyV6,
+        ml_dsa_key: [u8; ML_DSA_65_PUBLIC_KEY_BYTES],
+        receipt_key: [u8; 32],
+        validation_time: u64,
+        generations: Box<dyn AuthorityGenerationStore>,
+    ) -> Result<Self, AuthorityDispatchError> {
+        if receipt_key == [0; 32] || validation_time == 0 {
             return Err(AuthorityDispatchError::Unavailable);
         }
         let pair = AuthorizedHybridPair::bind(&openpgp_key, &ml_dsa_key);
@@ -69,7 +101,7 @@ impl ProductionAuthority {
             receipt_key,
             signer_identity,
             validation_time,
-            repository_generation,
+            generations,
         })
     }
 
@@ -130,7 +162,7 @@ impl ProductionAuthority {
         let request = parse_authority_receive(payload).map_err(map_git_error)?;
         let policy = self.current_policy()?;
         if request.repository != *policy.repository()
-            || request.repository_generation != self.repository_generation
+            || request.repository_generation != self.current_generation(policy.repository())?
             || request.trust_generation != policy.generation()
             || request.revocation_generation != policy.revocation_generation()
             || request.policy_digest != policy.digest()
@@ -145,7 +177,7 @@ impl ProductionAuthority {
         let policy = self.current_policy()?;
         let transaction = &request.transaction;
         if transaction.repository != *policy.repository()
-            || transaction.repository_generation != self.repository_generation
+            || transaction.repository_generation != self.current_generation(policy.repository())?
             || transaction.trust_generation != policy.generation()
             || transaction.revocation_generation != policy.revocation_generation()
             || request.policy_digest != policy.digest()
@@ -166,7 +198,7 @@ impl ProductionAuthority {
         if request.repository != *policy.repository()
             || request.trust_generation != policy.generation()
             || request.revocation_generation != policy.revocation_generation()
-            || request.repository_generation != self.repository_generation
+            || request.repository_generation != self.current_generation(policy.repository())?
             || request.purpose != SignaturePurpose::GitCommit
         {
             return Err(AuthorityDispatchError::Unauthorized);
@@ -202,7 +234,7 @@ impl ProductionAuthority {
         let request = parse_authority_proof_install(payload).map_err(map_git_error)?;
         let policy = self.current_policy()?;
         if request.repository != *policy.repository()
-            || request.repository_generation != self.repository_generation
+            || request.repository_generation != self.current_generation(policy.repository())?
             || request.trust_generation != policy.generation()
             || request.revocation_generation != policy.revocation_generation()
             || request.purpose != SignaturePurpose::GitCommit
@@ -262,13 +294,35 @@ impl ProductionAuthority {
         Ok(Vector::new())
     }
 
-    fn sign_receipt(&self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
+    fn sign_receipt(&mut self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
         let request = parse_authority_receipt(payload).map_err(map_git_error)?;
         if !request.signature.is_empty() {
             return Err(AuthorityDispatchError::Malformed);
         }
-        let transcript = receipt_signature_transcript(&request.transcript)?;
+        let receipt = parse_authenticated_audit_receipt_transcript(&request.transcript)
+            .map_err(|_| AuthorityDispatchError::Malformed)?;
+        let policy = self.current_policy()?;
+        let current = self.current_generation(policy.repository())?;
+        if receipt.repository != *policy.repository()
+            || receipt.repository_generation != current
+            || receipt.activated_repository_generation.0 != current.0.checked_add(1).ok_or(
+                AuthorityDispatchError::Resource,
+            )?
+            || receipt.trust_generation != policy.generation()
+            || receipt.revocation_generation != policy.revocation_generation()
+        {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        let transcript = authority_receipt_signature_transcript(&request.transcript)
+            .map_err(|_| AuthorityDispatchError::Resource)?;
         let signature = ed25519_sign(&self.receipt_key, &transcript);
+        self.generations
+            .commit_next(
+                policy.repository(),
+                current,
+                receipt.activated_repository_generation,
+            )
+            .map_err(map_generation_error)?;
         let mut output = Vector::new();
         output
             .try_extend_from_slice(&signature)
@@ -284,7 +338,8 @@ impl ProductionAuthority {
         let signature: &[u8; RECEIPT_SIGNATURE_BYTES] = (&request.signature[..])
             .try_into()
             .map_err(|_| AuthorityDispatchError::Unauthorized)?;
-        let transcript = receipt_signature_transcript(&request.transcript)?;
+        let transcript = authority_receipt_signature_transcript(&request.transcript)
+            .map_err(|_| AuthorityDispatchError::Resource)?;
         if !ed25519_verify(&ed25519_public(&self.receipt_key), &transcript, signature) {
             return Err(AuthorityDispatchError::Unauthorized);
         }
@@ -296,17 +351,24 @@ impl ProductionAuthority {
             .load()
             .map_err(|_| AuthorityDispatchError::Unavailable)
     }
+
+    fn current_generation(
+        &self,
+        repository: &mrml_git::RepositoryIdentity,
+    ) -> Result<RepositoryGeneration, AuthorityDispatchError> {
+        self.generations
+            .current(repository)
+            .map_err(map_generation_error)
+    }
 }
 
-fn receipt_signature_transcript(payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
-    let length = u32::try_from(payload.len()).map_err(|_| AuthorityDispatchError::Resource)?;
-    let mut output = Vector::new();
-    output
-        .try_extend_from_slice(RECEIPT_DOMAIN)
-        .and_then(|_| output.try_extend_from_slice(&length.to_be_bytes()))
-        .and_then(|_| output.try_extend_from_slice(payload))
-        .map_err(|_| AuthorityDispatchError::Resource)?;
-    Ok(output)
+fn map_generation_error(error: GenerationStoreError) -> AuthorityDispatchError {
+    match error {
+        GenerationStoreError::Stale | GenerationStoreError::Invalid => {
+            AuthorityDispatchError::Unauthorized
+        }
+        GenerationStoreError::Unavailable => AuthorityDispatchError::Unavailable,
+    }
 }
 
 impl Drop for ProductionAuthority {
@@ -333,12 +395,13 @@ mod tests {
         ml_dsa_65_keygen, ml_dsa_65_sign, ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES,
     };
     use mrml_git::{
-        canonical_hybrid_transcript, encode_authority_commit, encode_authority_receipt,
-        encode_authority_receive, encode_authority_ref_transaction,
-        encode_loose_object_with_format, CandidateRefTransaction, CandidateRefUpdate,
-        DetachedCommitProofRecord, FullRefName, GitObjectType, ObjectFormat, ObjectId, ObjectKind,
-        PolicyPairStatus, ProtectedReceiveAuthorization, RepositoryGeneration, RepositoryIdentity,
-        RevocationGeneration, TrustGeneration, TrustPolicyCandidate,
+        authenticated_audit_receipt_transcript, canonical_hybrid_transcript,
+        encode_audit_receipt, encode_authority_commit, encode_authority_receipt,
+        encode_authority_receive, encode_authority_ref_transaction, encode_loose_object_with_format,
+        AuditReceipt, CandidateRefTransaction, CandidateRefUpdate, DetachedCommitProofRecord,
+        FullRefName, GitObjectType, ObjectFormat, ObjectId, ObjectKind, PolicyPairStatus,
+        ProtectedReceiveAuthorization, QuarantineTransactionId, RepositoryGeneration,
+        RepositoryIdentity, RevocationGeneration, TrustGeneration, TrustPolicyCandidate,
     };
     use mrml_openpgp::{
         sign_detached_v6_ascii_with_salt, DigestAlgorithm, SigningKeyV6,
@@ -526,22 +589,59 @@ mod tests {
             ),
             Err(AuthorityDispatchError::Unauthorized)
         );
-        let sign_request = encode_authority_receipt(b"receipt transcript", &[]).unwrap();
+        let receipt = AuditReceipt {
+            transaction: QuarantineTransactionId([31; 16]),
+            repository: transaction.repository.clone(),
+            repository_generation: RepositoryGeneration(3),
+            activated_repository_generation: RepositoryGeneration(4),
+            trust_generation: TrustGeneration(4),
+            revocation_generation: RevocationGeneration(8),
+            updates: [(
+                transaction.updates[0].name.clone(),
+                transaction.updates[0].expected_old.unwrap(),
+                transaction.updates[0].proposed_new.unwrap(),
+            )]
+            .into(),
+        };
+        let canonical_receipt = encode_audit_receipt(&receipt).unwrap();
+        let receipt_transcript =
+            authenticated_audit_receipt_transcript(&canonical_receipt).unwrap();
+        let sign_request = encode_authority_receipt(&receipt_transcript, &[]).unwrap();
         let signature = authority
             .dispatch(AuthorityOperation::SignReceipt, &sign_request)
             .unwrap();
         assert_eq!(signature.len(), RECEIPT_SIGNATURE_BYTES);
+        assert_eq!(
+            authority.dispatch(AuthorityOperation::SignReceipt, &sign_request),
+            Err(AuthorityDispatchError::Unauthorized)
+        );
+        assert_eq!(
+            authority.dispatch(
+                AuthorityOperation::AuthorizeReceive,
+                &encode_authority_receive(&receive).unwrap()
+            ),
+            Err(AuthorityDispatchError::Unauthorized)
+        );
+        let mut next_receive = receive.clone();
+        next_receive.repository_generation = RepositoryGeneration(4);
+        assert_eq!(
+            authority.dispatch(
+                AuthorityOperation::AuthorizeReceive,
+                &encode_authority_receive(&next_receive).unwrap()
+            ),
+            Ok(Vector::new())
+        );
         let signature_array: &[u8; RECEIPT_SIGNATURE_BYTES] =
             (&signature[..]).try_into().unwrap();
         assert!(ed25519_verify(
             &authority.receipt_verification_key(),
-            &receipt_signature_transcript(b"receipt transcript").unwrap(),
+            &authority_receipt_signature_transcript(&receipt_transcript).unwrap(),
             signature_array
         ));
         assert_eq!(
             authority.dispatch(
                 AuthorityOperation::VerifyReceipt,
-                &encode_authority_receipt(b"receipt transcript", &signature).unwrap()
+                &encode_authority_receipt(&receipt_transcript, &signature).unwrap()
             ),
             Ok(Vector::new())
         );
@@ -550,7 +650,7 @@ mod tests {
         assert_eq!(
             authority.dispatch(
                 AuthorityOperation::VerifyReceipt,
-                &encode_authority_receipt(b"receipt transcript", &tampered).unwrap()
+                &encode_authority_receipt(&receipt_transcript, &tampered).unwrap()
             ),
             Err(AuthorityDispatchError::Unauthorized)
         );

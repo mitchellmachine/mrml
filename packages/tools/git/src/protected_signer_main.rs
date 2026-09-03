@@ -1091,8 +1091,8 @@ mod tests {
     use mrml_git::{
         AuditReceipt, FullRefName, HybridVerificationRequest, ObjectId, PolicyPairStatus,
         QuarantineTransactionId, TrustPolicyCandidate, TrustPolicyState,
-        authenticated_audit_receipt_transcript, encode_audit_receipt, encode_trust_policy,
-        verify_hybrid_signature,
+        authenticated_audit_receipt_transcript, authority_receipt_signature_transcript,
+        encode_audit_receipt, encode_trust_policy, verify_hybrid_signature,
     };
     use mrml_runtime::Vector;
 
@@ -1243,7 +1243,8 @@ mod tests {
         };
         let canonical = encode_audit_receipt(&receipt).unwrap();
         let transcript = authenticated_audit_receipt_transcript(&canonical).unwrap();
-        let signature = mrml_crypto::ed25519_sign(&seed, &transcript);
+        let authority_transcript = authority_receipt_signature_transcript(&transcript).unwrap();
+        let signature = mrml_crypto::ed25519_sign(&seed, &authority_transcript);
         let mut signer_identity = Sha3_512::new();
         signer_identity.update(b"MRML git receipt signer identity v1");
         signer_identity.update(&public);

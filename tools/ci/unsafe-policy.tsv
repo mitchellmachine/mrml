@@ -84,6 +84,7 @@ packages/services/config/src/config/implementation.rs	0	1	2	0	0	0	Baseline-admit
 packages/services/config/src/config/tests.rs	9	0	5	0	0	6	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/services/config/src/hosted_recovery_probe.rs	3	3	4	0	0	2	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/services/deployment/src/lib.rs	0	0	5	0	0	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
+packages/services/git-authority/src/generation.rs	1	0	0	1	0	0	One reviewed advisory-lock syscall holds exclusive ownership of the durable authority generation catalog; the live owned descriptor is retained for the store lifetime.
 packages/services/storage/src/allocation.rs	0	0	2	0	1	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/services/storage/src/authority_checkpoint.rs	14	3	4	0	1	14	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/services/storage/src/block.rs	0	0	9	0	1	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.

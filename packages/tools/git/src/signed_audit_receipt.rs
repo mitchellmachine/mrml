@@ -13,6 +13,7 @@ use crate::{
 
 const MAGIC: &[u8; 8] = b"MRARCP01";
 const DOMAIN: &[u8] = b"MRML-GIT-AUDIT-RECEIPT-V1\0";
+const AUTHORITY_SIGNATURE_DOMAIN: &[u8] = b"MRML git authority receipt signing v1";
 const MAX_SIGNATURE_BYTES: usize = 32 * 1024;
 pub const MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES: usize =
     crate::MAX_AUDIT_RECEIPT_BYTES + MAX_SIGNATURE_BYTES + 128;
@@ -62,6 +63,7 @@ pub fn verify_signer_generation_advancement(
     let canonical = encode_audit_receipt(&authenticated.receipt)
         .map_err(|_| DurableFailure::AuditReceipt)?;
     let transcript = authenticated_audit_receipt_transcript(&canonical)
+        .and_then(|transcript| authority_receipt_signature_transcript(&transcript))
         .map_err(|_| DurableFailure::AuditReceipt)?;
     if !ed25519_verify(authority_public_key, &transcript, signature) {
         return Err(DurableFailure::AuditReceipt);
@@ -285,6 +287,38 @@ pub fn authenticated_audit_receipt_transcript(canonical: &[u8]) -> Result<Vector
     Ok(output)
 }
 
+pub fn parse_authenticated_audit_receipt_transcript(
+    transcript: &[u8],
+) -> Result<AuditReceipt, DurableFailure> {
+    let header = DOMAIN
+        .len()
+        .checked_add(4)
+        .ok_or(DurableFailure::AuditReceipt)?;
+    if transcript.len() < header || !transcript.starts_with(DOMAIN) {
+        return Err(DurableFailure::AuditReceipt);
+    }
+    let length = u32::from_be_bytes(
+        transcript[DOMAIN.len()..header]
+            .try_into()
+            .map_err(|_| DurableFailure::AuditReceipt)?,
+    ) as usize;
+    if header.checked_add(length) != Some(transcript.len()) {
+        return Err(DurableFailure::AuditReceipt);
+    }
+    parse_audit_receipt(&transcript[header..]).map_err(|_| DurableFailure::AuditReceipt)
+}
+
+pub fn authority_receipt_signature_transcript(payload: &[u8]) -> Result<Vector<u8>, ()> {
+    let length = u32::try_from(payload.len()).map_err(|_| ())?;
+    let mut output = Vector::new();
+    output
+        .try_extend_from_slice(AUTHORITY_SIGNATURE_DOMAIN)
+        .and_then(|_| output.try_extend_from_slice(&length.to_be_bytes()))
+        .and_then(|_| output.try_extend_from_slice(payload))
+        .map_err(|_| ())?;
+    Ok(output)
+}
+
 fn encode_authenticated(
     canonical: &[u8],
     signer_identity: [u8; 64],
@@ -462,6 +496,16 @@ mod tests {
         let receipt = fixture();
         let canonical = encode_audit_receipt(&receipt).unwrap();
         let signed_transcript = authenticated_audit_receipt_transcript(&canonical).unwrap();
+        assert_eq!(
+            parse_authenticated_audit_receipt_transcript(&signed_transcript),
+            Ok(receipt.clone())
+        );
+        let mut malformed_transcript = signed_transcript.clone();
+        malformed_transcript.push(0);
+        assert_eq!(
+            parse_authenticated_audit_receipt_transcript(&malformed_transcript),
+            Err(DurableFailure::AuditReceipt)
+        );
         let mut authority = DigestAuthority {
             identity: [7u8; 64],
         };
@@ -499,7 +543,8 @@ mod tests {
         let transcript = authenticated_audit_receipt_transcript(&canonical).unwrap();
         let seed = [91u8; 32];
         let public = mrml_crypto::ed25519_public(&seed);
-        let signature = mrml_crypto::ed25519_sign(&seed, &transcript);
+        let authority_transcript = authority_receipt_signature_transcript(&transcript).unwrap();
+        let signature = mrml_crypto::ed25519_sign(&seed, &authority_transcript);
         let identity = [17u8; 64];
         let encoded = encode_authenticated(&canonical, identity, &signature).unwrap();
         assert_eq!(

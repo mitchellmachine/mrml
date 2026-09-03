@@ -33,5 +33,22 @@ without receiving symmetric receipt-forging authority. The authenticated
 receipt container and its canonical transcript parser are shared library
 interfaces; a checksum alone is never treated as authority.
 
+Repository generation is no longer accepted as mutable process-local state.
+Production startup opens an owner-only durable generation catalog in the
+authority state volume and holds an exclusive advisory lock for the daemon
+lifetime. Each record binds the canonical repository identity, current nonzero
+generation, format version, and checksum under a purpose-separated domain. The
+bootstrap generation is only a creation value and rollback floor; reopening a
+newer durable value does not reset it.
+
+Receipt signing first parses the nested canonical audit-receipt transcript and
+requires the authority's exact repository, current generation, next generation,
+trust generation, and revocation generation. The signature is not returned
+until the catalog has atomically replaced, directory-synced, and reopened the
+exact next generation. Replays, skips, and rollback attempts fail closed. The
+current process still loads one repository's policy and proof directories at
+startup; a complete dynamic multi-repository catalog and candidate transaction
+state remain required before production-candidate classification.
+
 Patent review: **NOT_TRIGGERED**. This is conventional authenticated local RPC
 composition and replay sequencing. See `docs/patents/REVIEW_LOG.md`.

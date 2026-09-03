@@ -199,7 +199,8 @@ pub use sha1::{ObjectFormat, ObjectId, Sha1};
 pub use signed_audit_receipt::{
     AuditReceiptAuthority, AuthenticatedAuditReceipt, AuthenticatedAuditReceiptDirectory,
     AuthenticatedReceiveStore, MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES,
-    authenticated_audit_receipt_transcript, parse_authenticated_audit_receipt,
+    authenticated_audit_receipt_transcript, authority_receipt_signature_transcript,
+    parse_authenticated_audit_receipt, parse_authenticated_audit_receipt_transcript,
     verify_signer_generation_advancement,
 };
 pub use smart_protocol::{

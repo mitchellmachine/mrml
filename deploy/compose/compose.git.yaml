@@ -60,6 +60,7 @@ services:
       - "21002"
       - /var/lib/mrml/git-policies
       - /var/lib/mrml/authority/proofs
+      - /var/lib/mrml/authority/generations
       - "${MRML_PROTECTED_REPOSITORY:?set MRML_PROTECTED_REPOSITORY}"
       - /etc/mrml/authority/openpgp-public.asc
       - /etc/mrml/authority/ml-dsa-public.bin

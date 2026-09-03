@@ -2,6 +2,7 @@
 
 mod authority;
 mod channel;
+mod generation;
 #[cfg(target_os = "linux")]
 mod unix;
 
@@ -10,6 +11,10 @@ pub use channel::{
     decode_frame, encode_frame, AuthorityCapability, AuthorityError, AuthorityFrame,
     AuthorityFrameKind, AuthorityOperation, AuthorityPeer, AuthorityReplayWindow,
     AUTHORITY_CAPABILITY_BYTES, AUTHORITY_HEADER_BYTES, MAX_AUTHORITY_PAYLOAD_BYTES,
+};
+pub use generation::{
+    AuthorityGenerationStore, GenerationStoreError, LinuxAuthorityGenerationStore,
+    MemoryAuthorityGenerationStore,
 };
 #[cfg(target_os = "linux")]
 pub use unix::{AuthorityListener, AuthoritySession, UnixAuthorityError};

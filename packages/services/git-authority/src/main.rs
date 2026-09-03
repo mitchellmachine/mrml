@@ -8,14 +8,14 @@ use mrml_git_authority::{
     decode_frame, encode_frame, AuthorityCapability, AuthorityDispatchError, AuthorityFrame,
     AuthorityFrameKind, AuthorityListener, AuthorityOperation, AuthorityPeer,
     AuthorityReplayWindow, AuthoritySession, ProductionAuthority, AUTHORITY_CAPABILITY_BYTES,
-    AUTHORITY_HEADER_BYTES, MAX_AUTHORITY_PAYLOAD_BYTES,
+    AUTHORITY_HEADER_BYTES, LinuxAuthorityGenerationStore, MAX_AUTHORITY_PAYLOAD_BYTES,
 };
 use mrml_openpgp::{
     MAX_OPENPGP_PUBLIC_KEY_BYTES, MAX_OPENPGP_SIGNATURE_BYTES, parse_public_key_v6_ascii,
 };
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Read;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -36,7 +36,7 @@ fn main() {
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
     match arguments.as_slice() {
-        [_, command, _socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
+        [_, command, _socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, generations, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
             if matches!(
                 command.as_str(),
                 "check-config" | "describe-signer" | "describe-receipt-verifier"
@@ -49,6 +49,7 @@ fn run() -> Result<(), ()> {
                 authority_peer.uid,
                 policy,
                 proofs,
+                generations,
                 repository,
                 openpgp,
                 ml_dsa,
@@ -65,7 +66,7 @@ fn run() -> Result<(), ()> {
             }
             Ok(())
         }
-        [_, command, socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
+        [_, command, socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, generations, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
             if command == "serve" =>
         {
             serve(
@@ -75,6 +76,7 @@ fn run() -> Result<(), ()> {
                 parse_peer(own_uid, own_gid)?,
                 policy,
                 proofs,
+                generations,
                 repository,
                 openpgp,
                 ml_dsa,
@@ -137,7 +139,7 @@ fn run() -> Result<(), ()> {
         ),
         _ => {
             eprintln!(
-                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-receipt-verifier SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority transition-policy POLICY_ROOT REPOSITORY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP NEXT_ML_DSA NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE VALIDATION_TIME EXPECTED_GENERATION EXPECTED_DIGEST OWN_UID\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
+                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-receipt-verifier SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority transition-policy POLICY_ROOT REPOSITORY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP NEXT_ML_DSA NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE VALIDATION_TIME EXPECTED_GENERATION EXPECTED_DIGEST OWN_UID\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
             );
             std::process::exit(EX_USAGE);
         }
@@ -373,6 +375,7 @@ fn serve(
     authority_peer: AuthorityPeer,
     policy_path: &str,
     proof_path: &str,
+    generation_path: &str,
     repository: &str,
     openpgp_path: &str,
     ml_dsa_path: &str,
@@ -386,6 +389,7 @@ fn serve(
         authority_peer.uid,
         policy_path,
         proof_path,
+        generation_path,
         repository,
         openpgp_path,
         ml_dsa_path,
@@ -473,6 +477,7 @@ fn load_authority(
     authority_uid: u32,
     policy_path: &str,
     proof_path: &str,
+    generation_path: &str,
     repository: &str,
     openpgp_path: &str,
     ml_dsa_path: &str,
@@ -480,6 +485,7 @@ fn load_authority(
     validation_time: u64,
     repository_generation: u64,
 ) -> Result<ProductionAuthority, ()> {
+    let repository_identity = RepositoryIdentity::parse(repository).map_err(|_| ())?;
     let (policy_path, proof_path) = authority_storage_paths(policy_path, proof_path, repository)?;
     let policy =
         LinuxDurableTrustPolicyStore::open(policy_path.to_str().ok_or(())?).map_err(|_| ())?;
@@ -508,14 +514,23 @@ fn load_authority(
     let mut receipt_key = [0u8; 32];
     receipt_key.copy_from_slice(&receipt_bytes);
     erase_secret_bytes(&mut receipt_bytes);
-    let authority = ProductionAuthority::new(
+    fs::create_dir_all(generation_path).map_err(|_| ())?;
+    fs::set_permissions(generation_path, fs::Permissions::from_mode(0o700)).map_err(|_| ())?;
+    let generations = LinuxAuthorityGenerationStore::open(
+        generation_path,
+        authority_uid,
+        &repository_identity,
+        mrml_git::RepositoryGeneration(repository_generation),
+    )
+    .map_err(|_| ())?;
+    let authority = ProductionAuthority::new_with_generation_store(
         policy,
         proofs,
         openpgp_key,
         ml_dsa_key,
         receipt_key,
         validation_time,
-        mrml_git::RepositoryGeneration(repository_generation),
+        Box::new(generations),
     )
     .map_err(|_| ())?;
     erase_secret_bytes(&mut receipt_key);
