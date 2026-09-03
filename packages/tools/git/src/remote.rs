@@ -502,6 +502,59 @@ pub fn push_https_protected_authenticated(
         return Err(PushError::Protocol);
     }
     let reference = mrml_runtime::mrml_format!("refs/heads/{branch}");
+    let identity = remote
+        .repository_identity()
+        .map_err(|_| PushError::Protocol)?;
+    if let Some(pending) = crate::pending_protected_push::PendingProtectedPush::load(
+        &repository.git_dir,
+    )
+    .map_err(|_| PushError::Repository)?
+    {
+        if pending.repository != identity || pending.reference != reference {
+            return Err(PushError::Https);
+        }
+        let status = remote
+            .candidate_status_authenticated(pending.candidate, credential_provider)
+            .map_err(|_| PushError::Https)?;
+        if status.record.context.repository != pending.repository
+            || status.record.context.id != pending.candidate
+            || status.record.context.current_generation != pending.repository_generation
+            || status.record.context.next_generation.0
+                != pending
+                    .repository_generation
+                    .0
+                    .checked_add(1)
+                    .ok_or(PushError::Protocol)?
+            || status.record.context.trust_generation != pending.trust_generation
+            || status.record.context.revocation_generation != pending.revocation_generation
+        {
+            return Err(PushError::Protocol);
+        }
+        match status.record.status {
+            crate::AuthorityCandidateStatus::ReceiptPersisted
+            | crate::AuthorityCandidateStatus::Completed => {
+                let receipt = status.authenticated_receipt.ok_or(PushError::Protocol)?;
+                validate_protected_push_receipt(&receipt, &pending)?;
+                proof_signer
+                    .advance_repository_generation(&receipt)
+                    .map_err(|_| PushError::Protocol)?;
+                repository
+                    .update_remote_ref(remote_name, &reference, pending.new)
+                    .map_err(|_| PushError::Repository)?;
+                crate::pending_protected_push::PendingProtectedPush::remove(&repository.git_dir)
+                    .map_err(|_| PushError::Repository)?;
+                return Ok(PushResult {
+                    old: pending.old,
+                    new: pending.new,
+                });
+            }
+            crate::AuthorityCandidateStatus::Aborted => {
+                crate::pending_protected_push::PendingProtectedPush::remove(&repository.git_dir)
+                    .map_err(|_| PushError::Repository)?;
+            }
+            _ => return Err(PushError::Https),
+        }
+    }
     let advertisement = remote
         .list_refs_authenticated(credential_provider)
         .map_err(|_| PushError::Https)?;
@@ -525,9 +578,6 @@ pub fn push_https_protected_authenticated(
     let discovery = remote
         .discover_receive_pack_authenticated(credential_provider)
         .map_err(|_| PushError::Https)?;
-    let identity = remote
-        .repository_identity()
-        .map_err(|_| PushError::Protocol)?;
     let context = crate::ProtectedHistoryContext {
         repository: &identity,
         repository_generation: discovery.repository_generation,
@@ -571,6 +621,21 @@ pub fn push_https_protected_authenticated(
             });
         }
         output.finish()?;
+        let pending = crate::pending_protected_push::PendingProtectedPush {
+            repository: identity.clone(),
+            reference: reference.clone(),
+            candidate: candidate_id,
+            old,
+            new,
+            repository_generation: discovery.repository_generation,
+            trust_generation: discovery.trust_generation,
+            revocation_generation: discovery.revocation_generation,
+        };
+        crate::pending_protected_push::PendingProtectedPush::create(
+            &repository.git_dir,
+            &pending,
+        )
+        .map_err(|_| PushError::Repository)?;
         let authenticated_receipt = match remote.push_protected_pack_file_authenticated(
                 old,
                 new,
@@ -606,44 +671,25 @@ pub fn push_https_protected_authenticated(
                     | crate::AuthorityCandidateStatus::Completed => status
                         .authenticated_receipt
                         .ok_or(PushError::Protocol)?,
-                    crate::AuthorityCandidateStatus::Aborted
-                    | crate::AuthorityCandidateStatus::Receiving
-                    | crate::AuthorityCandidateStatus::ProofsSealed
-                    | crate::AuthorityCandidateStatus::Authorized => {
+                    crate::AuthorityCandidateStatus::Aborted => {
+                        crate::pending_protected_push::PendingProtectedPush::remove(
+                            &repository.git_dir,
+                        )
+                        .map_err(|_| PushError::Repository)?;
                         return Err(PushError::Remote);
                     }
-                    crate::AuthorityCandidateStatus::ActivationStarted
-                    | crate::AuthorityCandidateStatus::Activated => {
-                        return Err(PushError::Https);
-                    }
+                    _ => return Err(PushError::Https),
                 }
             }
         };
-        let receipt = crate::parse_authenticated_audit_receipt(&authenticated_receipt)
-            .map_err(|_| PushError::Protocol)?;
-        if receipt.receipt.transaction != candidate_id
-            || receipt.receipt.repository != identity
-            || receipt.receipt.repository_generation != discovery.repository_generation
-            || receipt.receipt.trust_generation != discovery.trust_generation
-            || receipt.receipt.revocation_generation != discovery.revocation_generation
-            || receipt.receipt.activated_repository_generation.0
-                != discovery
-                    .repository_generation
-                    .0
-                    .checked_add(1)
-                    .ok_or(PushError::Protocol)?
-            || receipt.receipt.updates.len() != 1
-            || reference != receipt.receipt.updates[0].0.as_str()
-            || receipt.receipt.updates[0].1 != old
-            || receipt.receipt.updates[0].2 != new
-        {
-            return Err(PushError::Protocol);
-        }
+        validate_protected_push_receipt(&authenticated_receipt, &pending)?;
         proof_signer
             .advance_repository_generation(&authenticated_receipt)
             .map_err(|_| PushError::Protocol)?;
         repository
             .update_remote_ref(remote_name, &reference, new)
+            .map_err(|_| PushError::Repository)?;
+        crate::pending_protected_push::PendingProtectedPush::remove(&repository.git_dir)
             .map_err(|_| PushError::Repository)?;
         Ok(PushResult { old, new })
     })();
@@ -651,6 +697,33 @@ pub fn push_https_protected_authenticated(
         return Err(PushError::Repository);
     }
     result
+}
+
+fn validate_protected_push_receipt(
+    authenticated_receipt: &[u8],
+    pending: &crate::pending_protected_push::PendingProtectedPush,
+) -> Result<(), PushError> {
+    let receipt = crate::parse_authenticated_audit_receipt(authenticated_receipt)
+        .map_err(|_| PushError::Protocol)?;
+    if receipt.receipt.transaction != pending.candidate
+        || receipt.receipt.repository != pending.repository
+        || receipt.receipt.repository_generation != pending.repository_generation
+        || receipt.receipt.trust_generation != pending.trust_generation
+        || receipt.receipt.revocation_generation != pending.revocation_generation
+        || receipt.receipt.activated_repository_generation.0
+            != pending
+                .repository_generation
+                .0
+                .checked_add(1)
+                .ok_or(PushError::Protocol)?
+        || receipt.receipt.updates.len() != 1
+        || pending.reference != receipt.receipt.updates[0].0.as_str()
+        || receipt.receipt.updates[0].1 != pending.old
+        || receipt.receipt.updates[0].2 != pending.new
+    {
+        return Err(PushError::Protocol);
+    }
+    Ok(())
 }
 
 pub fn push_ssh(

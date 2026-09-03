@@ -33,6 +33,7 @@ mod pack_delta;
 mod pack_file;
 mod pack_index;
 mod pack_set;
+mod pending_protected_push;
 mod protected_push;
 #[cfg(target_os = "linux")]
 mod protected_signer_unix;
