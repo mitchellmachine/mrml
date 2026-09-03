@@ -1,7 +1,7 @@
 use core::fmt;
 
 use mrml_crypto::hmac_sha256;
-use mrml_runtime::{Text, Vector};
+use mrml_runtime::{SpinMutex, Text, Vector};
 
 use crate::{Header, RepositoryIdentity};
 
@@ -12,6 +12,9 @@ const RECORD_VERSION: u8 = 1;
 const TOKEN_STORE_MAGIC: &[u8; 8] = b"MRMLTRV1";
 const TOKEN_STORE_TAG_BYTES: usize = 32;
 const MAX_TOKEN_RECORDS: usize = 1_000_000;
+const AUTH_FAILURE_BUCKETS: usize = 4_096;
+const AUTH_FAILURE_WINDOW_SECONDS: u64 = 60;
+const AUTH_FAILURES_PER_WINDOW: u16 = 32;
 pub const MAX_TOKEN_STORE_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -106,6 +109,52 @@ pub struct GitdAuthentication {
     authority: TokenAuthority,
     policies: Vector<RepositoryAccessPolicy>,
     records: Vector<TokenRecord>,
+    failures: SpinMutex<AuthenticationFailures>,
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticationFailureBucket {
+    window_started: u64,
+    failures: u16,
+}
+
+struct AuthenticationFailures {
+    buckets: Vector<AuthenticationFailureBucket>,
+}
+
+impl AuthenticationFailures {
+    fn new() -> Result<Self, AuthenticationError> {
+        let mut buckets = Vector::new();
+        buckets
+            .try_reserve_exact(AUTH_FAILURE_BUCKETS)
+            .map_err(|_| AuthenticationError::Resource)?;
+        buckets.resize(
+            AUTH_FAILURE_BUCKETS,
+            AuthenticationFailureBucket {
+                window_started: 0,
+                failures: 0,
+            },
+        );
+        Ok(Self { buckets })
+    }
+
+    fn limited(&mut self, bucket: usize, now: u64) -> bool {
+        let state = &mut self.buckets[bucket];
+        if now.saturating_sub(state.window_started) >= AUTH_FAILURE_WINDOW_SECONDS {
+            state.window_started = now;
+            state.failures = 0;
+        }
+        state.failures >= AUTH_FAILURES_PER_WINDOW
+    }
+
+    fn record(&mut self, bucket: usize, now: u64) {
+        let state = &mut self.buckets[bucket];
+        if now.saturating_sub(state.window_started) >= AUTH_FAILURE_WINDOW_SECONDS {
+            state.window_started = now;
+            state.failures = 0;
+        }
+        state.failures = state.failures.saturating_add(1);
+    }
 }
 
 impl GitdAuthentication {
@@ -146,6 +195,7 @@ impl GitdAuthentication {
             authority,
             policies,
             records,
+            failures: SpinMutex::new(AuthenticationFailures::new()?),
         })
     }
 
@@ -156,21 +206,31 @@ impl GitdAuthentication {
         action: RepositoryAction,
         now: u64,
     ) -> Result<AuthenticatedAccess, AuthenticationError> {
-        let policy = self
+        let failure_bucket = self.authority.failure_bucket(headers, repository);
+        if self.failures.lock().limited(failure_bucket, now) {
+            return Err(AuthenticationError::Denied);
+        }
+        let result = self
             .policies
             .binary_search_by(|policy| policy.repository.cmp(repository))
             .ok()
             .map(|index| &self.policies[index])
-            .ok_or(AuthenticationError::Denied)?;
-        self.authority.authorize(
-            headers,
-            repository,
-            action,
-            policy.profile,
-            now,
-            policy.revocation_generation,
-            &self.records,
-        )
+            .ok_or(AuthenticationError::Denied)
+            .and_then(|policy| {
+                self.authority.authorize(
+                    headers,
+                    repository,
+                    action,
+                    policy.profile,
+                    now,
+                    policy.revocation_generation,
+                    &self.records,
+                )
+            });
+        if result == Err(AuthenticationError::Denied) {
+            self.failures.lock().record(failure_bucket, now);
+        }
+        result
     }
 }
 
@@ -284,6 +344,22 @@ impl TokenAuthority {
             return Err(AuthenticationError::Denied);
         }
         Ok(AuthenticatedAccess::Token)
+    }
+
+    fn failure_bucket(&self, headers: &[Header], repository: &RepositoryIdentity) -> usize {
+        let authorization = headers
+            .iter()
+            .find(|header| header.name.eq_ignore_ascii_case("authorization"))
+            .map_or(&[][..], |header| header.value.as_bytes());
+        let digest = hmac_sha256(
+            &self.pepper,
+            &[
+                b"mrml-git-auth-failure-bucket-v1",
+                repository.as_str().as_bytes(),
+                authorization,
+            ],
+        );
+        usize::from(u16::from_be_bytes([digest[0], digest[1]])) % AUTH_FAILURE_BUCKETS
     }
 
     pub fn revoke_encoded_token(
@@ -772,6 +848,51 @@ mod tests {
             ),
             Err(AuthenticationError::Denied)
         );
+    }
+
+    #[test]
+    fn failed_authentication_is_bounded_before_repository_access() {
+        let repository = RepositoryIdentity::parse("owner/private").unwrap();
+        let invalid = authorization(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let authentication = GitdAuthentication::new(
+            TokenAuthority::new([0x19; 32]).unwrap(),
+            [RepositoryAccessPolicy {
+                repository: repository.clone(),
+                profile: RepositoryProfile::Private,
+                revocation_generation: 1,
+            }]
+            .into(),
+            Vector::new(),
+        )
+        .unwrap();
+        let bucket = authentication
+            .authority
+            .failure_bucket(&invalid, &repository);
+        for _ in 0..AUTH_FAILURES_PER_WINDOW {
+            assert_eq!(
+                authentication.authorize(&invalid, &repository, RepositoryAction::Read, 100),
+                Err(AuthenticationError::Denied)
+            );
+        }
+        assert_eq!(
+            authentication.failures.lock().buckets[bucket].failures,
+            AUTH_FAILURES_PER_WINDOW
+        );
+        assert_eq!(
+            authentication.authorize(&invalid, &repository, RepositoryAction::Read, 100),
+            Err(AuthenticationError::Denied)
+        );
+        assert_eq!(
+            authentication.failures.lock().buckets[bucket].failures,
+            AUTH_FAILURES_PER_WINDOW
+        );
+        assert_eq!(
+            authentication.authorize(&invalid, &repository, RepositoryAction::Read, 160),
+            Err(AuthenticationError::Denied)
+        );
+        assert_eq!(authentication.failures.lock().buckets[bucket].failures, 1);
     }
 
     #[test]
