@@ -1,5 +1,26 @@
 # Patent review log
 
+## 2026-09-03: Volume-backed deployment operations
+
+- Result: **NOT_TRIGGERED**.
+- Scope: resolving existing Gitd Docker volumes for the atomic image-version
+  activation record and for bounded streaming resource measurements rather than
+  using retired host bind directories.
+- Reason: this is a conventional container-volume path correction and atomic
+  filesystem record; it introduces no new protocol, cryptographic construction,
+  storage algorithm, or protected mechanism.
+
+## 2026-09-03: Portable offline image lock
+
+- Result: **NOT_TRIGGERED**.
+- Scope: binding offline container delivery to the signed archive SHA-256 and
+  required platform, numeric user, and entrypoint while retaining the producing
+  engine's image ID as provenance and normalizing a local-only Podman tag after
+  Docker load.
+- Reason: this corrects conventional cross-engine container metadata handling;
+  it introduces no new protocol, cryptographic construction, compression
+  mechanism, or specialized storage algorithm.
+
 ## 2026-09-02: Bounded large-object DEFLATE profile
 
 - Result: **NOT_TRIGGERED**.

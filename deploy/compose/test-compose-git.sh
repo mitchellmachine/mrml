@@ -89,10 +89,19 @@ for operator in deploy/compose/initialize-git.sh deploy/compose/initialize-git-r
     exit 1
   }
 done
+
+require 'docker volume inspect --format' deploy/compose/switch-git-version.sh
+require 'mrml-gitd-state' deploy/compose/switch-git-version.sh
+reject '$deploy_root/gitd/state' deploy/compose/switch-git-version.sh
+require 'volume_mount mrml-gitd-config' tools/containers/measure-git-streaming.sh
+require 'volume_mount mrml-gitd-repos' tools/containers/measure-git-streaming.sh
+reject '$deploy_root/gitd/' tools/containers/measure-git-streaming.sh
 require '--no-build --pull never git-authority gitd' deploy/compose/switch-git-version.sh
 require 'repository data was not rolled back' deploy/compose/switch-git-version.sh
 require 'docker load -i' deploy/compose/load-offline-git-images.sh
-require 'loaded image identity does not match images.git.lock' deploy/compose/load-offline-git-images.sh
+require 'loaded image runtime identity does not match images.git.lock' deploy/compose/load-offline-git-images.sh
+require 'archive_sha256=' deploy/compose/build-offline-git-bundle.sh
+require 'localhost/mrml/$image:$version' deploy/compose/load-offline-git-images.sh
 require 'managed-volume backup must run as root' deploy/compose/backup-git.sh
 require 'mrml-gitd-repos' deploy/compose/backup-git.sh
 require 'restore requires absent Docker volume' deploy/compose/restore-git.sh
@@ -103,6 +112,9 @@ require 'repository initialization requires stopped Gitd' deploy/compose/initial
 require 'initialize-repository /etc/mrml/gitd.conf' deploy/compose/initialize-git-repository.sh
 require 'protected policy initialization requires stopped Gitd and authority' deploy/compose/initialize-git-protected-policy.sh
 require 'initialize-protected-policy /etc/mrml/gitd.conf' deploy/compose/initialize-git-protected-policy.sh
+require 'mrml-gitd-policies:/mnt/mrml/gitd/policies:rw' deploy/compose/initialize-git-protected-policy.sh
+require 'mrml-git-authority-config:/run/mrml-bootstrap:ro' deploy/compose/initialize-git-protected-policy.sh
+reject '$deployment_root/gitd/policies' deploy/compose/initialize-git-protected-policy.sh
 require 'token administration requires stopped Gitd' deploy/compose/token-git.sh
 require 'run -T --rm --no-deps' deploy/compose/token-git.sh
 require 'recovery administration requires stopped Gitd' deploy/compose/recovery-git.sh

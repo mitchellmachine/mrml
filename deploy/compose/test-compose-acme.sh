@@ -2,6 +2,11 @@
 set -eu
 
 compose=${1:-deploy/compose/compose.acme.yaml}
+
+[ ! -e deploy/compose/compose.acme.yml ] || {
+  echo "legacy bind-mounted compose.acme.yml is forbidden" >&2
+  exit 1
+}
 certd_dockerfile=${2:-deploy/compose/Dockerfile.certd}
 acmed_dockerfile=${3:-deploy/compose/Dockerfile.acmed}
 

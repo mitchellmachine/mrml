@@ -94,6 +94,19 @@ volume, validates the archive before extraction, provisions fresh volumes, and
 extracts each subtree into only its exact volume before a final structural
 revalidation. Runtime socket volumes and the rebuildable cache are not restored.
 
+Image upgrade and rollback resolve the engine-reported mountpoint of the
+`mrml-gitd-state` volume, require its configured numeric Gitd owner and private
+mode, and atomically record the activated immutable image version there only
+after both services become healthy. They do not depend on the retired host-bind
+state directory and do not roll repository or security generations backward.
+
+The offline Git image lock binds each exact signed Docker archive by SHA-256 and
+records its producer-engine image ID as provenance. The loader accepts only the
+locked archive, verifies Linux/amd64, the fixed numeric user, and the exact
+entrypoint after load, and may add only the equivalent `mrml/...` local tag when
+a Podman-produced archive is imported by Docker as `localhost/mrml/...`. It
+never pulls, rebuilds, or treats engine-specific image IDs as portable.
+
 Normal receive completion now re-reads the exact final journal, removes it, and
 syncs the journal directory after the durable receipt and final journal phase.
 If cleanup alone fails, the receive remains definitely activated and successful;

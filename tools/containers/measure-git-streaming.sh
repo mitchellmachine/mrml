@@ -19,19 +19,43 @@ compose_directory=$directory/deploy/compose
 environment=${MRML_ENV_FILE:-$compose_directory/.env.production}
 git_compose=${MRML_GIT_COMPOSE_FILE:-$compose_directory/compose.git.yaml}
 acme_compose=${MRML_ACME_COMPOSE_FILE:-$compose_directory/compose.acme.yaml}
-deploy_root=${MRML_DEPLOY_ROOT:-/mnt/mrml}
 
-for tool in docker awk sed wc du date git find sha256sum sleep xargs; do
+for tool in docker awk sed wc du date git find sha256sum sleep xargs id; do
   command -v "$tool" >/dev/null || { echo "missing measurement tool: $tool" >&2; exit 1; }
 done
+[ "$(id -u)" -eq 0 ] || { echo "managed-volume measurement must run as root" >&2; exit 1; }
 [ -f "$environment" ] && [ ! -L "$environment" ] || exit 1
 mkdir -m 0700 "$output"
 trap 'if [ -n "${child_pid-}" ]; then kill "$child_pid" 2>/dev/null || true; fi' EXIT HUP INT TERM
 
+volume_mount() {
+  measured_volume=$1
+  measured_mount=$(docker volume inspect --format '{{.Mountpoint}}' "$measured_volume") || {
+    echo "required measurement volume is absent: $measured_volume" >&2
+    exit 1
+  }
+  case $measured_mount in /*/_data) ;; *) echo "unsafe measurement volume mountpoint: $measured_volume" >&2; exit 1 ;; esac
+  [ -d "$measured_mount" ] && [ ! -L "$measured_mount" ] || {
+    echo "unsafe measurement volume path: $measured_volume" >&2
+    exit 1
+  }
+  printf '%s\n' "$measured_mount"
+}
+
+config_mount=$(volume_mount mrml-gitd-config)
+repos_mount=$(volume_mount mrml-gitd-repos)
+quarantine_mount=$(volume_mount mrml-gitd-quarantine)
+cache_mount=$(volume_mount mrml-gitd-cache)
+config_file=$config_mount/gitd.conf
+[ -f "$config_file" ] && [ ! -L "$config_file" ] || {
+  echo "Gitd configuration volume does not contain a safe gitd.conf" >&2
+  exit 1
+}
+
 git -C "$directory" rev-parse --verify HEAD >"$output/source.commit"
 printf 'format=mrml-git-streaming-evidence-v1\nsource_bytes=%s\n' "$source_bytes" >"$output/metadata"
 sed -n '/^max_connections=/p;/^max_uploads=/p;/^max_receives=/p;/^max_body_bytes=/p;/^minimum_free_space_bytes=/p;/^drain_seconds=/p' \
-  "$deploy_root/config/gitd.conf" >"$output/configured-limits"
+  "$config_file" >"$output/configured-limits"
 
 gitd_container=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" ps -q gitd)
 authority_container=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" ps -q git-authority)
@@ -54,8 +78,8 @@ while kill -0 "$child_pid" 2>/dev/null; do
     "$sample" "$(rss "$child_pid")" "$(fds "$child_pid")" \
     "$(rss "$gitd_pid")" "$(fds "$gitd_pid")" \
     "$(rss "$authority_pid")" "$(fds "$authority_pid")" \
-    "$(bytes "$deploy_root/gitd/repos")" "$(bytes "$deploy_root/gitd/quarantine")" \
-    "$(bytes "$deploy_root/gitd/cache")" >>"$output/process.tsv"
+    "$(bytes "$repos_mount")" "$(bytes "$quarantine_mount")" \
+    "$(bytes "$cache_mount")" >>"$output/process.tsv"
   docker stats --no-stream --format '{{json .}}' "$gitd_container" "$authority_container" \
     >>"$output/docker-stats.jsonl"
   sleep 1

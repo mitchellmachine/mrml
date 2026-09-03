@@ -90,11 +90,17 @@ for image in git-authority gitd; do
     --bundle "$payload/signatures/$image.cosign.bundle" "$payload/images/$image.tar"
 done
 {
-  printf '%s\n' 'format=mrml-images-git-v1' "version=$version" "platform=linux/amd64"
+  printf '%s\n' 'format=mrml-images-git-v2' "version=$version" "platform=linux/amd64"
   for image in git-authority gitd; do
-    docker image inspect --format \
-      'image={{index .RepoTags 0}} id={{.Id}} repo_digests={{json .RepoDigests}}' \
-      "mrml/$image:$version"
+    archive_digest=$(sha256sum "$payload/images/$image.tar" | awk '{print $1}')
+    producer_id=$(docker image inspect --format '{{.Id}}' "mrml/$image:$version")
+    case $image in
+      git-authority) user=21002:21002 entrypoint=/usr/bin/mrml-git-authority ;;
+      gitd) user=21001:21001 entrypoint=/usr/bin/mrml-gitd ;;
+      *) exit 1 ;;
+    esac
+    printf 'image=mrml/%s:%s archive_sha256=%s producer_id=%s user=%s entrypoint=%s\n' \
+      "$image" "$version" "$archive_digest" "$producer_id" "$user" "$entrypoint"
   done
 } > "$payload/images.git.lock"
 install -m 0444 "$COSIGN_PUBLIC_KEY" "$payload/signatures/cosign.pub"
@@ -112,6 +118,7 @@ install -m 0555 deploy/compose/rollback-git.sh "$payload/deploy/rollback-git.sh"
 install -m 0555 deploy/compose/status-git.sh "$payload/deploy/status-git.sh"
 install -m 0555 deploy/compose/backup-git.sh "$payload/deploy/backup-git.sh"
 install -m 0555 deploy/compose/restore-git.sh "$payload/deploy/restore-git.sh"
+install -m 0555 deploy/compose/install-volume-inputs.sh "$payload/deploy/install-volume-inputs.sh"
 install -m 0555 deploy/compose/validate-git.sh "$payload/deploy/validate-git.sh"
 install -m 0555 deploy/compose/test-compose-git.sh "$payload/deploy/test-compose-git.sh"
 install -m 0555 deploy/compose/verify-offline-git-bundle.sh "$payload/verify-offline-git-bundle.sh"

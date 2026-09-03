@@ -10,17 +10,34 @@ directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 environment=${MRML_ENV_FILE:-$directory/.env.production}
 git_compose=${MRML_GIT_COMPOSE_FILE:-$directory/compose.git.yaml}
 acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
-deploy_root=${MRML_DEPLOY_ROOT:-/mnt/mrml}
-record=$deploy_root/gitd/state/deployed-image-version
+gitd_uid=${MRML_GITD_UID:-21001}
+gitd_gid=${MRML_GITD_GID:-21001}
+case $gitd_uid in ''|0|*[!0-9]*) echo "invalid Gitd UID" >&2; exit 1 ;; esac
+case $gitd_gid in ''|0|*[!0-9]*) echo "invalid Gitd GID" >&2; exit 1 ;; esac
 
 [ -f "$environment" ] && [ ! -L "$environment" ] && [ "$(stat -c %a "$environment")" = 600 ] || {
   echo "missing or unsafe mode-0600 production environment file: $environment" >&2
   exit 1
 }
-[ -d "$deploy_root/gitd/state" ] && [ ! -L "$deploy_root/gitd/state" ] || {
-  echo "provisioned Gitd state directory is required" >&2
+[ "$(id -u)" -eq 0 ] || {
+  echo "image switching must run as root" >&2
   exit 1
 }
+state_mount=$(docker volume inspect --format '{{.Mountpoint}}' mrml-gitd-state) || {
+  echo "provisioned mrml-gitd-state volume is required" >&2
+  exit 1
+}
+case $state_mount in /*/_data) ;; *) echo "unsafe Gitd state volume mountpoint" >&2; exit 1 ;; esac
+[ -d "$state_mount" ] && [ ! -L "$state_mount" ] || {
+  echo "unsafe Gitd state volume path" >&2
+  exit 1
+}
+[ "$(stat -c '%u:%g' "$state_mount")" = "$gitd_uid:$gitd_gid" ] &&
+  [ "$(stat -c '%a' "$state_mount")" = 700 ] || {
+  echo "Gitd state volume ownership or mode is unsafe" >&2
+  exit 1
+}
+record=$state_mount/deployed-image-version
 
 for image in "mrml/gitd:$version" "mrml/git-authority:$version"; do
   docker image inspect "$image" >/dev/null 2>&1 || {

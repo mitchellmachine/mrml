@@ -21,10 +21,7 @@ esac
   echo "policy validity must be nonzero and increasing" >&2
   exit 64
 }
-deployment_root=$(sed -n 's/^MRML_DEPLOY_ROOT=//p' "$environment")
 selected_repository=$(sed -n 's/^MRML_PROTECTED_REPOSITORY=//p' "$environment")
-case $deployment_root in /mnt/*) ;; *) echo "unsafe MRML_DEPLOY_ROOT" >&2; exit 1 ;; esac
-case $deployment_root in *'/../'*|*/..|*'/./'*) echo "noncanonical MRML_DEPLOY_ROOT" >&2; exit 1 ;; esac
 [ "$selected_repository" = "$1" ] || {
   echo "repository does not match MRML_PROTECTED_REPOSITORY" >&2
   exit 1
@@ -38,9 +35,8 @@ done
 
 docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
   run --rm --no-deps \
-  -v "$deployment_root/gitd/policies:/mnt/mrml/gitd/policies:rw" \
-  -v "$deployment_root/secrets/git-authority/openpgp-public.asc:/run/mrml-bootstrap/openpgp-public.asc:ro" \
-  -v "$deployment_root/secrets/git-authority/ml-dsa-public.bin:/run/mrml-bootstrap/ml-dsa-public.bin:ro" \
+  -v "mrml-gitd-policies:/mnt/mrml/gitd/policies:rw" \
+  -v "mrml-git-authority-config:/run/mrml-bootstrap:ro" \
   --entrypoint /usr/bin/mrml-gitd gitd \
   initialize-protected-policy /etc/mrml/gitd.conf "$1" \
   /run/mrml-bootstrap/openpgp-public.asc /run/mrml-bootstrap/ml-dsa-public.bin "$2" "$3"
