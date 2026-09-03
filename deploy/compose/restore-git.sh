@@ -26,12 +26,12 @@ tar -tvzf "$archive" | awk 'substr($1, 1, 1) != "-" && substr($1, 1, 1) != "d" {
   echo "archive links or special files rejected" >&2
   exit 1
 }
-for required in gitd/repos gitd/state gitd/receipts gitd/policies authority/state secrets/git-authority secrets/gitd secrets/channels config/gitd.conf; do
+for required in gitd/repos gitd/state gitd/receipts gitd/policies gitd/secrets gitd/config authority/state authority/secrets authority/config; do
   printf '%s\n' "$entries" | grep -F "$required" >/dev/null || { echo "backup missing $required" >&2; exit 1; }
 done
 
-volumes='gitd/repos:mrml-gitd-repos gitd/state:mrml-gitd-state gitd/quarantine:mrml-gitd-quarantine gitd/receipts:mrml-gitd-receipts gitd/policies:mrml-gitd-policies authority/state:mrml-authority-state'
-required_absent_volumes='mrml-gitd-repos mrml-gitd-state mrml-gitd-quarantine mrml-gitd-cache mrml-gitd-receipts mrml-gitd-policies mrml-authority-state mrml-runtime-git-authority'
+volumes='gitd/repos:mrml-gitd-repos gitd/state:mrml-gitd-state gitd/quarantine:mrml-gitd-quarantine gitd/receipts:mrml-gitd-receipts gitd/policies:mrml-gitd-policies gitd/secrets:mrml-gitd-secrets gitd/config:mrml-gitd-config authority/state:mrml-authority-state authority/secrets:mrml-git-authority-secrets authority/config:mrml-git-authority-config'
+required_absent_volumes='mrml-gitd-repos mrml-gitd-state mrml-gitd-quarantine mrml-gitd-cache mrml-gitd-receipts mrml-gitd-policies mrml-gitd-secrets mrml-gitd-config mrml-authority-state mrml-git-authority-secrets mrml-git-authority-config mrml-runtime-git-authority'
 for volume in $required_absent_volumes; do
   if docker volume inspect "$volume" >/dev/null 2>&1; then
     echo "restore requires absent Docker volume: $volume" >&2
@@ -47,8 +47,6 @@ if [ -e "$target" ]; then
 else
   install -d -o 0 -g 0 -m 0755 "$target"
 fi
-tar --numeric-owner --same-permissions -C "$target" -xzf "$archive" \
-  secrets/git-authority secrets/gitd secrets/channels config/gitd.conf
 provisioner=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/provision-git-host.sh
 MRML_DEPLOY_ROOT="$target" "$provisioner"
 for mapping in $volumes; do

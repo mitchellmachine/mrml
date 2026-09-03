@@ -22,16 +22,7 @@ running=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_c
   ps --status running -q gitd git-authority)
 [ -z "$running" ] || { echo "cold backup requires Gitd and authority to be stopped" >&2; exit 1; }
 
-host_paths='secrets/git-authority secrets/gitd secrets/channels config/gitd.conf'
-for path in $host_paths; do
-  [ -e "$root/$path" ] && [ ! -L "$root/$path" ] || { echo "missing or unsafe backup input: $path" >&2; exit 1; }
-  if find "$root/$path" -type l -print | grep . >/dev/null; then
-    echo "backup inputs must not contain symlinks: $path" >&2
-    exit 1
-  fi
-done
-
-volumes='gitd/repos:mrml-gitd-repos gitd/state:mrml-gitd-state gitd/quarantine:mrml-gitd-quarantine gitd/receipts:mrml-gitd-receipts gitd/policies:mrml-gitd-policies authority/state:mrml-authority-state'
+volumes='gitd/repos:mrml-gitd-repos gitd/state:mrml-gitd-state gitd/quarantine:mrml-gitd-quarantine gitd/receipts:mrml-gitd-receipts gitd/policies:mrml-gitd-policies gitd/secrets:mrml-gitd-secrets gitd/config:mrml-gitd-config authority/state:mrml-authority-state authority/secrets:mrml-git-authority-secrets authority/config:mrml-git-authority-config'
 for mapping in $volumes; do
   volume=${mapping#*:}
   mountpoint=$(docker volume inspect --format '{{.Mountpoint}}' "$volume") || { echo "missing backup volume: $volume" >&2; exit 1; }
@@ -47,13 +38,14 @@ umask 077
 temporary=$output.new.$$
 uncompressed=$output.tar.new.$$
 trap 'rm -f "$temporary" "$uncompressed"' EXIT HUP INT TERM
-tar --sort=name --mtime='UTC 1970-01-01' --numeric-owner -C "$root" -cf "$uncompressed" $host_paths
+tar --sort=name --mtime='UTC 1970-01-01' --numeric-owner --files-from=/dev/null -cf "$uncompressed"
 for mapping in $volumes; do
   archive_path=${mapping%:*}
   volume=${mapping#*:}
   mountpoint=$(docker volume inspect --format '{{.Mountpoint}}' "$volume")
   tar --sort=name --mtime='UTC 1970-01-01' --numeric-owner \
-    --transform="s|^\./|$archive_path/|" -C "$mountpoint" -rf "$uncompressed" .
+    --transform="s|^\.$|$archive_path|;s|^\./|$archive_path/|" \
+    -C "$mountpoint" -rf "$uncompressed" .
 done
 gzip -n -c "$uncompressed" > "$temporary"
 chmod 0600 "$temporary"

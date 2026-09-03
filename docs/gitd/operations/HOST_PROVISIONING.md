@@ -1,8 +1,8 @@
 # Git host provisioning
 
-Status: **PARTIALLY IMPLEMENTED**. Git-owned Docker-managed volumes, shared Gitd
-socket volumes, and the narrowly mounted host secret/configuration files have
-an idempotent host provisioner. Image-only Compose validation,
+Status: **PARTIALLY IMPLEMENTED**. Git-owned Docker-managed data, socket,
+secret, and configuration volumes have an idempotent host provisioner.
+Image-only Compose validation,
 offline image bundling, cold backup/restore, and immutable image
 upgrade/rollback are separate implemented operators. Native one-shot repository
 and initial protected-policy creation, token administration, and bounded recovery
@@ -10,15 +10,16 @@ operations exist. Authenticated normal and emergency trust-transition
 administration remains incomplete.
 
 Run `deploy/compose/provision-git-host.sh` as root with Docker available. The
-deployment root defaults to `/mnt/mrml` and now contains only narrowly mounted
-secret/configuration files and operator backup outputs. Durable Git/authority
-data and Unix-socket directories are explicit `mrml-*` Docker volumes. Fixed
+deployment root defaults to `/mnt/mrml` and now contains only operator inputs,
+deployment metadata, and backup outputs; it is not mounted into a production
+container. Durable data, secrets, configuration, and Unix-socket directories
+are separately scoped explicit `mrml-*` Docker volumes. Fixed
 production identities and socket groups default to the values in the Gitd
 deployment contract and can be overridden with the named numeric environment
 variables in the script.
 
-The provisioner creates only the declared Gitd, Git authority, and shared socket
-volumes plus Git-owned channel-secret parents and backup/configuration paths.
+The provisioner creates only the declared Gitd, Git authority, secret,
+configuration, and shared socket volumes plus operator backup/input paths.
 New volumes receive their exact numeric owner and mode through the Docker volume
 mountpoint; an existing volume is only inspected and is never silently re-owned
 or re-moded. Unsafe volume names/mountpoints, paths, types, symlinks, owners, or
@@ -26,9 +27,13 @@ modes fail closed. A final probe requires file and directory sync, hard links,
 and same-filesystem atomic rename before the host is accepted. The probe contains
 no secret or repository data and is removed.
 
-On a new root the script creates paired Gitd/authority and Gitd/certd channel
-capabilities, a receipt key, token pepper, and QUIC Retry key exactly once, then
-revalidates type, owner, mode, link count, and exact length on every run. It
+On a new host the scripts create paired Gitd/authority and Gitd/certd channel
+capabilities in separate service-scoped secret volumes, plus a receipt key,
+token pepper, and QUIC Retry key exactly once, then
+revalidate type, owner, mode, link count, and exact length on every run.
+`install-volume-inputs.sh` is the stopped-service, no-overwrite installer for
+reviewed Gitd/certd/acmed configuration, authority public keys, trust roots, and
+the DNS-provider token; it rejects running consumers and unsafe inputs. It
 never creates certificates, repositories, access tokens, trust policies,
 detached proofs, or publisher keys. Those require explicit authority-bearing
 administration so provisioning cannot replace selected policy or repository
@@ -83,8 +88,8 @@ and manual-uncertain states remain unavailable rather than being guessed.
 `backup-git.sh` requires root so it can read the Docker-managed volume
 mountpoints after confirming their exact names, bounded mountpoint shape, and
 absence of symlinks. It writes the same deterministic, numeric-owner archive
-namespace as before, combining volume data with the narrowly mounted secret and
-configuration files. `restore-git.sh` refuses any pre-existing target data
+namespace as before, combining the separately scoped data, secret, and
+configuration volumes. `restore-git.sh` refuses any pre-existing target data
 volume, validates the archive before extraction, provisions fresh volumes, and
 extracts each subtree into only its exact volume before a final structural
 revalidation. Runtime socket volumes and the rebuildable cache are not restored.
@@ -98,9 +103,15 @@ after its receipt has been recovered and verified.
 
 On 2026-09-02 the provisioners ran twice, unchanged, through rootful Docker
 29.6.1 on the authorized `mrml.ca` Ubuntu x86_64 VPS. Both passes succeeded and
-the second pass proved idempotence across all 14 declared managed volumes. This
-is real VPS provisioning/filesystem evidence; it is not yet a successful image
-start, backup/restore cycle, public TLS exchange, or application transaction.
+the second pass proved idempotence across all 22 declared managed volumes. The
+combined all-volume Compose model also rendered successfully under Docker
+Compose 5.3.1 without connecting the Docker Snap `removable-media` interface.
+The cold Git archive was created from those volumes, its sidecar checksum
+verified, and its logical volume roots inspected. The restore preflight verified
+that archive and rejected an existing target volume before mutation. This is
+real VPS provisioning/filesystem/backup evidence; a destructive restore
+roundtrip, successful image start, public TLS exchange, and application
+transaction remain unproven on that VPS.
 
 Patent review: **NOT_TRIGGERED**. Docker volume provisioning, ownership/mode
 checks, hard-link and rename probes, and filesystem sync are conventional
