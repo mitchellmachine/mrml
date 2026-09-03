@@ -147,8 +147,9 @@ pub use protected_push::{
 #[cfg(target_os = "linux")]
 pub use protected_signer_unix::{
     ProtectedSignerCapability, ProtectedSignerPeer, ProtectedSignerRequest,
-    UnixProtectedCommitSigningProvider, UnixProtectedSignerError, decode_protected_signer_request,
-    encode_protected_signer_response,
+    ProtectedSignerSession, UnixProtectedCommitSigningProvider, UnixProtectedSignerError,
+    decode_protected_signer_hello, decode_protected_signer_request,
+    encode_protected_signer_hello, encode_protected_signer_response,
 };
 pub use quarantine::{
     ActivationSnapshot, AuditReceipt, DEFAULT_MAX_EXPANDED_OBJECT_BYTES,

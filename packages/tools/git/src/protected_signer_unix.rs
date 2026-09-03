@@ -9,11 +9,15 @@ use crate::{
     RevocationGeneration, SignaturePurpose, TrustGeneration,
 };
 
-const MAGIC: &[u8; 8] = b"MRGPSG01";
-const VERSION: u16 = 1;
+const MAGIC: &[u8; 8] = b"MRGPSG02";
+const VERSION: u16 = 2;
+const OP_SESSION_HELLO: u16 = 0;
 const OP_SIGN_COMMIT: u16 = 1;
-const REQUEST_HEADER: usize = 8 + 2 + 2 + 8 + 8 + 8 + 8 + 32 + 2 + 8;
-const RESPONSE_HEADER: usize = 8 + 2 + 2 + 8 + 2 + 2 + 2;
+const SESSION_ID_BYTES: usize = 32;
+const SESSION_HELLO_BYTES: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 32;
+const REQUEST_HEADER: usize =
+    8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 2 + 8;
+const RESPONSE_HEADER: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + 2 + 2 + 2;
 const TAG_BYTES: usize = 32;
 const MAX_REPOSITORY_BYTES: usize = 255;
 const MAX_FRAME_BYTES: usize = REQUEST_HEADER + MAX_REPOSITORY_BYTES + 16 * 1024 * 1024 + TAG_BYTES;
@@ -63,6 +67,9 @@ pub enum UnixProtectedSignerError {
 }
 
 pub struct ProtectedSignerRequest {
+    pub session_id: [u8; SESSION_ID_BYTES],
+    pub session_expires_at: u64,
+    pub sequence: u64,
     pub request_id: u64,
     pub repository: RepositoryIdentity,
     pub repository_generation: RepositoryGeneration,
@@ -70,6 +77,13 @@ pub struct ProtectedSignerRequest {
     pub revocation_generation: RevocationGeneration,
     pub commit: ObjectId,
     pub exact_contents: Vector<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtectedSignerSession {
+    pub id: [u8; SESSION_ID_BYTES],
+    pub expires_at: u64,
+    pub maximum_sequence: u64,
 }
 
 pub struct UnixProtectedCommitSigningProvider {
@@ -102,7 +116,6 @@ impl UnixProtectedCommitSigningProvider {
         self.next_request_id = request_id
             .checked_add(1)
             .ok_or(UnixProtectedSignerError::Resource)?;
-        let frame = encode_request(request_id, request, &self.capability)?;
         let mut stream =
             UnixStream::connect(&self.socket).map_err(|_| UnixProtectedSignerError::Connect)?;
         stream
@@ -115,9 +128,16 @@ impl UnixProtectedCommitSigningProvider {
         if peer.0 != self.expected_peer.uid || peer.1 != self.expected_peer.gid {
             return Err(UnixProtectedSignerError::UnauthorizedPeer);
         }
+        let hello = read_frame(&mut stream)?;
+        let session = decode_protected_signer_hello(&hello, &self.capability)?;
+        let now = mrml_runtime::unix_time_seconds().ok_or(UnixProtectedSignerError::Protocol)?;
+        if session.expires_at < now || session.maximum_sequence == 0 {
+            return Err(UnixProtectedSignerError::Protocol);
+        }
+        let frame = encode_request(request_id, session, 1, request, &self.capability)?;
         write_frame(&mut stream, &frame)?;
         let response = read_frame(&mut stream)?;
-        decode_response(request_id, &response, &self.capability)
+        decode_response(request_id, session, 1, &response, &self.capability)
     }
 }
 
@@ -133,11 +153,17 @@ impl HybridCommitSigningProvider for UnixProtectedCommitSigningProvider {
 
 fn encode_request(
     request_id: u64,
+    session: ProtectedSignerSession,
+    sequence: u64,
     request: ProtectedCommitSigningRequest<'_>,
     capability: &ProtectedSignerCapability,
 ) -> Result<Vector<u8>, UnixProtectedSignerError> {
     let repository = request.context.repository.as_str().as_bytes();
     if request_id == 0
+        || session.id == [0; SESSION_ID_BYTES]
+        || session.expires_at == 0
+        || sequence == 0
+        || sequence > session.maximum_sequence
         || repository.is_empty()
         || repository.len() > MAX_REPOSITORY_BYTES
         || request.exact_contents.is_empty()
@@ -162,6 +188,9 @@ fn encode_request(
         MAGIC.as_slice(),
         &VERSION.to_be_bytes(),
         &OP_SIGN_COMMIT.to_be_bytes(),
+        &session.id,
+        &session.expires_at.to_be_bytes(),
+        &sequence.to_be_bytes(),
         &request_id.to_be_bytes(),
         &request.context.repository_generation.0.to_be_bytes(),
         &request.context.trust_generation.0.to_be_bytes(),
@@ -183,6 +212,69 @@ fn encode_request(
     Ok(output)
 }
 
+pub fn encode_protected_signer_hello(
+    session: ProtectedSignerSession,
+    capability: &ProtectedSignerCapability,
+) -> Result<Vector<u8>, UnixProtectedSignerError> {
+    if session.id == [0; SESSION_ID_BYTES]
+        || session.expires_at == 0
+        || session.maximum_sequence == 0
+    {
+        return Err(UnixProtectedSignerError::InvalidRequest);
+    }
+    let mut output = Vector::with_capacity(SESSION_HELLO_BYTES)
+        .map_err(|_| UnixProtectedSignerError::Resource)?;
+    for bytes in [
+        MAGIC.as_slice(),
+        &VERSION.to_be_bytes(),
+        &OP_SESSION_HELLO.to_be_bytes(),
+        &session.id,
+        &session.expires_at.to_be_bytes(),
+        &session.maximum_sequence.to_be_bytes(),
+    ] {
+        output
+            .try_extend_from_slice(bytes)
+            .map_err(|_| UnixProtectedSignerError::Resource)?;
+    }
+    let tag = capability.tag(&[&output]);
+    output
+        .try_extend_from_slice(&tag)
+        .map_err(|_| UnixProtectedSignerError::Resource)?;
+    Ok(output)
+}
+
+pub fn decode_protected_signer_hello(
+    input: &[u8],
+    capability: &ProtectedSignerCapability,
+) -> Result<ProtectedSignerSession, UnixProtectedSignerError> {
+    if input.len() != SESSION_HELLO_BYTES
+        || &input[..8] != MAGIC
+        || read_u16(input, 8)? != VERSION
+        || read_u16(input, 10)? != OP_SESSION_HELLO
+    {
+        return Err(UnixProtectedSignerError::Protocol);
+    }
+    let authenticated_end = input.len() - TAG_BYTES;
+    let expected = capability.tag(&[&input[..authenticated_end]]);
+    if !constant_time_equal(&expected, &input[authenticated_end..]) {
+        return Err(UnixProtectedSignerError::Protocol);
+    }
+    let mut id = [0; SESSION_ID_BYTES];
+    id.copy_from_slice(&input[12..44]);
+    let session = ProtectedSignerSession {
+        id,
+        expires_at: read_u64(input, 44)?,
+        maximum_sequence: read_u64(input, 52)?,
+    };
+    if session.id == [0; SESSION_ID_BYTES]
+        || session.expires_at == 0
+        || session.maximum_sequence == 0
+    {
+        return Err(UnixProtectedSignerError::InvalidRequest);
+    }
+    Ok(session)
+}
+
 pub fn decode_protected_signer_request(
     input: &[u8],
     capability: &ProtectedSignerCapability,
@@ -201,25 +293,32 @@ pub fn decode_protected_signer_request(
     {
         return Err(UnixProtectedSignerError::Protocol);
     }
-    let request_id = read_u64(input, 12)?;
-    let repository_generation = RepositoryGeneration(read_u64(input, 20)?);
-    let trust_generation = TrustGeneration(read_u64(input, 28)?);
-    let revocation_generation = RevocationGeneration(read_u64(input, 36)?);
+    let mut session_id = [0; SESSION_ID_BYTES];
+    session_id.copy_from_slice(input.get(12..44).ok_or(UnixProtectedSignerError::Protocol)?);
+    let session_expires_at = read_u64(input, 44)?;
+    let sequence = read_u64(input, 52)?;
+    let request_id = read_u64(input, 60)?;
+    let repository_generation = RepositoryGeneration(read_u64(input, 68)?);
+    let trust_generation = TrustGeneration(read_u64(input, 76)?);
+    let revocation_generation = RevocationGeneration(read_u64(input, 84)?);
     let commit = ObjectId::from_bytes(
         ObjectFormat::Sha256,
         input
-            .get(44..76)
+            .get(92..124)
             .ok_or(UnixProtectedSignerError::Protocol)?,
     )
     .ok_or(UnixProtectedSignerError::Protocol)?;
-    let repository_len = usize::from(read_u16(input, 76)?);
+    let repository_len = usize::from(read_u16(input, 124)?);
     let contents_len =
-        usize::try_from(read_u64(input, 78)?).map_err(|_| UnixProtectedSignerError::Resource)?;
+        usize::try_from(read_u64(input, 126)?).map_err(|_| UnixProtectedSignerError::Resource)?;
     let payload_end = REQUEST_HEADER
         .checked_add(repository_len)
         .and_then(|value| value.checked_add(contents_len))
         .ok_or(UnixProtectedSignerError::Resource)?;
-    if request_id == 0
+    if session_id == [0; SESSION_ID_BYTES]
+        || session_expires_at == 0
+        || sequence == 0
+        || request_id == 0
         || repository_generation.0 == 0
         || trust_generation.0 == 0
         || revocation_generation.0 == 0
@@ -243,6 +342,9 @@ pub fn decode_protected_signer_request(
         .try_extend_from_slice(&input[repository_end..payload_end])
         .map_err(|_| UnixProtectedSignerError::Resource)?;
     Ok(ProtectedSignerRequest {
+        session_id,
+        session_expires_at,
+        sequence,
         request_id,
         repository,
         repository_generation,
@@ -255,10 +357,16 @@ pub fn decode_protected_signer_request(
 
 pub fn encode_protected_signer_response(
     request_id: u64,
+    session: ProtectedSignerSession,
+    sequence: u64,
     result: Result<&HybridCommitSignatures, UnixProtectedSignerError>,
     capability: &ProtectedSignerCapability,
 ) -> Result<Vector<u8>, UnixProtectedSignerError> {
-    if request_id == 0 {
+    if request_id == 0
+        || session.id == [0; SESSION_ID_BYTES]
+        || sequence == 0
+        || sequence > session.maximum_sequence
+    {
         return Err(UnixProtectedSignerError::InvalidRequest);
     }
     let (status, openpgp, ml_dsa) = match result {
@@ -275,6 +383,9 @@ pub fn encode_protected_signer_response(
         MAGIC.as_slice(),
         &VERSION.to_be_bytes(),
         &OP_SIGN_COMMIT.to_be_bytes(),
+        &session.id,
+        &session.expires_at.to_be_bytes(),
+        &sequence.to_be_bytes(),
         &request_id.to_be_bytes(),
         &status.to_be_bytes(),
         &openpgp_len.to_be_bytes(),
@@ -295,6 +406,8 @@ pub fn encode_protected_signer_response(
 
 fn decode_response(
     request_id: u64,
+    session: ProtectedSignerSession,
+    sequence: u64,
     input: &[u8],
     capability: &ProtectedSignerCapability,
 ) -> Result<HybridCommitSignatures, UnixProtectedSignerError> {
@@ -308,13 +421,16 @@ fn decode_response(
     }
     if read_u16(input, 8)? != VERSION
         || read_u16(input, 10)? != OP_SIGN_COMMIT
-        || read_u64(input, 12)? != request_id
+        || input.get(12..44) != Some(session.id.as_slice())
+        || read_u64(input, 44)? != session.expires_at
+        || read_u64(input, 52)? != sequence
+        || read_u64(input, 60)? != request_id
     {
         return Err(UnixProtectedSignerError::Protocol);
     }
-    let status = read_u16(input, 20)?;
-    let openpgp_len = usize::from(read_u16(input, 22)?);
-    let ml_dsa_len = usize::from(read_u16(input, 24)?);
+    let status = read_u16(input, 68)?;
+    let openpgp_len = usize::from(read_u16(input, 70)?);
+    let ml_dsa_len = usize::from(read_u16(input, 72)?);
     let payload = &input[RESPONSE_HEADER..authenticated_end];
     if status != 0 {
         return Err(UnixProtectedSignerError::Rejected);
@@ -422,8 +538,15 @@ mod tests {
         };
         let capability = ProtectedSignerCapability::new([7; 32]).unwrap();
         let commit = ObjectId::from_bytes(ObjectFormat::Sha256, &[9; 32]).unwrap();
+        let session = ProtectedSignerSession {
+            id: [6; 32],
+            expires_at: 10,
+            maximum_sequence: 1,
+        };
         let frame = encode_request(
             5,
+            session,
+            1,
             ProtectedCommitSigningRequest {
                 context,
                 commit,
@@ -434,20 +557,28 @@ mod tests {
         .unwrap();
         let decoded = decode_protected_signer_request(&frame, &capability).unwrap();
         assert_eq!(decoded.request_id, 5);
+        assert_eq!(decoded.session_id, session.id);
+        assert_eq!(decoded.session_expires_at, session.expires_at);
+        assert_eq!(decoded.sequence, 1);
         assert_eq!(decoded.repository, identity);
         assert_eq!(decoded.commit, commit);
         assert_eq!(&*decoded.exact_contents, b"commit bytes");
         assert_eq!(&frame[..8], MAGIC);
-        assert_eq!(read_u64(&frame, 12).unwrap(), 5);
-        assert_eq!(read_u64(&frame, 20).unwrap(), 2);
-        assert_eq!(read_u64(&frame, 28).unwrap(), 3);
-        assert_eq!(read_u64(&frame, 36).unwrap(), 4);
+        assert_eq!(read_u64(&frame, 60).unwrap(), 5);
+        assert_eq!(read_u64(&frame, 68).unwrap(), 2);
+        assert_eq!(read_u64(&frame, 76).unwrap(), 3);
+        assert_eq!(read_u64(&frame, 84).unwrap(), 4);
         let mut altered = frame.clone();
-        altered[28] ^= 1;
+        altered[76] ^= 1;
         let end = altered.len() - TAG_BYTES;
         assert_ne!(
             hmac_sha256(&capability.0, &[&altered[..end]]).as_slice(),
             &altered[end..]
+        );
+        let wrong_capability = ProtectedSignerCapability::new([8; 32]).unwrap();
+        assert_eq!(
+            decode_protected_signer_request(&frame, &wrong_capability).err(),
+            Some(UnixProtectedSignerError::Protocol)
         );
     }
 
@@ -457,17 +588,41 @@ mod tests {
         let signatures =
             HybridCommitSignatures::new(&[3; 64], &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES])
                 .unwrap();
-        let response = encode_protected_signer_response(9, Ok(&signatures), &capability).unwrap();
-        let decoded = decode_response(9, &response, &capability).unwrap();
+        let session = ProtectedSignerSession {
+            id: [8; 32],
+            expires_at: 10,
+            maximum_sequence: 1,
+        };
+        let response =
+            encode_protected_signer_response(9, session, 1, Ok(&signatures), &capability).unwrap();
+        let decoded = decode_response(9, session, 1, &response, &capability).unwrap();
         assert_eq!(decoded.openpgp(), &[3; 64]);
         assert_eq!(
             decoded.ml_dsa(),
             &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES]
         );
         let mut tampered = response;
-        tampered[20] ^= 1;
+        tampered[68] ^= 1;
         assert_eq!(
-            decode_response(9, &tampered, &capability).err(),
+            decode_response(9, session, 1, &tampered, &capability).err(),
+            Some(UnixProtectedSignerError::Protocol)
+        );
+    }
+
+    #[test]
+    fn session_hello_is_authenticated_and_replay_context_is_exact() {
+        let capability = ProtectedSignerCapability::new([7; 32]).unwrap();
+        let session = ProtectedSignerSession {
+            id: [5; 32],
+            expires_at: 44,
+            maximum_sequence: 1,
+        };
+        let hello = encode_protected_signer_hello(session, &capability).unwrap();
+        assert_eq!(decode_protected_signer_hello(&hello, &capability).unwrap(), session);
+        let mut tampered = hello;
+        tampered[12] ^= 1;
+        assert_eq!(
+            decode_protected_signer_hello(&tampered, &capability).err(),
             Some(UnixProtectedSignerError::Protocol)
         );
     }

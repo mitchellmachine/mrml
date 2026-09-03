@@ -84,6 +84,23 @@ message-signing, key-export, lifecycle, or repository-write operation. SIGINT or
 SIGTERM wakes the listener, erases loaded secret buffers, and removes only the
 exact socket inode created by that process.
 
+Protocol v2 begins each connection with a signer-generated 256-bit random
+session identifier, a five-second absolute expiry, and an authenticated maximum
+sequence of one. The client authenticates that hello with its separately owned
+channel-capability copy before sending commit material. The request and response
+bind the session identifier, expiry, sequence, peer credentials, repository,
+all generations, Git-commit purpose, object ID, and exact commit bytes. A frame
+captured from one connection therefore fails under the next connection's random
+session. The deliberately single-request session also bounds concurrency and
+eliminates an in-session replay window rather than treating an echoed request ID
+as replay prevention.
+
+An external readiness probe authenticates both the Unix peer and the v2 hello:
+
+```text
+mrml-git-protected-signer socket-health SOCKET CAPABILITY CAPABILITY_OWNER_UID SIGNER_UID SIGNER_GID
+```
+
 The same binary provides a cold, offline owner operation for policy rotation:
 
 ```text

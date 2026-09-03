@@ -12419,3 +12419,11 @@ the standardized x86-64 AES instruction exposed by the target CPU after an
 explicit CPUID check and otherwise retains the existing constant-time software
 implementation. It is an implementation optimization of the existing
 standardized primitive, not a new cryptographic mechanism.
+
+# 2026-09-03 — Protected signer random session replay boundary
+
+Patent review: **NOT_TRIGGERED**. This increment applies a conventional random
+challenge, absolute expiry, monotonic sequence bound, HMAC authentication, and
+Unix peer credentials to the existing signer channel. It introduces no new
+signature primitive, key-management mechanism, repository policy, or
+patent-sensitive selection method.

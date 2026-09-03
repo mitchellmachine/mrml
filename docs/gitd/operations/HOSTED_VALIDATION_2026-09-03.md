@@ -141,3 +141,17 @@ the expected four payload hashes. All diagnostic evidence checksums verify. The
 run used an explicitly labeled uncommitted working-tree image, so it establishes
 the performance cause and correctness direction but is not final release or VPS
 acceptance evidence. A clean-commit rerun remains required.
+
+## Protected signer session replay boundary
+
+Signer protocol v2 replaces unauthenticated connection setup plus echoed request
+IDs with a signer-generated 256-bit random session, an authenticated five-second
+expiry, and an exact one-request sequence ceiling. Both directions bind the
+session, expiry, sequence, peer, channel capability, repository generations,
+purpose, commit ID, and exact bytes. The focused result is 237 Git library, 4
+CLI, and 6 signer tests, including wrong capability, tampered hello, wrong
+session, sequence replay, and expiry rejection. Strict clippy, formatting, and
+diff checks pass. A rebuilt hardened container completed a live v2 hello as UID
+`21007:21007` using its separately owned capability named volume; a different
+capability failed closed while the signer remained ready. Generation advancement
+is a separate incomplete gate and is not claimed by this result.

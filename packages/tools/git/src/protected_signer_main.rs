@@ -8,8 +8,9 @@ use mrml_git::{
     AuthorizedHybridPair, GitObjectType, HybridCommitSignatures, ObjectFormat,
     ProtectedSignerCapability, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
     SignaturePurpose, TrustGeneration, UnixProtectedSignerError, canonical_hybrid_transcript,
-    decode_protected_signer_request, encode_loose_object_with_format, encode_protected_signer_response,
-    parse_trust_policy, MAX_ENCODED_TRUST_POLICY_BYTES,
+    decode_protected_signer_request, encode_loose_object_with_format,
+    encode_protected_signer_hello, encode_protected_signer_response, parse_trust_policy,
+    ProtectedSignerSession, MAX_ENCODED_TRUST_POLICY_BYTES,
 };
 use mrml_openpgp::{
     DigestAlgorithm, MAX_OPENPGP_SIGNATURE_BYTES, SigningKeyV6, sign_detached_v6_ascii_with_salt,
@@ -27,6 +28,8 @@ use std::time::Duration;
 const O_NOFOLLOW: i32 = 0x20_000;
 const MAX_REQUEST_FRAME: usize = 17 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
+const SESSION_LIFETIME_SECONDS: u64 = 5;
+const MAXIMUM_SESSION_SEQUENCE: u64 = 1;
 
 struct Configuration {
     socket: PathBuf,
@@ -76,11 +79,21 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
-    if let [_, command, socket, signer_uid, signer_gid] = arguments.as_slice()
+    if let [
+        _,
+        command,
+        socket,
+        capability_file,
+        capability_owner_uid,
+        signer_uid,
+        signer_gid,
+    ] = arguments.as_slice()
         && command == "socket-health"
     {
         return socket_health(
             Path::new(socket),
+            Path::new(capability_file),
+            capability_owner_uid.parse().map_err(|_| ())?,
             signer_uid.parse().map_err(|_| ())?,
             signer_gid.parse().map_err(|_| ())?,
         );
@@ -161,8 +174,14 @@ fn run() -> Result<(), ()> {
     )
 }
 
-fn socket_health(path: &Path, signer_uid: u32, signer_gid: u32) -> Result<(), ()> {
-    if signer_uid == 0 || signer_gid == 0 {
+fn socket_health(
+    path: &Path,
+    capability_file: &Path,
+    capability_owner_uid: u32,
+    signer_uid: u32,
+    signer_gid: u32,
+) -> Result<(), ()> {
+    if capability_owner_uid == 0 || signer_uid == 0 || signer_gid == 0 {
         return Err(());
     }
     if path
@@ -175,11 +194,23 @@ fn socket_health(path: &Path, signer_uid: u32, signer_gid: u32) -> Result<(), ()
     if !path.starts_with('/') || path.len() > 107 || path.as_bytes().contains(&0) {
         return Err(());
     }
-    let stream = UnixStream::connect(path).map_err(|_| ())?;
+    let mut capability_bytes = read_secret(capability_file, 32, capability_owner_uid)?;
+    let mut capability_array = [0; 32];
+    capability_array.copy_from_slice(&capability_bytes);
+    erase_secret_bytes(&mut capability_bytes);
+    let capability = ProtectedSignerCapability::new(capability_array).map_err(|_| ())?;
+    erase_secret_bytes(&mut capability_array);
+    let mut stream = UnixStream::connect(path).map_err(|_| ())?;
     stream.set_read_timeout(Some(IO_TIMEOUT)).map_err(|_| ())?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|_| ())?;
     let peer = stream.peer_cred().map_err(|_| ())?;
     if peer.uid != signer_uid || peer.gid != signer_gid {
+        return Err(());
+    }
+    let hello = read_frame(&mut stream)?;
+    let session = mrml_git::decode_protected_signer_hello(&hello, &capability).map_err(|_| ())?;
+    let now = mrml_runtime::unix_time_seconds().ok_or(())?;
+    if session.expires_at < now || session.maximum_sequence == 0 {
         return Err(());
     }
     println!("ready");
@@ -359,6 +390,33 @@ fn serve(
             eprintln!("component=mrml-git-protected-signer event=request_failed category=peer");
             continue;
         }
+        let mut session_id = [0; 32];
+        if mrml_runtime::fill_random(&mut session_id).is_err() || session_id == [0; 32] {
+            eprintln!("component=mrml-git-protected-signer event=request_failed category=random");
+            continue;
+        }
+        let session = match mrml_runtime::unix_time_seconds()
+            .and_then(|now| now.checked_add(SESSION_LIFETIME_SECONDS))
+            .map(|expires_at| ProtectedSignerSession {
+                id: session_id,
+                expires_at,
+                maximum_sequence: MAXIMUM_SESSION_SEQUENCE,
+            })
+            .and_then(|session| {
+                encode_protected_signer_hello(session, capability)
+                    .ok()
+                    .map(|hello| (session, hello))
+            }) {
+            Some(session) => session,
+            None => {
+                eprintln!("component=mrml-git-protected-signer event=request_failed category=random");
+                continue;
+            }
+        };
+        if write_frame(&mut stream, &session.1).is_err() {
+            eprintln!("component=mrml-git-protected-signer event=request_failed category=write");
+            continue;
+        }
         match serve_one(
             &mut stream,
             config,
@@ -366,6 +424,7 @@ fn serve(
             openpgp,
             ml_dsa_public,
             ml_dsa,
+            session.0,
         ) {
             Ok(()) => eprintln!(
                 "component=mrml-git-protected-signer event=request_complete category=sign"
@@ -479,14 +538,20 @@ fn serve_one(
     openpgp: &SigningKeyV6,
     ml_dsa_public: &[u8],
     ml_dsa: &[u8],
+    session: ProtectedSignerSession,
 ) -> Result<(), ServeError> {
     let frame = read_frame(stream).map_err(|_| ServeError::Read)?;
     let request = decode_protected_signer_request(&frame, capability)
         .map_err(|_| ServeError::Authenticate)?;
+    let now = mrml_runtime::unix_time_seconds().ok_or(ServeError::Authenticate)?;
+    validate_session_request(session, &request, now).map_err(|_| ServeError::Authenticate)?;
     let request_id = request.request_id;
+    let sequence = request.sequence;
     let result = sign_request(config, openpgp, ml_dsa_public, ml_dsa, request);
     let response = encode_protected_signer_response(
         request_id,
+        session,
+        sequence,
         result
             .as_ref()
             .map_err(|_| UnixProtectedSignerError::Rejected),
@@ -503,6 +568,22 @@ fn serve_one(
         SignError::MlDsa => ServeError::SignMlDsa,
         SignError::Output => ServeError::SignOutput,
     })
+}
+
+fn validate_session_request(
+    session: ProtectedSignerSession,
+    request: &mrml_git::ProtectedSignerRequest,
+    now: u64,
+) -> Result<(), ()> {
+    if request.session_id != session.id
+        || request.session_expires_at != session.expires_at
+        || request.sequence != 1
+        || request.sequence > session.maximum_sequence
+        || now > session.expires_at
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -798,7 +879,7 @@ fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> Result<(), ()> {
 mod tests {
     use super::*;
     use mrml_git::{
-        FullRefName, HybridVerificationRequest, PolicyPairStatus, TrustPolicyCandidate,
+        FullRefName, HybridVerificationRequest, ObjectId, PolicyPairStatus, TrustPolicyCandidate,
         TrustPolicyState, encode_trust_policy, verify_hybrid_signature,
     };
     use mrml_runtime::Vector;
@@ -848,6 +929,9 @@ mod tests {
             contents,
         );
         let request = mrml_git::ProtectedSignerRequest {
+            session_id: [5; 32],
+            session_expires_at: u64::MAX,
+            sequence: 1,
             request_id: 1,
             repository: RepositoryIdentity::parse("owner/repo").unwrap(),
             repository_generation: RepositoryGeneration(2),
@@ -860,6 +944,35 @@ mod tests {
         assert!(!signatures.openpgp().is_empty());
         assert_eq!(signatures.ml_dsa().len(), ML_DSA_65_SIGNATURE_BYTES);
         erase_secret_bytes(&mut ml_secret);
+    }
+
+    #[test]
+    fn signer_session_rejects_replay_wrong_sequence_and_expiry() {
+        let session = ProtectedSignerSession {
+            id: [7; 32],
+            expires_at: 20,
+            maximum_sequence: 1,
+        };
+        let mut request = mrml_git::ProtectedSignerRequest {
+            session_id: session.id,
+            session_expires_at: session.expires_at,
+            sequence: 1,
+            request_id: 1,
+            repository: RepositoryIdentity::parse("owner/repo").unwrap(),
+            repository_generation: RepositoryGeneration(2),
+            trust_generation: TrustGeneration(3),
+            revocation_generation: RevocationGeneration(4),
+            commit: ObjectId::from_bytes(ObjectFormat::Sha256, &[9; 32]).unwrap(),
+            exact_contents: Vector::from(*b"commit bytes"),
+        };
+        assert!(validate_session_request(session, &request, 20).is_ok());
+        request.session_id[0] ^= 1;
+        assert!(validate_session_request(session, &request, 20).is_err());
+        request.session_id = session.id;
+        request.sequence = 2;
+        assert!(validate_session_request(session, &request, 20).is_err());
+        request.sequence = 1;
+        assert!(validate_session_request(session, &request, 21).is_err());
     }
 
     #[test]
