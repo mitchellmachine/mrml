@@ -144,7 +144,17 @@ a safe miss and requires later administrative recovery rather than guessing.
 Regular-file opens reject final symlinks. Other targets fail closed until
 directory synchronization is available.
 
-The repository view now optionally populates and consumes this durable cache
+The repository view's complete-vector durable cache is retained only in
+`cfg(test)` builds for compatibility tests. Production construction does not
+contain the cache field, cache setter, precomputation entry points, whole-object
+collection, or complete-pack encoding/response branch; its public capability
+constant is false and the Gitd production build exercises that compile-time
+configuration. Production protocol-v2 fetch therefore always uses
+`PackStreamEncoder` with fixed-size writes. A future production cache must be a
+bounded file-backed streaming design rather than re-enabling these test-only
+vectors.
+
+The test-only repository view optionally populates and consumes this durable cache
 for protocol-v2 fetch and exposes the same path for bounded precomputation.
 Every lookup binds the object format, exact ordered wants and haves, active
 repository generation, fixed pack-profile version, and encoder version. Wants
@@ -194,11 +204,20 @@ No outer Zstandard layer belongs in Git pack storage.
 
 Active arrival-pack reads are authorized only by the exact `MRPKSET1` digest in
 `MRREFS02`; directory entries and transaction-derived names never grant
-membership. The repository view resolves commit, tree, blob, tag, README,
-verified-metadata, and upload-pack traversal through that selected set before
-the baseline object database. Every selected read reauthenticates its bounded
-pack/index pair and Git identity, unselected installed arrivals remain
-invisible, and operations recheck the complete active-ref state before return.
+membership. On startup or an exact selected-generation transition, the
+repository view authenticates the selected manifest, fully validates each
+immutable pack/index pair once, checks its declared sizes, checksums, counts,
+work, IDs, format, and generation, and builds a bounded ordered object-ID to
+transaction locator. Publication is monotonic and atomic at the snapshot
+boundary; a changed digest at the same generation and generation rollback fail
+closed. Reads from an unchanged snapshot perform one indexed lookup, open only
+the exact scratch object, and independently recompute its canonical Git object
+ID. A missing selected object, changed content, or stale generation is not
+allowed to fall back to the baseline database. Unselected installed arrivals
+remain invisible, and operations recheck the complete active-ref state before
+return. Counters expose complete validations, index parses, object lookups,
+object reads, bytes read, and object hash checks; focused tests require the
+first two to remain constant while reads grow.
 
 `MRPKSET1` now implements the non-authoritative manifest prerequisite. Its
 private validated construction consumes authenticated index summaries and binds
@@ -228,9 +247,8 @@ real digest instead of a sentinel. The end-to-end receive test reopens the
 selected next generation and its exact transaction/object membership.
 
 The receive store can now resolve an exact object from the selected arrival set:
-it finds the single manifest entry, reauthenticates that installed pack/index
-summary byte-for-byte, opens only the transaction's bounded scratch object, and
-rehashes its Git identity. Thin-pack validation consults this selected view
+it uses the authenticated generation snapshot's exact locator, opens only the
+transaction's bounded scratch object, and rehashes its Git identity. Thin-pack validation consults this selected view
 before the separately authenticated baseline repository, so sequential receives
 can use prior active arrivals without directory scanning. Protected-history
 traversal uses the same selected view, and the end-to-end receive test prepares

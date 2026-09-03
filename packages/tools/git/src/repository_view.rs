@@ -2,21 +2,27 @@
 
 use mrml_runtime::Vector;
 
+#[cfg(test)]
 use crate::{
-    encode_pack_with_format, parse_tree_with_format, read_v2_request, write_pkt_line,
+    ImmutablePackCacheDirectory, PackCacheFileError, PackCacheKey, encode_pack_with_format,
+};
+
+use crate::{
     ActiveRefFile, AnnotatedTagDetails, AnnotatedTagPage, ArrivalPackStore, BlobPage, BoundedRead,
     BoundedWrite, Commit, CommitDetails, CommitPage, FullRefName, GitdCoreBackend, GitdCoreError,
-    ImmutablePackCacheDirectory, ImmutablePackDescriptor, Index, IndexEntry, ObjectFormat,
-    ObjectId, ObjectKind, PackCacheFileError, PackCacheKey, PackError, PackGeneration, PackObject,
-    PackSetLimits, PackSetManifest, PackStreamEncoder, PackStreamOutput, PktLine, ProtocolBudget,
-    ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
+    ImmutablePackDescriptor, Index, IndexEntry, ObjectFormat, ObjectId, ObjectKind, PackError,
+    PackGeneration, PackObject, PackSetLimits, PackStreamEncoder, PackStreamOutput, PktLine,
+    ProtocolBudget, ProtocolV2Request, QueryLimits, ReadmeCandidate, Repository, RepositoryEvent,
     RepositoryEventCursor, RepositoryEventPage, RepositoryGeneration, RepositoryIdentity,
     RepositoryPath, RepositorySummary, RevocationGeneration, SmartGitOperation, SmartGitRequest,
     SmartGitResponse, TreePage, TrustGeneration, VerificationSummary, VerifiedCommitProof,
-    VerifiedGitObjectProof, VerifiedMetadataDescriptor, WorkBudget,
+    VerifiedGitObjectProof, VerifiedMetadataDescriptor, WorkBudget, parse_tree_with_format,
+    read_v2_request, write_pkt_line,
 };
 
 pub const MAX_VERIFICATION_SUMMARY_EVIDENCE: usize = 5_000;
+/// Production builds expose only the fixed-chunk streaming upload-pack path.
+pub const PRODUCTION_FULL_PACK_CACHE_ENABLED: bool = false;
 const SELECTED_PACK_SET_LIMITS: PackSetLimits = PackSetLimits {
     max_packs: 65_536,
     max_objects: 10_000_000,
@@ -24,8 +30,11 @@ const SELECTED_PACK_SET_LIMITS: PackSetLimits = PackSetLimits {
     max_index_bytes: 16 * 1024 * 1024 * 1024,
     max_work_units: 16 * 1024 * 1024 * 1024 * 1024,
 };
+#[cfg(test)]
 const FETCH_PACK_PROFILE_VERSION: u32 = 1;
+#[cfg(test)]
 const FETCH_PACK_ENCODER_VERSION: u32 = 1;
+#[cfg(test)]
 const MAX_FETCH_PRECOMPUTE_REFS: usize = 4_096;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -162,6 +171,7 @@ pub struct FilesystemRepositoryView {
     objects: Repository,
     refs: ActiveRefFile,
     arrivals: Option<ArrivalPackStore>,
+    #[cfg(test)]
     pack_cache: Option<ImmutablePackCacheDirectory>,
     verification: VerificationSummaryStore,
 }
@@ -414,6 +424,16 @@ impl GitdCoreBackend for FilesystemRepositoryView {
                 {
                     return Err(GitdCoreError::Authorization);
                 }
+                #[cfg(not(test))]
+                self.stream_pack_response(
+                    &state,
+                    &wants,
+                    &haves,
+                    output,
+                    &mut protocol,
+                    budget.max_memory_bytes,
+                )?;
+                #[cfg(test)]
                 if self.pack_cache.is_none() {
                     self.stream_pack_response(
                         &state,
@@ -737,6 +757,7 @@ impl FilesystemRepositoryView {
             objects,
             refs,
             arrivals: None,
+            #[cfg(test)]
             pack_cache: None,
             verification: VerificationSummaryStore::new(Vector::new())?,
         })
@@ -769,6 +790,7 @@ impl FilesystemRepositoryView {
     /// Adds a durable immutable representation cache. Cache authority remains
     /// subordinate to the exact active repository generation encoded in every
     /// key; the directory name and a digest-name match never authorize a hit.
+    #[cfg(test)]
     pub fn with_pack_cache(mut self, path: &str) -> Result<Self, GitdCoreError> {
         self.pack_cache =
             Some(ImmutablePackCacheDirectory::open(path).map_err(map_pack_cache_error)?);
@@ -777,6 +799,7 @@ impl FilesystemRepositoryView {
 
     /// Precomputes the canonical pack for one exact ordered negotiation. Wants
     /// remain restricted to advertised refs, exactly like protocol-v2 fetch.
+    #[cfg(test)]
     pub fn precompute_fetch_pack(
         &self,
         repository: &RepositoryIdentity,
@@ -804,6 +827,7 @@ impl FilesystemRepositoryView {
     /// exact tag refs, and caller-selected popular refs. Names identify
     /// candidates but grant no authority: every name resolves through the
     /// exact active state, and duplicate object tips produce one cache entry.
+    #[cfg(test)]
     pub fn precompute_selected_fetch_packs(
         &self,
         repository: &RepositoryIdentity,
@@ -1434,10 +1458,17 @@ impl FilesystemRepositoryView {
     fn selected_pack_set(
         &self,
         state: &crate::ActiveRefState,
-    ) -> Result<Option<PackSetManifest>, GitdCoreError> {
-        let Some(_) = self.arrivals else {
+    ) -> Result<Option<[u8; 32]>, GitdCoreError> {
+        let Some(arrivals) = &self.arrivals else {
             return Ok(None);
         };
+        if arrivals.selected_snapshot_matches(
+            state.repository_generation,
+            state.pack_generation,
+            state.pack_set_digest,
+        ) {
+            return Ok(Some(state.pack_set_digest));
+        }
         let manifest = self
             .refs
             .load_selected_pack_set(SELECTED_PACK_SET_LIMITS)
@@ -1451,7 +1482,8 @@ impl FilesystemRepositoryView {
         {
             return Err(GitdCoreError::StaleGeneration);
         }
-        Ok(Some(manifest))
+        arrivals.activate_selected_snapshot(&manifest, state.pack_set_digest)?;
+        Ok(Some(state.pack_set_digest))
     }
 
     fn read_object(
@@ -1462,17 +1494,15 @@ impl FilesystemRepositoryView {
         if id.format() != state.object_format {
             return Err(GitdCoreError::ObjectValidation);
         }
-        if let (Some(arrivals), Some(manifest)) = (&self.arrivals, self.selected_pack_set(state)?) {
-            let selected = manifest
-                .entries()
-                .iter()
-                .any(|entry| entry.object_ids().binary_search(&id).is_ok());
-            if selected {
-                return arrivals.read_selected_object(
-                    &manifest,
-                    id,
-                    crate::DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES,
-                );
+        if let (Some(arrivals), Some(digest)) = (&self.arrivals, self.selected_pack_set(state)?) {
+            match arrivals.read_authenticated_selected_object(
+                digest,
+                id,
+                crate::DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES,
+            ) {
+                Ok(object) => return Ok(object),
+                Err(GitdCoreError::Unsupported) => {}
+                Err(error) => return Err(error),
             }
         }
         self.objects
@@ -1599,6 +1629,7 @@ impl FilesystemRepositoryView {
         Ok(())
     }
 
+    #[cfg(test)]
     fn pack_negotiated(
         &self,
         state: &crate::ActiveRefState,
@@ -1654,6 +1685,7 @@ impl FilesystemRepositoryView {
         Ok(seen)
     }
 
+    #[cfg(test)]
     fn fetch_pack(
         &self,
         state: &crate::ActiveRefState,
@@ -1721,6 +1753,7 @@ impl FilesystemRepositoryView {
     }
 }
 
+#[cfg(test)]
 fn map_pack_cache_error(error: PackCacheFileError) -> GitdCoreError {
     match error {
         PackCacheFileError::Resource => GitdCoreError::Resource,
@@ -1869,6 +1902,7 @@ impl PackStreamOutput for SidebandPackWriter<'_, '_> {
     }
 }
 
+#[cfg(test)]
 fn preflight_pack_response(
     pack_bytes: usize,
     output: &dyn BoundedWrite,
@@ -1907,6 +1941,11 @@ mod tests {
     use mrml_runtime::join_path;
 
     use super::*;
+
+    #[test]
+    fn production_full_buffer_pack_cache_is_compile_time_disabled() {
+        assert!(!PRODUCTION_FULL_PACK_CACHE_ENABLED);
+    }
     use crate::{
         ActiveRefState, FullRefName, ObjectFormat, PackGeneration, RevocationGeneration,
         TrustGeneration,
@@ -2081,15 +2120,17 @@ mod tests {
             }
         });
         let evidence_store = VerificationSummaryStore::new(evidence_records).unwrap();
-        assert!(evidence_store
-            .exact(
-                &identity,
-                RepositoryGeneration(3),
-                commit,
-                TrustGeneration(5),
-                RevocationGeneration(6),
-            )
-            .is_none());
+        assert!(
+            evidence_store
+                .exact(
+                    &identity,
+                    RepositoryGeneration(3),
+                    commit,
+                    TrustGeneration(5),
+                    RevocationGeneration(6),
+                )
+                .is_none()
+        );
         view = view.with_verification_evidence(evidence_store);
         let limits = QueryLimits {
             max_entries: 8,
@@ -2775,6 +2816,22 @@ mod tests {
         assert!(packed.iter().any(|object| object.id == tree.id));
         assert!(packed.iter().any(|object| object.id == blob.id));
         assert!(!packed.iter().any(|object| object.id == hidden.id));
+        let selected_object_path = join_path(
+            &join_path(&store.arrival_path(selected_tx), "objects"),
+            &blob.id.to_hex(),
+        );
+        mrml_runtime::write_file(&selected_object_path, b"\x03tampered").unwrap();
+        assert_eq!(
+            view.read_object(&state, blob.id),
+            Err(GitdCoreError::ObjectValidation)
+        );
+        let statistics = view.arrivals.as_ref().unwrap().read_statistics();
+        assert_eq!(statistics.complete_pack_validations, 1);
+        assert_eq!(statistics.pack_index_parses, 1);
+        assert!(statistics.object_lookups >= 10);
+        assert!(statistics.object_reads >= 9);
+        assert_eq!(statistics.hash_checks, statistics.object_reads);
+        assert!(statistics.bytes_read > 0);
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }

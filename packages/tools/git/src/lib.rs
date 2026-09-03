@@ -53,7 +53,7 @@ mod trust_policy;
 mod trust_policy_file;
 mod verification;
 
-pub use arrival_pack::ArrivalPackStore;
+pub use arrival_pack::{ArrivalPackReadStatisticsSnapshot, ArrivalPackStore};
 pub use audit_receipt::{
     AuditReceiptDirectory, AuditReceiptError, MAX_AUDIT_RECEIPT_BYTES, encode_audit_receipt,
     parse_audit_receipt,
@@ -61,8 +61,7 @@ pub use audit_receipt::{
 pub use authority_client::{
     AUTHORITY_OP_AUTHORIZE_RECEIVE, AUTHORITY_OP_AUTHORIZE_REF_TRANSACTION,
     AUTHORITY_OP_INSTALL_PROOF, AUTHORITY_OP_SIGN_RECEIPT, AUTHORITY_OP_VERIFY_COMMIT,
-    AUTHORITY_OP_VERIFY_RECEIPT,
-    ProtectedAuthorityRpc, RemoteProtectedReceiveAuthority,
+    AUTHORITY_OP_VERIFY_RECEIPT, ProtectedAuthorityRpc, RemoteProtectedReceiveAuthority,
 };
 pub use authority_wire::{
     AuthorityCommitRequest, AuthorityProofInstallRequest, AuthorityReceiptRequest,
@@ -147,8 +146,8 @@ pub use protected_push::{
 #[cfg(target_os = "linux")]
 pub use protected_signer_unix::{
     ProtectedSignerCapability, ProtectedSignerPeer, ProtectedSignerRequest,
-    UnixProtectedCommitSigningProvider, UnixProtectedSignerError,
-    decode_protected_signer_request, encode_protected_signer_response,
+    UnixProtectedCommitSigningProvider, UnixProtectedSignerError, decode_protected_signer_request,
+    encode_protected_signer_response,
 };
 pub use quarantine::{
     ActivationSnapshot, AuditReceipt, DEFAULT_MAX_EXPANDED_OBJECT_BYTES,
@@ -189,8 +188,8 @@ pub use repository::{
     RebaseOutcome, Repository, RepositoryError,
 };
 pub use repository_view::{
-    FilesystemRepositoryView, MAX_VERIFICATION_SUMMARY_EVIDENCE, VerificationSummaryEvidence,
-    VerificationSummaryStore,
+    FilesystemRepositoryView, MAX_VERIFICATION_SUMMARY_EVIDENCE,
+    PRODUCTION_FULL_PACK_CACHE_ENABLED, VerificationSummaryEvidence, VerificationSummaryStore,
 };
 pub use sha1::{ObjectFormat, ObjectId, Sha1};
 pub use signed_audit_receipt::{
@@ -204,12 +203,12 @@ pub use smart_protocol::{
     write_v2_capability_advertisement, write_v2_protected_receive_capability_advertisement,
     write_v2_receive_capability_advertisement,
 };
-pub use transport::{protected_push_command_prefix, protected_push_command_with_proofs};
 pub use transport::{
     Advertisement, RemoteRef, TransportError, decode_packets, encode_flush, encode_packet,
     extract_pack_response, fetch_request, parse_advertisement, parse_push_response,
     parse_push_response_mode, push_request, push_request_mode, push_request_mode_negotiated,
 };
+pub use transport::{protected_push_command_prefix, protected_push_command_with_proofs};
 pub use trust_policy::{
     AuthorizedHybridPair, EmergencyRecoveryAuthority, EmergencyRecoveryAuthorization,
     EmergencyRecoveryTransition, GitObjectType, HYBRID_PROFILE_NAME, HybridPolicyError,
@@ -222,8 +221,9 @@ pub use trust_policy::{
     bind_verified_git_object_proof, bind_verified_legacy_commit_proof, canonical_hybrid_transcript,
     encode_emergency_recovery_authority, encode_emergency_recovery_transition,
     encode_key_revocation_statement, encode_trust_policy, encode_trust_policy_candidate,
-    key_revocation_statement_digest, parse_emergency_recovery_authority, parse_emergency_recovery_transition,
-    parse_key_revocation_statement, parse_trust_policy, verify_hybrid_signature,
+    key_revocation_statement_digest, parse_emergency_recovery_authority,
+    parse_emergency_recovery_transition, parse_key_revocation_statement, parse_trust_policy,
+    verify_hybrid_signature,
 };
 pub use trust_policy_file::{LinuxDurableTrustPolicyStore, TrustPolicyFileError};
 #[cfg(test)]

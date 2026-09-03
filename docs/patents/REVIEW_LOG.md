@@ -12379,3 +12379,12 @@ deadlines, sequence preservation, and an exact current-plus-next host-key pin
 set to the existing SSH implementation. It introduces no new cryptographic
 primitive, compression or delta selection, similarity mechanism, cache policy,
 or storage-selection mechanism.
+
+# 2026-09-03 — Authenticated selected-pack generation snapshot
+
+Patent review: **NOT_TRIGGERED**. This increment replaces repeated complete-pack
+validation with a conventional authenticated immutable-generation snapshot and
+ordered exact-key object locator, while retaining independent canonical object
+hash verification. It introduces no cryptographic primitive, compression or
+delta selection, similarity mechanism, adaptive cache policy, or recorded
+re-review trigger.

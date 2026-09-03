@@ -1,8 +1,9 @@
 //! Isolated, immutable arrival-pack staging and durable installation.
 
+use core::sync::atomic::{AtomicU64, Ordering};
 use mrml_runtime::{
-    File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory,
-    rename_file,
+    File, OrderedMap, SpinMutex, Text, Vector, canonical_path, create_dir_all, join_path,
+    path_exists, path_is_directory, rename_file,
 };
 
 use crate::pack_file::validate_pack_file_with_bases;
@@ -20,6 +21,35 @@ pub struct ArrivalPackStore {
     arrivals: Text,
     format: ObjectFormat,
     max_pack_bytes: u64,
+    selected: SpinMutex<Option<AuthenticatedSelectedPackSnapshot>>,
+    statistics: ArrivalPackReadStatistics,
+}
+
+struct AuthenticatedSelectedPackSnapshot {
+    manifest_digest: [u8; 32],
+    repository_generation: crate::RepositoryGeneration,
+    pack_generation: crate::PackGeneration,
+    objects: OrderedMap<ObjectId, QuarantineTransactionId>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ArrivalPackReadStatisticsSnapshot {
+    pub complete_pack_validations: u64,
+    pub pack_index_parses: u64,
+    pub object_lookups: u64,
+    pub object_reads: u64,
+    pub bytes_read: u64,
+    pub hash_checks: u64,
+}
+
+#[derive(Default)]
+struct ArrivalPackReadStatistics {
+    complete_pack_validations: AtomicU64,
+    pack_index_parses: AtomicU64,
+    object_lookups: AtomicU64,
+    object_reads: AtomicU64,
+    bytes_read: AtomicU64,
+    hash_checks: AtomicU64,
 }
 
 impl ArrivalPackStore {
@@ -237,6 +267,8 @@ impl ArrivalPackStore {
             arrivals,
             format,
             max_pack_bytes,
+            selected: SpinMutex::new(None),
+            statistics: ArrivalPackReadStatistics::default(),
         })
     }
 
@@ -380,31 +412,156 @@ impl ArrivalPackStore {
         if manifest.object_format() != self.format || id.format() != self.format || max_bytes == 0 {
             return Err(GitdCoreError::ObjectValidation);
         }
-        let entry = manifest
-            .entries()
-            .iter()
-            .find(|entry| entry.object_ids().binary_search(&id).is_ok())
-            .ok_or(GitdCoreError::ObjectValidation)?;
-        let summary = self
-            .authenticated_installed_summary(entry.transaction(), entry.object_count())
+        let digest = manifest
+            .digest()
             .map_err(|_| GitdCoreError::ObjectValidation)?;
-        if summary.pack_checksum != entry.pack_checksum()
-            || summary.index_checksum != entry.index_checksum()
-            || summary.pack_bytes != entry.pack_bytes()
-            || summary.index_bytes != entry.index_bytes()
-            || summary.work_units != entry.work_units()
-            || &*summary.object_ids != entry.object_ids()
+        self.activate_selected_snapshot(manifest, digest)?;
+        self.read_authenticated_selected_object(digest, id, max_bytes)
+    }
+
+    pub(crate) fn selected_snapshot_matches(
+        &self,
+        repository_generation: crate::RepositoryGeneration,
+        pack_generation: crate::PackGeneration,
+        manifest_digest: [u8; 32],
+    ) -> bool {
+        self.selected.lock().as_ref().is_some_and(|snapshot| {
+            snapshot.repository_generation == repository_generation
+                && snapshot.pack_generation == pack_generation
+                && snapshot.manifest_digest == manifest_digest
+        })
+    }
+
+    pub(crate) fn activate_selected_snapshot(
+        &self,
+        manifest: &PackSetManifest,
+        manifest_digest: [u8; 32],
+    ) -> Result<(), GitdCoreError> {
+        if manifest.object_format() != self.format
+            || manifest
+                .digest()
+                .map_err(|_| GitdCoreError::ObjectValidation)?
+                != manifest_digest
         {
             return Err(GitdCoreError::ObjectValidation);
         }
+        if self.selected_snapshot_matches(
+            manifest.repository_generation(),
+            manifest.pack_generation(),
+            manifest_digest,
+        ) {
+            return Ok(());
+        }
+        let mut objects = Vector::new();
+        for entry in manifest.entries() {
+            let summary = self
+                .authenticated_installed_summary(entry.transaction(), entry.object_count())
+                .map_err(|_| GitdCoreError::ObjectValidation)?;
+            if summary.pack_checksum != entry.pack_checksum()
+                || summary.index_checksum != entry.index_checksum()
+                || summary.pack_bytes != entry.pack_bytes()
+                || summary.index_bytes != entry.index_bytes()
+                || summary.work_units != entry.work_units()
+                || &*summary.object_ids != entry.object_ids()
+            {
+                return Err(GitdCoreError::ObjectValidation);
+            }
+            objects
+                .try_reserve_exact(entry.object_ids().len())
+                .map_err(|_| GitdCoreError::Resource)?;
+            for id in entry.object_ids() {
+                objects.push((*id, entry.transaction()));
+            }
+        }
+        objects.sort_unstable_by_key(|(id, _)| *id);
+        if objects.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        let next = AuthenticatedSelectedPackSnapshot {
+            manifest_digest,
+            repository_generation: manifest.repository_generation(),
+            pack_generation: manifest.pack_generation(),
+            objects: OrderedMap::from_sorted_entries(objects),
+        };
+        let mut selected = self.selected.lock();
+        let monotonic = selected.as_ref().is_none_or(|current| {
+            let advances = current.repository_generation.0 < next.repository_generation.0
+                || current.pack_generation.0 < next.pack_generation.0;
+            advances
+                && current.repository_generation.0 <= next.repository_generation.0
+                && current.pack_generation.0 <= next.pack_generation.0
+        });
+        if monotonic {
+            *selected = Some(next);
+            Ok(())
+        } else if selected.as_ref().is_some_and(|current| {
+            current.repository_generation == next.repository_generation
+                && current.pack_generation == next.pack_generation
+                && current.manifest_digest == next.manifest_digest
+        }) {
+            Ok(())
+        } else {
+            Err(GitdCoreError::StaleGeneration)
+        }
+    }
+
+    pub(crate) fn read_authenticated_selected_object(
+        &self,
+        manifest_digest: [u8; 32],
+        id: ObjectId,
+        max_bytes: u64,
+    ) -> Result<crate::Object, GitdCoreError> {
+        if id.format() != self.format || max_bytes == 0 {
+            return Err(GitdCoreError::ObjectValidation);
+        }
+        self.statistics
+            .object_lookups
+            .fetch_add(1, Ordering::Relaxed);
+        let transaction = {
+            let selected = self.selected.lock();
+            let snapshot = selected.as_ref().ok_or(GitdCoreError::StaleGeneration)?;
+            if snapshot.manifest_digest != manifest_digest {
+                return Err(GitdCoreError::StaleGeneration);
+            }
+            *snapshot
+                .objects
+                .get(&id)
+                .ok_or(GitdCoreError::Unsupported)?
+        };
         let (kind, contents) = read_scratch_object(
-            &join_path(&self.arrival_path(entry.transaction()), "objects"),
+            &join_path(&self.arrival_path(transaction), "objects"),
             id,
             max_bytes,
         )
         .map_err(|_| GitdCoreError::ObjectValidation)?
         .ok_or(GitdCoreError::ObjectValidation)?;
+        self.statistics.object_reads.fetch_add(1, Ordering::Relaxed);
+        self.statistics
+            .bytes_read
+            .fetch_add(contents.len() as u64 + 1, Ordering::Relaxed);
+        let header = mrml_runtime::mrml_format!("{} {}\0", kind.name(), contents.len());
+        let mut hash = GitObjectHasher::new(self.format);
+        hash.update(header.as_bytes());
+        hash.update(&contents);
+        self.statistics.hash_checks.fetch_add(1, Ordering::Relaxed);
+        if hash.finalize() != id {
+            return Err(GitdCoreError::ObjectValidation);
+        }
         Ok(crate::Object { kind, contents })
+    }
+
+    pub fn read_statistics(&self) -> ArrivalPackReadStatisticsSnapshot {
+        ArrivalPackReadStatisticsSnapshot {
+            complete_pack_validations: self
+                .statistics
+                .complete_pack_validations
+                .load(Ordering::Relaxed),
+            pack_index_parses: self.statistics.pack_index_parses.load(Ordering::Relaxed),
+            object_lookups: self.statistics.object_lookups.load(Ordering::Relaxed),
+            object_reads: self.statistics.object_reads.load(Ordering::Relaxed),
+            bytes_read: self.statistics.bytes_read.load(Ordering::Relaxed),
+            hash_checks: self.statistics.hash_checks.load(Ordering::Relaxed),
+        }
     }
 
     fn verify_directory(&self, directory: &str, object_count: u32) -> Result<(), DurableFailure> {
@@ -418,6 +575,9 @@ impl ArrivalPackStore {
         transaction: QuarantineTransactionId,
         object_count: u32,
     ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
+        self.statistics
+            .complete_pack_validations
+            .fetch_add(1, Ordering::Relaxed);
         let max_work = self
             .max_pack_bytes
             .checked_mul(2)
@@ -453,6 +613,9 @@ impl ArrivalPackStore {
         }
         let parsed = parse_pack_index_v2(self.format, &index, object_count)
             .map_err(|_| DurableFailure::VerifierCrash)?;
+        self.statistics
+            .pack_index_parses
+            .fetch_add(1, Ordering::Relaxed);
         if parsed.entries().len() != validated.entries.len()
             || validated.entries.iter().any(|expected| {
                 parsed
@@ -497,7 +660,7 @@ impl ArrivalPackStore {
     fn quarantine_path(&self, transaction: QuarantineTransactionId) -> Text {
         join_path(&self.quarantine, &transaction_name(transaction))
     }
-    fn arrival_path(&self, transaction: QuarantineTransactionId) -> Text {
+    pub(crate) fn arrival_path(&self, transaction: QuarantineTransactionId) -> Text {
         join_path(&self.arrivals, &transaction_name(transaction))
     }
 }
