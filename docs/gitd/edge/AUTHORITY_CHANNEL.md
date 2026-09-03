@@ -89,11 +89,12 @@ ordered verified ref updates, ordered detached proof set, authenticated pack and
 index checksums plus exact sizes/counts, and the expected authenticated receipt
 transcript. The expected receipt is produced by the same helper used after
 activation, preventing a separate preauthorization representation from drifting
-from durable evidence. Proof installation is still performed through the older
-globally visible operation during graph verification, before candidate begin.
-The remaining two-stage graph/proof verification and candidate-local proof
-directory are therefore mandatory before protected receive is fully
-candidate-transactional.
+from durable evidence. Graph verification now uses the authority's non-mutating
+`VerifyProof` operation, so a rejected or incomplete receive no longer installs
+generally visible proof state before candidate begin. The remaining second-stage
+candidate-bound installation, durable candidate-local proof directory, sealed-set
+verification, and commit/abort recovery are still mandatory before protected
+receive is fully candidate-transactional.
 
 Patent review: **NOT_TRIGGERED**. This is conventional authenticated local RPC
 composition and replay sequencing. See `docs/patents/REVIEW_LOG.md`.

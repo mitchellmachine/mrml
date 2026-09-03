@@ -1,7 +1,7 @@
 //! Protected receive authority adapter over a narrow authenticated RPC.
 
 use crate::{
-    encode_authority_candidate, encode_authority_commit, encode_authority_proof_install,
+    encode_authority_candidate, encode_authority_proof_install,
     encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
     parse_authority_candidate_record, AuditReceiptAuthority, AuthorityCandidateContext,
     AuthorityCandidateRecord, CandidateRefTransaction, DetachedCommitProofRecord, GitdCoreError,
@@ -25,6 +25,7 @@ pub const AUTHORITY_OP_ABORT_CANDIDATE: u8 = 14;
 pub const AUTHORITY_OP_QUERY_CANDIDATE: u8 = 15;
 pub const AUTHORITY_OP_PERSIST_CANDIDATE_RECEIPT: u8 = 16;
 pub const AUTHORITY_OP_COMPLETE_CANDIDATE: u8 = 17;
+pub const AUTHORITY_OP_VERIFY_PROOF: u8 = 18;
 const MAX_AUTHORITY_RESULT_BYTES: usize = 1024;
 
 /// Transport-only capability. Implementations must authenticate the peer,
@@ -73,6 +74,17 @@ impl<T: ProtectedAuthorityRpc> RemoteProtectedReceiveAuthority<T> {
     ) -> Result<(), GitdCoreError> {
         let encoded = encode_authority_proof_install(context, commit, exact_contents, proof)?;
         self.empty_response(AUTHORITY_OP_INSTALL_PROOF, &encoded)
+    }
+
+    pub fn verify_commit_proof(
+        &mut self,
+        context: ProtectedHistoryContext<'_>,
+        commit: ObjectId,
+        exact_contents: &[u8],
+        proof: &DetachedCommitProofRecord,
+    ) -> Result<(), GitdCoreError> {
+        let encoded = encode_authority_proof_install(context, commit, exact_contents, proof)?;
+        self.empty_response(AUTHORITY_OP_VERIFY_PROOF, &encoded)
     }
 
     pub fn begin_candidate(
@@ -259,11 +271,7 @@ impl<T: ProtectedAuthorityRpc> ProtectedCommitVerifier for RemoteProtectedReceiv
             .binary_search_by_key(&commit, DetachedCommitProofRecord::commit)
             .map_err(|_| HistoryVerificationError::Signature)?;
         let proof = self.pending_proofs.remove(index);
-        self.install_commit_proof(context, commit, exact_contents, &proof)
-            .map_err(|_| HistoryVerificationError::Signature)?;
-        let encoded = encode_authority_commit(context, commit, exact_contents)
-            .map_err(|_| HistoryVerificationError::Signature)?;
-        self.empty_response(AUTHORITY_OP_VERIFY_COMMIT, &encoded)
+        self.verify_commit_proof(context, commit, exact_contents, &proof)
             .map_err(|_| HistoryVerificationError::Signature)?;
         Ok(VerifiedCommitProof {
             commit,
@@ -362,7 +370,7 @@ mod tests {
                     parse_authority_commit(request).map_err(|_| ())?;
                     Ok(0)
                 }
-                AUTHORITY_OP_INSTALL_PROOF => {
+                AUTHORITY_OP_INSTALL_PROOF | AUTHORITY_OP_VERIFY_PROOF => {
                     parse_authority_proof_install(request).map_err(|_| ())?;
                     Ok(0)
                 }
@@ -429,6 +437,10 @@ mod tests {
         assert!(allowed
             .verify_commit(context, commit, b"commit bytes")
             .is_ok());
+        assert_eq!(
+            &allowed.transport.calls[..],
+            &[AUTHORITY_OP_VERIFY_PROOF]
+        );
         assert_eq!(allowed.finish_receive_proofs(), Ok(()));
         let mut signature = [0u8; 64];
         assert_eq!(allowed.sign(b"receipt", &mut signature), Ok(32));

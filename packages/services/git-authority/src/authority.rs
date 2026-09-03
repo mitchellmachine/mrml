@@ -166,6 +166,7 @@ impl ProductionAuthority {
             AuthorityOperation::SignReceipt => self.sign_receipt(payload),
             AuthorityOperation::VerifyReceipt => self.verify_receipt(payload),
             AuthorityOperation::InstallProof => self.install_proof(payload),
+            AuthorityOperation::VerifyProof => self.verify_proof(payload),
             AuthorityOperation::BeginCandidate => self.begin_candidate(payload),
             AuthorityOperation::SealCandidateProofSet => self.transition_candidate(
                 payload,
@@ -426,6 +427,35 @@ impl ProductionAuthority {
 
     fn install_proof(&mut self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
         let request = parse_authority_proof_install(payload).map_err(map_git_error)?;
+        self.verify_proof_request(&request)?;
+        let context = ProtectedHistoryContext {
+            repository: &request.repository,
+            repository_generation: request.repository_generation,
+            trust_generation: request.trust_generation,
+            revocation_generation: request.revocation_generation,
+            purpose: request.purpose,
+            object_format: request.object_format,
+        };
+        match self.proofs.insert(context, &request.proof) {
+            Ok(()) => {}
+            Err(mrml_git::DetachedCommitProofFileError::AlreadyExists) => {
+                self.verify_installed_proof(&request)?;
+            }
+            Err(_) => return Err(AuthorityDispatchError::Unavailable),
+        }
+        Ok(Vector::new())
+    }
+
+    fn verify_proof(&self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let request = parse_authority_proof_install(payload).map_err(map_git_error)?;
+        self.verify_proof_request(&request)?;
+        Ok(Vector::new())
+    }
+
+    fn verify_proof_request(
+        &self,
+        request: &mrml_git::AuthorityProofInstallRequest,
+    ) -> Result<(), AuthorityDispatchError> {
         let policy = self.current_policy()?;
         if request.repository != *policy.repository()
             || request.repository_generation != self.current_generation(policy.repository())?
@@ -467,25 +497,39 @@ impl ProductionAuthority {
         .map_err(|_| AuthorityDispatchError::Unauthorized)?;
         bind_verified_commit_proof(&signature, request.commit, &request.exact_contents, context)
             .map_err(|_| AuthorityDispatchError::Unauthorized)?;
-        match self.proofs.insert(context, &request.proof) {
-            Ok(()) => {}
-            Err(mrml_git::DetachedCommitProofFileError::AlreadyExists) => {
-                let mut scratch = [0; MAX_OPENPGP_SIGNATURE_BYTES];
-                DurableDetachedHybridCommitVerifier::new(
-                    &self.proofs,
-                    &verification_policy,
-                    &self.openpgp_key,
-                    &self.ml_dsa_key,
-                    &mut scratch,
-                )
-                .and_then(|mut verifier| {
-                    verifier.verify_commit(context, request.commit, &request.exact_contents)
-                })
-                .map_err(|_| AuthorityDispatchError::Unauthorized)?;
-            }
-            Err(_) => return Err(AuthorityDispatchError::Unavailable),
-        }
-        Ok(Vector::new())
+        Ok(())
+    }
+
+    fn verify_installed_proof(
+        &self,
+        request: &mrml_git::AuthorityProofInstallRequest,
+    ) -> Result<(), AuthorityDispatchError> {
+        let policy = self.current_policy()?;
+        let pair = AuthorizedHybridPair::bind(&self.openpgp_key, &self.ml_dsa_key);
+        let verification_policy = policy
+            .active_verification_policy_at(pair, self.validation_time, true)
+            .map_err(|_| AuthorityDispatchError::Unauthorized)?;
+        let context = ProtectedHistoryContext {
+            repository: &request.repository,
+            repository_generation: request.repository_generation,
+            trust_generation: request.trust_generation,
+            revocation_generation: request.revocation_generation,
+            purpose: request.purpose,
+            object_format: request.object_format,
+        };
+        let mut scratch = [0; MAX_OPENPGP_SIGNATURE_BYTES];
+        DurableDetachedHybridCommitVerifier::new(
+            &self.proofs,
+            &verification_policy,
+            &self.openpgp_key,
+            &self.ml_dsa_key,
+            &mut scratch,
+        )
+        .and_then(|mut verifier| {
+            verifier.verify_commit(context, request.commit, &request.exact_contents)
+        })
+        .map_err(|_| AuthorityDispatchError::Unauthorized)?;
+        Ok(())
     }
 
     fn sign_receipt(&mut self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
@@ -774,12 +818,21 @@ mod tests {
             revocation_generation: RevocationGeneration(8),
             policy_digest: policy.digest(),
         };
+        let encoded_proof =
+            mrml_git::encode_authority_proof_install(context, commit, contents, &proof).unwrap();
+        assert_eq!(
+            authority.dispatch(AuthorityOperation::VerifyProof, &encoded_proof),
+            Ok(Vector::new())
+        );
         assert_eq!(
             authority.dispatch(
-                AuthorityOperation::InstallProof,
-                &mrml_git::encode_authority_proof_install(context, commit, contents, &proof)
-                    .unwrap()
+                AuthorityOperation::VerifyCommit,
+                &encode_authority_commit(context, commit, contents).unwrap()
             ),
+            Err(AuthorityDispatchError::Unauthorized)
+        );
+        assert_eq!(
+            authority.dispatch(AuthorityOperation::InstallProof, &encoded_proof),
             Ok(Vector::new())
         );
         assert_eq!(
