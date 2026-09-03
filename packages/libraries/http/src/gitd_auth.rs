@@ -111,8 +111,8 @@ pub struct GitdAuthentication {
 impl GitdAuthentication {
     pub fn new(
         authority: TokenAuthority,
-        policies: Vector<RepositoryAccessPolicy>,
-        records: Vector<TokenRecord>,
+        mut policies: Vector<RepositoryAccessPolicy>,
+        mut records: Vector<TokenRecord>,
     ) -> Result<Self, AuthenticationError> {
         if policies.is_empty()
             || policies.len() > 100_000
@@ -123,13 +123,24 @@ impl GitdAuthentication {
         {
             return Err(AuthenticationError::InvalidConfiguration);
         }
-        for (index, policy) in policies.iter().enumerate() {
-            if policies[index + 1..]
-                .iter()
-                .any(|other| other.repository == policy.repository)
-            {
+        policies.sort_unstable_by(|left, right| left.repository.cmp(&right.repository));
+        if policies
+            .windows(2)
+            .any(|pair| pair[0].repository == pair[1].repository)
+        {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
+        for record in &records {
+            if !constant_time_equal(&authority.record_integrity(record)?, &record.integrity) {
                 return Err(AuthenticationError::InvalidConfiguration);
             }
+        }
+        records.sort_unstable_by(|left, right| left.verifier.cmp(&right.verifier));
+        if records
+            .windows(2)
+            .any(|pair| pair[0].verifier == pair[1].verifier)
+        {
+            return Err(AuthenticationError::InvalidConfiguration);
         }
         Ok(Self {
             authority,
@@ -147,8 +158,9 @@ impl GitdAuthentication {
     ) -> Result<AuthenticatedAccess, AuthenticationError> {
         let policy = self
             .policies
-            .iter()
-            .find(|policy| &policy.repository == repository)
+            .binary_search_by(|policy| policy.repository.cmp(repository))
+            .ok()
+            .map(|index| &self.policies[index])
             .ok_or(AuthenticationError::Denied)?;
         self.authority.authorize(
             headers,
@@ -258,19 +270,11 @@ impl TokenAuthority {
         let mut raw = decode_token(encoded)?;
         let actual = hmac_sha256(&self.pepper, &[b"mrml-git-token-v1", &raw]);
         erase(&mut raw);
-        let mut selected = None;
-        for record in records {
-            let integrity = self.record_integrity(record)?;
-            let valid = constant_time_equal(&integrity, &record.integrity)
-                & constant_time_equal(&actual, &record.verifier);
-            if valid {
-                if selected.is_some() {
-                    return Err(AuthenticationError::Denied);
-                }
-                selected = Some(record);
-            }
+        let (record, _) = indexed_record(records, &actual);
+        let record = record.ok_or(AuthenticationError::Denied)?;
+        if !constant_time_equal(&actual, &record.verifier) {
+            return Err(AuthenticationError::Denied);
         }
-        let record = selected.ok_or(AuthenticationError::Denied)?;
         if &record.repository != repository
             || !record.scopes.allows(action)
             || now < record.valid_from
@@ -449,6 +453,25 @@ impl TokenAuthority {
         validate_record_order(&records)?;
         Ok(records)
     }
+}
+
+fn indexed_record<'a>(
+    records: &'a [TokenRecord],
+    verifier: &[u8; 32],
+) -> (Option<&'a TokenRecord>, usize) {
+    let mut low = 0usize;
+    let mut high = records.len();
+    let mut probes = 0usize;
+    while low < high {
+        probes += 1;
+        let middle = low + (high - low) / 2;
+        match records[middle].verifier.cmp(verifier) {
+            core::cmp::Ordering::Less => low = middle + 1,
+            core::cmp::Ordering::Greater => high = middle,
+            core::cmp::Ordering::Equal => return (Some(&records[middle]), probes),
+        }
+    }
+    (None, probes)
 }
 
 impl fmt::Debug for TokenAuthority {
@@ -749,6 +772,39 @@ mod tests {
             ),
             Err(AuthenticationError::Denied)
         );
+    }
+
+    #[test]
+    fn verifier_lookup_is_logarithmic_at_configured_scale() {
+        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        for count in [1usize, 1_000, 100_000, MAX_TOKEN_RECORDS] {
+            let mut records = Vector::new();
+            records.try_reserve_exact(count).unwrap();
+            for value in 0..count {
+                let mut verifier = [0u8; 32];
+                verifier[24..].copy_from_slice(&(value as u64).to_be_bytes());
+                records.push(TokenRecord {
+                    repository: repository.clone(),
+                    scopes: AccessScopes::READ,
+                    valid_from: 1,
+                    expires_at: 2,
+                    revocation_generation: 1,
+                    label: "scale".into(),
+                    verifier,
+                    integrity: [1; 32],
+                });
+            }
+            let selected = records[count / 2].verifier;
+            let (found, found_probes) = indexed_record(&records, &selected);
+            assert_eq!(found.map(|record| record.verifier), Some(selected));
+            let mut absent = [0xff; 32];
+            absent[24..].copy_from_slice(&(count as u64).to_be_bytes());
+            let (missing, missing_probes) = indexed_record(&records, &absent);
+            assert!(missing.is_none());
+            let maximum_probes = usize::BITS as usize - count.leading_zeros() as usize + 1;
+            assert!(found_probes <= maximum_probes);
+            assert!(missing_probes <= maximum_probes);
+        }
     }
 
     #[test]
