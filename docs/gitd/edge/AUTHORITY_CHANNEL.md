@@ -73,12 +73,23 @@ activated candidate, exact generation transition, and a SHA3-512 activation
 digest over the authenticated receipt transcript; it then advances the journal
 to `receipt-persisted` before returning the deterministic signature.
 
-The receive pipeline does not yet calculate this complete context or route proof
-installation through candidate-local directories, so these operations are not
-yet invoked by a live protected receive. Candidate-local proof visibility, the
+The live receive composition does not yet invoke this complete context or route
+proof installation through candidate-local directories, so these operations
+are not yet invoked by a protected receive. Candidate-local proof visibility, the
 Gitd abort guard, activation-evidence construction, and recovery-driven receipt
 completion remain required. Until that wiring and its failure-path tests exist,
 protected receive is not candidate-transactional.
+
+The preparation layer now retains the authenticated quarantine pack/index
+summary and exposes construction of the complete candidate context. Canonical,
+domain-separated SHA3-512 digests bind the sorted unique introduced-commit set,
+ordered verified ref updates, ordered detached proof set, authenticated pack and
+index checksums plus exact sizes/counts, and the expected authenticated receipt
+transcript. The expected receipt is produced by the same helper used after
+activation, preventing a separate preauthorization representation from drifting
+from durable evidence. Live protected-receive composition still requires the
+two-stage graph/proof verification needed to begin the candidate before any
+proof becomes authority-visible.
 
 Patent review: **NOT_TRIGGERED**. This is conventional authenticated local RPC
 composition and replay sequencing. See `docs/patents/REVIEW_LOG.md`.

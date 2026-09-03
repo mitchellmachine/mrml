@@ -62,6 +62,8 @@ pub use audit_receipt::{
 };
 pub use authority_candidate::{
     AuthorityCandidateContext, AuthorityCandidateRecord, AuthorityCandidateStatus,
+    candidate_activation_digest, candidate_arrival_pack_digest, candidate_proof_set_digest,
+    candidate_ref_update_digest,
 };
 pub use authority_client::{
     AUTHORITY_OP_ABORT_CANDIDATE, AUTHORITY_OP_AUTHORIZE_CANDIDATE,
@@ -171,7 +173,7 @@ pub use quarantine::{
     DurableReceiveError, DurableReceiveStore, PushDiskReservation, PushStorageForecast,
     QuarantineError, QuarantineLimits, QuarantinePhase, QuarantineTransaction,
     QuarantineTransactionId, durably_activate_verified_receive, reserve_push_disk,
-    reserve_push_disk_before_body,
+    reserve_push_disk_before_body, expected_audit_receipt,
 };
 pub use receive_backend::{
     PreparedProtectedReceive, ProtectedCommitVerifier, activate_prepared_protected_receive,

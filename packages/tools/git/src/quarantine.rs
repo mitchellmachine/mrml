@@ -521,6 +521,30 @@ pub fn durably_activate_verified_receive(
         return Err(record_failure(transaction, verified, store, failure));
     }
 
+    let receipt = expected_audit_receipt(transaction.id(), verified)?;
+    if let Err(failure) = store.append_audit_receipt_and_fsync(&receipt) {
+        return Err(record_failure(transaction, verified, store, failure));
+    }
+    transaction
+        .audit_receipt_appended()
+        .map_err(|_| DurableReceiveError::InvalidState)?;
+    if let Err(failure) = store.persist_journal_and_fsync(transaction, verified) {
+        return Err(record_failure(transaction, verified, store, failure));
+    }
+    // Receipt and activated refs already make the outcome definitely
+    // successful. Completion cleanup is retried from the authenticated journal
+    // after a crash or sync failure and must not turn success into uncertainty.
+    let _ = store.mark_complete_and_fsync(transaction.id());
+    Ok(receipt)
+}
+
+pub fn expected_audit_receipt(
+    transaction: QuarantineTransactionId,
+    verified: &VerifiedRefTransaction,
+) -> Result<AuditReceipt, DurableReceiveError> {
+    if transaction.0 == [0; 16] {
+        return Err(DurableReceiveError::InvalidState);
+    }
     let mut updates = mrml_runtime::Vector::new();
     for update in verified.updates() {
         let old = update
@@ -540,7 +564,7 @@ pub fn durably_activate_verified_receive(
             .ok_or(DurableReceiveError::InvalidState)?,
     );
     let receipt = AuditReceipt {
-        transaction: transaction.id(),
+        transaction,
         repository: verified.repository().clone(),
         repository_generation: verified.repository_generation(),
         activated_repository_generation,
@@ -548,19 +572,6 @@ pub fn durably_activate_verified_receive(
         revocation_generation: verified.revocation_generation(),
         updates,
     };
-    if let Err(failure) = store.append_audit_receipt_and_fsync(&receipt) {
-        return Err(record_failure(transaction, verified, store, failure));
-    }
-    transaction
-        .audit_receipt_appended()
-        .map_err(|_| DurableReceiveError::InvalidState)?;
-    if let Err(failure) = store.persist_journal_and_fsync(transaction, verified) {
-        return Err(record_failure(transaction, verified, store, failure));
-    }
-    // Receipt and activated refs already make the outcome definitely
-    // successful. Completion cleanup is retried from the authenticated journal
-    // after a crash or sync failure and must not turn success into uncertainty.
-    let _ = store.mark_complete_and_fsync(transaction.id());
     Ok(receipt)
 }
 

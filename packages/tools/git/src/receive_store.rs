@@ -48,7 +48,7 @@ impl LinuxDurableReceiveStore {
         required_tips: &[ObjectId],
         expected_active: &ActiveRefState,
         active_objects: &Repository,
-    ) -> Result<(), GitdCoreError> {
+    ) -> Result<AuthenticatedPackIndexSummary, GitdCoreError> {
         if self.refs.load().map_err(|_| GitdCoreError::Storage)? != *expected_active
             || active_objects.object_format() != expected_active.object_format
             || transaction.repository() != &expected_active.repository

@@ -4,6 +4,7 @@ use mrml_crypto::{
 };
 use mrml_git::{
     authority_receipt_signature_transcript, bind_verified_commit_proof,
+    candidate_activation_digest,
     encode_authority_candidate_record, parse_authority_candidate, parse_authority_commit,
     parse_authority_proof_install,
     parse_authority_receipt, parse_authority_receive, parse_authority_ref_transaction,
@@ -512,7 +513,7 @@ impl ProductionAuthority {
                 || record.context.trust_generation != receipt.trust_generation
                 || record.context.revocation_generation != receipt.revocation_generation
                 || record.context.policy_digest != policy.digest()
-                || record.context.activation_digest != Sha3_512::digest(&request.transcript)
+                || record.context.activation_digest != candidate_activation_digest(&request.transcript)
                 || current != record.context.next_generation
                 || !matches!(
                     record.status,
@@ -932,7 +933,7 @@ mod tests {
             introduced_commit_set_digest: [12; 64],
             arrival_pack_digest: [13; 64],
             proof_set_digest: [14; 64],
-            activation_digest: Sha3_512::digest(&receipt_transcript),
+            activation_digest: candidate_activation_digest(&receipt_transcript),
         };
         let receipt_candidate_request = encode_authority_candidate(&receipt_candidate).unwrap();
         for operation in [

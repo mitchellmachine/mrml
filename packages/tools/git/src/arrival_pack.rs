@@ -166,6 +166,7 @@ impl ArrivalPackStore {
         required_tips: &[ObjectId],
     ) -> Result<(), GitdCoreError> {
         self.validate_received_pack_with_bases(transaction, required_tips, |_, _| Ok(None))
+            .map(|_| ())
     }
 
     /// Completes thin REF deltas only from an exact authenticated object view.
@@ -176,7 +177,7 @@ impl ArrivalPackStore {
         transaction: &mut QuarantineTransaction,
         required_tips: &[ObjectId],
         mut external_base: B,
-    ) -> Result<(), GitdCoreError>
+    ) -> Result<AuthenticatedPackIndexSummary, GitdCoreError>
     where
         B: FnMut(ObjectId, u64) -> Result<Option<(crate::ObjectKind, Vector<u8>)>, PackError>,
     {
@@ -241,8 +242,12 @@ impl ArrivalPackStore {
         transaction
             .objects_validated(validated.expanded_bytes, validated.objects.len() as u32)
             .map_err(|_| GitdCoreError::ObjectValidation)?;
-        self.verify_directory(&directory, validated.objects.len() as u32)
-            .map_err(|_| GitdCoreError::ObjectValidation)
+        self.summarize_directory(
+            &directory,
+            transaction.id(),
+            validated.objects.len() as u32,
+        )
+        .map_err(|_| GitdCoreError::ObjectValidation)
     }
 
     pub fn open(

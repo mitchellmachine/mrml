@@ -3,18 +3,21 @@
 use mrml_runtime::Vector;
 
 use crate::{
-    build_verified_fast_forward_transaction, durably_activate_verified_receive,
-    read_receive_pack_commands, reserve_push_disk_before_body,
+    authenticated_audit_receipt_transcript, build_verified_fast_forward_transaction,
+    candidate_activation_digest, candidate_arrival_pack_digest, candidate_proof_set_digest,
+    candidate_ref_update_digest, durably_activate_verified_receive, encode_audit_receipt,
+    expected_audit_receipt, read_receive_pack_commands, reserve_push_disk_before_body,
     verify_conventional_introduced_history, verify_policy_classified_history,
     verify_protected_introduced_history, write_receive_pack_report, ActiveRefState, AuditReceipt,
     AuthenticatedReceiveStore, BoundedWrite, DurableReceiveError, DurableReceiveStore,
     GitdCoreError, HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore,
-    Object, ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
+    Object, ObjectFormat, ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
     QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, ReceiveRefStatus,
     Repository, SignaturePurpose, SmartGitOperation, SmartGitRequest, SmartGitResponse,
     TrustPolicyState, VerifiedCommitProof, VerifiedLegacyCommitProof, VerifiedRefTransaction,
-    WorkBudget,
+    AuthorityCandidateContext, WorkBudget,
 };
+use crate::pack_set::AuthenticatedPackIndexSummary;
 
 /// Verification-only authority. Implementations receive public policy/key state
 /// and exact commit bytes; no signing key belongs at this boundary.
@@ -70,6 +73,7 @@ pub struct PreparedProtectedReceive {
     request: ReceivePackRequest,
     transaction: QuarantineTransaction,
     verified: VerifiedRefTransaction,
+    pack_summary: AuthenticatedPackIndexSummary,
     protocol_budget: ProtocolBudget,
 }
 
@@ -84,6 +88,47 @@ impl PreparedProtectedReceive {
 
     pub fn verified(&self) -> &VerifiedRefTransaction {
         &self.verified
+    }
+
+    pub fn candidate_context(
+        &self,
+        policy_digest: [u8; 64],
+    ) -> Result<AuthorityCandidateContext, GitdCoreError> {
+        if policy_digest == [0; 64] {
+            return Err(GitdCoreError::Authorization);
+        }
+        let expanded_bytes = self
+            .transaction
+            .validated_expanded_bytes()
+            .ok_or(GitdCoreError::ObjectValidation)?;
+        let receipt = expected_audit_receipt(self.transaction.id(), &self.verified)
+            .map_err(map_durable_error)?;
+        let receipt_bytes =
+            encode_audit_receipt(&receipt).map_err(|_| GitdCoreError::Policy)?;
+        let receipt_transcript = authenticated_audit_receipt_transcript(&receipt_bytes)
+            .map_err(|_| GitdCoreError::Policy)?;
+        Ok(AuthorityCandidateContext {
+            id: self.transaction.id(),
+            repository: self.verified.repository().clone(),
+            current_generation: self.verified.repository_generation(),
+            next_generation: receipt.activated_repository_generation,
+            trust_generation: self.verified.trust_generation(),
+            revocation_generation: self.verified.revocation_generation(),
+            policy_digest,
+            ref_update_digest: candidate_ref_update_digest(&self.verified)?,
+            introduced_commit_set_digest: self.verified.introduced_commit_set_digest(),
+            arrival_pack_digest: candidate_arrival_pack_digest(
+                ObjectFormat::Sha256,
+                self.pack_summary.pack_checksum,
+                self.pack_summary.index_checksum,
+                self.pack_summary.pack_bytes,
+                self.pack_summary.index_bytes,
+                self.pack_summary.object_count,
+                expanded_bytes,
+            )?,
+            proof_set_digest: candidate_proof_set_digest(&self.request.proofs)?,
+            activation_digest: candidate_activation_digest(&receipt_transcript),
+        })
     }
 
     pub const fn protocol_budget(&self) -> ProtocolBudget {
@@ -424,7 +469,7 @@ fn prepare_receive_internal(
     for update in &request.candidate.updates {
         tips.push(update.proposed_new.ok_or(GitdCoreError::Unsupported)?);
     }
-    store.validate_received_pack_with_active_bases(
+    let pack_summary = store.validate_received_pack_with_active_bases(
         &mut transaction,
         &tips,
         active,
@@ -531,6 +576,7 @@ fn prepare_receive_internal(
         request,
         transaction,
         verified,
+        pack_summary,
         protocol_budget,
     })
 }

@@ -5,6 +5,7 @@
 //! reads and mutations to the exact generations supplied by the caller.
 
 use core::fmt;
+use mrml_crypto::Sha3_512;
 use mrml_runtime::{Text, Vector};
 
 use crate::verification::{ProtectedHistoryContext, VerifiedCommitRange};
@@ -354,6 +355,7 @@ pub struct VerifiedRefTransaction {
     repository_generation: RepositoryGeneration,
     trust_generation: TrustGeneration,
     revocation_generation: RevocationGeneration,
+    introduced_commit_set_digest: [u8; 64],
     updates: Vector<VerifiedRefUpdate>,
 }
 
@@ -376,6 +378,10 @@ impl VerifiedRefTransaction {
 
     pub fn updates(&self) -> &[VerifiedRefUpdate] {
         &self.updates
+    }
+
+    pub const fn introduced_commit_set_digest(&self) -> [u8; 64] {
+        self.introduced_commit_set_digest
     }
 }
 
@@ -403,6 +409,7 @@ pub fn build_verified_fast_forward_transaction(
         return Err(GitdCoreError::MalformedRef);
     }
     let mut updates = Vector::new();
+    let mut introduced = Vector::new();
     let context = ProtectedHistoryContext {
         repository: &candidate.repository,
         repository_generation: candidate.repository_generation,
@@ -428,17 +435,48 @@ pub fn build_verified_fast_forward_transaction(
         {
             return Err(GitdCoreError::Ancestry);
         }
+        introduced
+            .try_extend_from_slice(range.introduced())
+            .map_err(|_| GitdCoreError::Resource)?;
         updates.push(VerifiedRefUpdate {
             name: update.name,
             expected_old: Some(old),
             proposed_new: Some(new),
         });
     }
+    introduced.sort_unstable();
+    let mut unique_introduced = Vector::new();
+    unique_introduced
+        .try_reserve_exact(introduced.len())
+        .map_err(|_| GitdCoreError::Resource)?;
+    for commit in introduced {
+        if unique_introduced.last() != Some(&commit) {
+            unique_introduced.push(commit);
+        }
+    }
+    if unique_introduced.is_empty() {
+        return Err(GitdCoreError::Ancestry);
+    }
+    let mut introduced_hash = Sha3_512::new();
+    introduced_hash.update(b"MRML git introduced commit set v1\0");
+    introduced_hash.update(
+        &u32::try_from(unique_introduced.len())
+            .map_err(|_| GitdCoreError::Resource)?
+            .to_be_bytes(),
+    );
+    for commit in &unique_introduced {
+        introduced_hash.update(&[match commit.format() {
+            ObjectFormat::Sha1 => 1,
+            ObjectFormat::Sha256 => 2,
+        }]);
+        introduced_hash.update(commit.as_bytes());
+    }
     Ok(VerifiedRefTransaction {
         repository: candidate.repository,
         repository_generation: candidate.repository_generation,
         trust_generation: candidate.trust_generation,
         revocation_generation: candidate.revocation_generation,
+        introduced_commit_set_digest: introduced_hash.finalize(),
         updates,
     })
 }
