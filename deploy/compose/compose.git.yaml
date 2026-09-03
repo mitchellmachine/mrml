@@ -51,7 +51,7 @@ services:
       - "mrml-git-authority-secrets:/run/secrets:ro"
       - "mrml-git-authority-config:/etc/mrml/authority:ro"
     command:
-      - serve
+      - serve-catalog
       - /run/mrml/git-authority/authority.sock
       - /run/secrets/git-authority-channel
       - "21001"
@@ -61,12 +61,11 @@ services:
       - /var/lib/mrml/git-policies
       - /var/lib/mrml/authority/proofs
       - /var/lib/mrml/authority/generations
-      - "${MRML_PROTECTED_REPOSITORY:?set MRML_PROTECTED_REPOSITORY}"
+      - /etc/mrml/authority/repositories.v1
       - /etc/mrml/authority/openpgp-public.asc
       - /etc/mrml/authority/ml-dsa-public.bin
       - /run/secrets/receipt.key
       - "${MRML_AUTHORITY_VALIDATION_TIME:?set MRML_AUTHORITY_VALIDATION_TIME}"
-      - "${MRML_REPOSITORY_GENERATION:?set MRML_REPOSITORY_GENERATION}"
     healthcheck:
       test:
         - CMD

@@ -41,7 +41,10 @@ require 'mrml-runtime-certd-gitd:/run/mrml/certd-gitd:ro' "$compose"
 require 'mrml-gitd-policies:/var/lib/mrml/git-policies:ro' "$compose"
 require 'mrml-gitd-repos:/mnt/mrml/gitd/repos:rw' "$compose"
 require 'name: mrml-gitd-repos' "$compose"
-require 'MRML_PROTECTED_REPOSITORY:?set MRML_PROTECTED_REPOSITORY' "$compose"
+require 'serve-catalog' "$compose"
+require '/etc/mrml/authority/repositories.v1' "$compose"
+reject 'MRML_PROTECTED_REPOSITORY' "$compose"
+reject 'MRML_REPOSITORY_GENERATION' "$compose"
 require 'mrml-git-authority-secrets:/run/secrets:ro' "$compose"
 require 'mrml-git-authority-transition:/run/mrml-transition:ro' "$compose"
 require '/var/lib/mrml/authority/generations' "$compose"
@@ -122,6 +125,8 @@ reject '$deployment_root/gitd/policies' deploy/compose/initialize-git-protected-
 require 'trust transition requires stopped Gitd and authority' deploy/compose/transition-git-trust.sh
 require '--profile admin run --rm --no-deps git-trust-transition' deploy/compose/transition-git-trust.sh
 require 'mrml-git-authority-transition' deploy/compose/install-volume-inputs.sh
+require 'authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC' deploy/compose/install-volume-inputs.sh
+require 'repositories.v1' deploy/compose/install-volume-inputs.sh
 reject '$deployment_root/gitd/policies' deploy/compose/transition-git-trust.sh
 require 'token administration requires stopped Gitd' deploy/compose/token-git.sh
 require 'run -T --rm --no-deps' deploy/compose/token-git.sh
