@@ -1,5 +1,6 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
@@ -13,6 +14,11 @@ use mrml_runtime::Vector;
 use crate::{DeploymentCatalog, DeploymentRepositoryProfile, GitdConfig};
 
 const O_NOFOLLOW: i32 = 0x20_000;
+const LOCK_EXCLUSIVE: i32 = 2;
+
+unsafe extern "C" {
+    fn flock(fd: i32, operation: i32) -> i32;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthenticationStoreError {
@@ -23,6 +29,7 @@ pub enum AuthenticationStoreError {
     Read,
     Decode,
     Catalog,
+    Lock,
 }
 
 pub fn initialize_empty_token_store(
@@ -47,9 +54,9 @@ pub fn initialize_empty_token_store(
     let authority = TokenAuthority::new(pepper).map_err(|_| AuthenticationStoreError::Decode);
     erase_secret_bytes(&mut pepper);
     let bytes = authority?
-        .encode_records(&[])
+        .encode_record_snapshot(1, &[])
         .map_err(|_| AuthenticationStoreError::Decode)?;
-    let temporary = parent.join(format!(".tokens.v1.initialize.{}", std::process::id()));
+    let temporary = parent.join(format!(".tokens.v2.initialize.{}", std::process::id()));
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -84,7 +91,8 @@ pub fn issue_access_token(
     revocation_generation: u64,
     label: &str,
 ) -> Result<OneTimeAccessToken, AuthenticationStoreError> {
-    let (authority, mut records) = load_token_authority(path, pepper_path, gitd_uid)?;
+    let _lock = lock_token_administration(path, gitd_uid)?;
+    let (authority, generation, mut records) = load_token_authority(path, pepper_path, gitd_uid)?;
     let (token, record) = authority
         .issue(
             repository,
@@ -96,7 +104,13 @@ pub fn issue_access_token(
         )
         .map_err(|_| AuthenticationStoreError::Decode)?;
     records.push(record);
-    replace_token_store(path, gitd_uid, &authority, &records)?;
+    replace_token_store(
+        path,
+        gitd_uid,
+        &authority,
+        generation.checked_add(1).ok_or(AuthenticationStoreError::Decode)?,
+        &records,
+    )?;
     Ok(token)
 }
 
@@ -106,12 +120,19 @@ pub fn revoke_access_token(
     gitd_uid: u32,
     encoded_token: &str,
 ) -> Result<bool, AuthenticationStoreError> {
-    let (authority, mut records) = load_token_authority(path, pepper_path, gitd_uid)?;
+    let _lock = lock_token_administration(path, gitd_uid)?;
+    let (authority, generation, mut records) = load_token_authority(path, pepper_path, gitd_uid)?;
     let removed = authority
         .revoke_encoded_token(&mut records, encoded_token)
         .map_err(|_| AuthenticationStoreError::Decode)?;
     if removed {
-        replace_token_store(path, gitd_uid, &authority, &records)?;
+        replace_token_store(
+            path,
+            gitd_uid,
+            &authority,
+            generation.checked_add(1).ok_or(AuthenticationStoreError::Decode)?,
+            &records,
+        )?;
     }
     Ok(removed)
 }
@@ -120,29 +141,30 @@ fn load_token_authority(
     path: &Path,
     pepper_path: &Path,
     gitd_uid: u32,
-) -> Result<(TokenAuthority, Vector<TokenRecord>), AuthenticationStoreError> {
+) -> Result<(TokenAuthority, u64, Vector<TokenRecord>), AuthenticationStoreError> {
     let mut pepper = read_pepper(pepper_path, gitd_uid)?;
     let authority = TokenAuthority::new(pepper).map_err(|_| AuthenticationStoreError::Decode);
     erase_secret_bytes(&mut pepper);
     let authority = authority?;
-    let records = authority
-        .decode_records(&read_token_store(path, gitd_uid)?)
+    let (generation, records) = authority
+        .decode_record_snapshot(&read_token_store(path, gitd_uid)?)
         .map_err(|_| AuthenticationStoreError::Decode)?;
-    Ok((authority, records))
+    Ok((authority, generation, records))
 }
 
 fn replace_token_store(
     path: &Path,
     gitd_uid: u32,
     authority: &TokenAuthority,
+    generation: u64,
     records: &[TokenRecord],
 ) -> Result<(), AuthenticationStoreError> {
-    let _existing = secure_file(path, gitd_uid, 44, MAX_TOKEN_STORE_BYTES as u64)?;
+    let _existing = secure_file(path, gitd_uid, 52, MAX_TOKEN_STORE_BYTES as u64)?;
     let parent = path.parent().ok_or(AuthenticationStoreError::Open)?;
     let bytes = authority
-        .encode_records(records)
+        .encode_record_snapshot(generation, records)
         .map_err(|_| AuthenticationStoreError::Decode)?;
-    let temporary = parent.join(format!(".tokens.v1.replace.{}", std::process::id()));
+    let temporary = parent.join(format!(".tokens.v2.replace.{}", std::process::id()));
     let result = (|| {
         let mut file = OpenOptions::new()
             .write(true)
@@ -165,6 +187,41 @@ fn replace_token_store(
     result
 }
 
+fn lock_token_administration(
+    path: &Path,
+    gitd_uid: u32,
+) -> Result<std::fs::File, AuthenticationStoreError> {
+    if !path.is_absolute() || path.file_name().is_none() {
+        return Err(AuthenticationStoreError::Lock);
+    }
+    let parent = path.parent().ok_or(AuthenticationStoreError::Lock)?;
+    let lock_path = parent.join(".tokens.v2.admin.lock");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(O_NOFOLLOW)
+        .open(lock_path)
+        .map_err(|_| AuthenticationStoreError::Lock)?;
+    let metadata = lock
+        .metadata()
+        .map_err(|_| AuthenticationStoreError::Lock)?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.nlink() != 1
+        || (metadata.uid() != 0 && metadata.uid() != gitd_uid)
+        || metadata.mode() & 0o777 != 0o600
+    {
+        return Err(AuthenticationStoreError::Lock);
+    }
+    // SAFETY: `lock` owns this live descriptor for the returned guard's lifetime.
+    if unsafe { flock(lock.as_raw_fd(), LOCK_EXCLUSIVE) } != 0 {
+        return Err(AuthenticationStoreError::Lock);
+    }
+    Ok(lock)
+}
+
 pub fn load_gitd_authentication(
     config: &GitdConfig,
     catalog: &DeploymentCatalog,
@@ -174,8 +231,8 @@ pub fn load_gitd_authentication(
     erase_secret_bytes(&mut pepper);
     let authority = authority?;
     let bytes = read_token_store(&config.token_records, config.gitd_uid)?;
-    let records = authority
-        .decode_records(&bytes)
+    let (_, records) = authority
+        .decode_record_snapshot(&bytes)
         .map_err(|_| AuthenticationStoreError::Decode)?;
     let mut policies = Vector::new();
     policies
@@ -212,7 +269,7 @@ fn read_pepper(path: &Path, gitd_uid: u32) -> Result<[u8; 32], AuthenticationSto
 }
 
 fn read_token_store(path: &Path, gitd_uid: u32) -> Result<Vec<u8>, AuthenticationStoreError> {
-    let mut file = secure_file(path, gitd_uid, 44, MAX_TOKEN_STORE_BYTES as u64)?;
+    let mut file = secure_file(path, gitd_uid, 52, MAX_TOKEN_STORE_BYTES as u64)?;
     let length = usize::try_from(
         file.metadata()
             .map_err(|_| AuthenticationStoreError::Metadata)?
@@ -318,12 +375,11 @@ mod tests {
         let mut pepper = read_pepper(&pepper_path, uid).unwrap();
         let authority = TokenAuthority::new(pepper).unwrap();
         erase_secret_bytes(&mut pepper);
-        assert!(
-            authority
-                .decode_records(&fs::read(&store_path).unwrap())
-                .unwrap()
-                .is_empty()
-        );
+        let (generation, records) = authority
+            .decode_record_snapshot(&fs::read(&store_path).unwrap())
+            .unwrap();
+        assert_eq!(generation, 1);
+        assert!(records.is_empty());
         let mut token = issue_access_token(
             &store_path,
             &pepper_path,
@@ -347,10 +403,63 @@ mod tests {
             revoke_access_token(&store_path, &pepper_path, uid, &encoded),
             Ok(false)
         );
+        let (generation, records) = authority
+            .decode_record_snapshot(&fs::read(&store_path).unwrap())
+            .unwrap();
+        assert_eq!(generation, 3);
+        assert!(records.is_empty());
         assert_eq!(
             initialize_empty_token_store(&store_path, &pepper_path, uid),
             Err(AuthenticationStoreError::Open)
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_issuers_serialize_without_lost_updates() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-gitd-auth-concurrent-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = fs::metadata(&root).unwrap().uid();
+        let pepper_path = root.join("pepper");
+        fs::write(&pepper_path, [0x63; 32]).unwrap();
+        fs::set_permissions(&pepper_path, fs::Permissions::from_mode(0o400)).unwrap();
+        let store_path = root.join("tokens.v2");
+        initialize_empty_token_store(&store_path, &pepper_path, uid).unwrap();
+        let mut workers = Vec::new();
+        for label in ["first", "second"] {
+            let store_path = store_path.clone();
+            let pepper_path = pepper_path.clone();
+            workers.push(std::thread::spawn(move || {
+                issue_access_token(
+                    &store_path,
+                    &pepper_path,
+                    uid,
+                    RepositoryIdentity::parse("owner/repository").unwrap(),
+                    AccessScopes::READ,
+                    10,
+                    20,
+                    3,
+                    label,
+                )
+                .map(|_| ())
+            }));
+        }
+        for worker in workers {
+            assert_eq!(worker.join().unwrap(), Ok(()));
+        }
+        let mut pepper = read_pepper(&pepper_path, uid).unwrap();
+        let authority = TokenAuthority::new(pepper).unwrap();
+        erase_secret_bytes(&mut pepper);
+        let (generation, records) = authority
+            .decode_record_snapshot(&fs::read(&store_path).unwrap())
+            .unwrap();
+        assert_eq!(generation, 3);
+        assert_eq!(records.len(), 2);
         fs::remove_dir_all(root).unwrap();
     }
 }

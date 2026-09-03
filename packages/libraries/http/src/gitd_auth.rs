@@ -9,8 +9,9 @@ const TOKEN_BYTES: usize = 32;
 const TOKEN_TEXT_BYTES: usize = TOKEN_BYTES * 2;
 const MAX_LABEL_BYTES: usize = 96;
 const RECORD_VERSION: u8 = 1;
-const TOKEN_STORE_MAGIC: &[u8; 8] = b"MRMLTRV1";
+const TOKEN_STORE_MAGIC: &[u8; 8] = b"MRMLTRV2";
 const TOKEN_STORE_TAG_BYTES: usize = 32;
+const TOKEN_STORE_HEADER_BYTES: usize = 20;
 const MAX_TOKEN_RECORDS: usize = 1_000_000;
 const AUTH_FAILURE_BUCKETS: usize = 4_096;
 const AUTH_FAILURE_WINDOW_SECONDS: u64 = 60;
@@ -407,6 +408,17 @@ impl TokenAuthority {
         &self,
         records: &[TokenRecord],
     ) -> Result<Vector<u8>, AuthenticationError> {
+        self.encode_record_snapshot(1, records)
+    }
+
+    pub fn encode_record_snapshot(
+        &self,
+        generation: u64,
+        records: &[TokenRecord],
+    ) -> Result<Vector<u8>, AuthenticationError> {
+        if generation == 0 {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
         if records.len() > MAX_TOKEN_RECORDS {
             return Err(AuthenticationError::Resource);
         }
@@ -424,9 +436,10 @@ impl TokenAuthority {
         }
         let mut output = Vector::new();
         output
-            .try_reserve_exact(12 + records.len().saturating_mul(128))
+            .try_reserve_exact(TOKEN_STORE_HEADER_BYTES + records.len().saturating_mul(128))
             .map_err(|_| AuthenticationError::Resource)?;
         output.extend(*TOKEN_STORE_MAGIC);
+        output.extend(generation.to_be_bytes());
         output.extend(
             u32::try_from(records.len())
                 .map_err(|_| AuthenticationError::Resource)?
@@ -449,19 +462,28 @@ impl TokenAuthority {
                 return Err(AuthenticationError::Resource);
             }
         }
-        let tag = hmac_sha256(&self.pepper, &[b"mrml-git-token-store-v1", &output]);
+        let tag = hmac_sha256(&self.pepper, &[b"mrml-git-token-store-v2", &output]);
         output.extend(tag);
         Ok(output)
     }
 
     pub fn decode_records(&self, input: &[u8]) -> Result<Vector<TokenRecord>, AuthenticationError> {
-        if input.len() < 12 + TOKEN_STORE_TAG_BYTES || input.len() > MAX_TOKEN_STORE_BYTES {
+        self.decode_record_snapshot(input).map(|(_, records)| records)
+    }
+
+    pub fn decode_record_snapshot(
+        &self,
+        input: &[u8],
+    ) -> Result<(u64, Vector<TokenRecord>), AuthenticationError> {
+        if input.len() < TOKEN_STORE_HEADER_BYTES + TOKEN_STORE_TAG_BYTES
+            || input.len() > MAX_TOKEN_STORE_BYTES
+        {
             return Err(AuthenticationError::InvalidConfiguration);
         }
         let authenticated_length = input.len() - TOKEN_STORE_TAG_BYTES;
         let expected = hmac_sha256(
             &self.pepper,
-            &[b"mrml-git-token-store-v1", &input[..authenticated_length]],
+            &[b"mrml-git-token-store-v2", &input[..authenticated_length]],
         );
         let supplied: &[u8; 32] = input[authenticated_length..]
             .try_into()
@@ -469,15 +491,23 @@ impl TokenAuthority {
         if !constant_time_equal(&expected, supplied) || &input[..8] != TOKEN_STORE_MAGIC {
             return Err(AuthenticationError::InvalidConfiguration);
         }
+        let generation = u64::from_be_bytes(
+            input[8..16]
+                .try_into()
+                .map_err(|_| AuthenticationError::InvalidConfiguration)?,
+        );
+        if generation == 0 {
+            return Err(AuthenticationError::InvalidConfiguration);
+        }
         let count = u32::from_be_bytes(
-            input[8..12]
+            input[16..20]
                 .try_into()
                 .map_err(|_| AuthenticationError::InvalidConfiguration)?,
         ) as usize;
         if count > MAX_TOKEN_RECORDS {
             return Err(AuthenticationError::Resource);
         }
-        let mut at = 12usize;
+        let mut at = TOKEN_STORE_HEADER_BYTES;
         let mut records = Vector::new();
         records
             .try_reserve_exact(count)
@@ -527,7 +557,7 @@ impl TokenAuthority {
             return Err(AuthenticationError::InvalidConfiguration);
         }
         validate_record_order(&records)?;
-        Ok(records)
+        Ok((generation, records))
     }
 }
 
