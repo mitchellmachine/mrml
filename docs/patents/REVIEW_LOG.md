@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-09-03: Bare OpenPGP v6 public-key export
+
+- Result: **NOT_TRIGGERED**.
+- Scope: deterministic ASCII armor for one existing RFC 9580 Ed25519 v6 public
+  primary-key packet so owner tooling can export verification material without
+  exporting its seed.
+- Reason: this is conventional serialization of an already implemented standard
+  public-key packet and introduces no new cryptographic construction or key-use
+  mechanism.
+
 ## 2026-09-03: Volume-fed normal trust-transition operator
 
 - Result: **NOT_TRIGGERED**.

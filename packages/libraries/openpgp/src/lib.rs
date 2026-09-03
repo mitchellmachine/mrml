@@ -225,6 +225,17 @@ impl PublicKeyV6 {
     pub const fn fingerprint(&self) -> FingerprintV6 {
         self.fingerprint
     }
+
+    /// Encodes one bare RFC 9580 v6 public primary key. The resulting armored
+    /// packet contains no secret material and identifies rather than authorizes.
+    pub fn encode_ascii(&self, output: &mut [u8]) -> Result<usize, Error> {
+        let body = public_key_body_v6(self.public, self.created_at);
+        let mut packet = [0u8; 44];
+        packet[0] = 0xc6;
+        packet[1] = body.len() as u8;
+        packet[2..].copy_from_slice(&body);
+        encode_armor(PUBLIC_KEY_BEGIN, PUBLIC_KEY_END, &packet, output)
+    }
 }
 
 pub struct SigningKeyV6 {
@@ -1850,6 +1861,23 @@ RrZBCWR8kCBbjsCcCxGvoS42kUhn7wg=\n\
                 0x3d, 0xf8, 0x95, 0xa3,
             ]
         );
+    }
+
+    #[test]
+    fn bare_v6_public_key_ascii_round_trips_without_secret_material() {
+        let expected = PublicKeyV6::from_seed(&[0x42; 32], 1_700_000_000).unwrap();
+        let mut encoded = [0u8; MAX_OPENPGP_PUBLIC_KEY_BYTES];
+        let length = expected.encode_ascii(&mut encoded).unwrap();
+        let mut scratch = [0u8; MAX_OPENPGP_PUBLIC_KEY_BYTES];
+        assert_eq!(
+            parse_public_key_v6_ascii(&encoded[..length], &mut scratch),
+            Ok(expected)
+        );
+        // The final armor newline is intentionally optional; every earlier
+        // truncation must fail.
+        for end in 0..length - 1 {
+            assert!(parse_public_key_v6_ascii(&encoded[..end], &mut scratch).is_err());
+        }
     }
 
     #[test]

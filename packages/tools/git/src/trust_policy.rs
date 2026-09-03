@@ -847,6 +847,16 @@ pub fn encode_trust_policy(policy: &TrustPolicyState) -> Result<Vector<u8>, Hybr
     Ok(output)
 }
 
+/// Encodes one proposed next policy without selecting it. This validates the
+/// complete candidate and returns the same canonical bytes later bound by both
+/// key-rotation authorizations. Bytes are data and grant no authority.
+pub fn encode_trust_policy_candidate(
+    candidate: &TrustPolicyCandidate,
+) -> Result<Vector<u8>, HybridPolicyError> {
+    validate_candidate(candidate)?;
+    encode_trust_policy(&TrustPolicyState::from_candidate(candidate.clone()))
+}
+
 pub fn parse_trust_policy(input: &[u8]) -> Result<TrustPolicyState, HybridPolicyError> {
     if input.is_empty() || input.len() > MAX_ENCODED_TRUST_POLICY_BYTES {
         return Err(HybridPolicyError::InputTooLarge);
@@ -1266,9 +1276,7 @@ impl TrustPolicyState {
         new_authorization: &VerifiedHybridSignature,
     ) -> Result<Self, HybridPolicyError> {
         validate_candidate(&candidate)?;
-        let candidate_payload_digest = Sha3_512::digest(&encode_trust_policy(
-            &TrustPolicyState::from_candidate(candidate.clone()),
-        )?);
+        let candidate_payload_digest = Sha3_512::digest(&encode_trust_policy_candidate(&candidate)?);
         if candidate.repository != self.repository {
             return Err(HybridPolicyError::TrustRootBroadened);
         }

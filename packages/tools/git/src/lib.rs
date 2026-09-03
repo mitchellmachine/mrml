@@ -221,8 +221,8 @@ pub use trust_policy::{
     VerifiedHybridSignature, authorize_emergency_recovery, bind_verified_commit_proof,
     bind_verified_git_object_proof, bind_verified_legacy_commit_proof, canonical_hybrid_transcript,
     encode_emergency_recovery_authority, encode_emergency_recovery_transition,
-    encode_key_revocation_statement, encode_trust_policy, key_revocation_statement_digest,
-    parse_emergency_recovery_authority, parse_emergency_recovery_transition,
+    encode_key_revocation_statement, encode_trust_policy, encode_trust_policy_candidate,
+    key_revocation_statement_digest, parse_emergency_recovery_authority, parse_emergency_recovery_transition,
     parse_key_revocation_statement, parse_trust_policy, verify_hybrid_signature,
 };
 pub use trust_policy_file::{LinuxDurableTrustPolicyStore, TrustPolicyFileError};

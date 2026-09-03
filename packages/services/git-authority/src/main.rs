@@ -686,6 +686,18 @@ fn read_regular(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_crypto::{
+        ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES,
+        ml_dsa_65_keygen, ml_dsa_65_sign,
+    };
+    use mrml_git::{
+        FullRefName, PolicyPairStatus, RevocationGeneration, TrustPolicyCandidate,
+        TrustPolicyState, canonical_hybrid_transcript, encode_trust_policy_candidate,
+    };
+    use mrml_openpgp::{
+        DigestAlgorithm, SigningKeyV6, sign_detached_v6_ascii_with_salt,
+    };
+    use mrml_runtime::Vector;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
 
@@ -737,5 +749,233 @@ mod tests {
         assert!(parse_lower_hex_64(&"AB".repeat(64)).is_err());
         assert!(parse_lower_hex_64(&"a".repeat(127)).is_err());
         assert!(parse_lower_hex_64(&"gg".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn normal_transition_verifies_both_real_signatures_and_reopens_exact_policy() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-authority-normal-transition-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let uid = std::fs::metadata(&root).unwrap().uid();
+        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        let old_openpgp = SigningKeyV6::from_seed([7; 32], 1_700_000_000).unwrap();
+        let next_openpgp = SigningKeyV6::from_seed([8; 32], 1_700_000_000).unwrap();
+        let mut old_ml_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut old_ml_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&[9; 32], &mut old_ml_public, &mut old_ml_secret).unwrap();
+        let mut next_ml_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut next_ml_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&[10; 32], &mut next_ml_public, &mut next_ml_secret).unwrap();
+        let old_pair = AuthorizedHybridPair::bind(&old_openpgp.public_key(), &old_ml_public);
+        let next_pair = AuthorizedHybridPair::bind(&next_openpgp.public_key(), &next_ml_public);
+        assert_ne!(old_pair, next_pair);
+        let initial = TrustPolicyState::establish(TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(1),
+            previous_policy_digest: [0; 64],
+            revocation_generation: RevocationGeneration(1),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: false,
+            legacy_checkpoint: None,
+            hybrid_cutover: None,
+            emergency_policy_digest: Some([11; 64]),
+            active_pairs: [old_pair].into(),
+            pair_statuses: [PolicyPairStatus::new(
+                old_pair,
+                1_700_000_000,
+                1_800_000_000,
+                None,
+            )
+            .unwrap()]
+            .into(),
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        })
+        .unwrap();
+        let (active_pairs, pair_statuses) = if old_pair.openpgp_fingerprint().as_bytes()
+            < next_pair.openpgp_fingerprint().as_bytes()
+        {
+            (
+                [old_pair, next_pair].into(),
+                [
+                    PolicyPairStatus::new(old_pair, 1_700_000_000, 1_800_000_000, None)
+                        .unwrap(),
+                    PolicyPairStatus::new(next_pair, 1_700_000_000, 1_800_000_000, None)
+                        .unwrap(),
+                ]
+                .into(),
+            )
+        } else {
+            (
+                [next_pair, old_pair].into(),
+                [
+                    PolicyPairStatus::new(next_pair, 1_700_000_000, 1_800_000_000, None)
+                        .unwrap(),
+                    PolicyPairStatus::new(old_pair, 1_700_000_000, 1_800_000_000, None)
+                        .unwrap(),
+                ]
+                .into(),
+            )
+        };
+        let candidate = TrustPolicyCandidate {
+            repository: repository.clone(),
+            generation: TrustGeneration(2),
+            previous_policy_digest: initial.digest(),
+            revocation_generation: RevocationGeneration(2),
+            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+            allow_sha1: false,
+            allow_sha256: true,
+            hybrid_required: false,
+            legacy_checkpoint: None,
+            hybrid_cutover: None,
+            emergency_policy_digest: Some([11; 64]),
+            active_pairs,
+            pair_statuses,
+            legacy_v4_statuses: Vector::new(),
+            revoked_legacy_v4: Vector::new(),
+            revoked_openpgp: Vector::new(),
+            revoked_ml_dsa: Vector::new(),
+        };
+        let next_policy = encode_trust_policy_candidate(&candidate).unwrap();
+        let expected_next = parse_trust_policy(&next_policy).unwrap();
+        let policy_root = root.join("policies");
+        let policy_directory = policy_root.join(repository.as_str());
+        LinuxDurableTrustPolicyStore::create(policy_directory.to_str().unwrap(), &initial)
+            .unwrap();
+
+        let old_transcript = canonical_hybrid_transcript(
+            &repository,
+            ObjectFormat::Sha256,
+            GitObjectType::KeyRotation,
+            SignaturePurpose::KeyRotation,
+            TrustGeneration(1),
+            old_pair,
+            &next_policy,
+        )
+        .unwrap();
+        let next_transcript = canonical_hybrid_transcript(
+            &repository,
+            ObjectFormat::Sha256,
+            GitObjectType::KeyRotation,
+            SignaturePurpose::KeyRotation,
+            TrustGeneration(2),
+            next_pair,
+            &next_policy,
+        )
+        .unwrap();
+        let mut old_openpgp_signature = [0; MAX_OPENPGP_SIGNATURE_BYTES];
+        let old_openpgp_length = sign_detached_v6_ascii_with_salt(
+            &old_openpgp,
+            &old_transcript,
+            DigestAlgorithm::Sha512,
+            1_700_000_010,
+            &[12; 32],
+            &mut old_openpgp_signature,
+        )
+        .unwrap();
+        let mut next_openpgp_signature = [0; MAX_OPENPGP_SIGNATURE_BYTES];
+        let next_openpgp_length = sign_detached_v6_ascii_with_salt(
+            &next_openpgp,
+            &next_transcript,
+            DigestAlgorithm::Sha512,
+            1_700_000_010,
+            &[13; 32],
+            &mut next_openpgp_signature,
+        )
+        .unwrap();
+        let mut old_ml_signature = [0; ML_DSA_65_SIGNATURE_BYTES];
+        ml_dsa_65_sign(
+            &old_ml_secret,
+            b"mrml.git.hybrid.v1",
+            &old_transcript,
+            &[14; 32],
+            &mut old_ml_signature,
+        )
+        .unwrap();
+        let mut next_ml_signature = [0; ML_DSA_65_SIGNATURE_BYTES];
+        ml_dsa_65_sign(
+            &next_ml_secret,
+            b"mrml.git.hybrid.v1",
+            &next_transcript,
+            &[15; 32],
+            &mut next_ml_signature,
+        )
+        .unwrap();
+
+        let next_policy_path = root.join("next-policy.bin");
+        let old_openpgp_path = root.join("old-openpgp.asc");
+        let old_ml_path = root.join("old-ml.bin");
+        let old_openpgp_signature_path = root.join("old-openpgp.sig");
+        let old_ml_signature_path = root.join("old-ml.sig");
+        let next_openpgp_path = root.join("next-openpgp.asc");
+        let next_ml_path = root.join("next-ml.bin");
+        let next_openpgp_signature_path = root.join("next-openpgp.sig");
+        let next_ml_signature_path = root.join("next-ml.sig");
+        write_public(&next_policy_path, &next_policy);
+        write_openpgp_public(&old_openpgp_path, &old_openpgp);
+        write_public(&old_ml_path, &old_ml_public);
+        write_public(
+            &old_openpgp_signature_path,
+            &old_openpgp_signature[..old_openpgp_length],
+        );
+        write_public(&old_ml_signature_path, &old_ml_signature);
+        write_openpgp_public(&next_openpgp_path, &next_openpgp);
+        write_public(&next_ml_path, &next_ml_public);
+        write_public(
+            &next_openpgp_signature_path,
+            &next_openpgp_signature[..next_openpgp_length],
+        );
+        write_public(&next_ml_signature_path, &next_ml_signature);
+
+        assert!(
+            transition_policy(
+                path(&policy_root),
+                repository.as_str(),
+                path(&next_policy_path),
+                path(&old_openpgp_path),
+                path(&old_ml_path),
+                path(&old_openpgp_signature_path),
+                path(&old_ml_signature_path),
+                path(&next_openpgp_path),
+                path(&next_ml_path),
+                path(&next_openpgp_signature_path),
+                path(&next_ml_signature_path),
+                1_700_000_020,
+                1,
+                initial.digest(),
+                uid,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            LinuxDurableTrustPolicyStore::open(path(&policy_directory))
+                .unwrap()
+                .load()
+                .unwrap(),
+            expected_next
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_public(path: &Path, bytes: &[u8]) {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    fn write_openpgp_public(path: &Path, key: &SigningKeyV6) {
+        let mut encoded = vec![0; MAX_OPENPGP_PUBLIC_KEY_BYTES];
+        let length = key.public_key().encode_ascii(&mut encoded).unwrap();
+        write_public(path, &encoded[..length]);
+    }
+
+    fn path(value: &Path) -> &str {
+        value.to_str().unwrap()
     }
 }
