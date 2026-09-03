@@ -576,3 +576,47 @@ and owner-sovereignty requirements.
 Patent review: **NOT_TRIGGERED**. This records conventional offline image
 export, checksums, SBOM generation, SSH transfer, Docker load, and Compose
 render evidence. See `docs/patents/REVIEW_LOG.md`.
+
+## Normal trust-transition and image refresh follow-up
+
+Signed local commit `386883af` added exact-candidate payload binding to normal
+trust transitions, the crash-durable ordinary transition store path, and a
+networkless Compose admin profile fed only by Docker-managed volumes. A clean
+detached worktree at that exact commit passed 228 Git library tests, 4 Git CLI
+tests, 3 protected-signer tests, 4 authority library tests, 3 authority binary
+tests, and the Git Compose static-invariant test. Podman Compose also rendered
+the combined Git and ACME configuration and selected the separate
+`git-trust-transition` service only with the `admin` profile.
+
+Clean release builds produced:
+
+```text
+mrml-git-authority binary sha256:d1b6fbc038e05cc0c18b3a56e810956f5333c538e33eca844ee3fdf8d2e41ddc
+mrml-gitd binary sha256:2b5acce6a0b543729c0baa7b2036eb58166a05a7ff094624448b9d6b288aae83
+git-authority.tar sha256:e80ad3fe1f686dd7eeac8fb385d0ca1389afb78831053ee52d438f0388722dcf
+gitd.tar sha256:614c5666414f4d829d504bab53721526ee96817c0dada1f5c3e938f73d51d1ac
+git-authority SPDX JSON sha256:6422906b3ae8cfed633a13bc34024df2a02240f63cf37f91325da82ccffda18c
+gitd SPDX JSON sha256:a94212278a801783b2f0f480901290a4312138bf1caad81b4f91a491c59b3e5b
+```
+
+All four artifact checksums passed locally and after SCP to the authorized VPS.
+Docker loaded both archives offline; after the documented local tag
+normalization, the VPS reported:
+
+```text
+mrml/git-authority:386883af sha256:f40e11355a506df06b0a0e2331650df73114e9d245481b2d90535ed0f9fe750f user=21002:21002 entrypoint=/usr/bin/mrml-git-authority
+mrml/gitd:386883af sha256:dfe15215ef7e3a9ad9144feca01f7dded3ee57ab48ad44e9a90f4f1f89eee252 user=21001:21001 entrypoint=/usr/bin/mrml-gitd
+```
+
+No MRML container was running after the load. The source-only review archive
+`mrml-git-review-386883af.tar.gz` verified locally and remotely at
+SHA-256 `ce2af07b01f952127da016240919e181eae61006562fae7b8a2ec5352169553d`.
+An actual normal trust transition was not exercised because no owner-selected
+production key pair, next policy, or four matching detached authorizations were
+available; fixtures were not substituted. Production startup remains blocked
+on those owner inputs and the DNS/provider inputs recorded above.
+
+Patent review: **NOT_TRIGGERED**. This follow-up records conventional build,
+test, SBOM, archive transfer, checksum, Docker load, and configuration-render
+evidence; the transition implementation review is recorded separately in
+`docs/patents/REVIEW_LOG.md`.
