@@ -1,6 +1,8 @@
 use mrml_crypto::erase_secret_bytes;
 use mrml_git::{
-    DurableDetachedCommitProofDirectory, LinuxDurableTrustPolicyStore, RepositoryIdentity,
+    AuthorizedHybridPair, DurableDetachedCommitProofDirectory, GitObjectType,
+    HybridVerificationRequest, LinuxDurableTrustPolicyStore, ObjectFormat, RepositoryIdentity,
+    SignaturePurpose, TrustGeneration, parse_trust_policy, verify_hybrid_signature,
 };
 use mrml_git_authority::{
     decode_frame, encode_frame, AuthorityCapability, AuthorityDispatchError, AuthorityFrame,
@@ -8,7 +10,9 @@ use mrml_git_authority::{
     AuthorityReplayWindow, AuthoritySession, ProductionAuthority, AUTHORITY_CAPABILITY_BYTES,
     AUTHORITY_HEADER_BYTES, MAX_AUTHORITY_PAYLOAD_BYTES,
 };
-use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
+use mrml_openpgp::{
+    MAX_OPENPGP_PUBLIC_KEY_BYTES, MAX_OPENPGP_SIGNATURE_BYTES, parse_public_key_v6_ascii,
+};
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
@@ -91,12 +95,238 @@ fn run() -> Result<(), ()> {
                 socket_gid.parse().map_err(|_| ())?,
             )
         }
+        [
+            _,
+            command,
+            policy_root,
+            repository,
+            next_policy,
+            previous_openpgp,
+            previous_ml_dsa,
+            previous_openpgp_signature,
+            previous_ml_dsa_signature,
+            next_openpgp,
+            next_ml_dsa,
+            next_openpgp_signature,
+            next_ml_dsa_signature,
+            validation_time,
+            expected_generation,
+            expected_digest,
+            own_uid,
+        ] if command == "transition-policy" => transition_policy(
+            policy_root,
+            repository,
+            next_policy,
+            previous_openpgp,
+            previous_ml_dsa,
+            previous_openpgp_signature,
+            previous_ml_dsa_signature,
+            next_openpgp,
+            next_ml_dsa,
+            next_openpgp_signature,
+            next_ml_dsa_signature,
+            validation_time.parse().map_err(|_| ())?,
+            expected_generation.parse().map_err(|_| ())?,
+            parse_lower_hex_64(expected_digest)?,
+            own_uid.parse().map_err(|_| ())?,
+        ),
         _ => {
             eprintln!(
-                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
+                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority transition-policy POLICY_ROOT REPOSITORY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP NEXT_ML_DSA NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE VALIDATION_TIME EXPECTED_GENERATION EXPECTED_DIGEST OWN_UID\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
             );
             std::process::exit(EX_USAGE);
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transition_policy(
+    policy_root: &str,
+    repository: &str,
+    next_policy_path: &str,
+    previous_openpgp_path: &str,
+    previous_ml_dsa_path: &str,
+    previous_openpgp_signature_path: &str,
+    previous_ml_dsa_signature_path: &str,
+    next_openpgp_path: &str,
+    next_ml_dsa_path: &str,
+    next_openpgp_signature_path: &str,
+    next_ml_dsa_signature_path: &str,
+    validation_time: u64,
+    expected_generation: u64,
+    expected_digest: [u8; 64],
+    own_uid: u32,
+) -> Result<(), ()> {
+    if validation_time == 0 || expected_generation == 0 || own_uid == 0 {
+        return Err(());
+    }
+    let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
+    let policy_path = policy_storage_path(policy_root, &repository)?;
+    let store =
+        LinuxDurableTrustPolicyStore::open(policy_path.to_str().ok_or(())?).map_err(|_| ())?;
+    let current = store.load().map_err(|_| ())?;
+    if current.repository() != &repository {
+        return Err(());
+    }
+    let next_policy_bytes = read_regular(
+        next_policy_path,
+        1,
+        mrml_git::MAX_ENCODED_TRUST_POLICY_BYTES,
+        own_uid,
+        false,
+    )?;
+    let next = parse_trust_policy(&next_policy_bytes).map_err(|_| ())?;
+    if next.repository() != &repository {
+        return Err(());
+    }
+    let (previous_openpgp, previous_ml_dsa) =
+        read_hybrid_public_pair(previous_openpgp_path, previous_ml_dsa_path, own_uid)?;
+    let (next_openpgp, next_ml_dsa) =
+        read_hybrid_public_pair(next_openpgp_path, next_ml_dsa_path, own_uid)?;
+    let previous_pair = AuthorizedHybridPair::bind(&previous_openpgp, &previous_ml_dsa);
+    let next_pair = AuthorizedHybridPair::bind(&next_openpgp, &next_ml_dsa);
+    let previous_policy = current
+        .active_verification_policy_at(previous_pair, validation_time, true)
+        .map_err(|_| ())?;
+    let next_verification_policy = next
+        .active_verification_policy_at(next_pair, validation_time, true)
+        .map_err(|_| ())?;
+    let previous_openpgp_signature = read_regular(
+        previous_openpgp_signature_path,
+        1,
+        MAX_OPENPGP_SIGNATURE_BYTES,
+        own_uid,
+        false,
+    )?;
+    let previous_ml_dsa_signature = read_regular(
+        previous_ml_dsa_signature_path,
+        mrml_crypto::ML_DSA_65_SIGNATURE_BYTES,
+        mrml_crypto::ML_DSA_65_SIGNATURE_BYTES,
+        own_uid,
+        false,
+    )?;
+    let next_openpgp_signature = read_regular(
+        next_openpgp_signature_path,
+        1,
+        MAX_OPENPGP_SIGNATURE_BYTES,
+        own_uid,
+        false,
+    )?;
+    let next_ml_dsa_signature = read_regular(
+        next_ml_dsa_signature_path,
+        mrml_crypto::ML_DSA_65_SIGNATURE_BYTES,
+        mrml_crypto::ML_DSA_65_SIGNATURE_BYTES,
+        own_uid,
+        false,
+    )?;
+    let previous_request = HybridVerificationRequest {
+        repository: &repository,
+        object_format: ObjectFormat::Sha256,
+        object_type: GitObjectType::KeyRotation,
+        purpose: SignaturePurpose::KeyRotation,
+        trust_generation: current.generation(),
+        revocation_generation: current.revocation_generation(),
+        payload: &next_policy_bytes,
+        openpgp_signature: &previous_openpgp_signature,
+        ml_dsa_signature: &previous_ml_dsa_signature,
+    };
+    let mut scratch = vec![0u8; MAX_OPENPGP_SIGNATURE_BYTES];
+    let previous_authorization = verify_hybrid_signature(
+        &previous_policy,
+        &previous_openpgp,
+        &previous_ml_dsa,
+        &previous_request,
+        &mut scratch,
+    )
+    .map_err(|_| ())?;
+    let next_request = HybridVerificationRequest {
+        repository: &repository,
+        object_format: ObjectFormat::Sha256,
+        object_type: GitObjectType::KeyRotation,
+        purpose: SignaturePurpose::KeyRotation,
+        trust_generation: next.generation(),
+        revocation_generation: next.revocation_generation(),
+        payload: &next_policy_bytes,
+        openpgp_signature: &next_openpgp_signature,
+        ml_dsa_signature: &next_ml_dsa_signature,
+    };
+    let next_authorization = verify_hybrid_signature(
+        &next_verification_policy,
+        &next_openpgp,
+        &next_ml_dsa,
+        &next_request,
+        &mut scratch,
+    )
+    .map_err(|_| ())?;
+    let selected = store
+        .transition(
+            TrustGeneration(expected_generation),
+            expected_digest,
+            next,
+            &previous_authorization,
+            &next_authorization,
+        )
+        .map_err(|_| ())?;
+    println!(
+        "generation={} digest={}",
+        selected.generation().0,
+        lower_hex(&selected.digest())
+    );
+    Ok(())
+}
+
+fn read_hybrid_public_pair(
+    openpgp_path: &str,
+    ml_dsa_path: &str,
+    own_uid: u32,
+) -> Result<
+    (
+        mrml_openpgp::PublicKeyV6,
+        [u8; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES],
+    ),
+    (),
+> {
+    let openpgp_bytes = read_regular(
+        openpgp_path,
+        1,
+        MAX_OPENPGP_PUBLIC_KEY_BYTES,
+        own_uid,
+        false,
+    )?;
+    let mut scratch = vec![0u8; MAX_OPENPGP_PUBLIC_KEY_BYTES];
+    let openpgp = parse_public_key_v6_ascii(&openpgp_bytes, &mut scratch).map_err(|_| ())?;
+    let ml_dsa_bytes = read_regular(
+        ml_dsa_path,
+        mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
+        mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
+        own_uid,
+        false,
+    )?;
+    let mut ml_dsa = [0u8; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
+    ml_dsa.copy_from_slice(&ml_dsa_bytes);
+    Ok((openpgp, ml_dsa))
+}
+
+fn parse_lower_hex_64(input: &str) -> Result<[u8; 64], ()> {
+    if input.len() != 128
+        || !input
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(());
+    }
+    let mut output = [0u8; 64];
+    for (index, pair) in input.as_bytes().chunks_exact(2).enumerate() {
+        output[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+    }
+    Ok(output)
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, ()> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err(()),
     }
 }
 
@@ -299,9 +529,17 @@ fn authority_storage_paths(
     }
     let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
     Ok((
-        policy_root.join(repository.as_str()),
+        policy_storage_path(policy_root.to_str().ok_or(())?, &repository)?,
         proof_root.join(repository.as_str()),
     ))
+}
+
+fn policy_storage_path(policy_root: &str, repository: &RepositoryIdentity) -> Result<PathBuf, ()> {
+    let policy_root = Path::new(policy_root);
+    if !policy_root.is_absolute() {
+        return Err(());
+    }
+    Ok(policy_root.join(repository.as_str()))
 }
 
 fn healthcheck(
@@ -495,5 +733,9 @@ mod tests {
     #[test]
     fn signer_identity_encoding_is_exact_lowercase_hex() {
         assert_eq!(lower_hex(&[0x00, 0xab, 0xff]), "00abff");
+        assert_eq!(parse_lower_hex_64(&"ab".repeat(64)), Ok([0xab; 64]));
+        assert!(parse_lower_hex_64(&"AB".repeat(64)).is_err());
+        assert!(parse_lower_hex_64(&"a".repeat(127)).is_err());
+        assert!(parse_lower_hex_64(&"gg".repeat(64)).is_err());
     }
 }

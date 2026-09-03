@@ -128,6 +128,7 @@ ensure_volume mrml-runtime-git-authority "$authority_uid" "$authority_socket_gid
 ensure_volume mrml-runtime-certd-gitd "$certd_uid" "$certd_socket_gid" 2770
 ensure_volume mrml-git-authority-secrets "$authority_uid" "$authority_gid" 700
 ensure_volume mrml-git-authority-config 0 0 755
+ensure_volume mrml-git-authority-transition "$authority_uid" "$authority_gid" 755
 ensure_volume mrml-gitd-secrets "$gitd_uid" "$gitd_gid" 700
 ensure_volume mrml-gitd-config 0 0 755
 

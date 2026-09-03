@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-09-03: Volume-fed normal trust-transition operator
+
+- Result: **NOT_TRIGGERED**.
+- Scope: a networkless one-shot container that reads public policy, key, and
+  detached-signature inputs from a separately scoped Docker volume and invokes
+  the existing authenticated durable trust-generation transition.
+- Reason: this is conventional offline administrative composition of existing
+  verification, monotonic policy, container-volume, and durable-file mechanisms;
+  it introduces no new cryptographic construction, protocol, storage algorithm,
+  or specialized recovery technique.
+
 ## 2026-09-03: Exact trust-policy transition binding
 
 - Result: **NOT_TRIGGERED**.

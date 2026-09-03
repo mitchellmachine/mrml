@@ -6,8 +6,8 @@ Image-only Compose validation,
 offline image bundling, cold backup/restore, and immutable image
 upgrade/rollback are separate implemented operators. Native one-shot repository
 and initial protected-policy creation, token administration, and bounded recovery
-operations exist. Authenticated normal and emergency trust-transition
-administration remains incomplete.
+operations exist. Authenticated normal trust-transition administration is
+implemented; emergency trust-transition administration remains incomplete.
 
 Run `deploy/compose/provision-git-host.sh` as root with Docker available. The
 deployment root defaults to `/mnt/mrml` and now contains only operator inputs,
@@ -38,6 +38,28 @@ never creates certificates, repositories, access tokens, trust policies,
 detached proofs, or publisher keys. Those require explicit authority-bearing
 administration so provisioning cannot replace selected policy or repository
 state.
+
+For a normal trust transition, construct the canonical next policy and obtain
+detached OpenPGP-v6 and ML-DSA-65 signatures over its exact
+`MRML-GIT-HYBRID-V1` key-rotation transcript from both one currently active
+pair and one pair active in the next generation. Install the next policy, next
+public keys, and four detached signatures with
+`install-volume-inputs.sh authority-transition ...`. This no-overwrite command
+places only public material in `mrml-git-authority-transition`; private signing
+keys never enter the VPS or a production container. Stop Gitd and the authority,
+then run
+`transition-git-trust.sh OWNER/REPOSITORY VALIDATION_TIME EXPECTED_GENERATION EXPECTED_POLICY_DIGEST`.
+The networkless admin-profile container receives only the read-only current-key
+and transition-input volumes plus a writable policy volume. It reopens the exact
+expected generation, independently verifies both hybrid authorizations against
+the canonical next bytes, applies the monotonic policy rules, durably selects
+the next generation, reopens it, and only then removes the consumed public
+inputs. Stale, substituted, malformed, unauthorized, or uncertain transitions
+fail closed; a retained lock or temporary file requires operator inspection.
+The candidate should retain the configured previous pair during a planned
+overlap so the authority remains startable while operators validate the new
+generation. Emergency transition is deliberately a separate residual operation
+and is not inferred from normal signatures.
 
 After installing the production environment and policy/catalog files, run
 `deploy/compose/initialize-git.sh` exactly once. It starts the preloaded Gitd

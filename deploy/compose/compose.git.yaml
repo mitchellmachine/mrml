@@ -1,4 +1,27 @@
 services:
+  git-trust-transition:
+    profiles: [admin]
+    image: "mrml/git-authority:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21001:21001"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 16
+    mem_limit: 256m
+    cpus: 1.0
+    restart: "no"
+    ulimits:
+      nofile: {soft: 256, hard: 256}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=21001,gid=21001,mode=0700
+    volumes:
+      - "mrml-gitd-policies:/var/lib/mrml/git-policies:rw"
+      - "mrml-git-authority-config:/etc/mrml/authority:ro"
+      - "mrml-git-authority-transition:/run/mrml-transition:ro"
+
   git-authority:
     image: "mrml/git-authority:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
     platform: linux/amd64
@@ -131,6 +154,8 @@ volumes:
     name: mrml-git-authority-secrets
   mrml-git-authority-config:
     name: mrml-git-authority-config
+  mrml-git-authority-transition:
+    name: mrml-git-authority-transition
   mrml-gitd-secrets:
     name: mrml-gitd-secrets
   mrml-gitd-config:
