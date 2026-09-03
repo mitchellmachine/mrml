@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use mrml_git::ProtectedAuthorityRpc;
 use mrml_git_authority::{
@@ -21,13 +22,14 @@ pub enum GitAuthorityChannelError {
     OutputLimit,
 }
 
+#[derive(Clone)]
 pub struct GitAuthorityChannelClient {
     socket: PathBuf,
-    capability: AuthorityCapability,
+    capability: Arc<AuthorityCapability>,
     gitd_peer: AuthorityPeer,
     authority_peer: AuthorityPeer,
     signer_identity: [u8; 64],
-    next_request_id: u64,
+    next_request_id: Arc<AtomicU64>,
     request_id_limit: u64,
 }
 
@@ -52,11 +54,11 @@ impl GitAuthorityChannelClient {
         }
         Ok(Self {
             socket: socket.to_path_buf(),
-            capability,
+            capability: Arc::new(capability),
             gitd_peer,
             authority_peer,
             signer_identity,
-            next_request_id,
+            next_request_id: Arc::new(AtomicU64::new(next_request_id)),
             request_id_limit: u64::MAX,
         })
     }
@@ -65,7 +67,7 @@ impl GitAuthorityChannelClient {
         mut self,
         request_id_limit: u64,
     ) -> Result<Self, GitAuthorityChannelError> {
-        if request_id_limit <= self.next_request_id {
+        if request_id_limit <= self.next_request_id.load(Ordering::Relaxed) {
             return Err(GitAuthorityChannelError::InvalidConfiguration);
         }
         self.request_id_limit = request_id_limit;
@@ -90,14 +92,7 @@ impl GitAuthorityChannelClient {
         if request.len() > MAX_AUTHORITY_PAYLOAD_BYTES {
             return Err(GitAuthorityChannelError::OutputLimit);
         }
-        if self.next_request_id >= self.request_id_limit {
-            return Err(GitAuthorityChannelError::SequenceExhausted);
-        }
-        let request_id = self.next_request_id;
-        self.next_request_id = self
-            .next_request_id
-            .checked_add(1)
-            .ok_or(GitAuthorityChannelError::SequenceExhausted)?;
+        let request_id = self.allocate_request_id()?;
         let mut session = AuthoritySession::connect(&self.socket)
             .map_err(|_| GitAuthorityChannelError::Connect)?;
         let mut frame = vec![0u8; AUTHORITY_HEADER_BYTES + MAX_AUTHORITY_PAYLOAD_BYTES];
@@ -144,6 +139,14 @@ impl GitAuthorityChannelClient {
             .ok_or(GitAuthorityChannelError::OutputLimit)?;
         destination.copy_from_slice(decoded.payload);
         Ok(decoded.payload.len())
+    }
+
+    fn allocate_request_id(&self) -> Result<u64, GitAuthorityChannelError> {
+        self.next_request_id
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                (current < self.request_id_limit).then(|| current + 1)
+            })
+            .map_err(|_| GitAuthorityChannelError::SequenceExhausted)
     }
 }
 
@@ -207,6 +210,30 @@ mod tests {
             client.with_request_id_limit(9),
             Err(GitAuthorityChannelError::InvalidConfiguration)
         ));
+    }
+
+    #[test]
+    fn cloned_clients_share_one_monotonic_request_sequence() {
+        let peer = AuthorityPeer { uid: 1, gid: 1 };
+        let first = GitAuthorityChannelClient::new(
+            Path::new("/run/authority.sock"),
+            AuthorityCapability::new([0x41; 32]).unwrap(),
+            peer,
+            peer,
+            [0x42; 64],
+            41,
+        )
+        .unwrap()
+        .with_request_id_limit(44)
+        .unwrap();
+        let second = first.clone();
+        assert_eq!(first.allocate_request_id(), Ok(41));
+        assert_eq!(second.allocate_request_id(), Ok(42));
+        assert_eq!(first.allocate_request_id(), Ok(43));
+        assert_eq!(
+            second.allocate_request_id(),
+            Err(GitAuthorityChannelError::SequenceExhausted)
+        );
     }
 
     #[test]

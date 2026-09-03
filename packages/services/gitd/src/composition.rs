@@ -45,7 +45,7 @@ impl GitdComposedService {
 /// Construct the routable Git service only after every catalog repository is
 /// admitted against live generations and every durable receive journal has a
 /// non-ambiguous recovery result.
-pub fn compose_gitd_service<A: ProtectedReceiveAuthority + Send + 'static>(
+pub fn compose_gitd_service<A: ProtectedReceiveAuthority + Send + Clone + 'static>(
     config: &GitdConfig,
     catalog: &DeploymentCatalog,
     mut authority: A,
@@ -71,7 +71,7 @@ pub fn compose_gitd_service<A: ProtectedReceiveAuthority + Send + 'static>(
         admitted_repositories.push(admitted);
     }
     repositories
-        .configure_receive_authority(Box::new(authority))
+        .configure_receive_authority(authority)
         .map_err(|_| GitdCompositionError::Backend)?;
     for (entry, admitted) in catalog.repositories.iter().zip(admitted_repositories) {
         repositories

@@ -44,6 +44,15 @@ pub struct RemoteProtectedReceiveAuthority<T> {
     pending_proofs: mrml_runtime::Vector<DetachedCommitProofRecord>,
 }
 
+impl<T: Clone> Clone for RemoteProtectedReceiveAuthority<T> {
+    fn clone(&self) -> Self {
+        Self {
+            transport: self.transport.clone(),
+            pending_proofs: mrml_runtime::Vector::new(),
+        }
+    }
+}
+
 impl<T: ProtectedAuthorityRpc> RemoteProtectedReceiveAuthority<T> {
     pub const fn new(transport: T) -> Self {
         Self {
