@@ -1,4 +1,7 @@
-use mrml_crypto::{erase_secret_bytes, hmac_sha256, Sha3_512, ML_DSA_65_PUBLIC_KEY_BYTES};
+use mrml_crypto::{
+    ed25519_public, ed25519_sign, ed25519_verify, erase_secret_bytes, Sha3_512,
+    ML_DSA_65_PUBLIC_KEY_BYTES,
+};
 use mrml_git::{
     bind_verified_commit_proof, parse_authority_commit, parse_authority_proof_install,
     parse_authority_receipt, parse_authority_receive, parse_authority_ref_transaction,
@@ -13,6 +16,7 @@ use mrml_runtime::Vector;
 use crate::AuthorityOperation;
 
 const RECEIPT_DOMAIN: &[u8] = b"MRML git authority receipt signing v1";
+const RECEIPT_SIGNATURE_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthorityDispatchError {
@@ -55,7 +59,7 @@ impl ProductionAuthority {
             .map_err(|_| AuthorityDispatchError::Unauthorized)?;
         let mut identity = Sha3_512::new();
         identity.update(b"MRML git receipt signer identity v1");
-        identity.update(&receipt_key);
+        identity.update(&ed25519_public(&receipt_key));
         let signer_identity = identity.finalize();
         Ok(Self {
             policy,
@@ -71,6 +75,10 @@ impl ProductionAuthority {
 
     pub const fn signer_identity(&self) -> [u8; 64] {
         self.signer_identity
+    }
+
+    pub fn receipt_verification_key(&self) -> [u8; 32] {
+        ed25519_public(&self.receipt_key)
     }
 
     pub fn set_validation_time(
@@ -259,7 +267,8 @@ impl ProductionAuthority {
         if !request.signature.is_empty() {
             return Err(AuthorityDispatchError::Malformed);
         }
-        let signature = hmac_sha256(&self.receipt_key, &[RECEIPT_DOMAIN, &request.transcript]);
+        let transcript = receipt_signature_transcript(&request.transcript)?;
+        let signature = ed25519_sign(&self.receipt_key, &transcript);
         let mut output = Vector::new();
         output
             .try_extend_from_slice(&signature)
@@ -269,15 +278,14 @@ impl ProductionAuthority {
 
     fn verify_receipt(&self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
         let request = parse_authority_receipt(payload).map_err(map_git_error)?;
-        if request.signature.len() != 32 {
+        if request.signature.len() != RECEIPT_SIGNATURE_BYTES {
             return Err(AuthorityDispatchError::Unauthorized);
         }
-        let expected = hmac_sha256(&self.receipt_key, &[RECEIPT_DOMAIN, &request.transcript]);
-        let mut difference = 0u8;
-        for index in 0..expected.len() {
-            difference |= expected[index] ^ request.signature[index];
-        }
-        if difference != 0 {
+        let signature: &[u8; RECEIPT_SIGNATURE_BYTES] = (&request.signature[..])
+            .try_into()
+            .map_err(|_| AuthorityDispatchError::Unauthorized)?;
+        let transcript = receipt_signature_transcript(&request.transcript)?;
+        if !ed25519_verify(&ed25519_public(&self.receipt_key), &transcript, signature) {
             return Err(AuthorityDispatchError::Unauthorized);
         }
         Ok(Vector::new())
@@ -288,6 +296,17 @@ impl ProductionAuthority {
             .load()
             .map_err(|_| AuthorityDispatchError::Unavailable)
     }
+}
+
+fn receipt_signature_transcript(payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
+    let length = u32::try_from(payload.len()).map_err(|_| AuthorityDispatchError::Resource)?;
+    let mut output = Vector::new();
+    output
+        .try_extend_from_slice(RECEIPT_DOMAIN)
+        .and_then(|_| output.try_extend_from_slice(&length.to_be_bytes()))
+        .and_then(|_| output.try_extend_from_slice(payload))
+        .map_err(|_| AuthorityDispatchError::Resource)?;
+    Ok(output)
 }
 
 impl Drop for ProductionAuthority {
@@ -511,7 +530,14 @@ mod tests {
         let signature = authority
             .dispatch(AuthorityOperation::SignReceipt, &sign_request)
             .unwrap();
-        assert_eq!(signature.len(), 32);
+        assert_eq!(signature.len(), RECEIPT_SIGNATURE_BYTES);
+        let signature_array: &[u8; RECEIPT_SIGNATURE_BYTES] =
+            (&signature[..]).try_into().unwrap();
+        assert!(ed25519_verify(
+            &authority.receipt_verification_key(),
+            &receipt_signature_transcript(b"receipt transcript").unwrap(),
+            signature_array
+        ));
         assert_eq!(
             authority.dispatch(
                 AuthorityOperation::VerifyReceipt,

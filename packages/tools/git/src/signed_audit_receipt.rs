@@ -50,7 +50,8 @@ impl AuthenticatedAuditReceiptDirectory {
         authority: &mut dyn AuditReceiptAuthority,
     ) -> Result<(), DurableFailure> {
         let canonical = encode_audit_receipt(receipt).map_err(|_| DurableFailure::AuditReceipt)?;
-        let transcript = transcript(&canonical).map_err(|_| DurableFailure::AuditReceipt)?;
+        let transcript = authenticated_audit_receipt_transcript(&canonical)
+            .map_err(|_| DurableFailure::AuditReceipt)?;
         let mut signature = [0u8; MAX_SIGNATURE_BYTES];
         let signature_len = authority
             .sign(&transcript, &mut signature)
@@ -102,7 +103,7 @@ impl AuthenticatedAuditReceiptDirectory {
         bytes.resize(length, 0);
         file.read_exact(&mut bytes)
             .map_err(|_| DurableFailure::AuditReceipt)?;
-        let authenticated = parse_authenticated(&bytes)?;
+        let authenticated = parse_authenticated_audit_receipt(&bytes)?;
         if authenticated.receipt.transaction != transaction
             || authenticated.signer_identity != authority.signer_identity()
         {
@@ -112,7 +113,8 @@ impl AuthenticatedAuditReceiptDirectory {
             .map_err(|_| DurableFailure::AuditReceipt)?;
         authority
             .verify(
-                &transcript(&canonical).map_err(|_| DurableFailure::AuditReceipt)?,
+                &authenticated_audit_receipt_transcript(&canonical)
+                    .map_err(|_| DurableFailure::AuditReceipt)?,
                 &authenticated.signature,
             )
             .map_err(|_| DurableFailure::AuditReceipt)?;
@@ -208,7 +210,7 @@ impl DurableReceiveStore for AuthenticatedReceiveStore<'_> {
     }
 }
 
-fn transcript(canonical: &[u8]) -> Result<Vector<u8>, ()> {
+pub fn authenticated_audit_receipt_transcript(canonical: &[u8]) -> Result<Vector<u8>, ()> {
     let length = u32::try_from(canonical.len()).map_err(|_| ())?;
     let mut output = Vector::new();
     output.try_extend_from_slice(DOMAIN).map_err(|_| ())?;
@@ -256,7 +258,9 @@ fn encode_authenticated(
     Ok(output)
 }
 
-fn parse_authenticated(input: &[u8]) -> Result<AuthenticatedAuditReceipt, DurableFailure> {
+pub fn parse_authenticated_audit_receipt(
+    input: &[u8],
+) -> Result<AuthenticatedAuditReceipt, DurableFailure> {
     if input.len() < 8 + 64 + 4 + 2 + 32 || input.len() > MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES {
         return Err(DurableFailure::AuditReceipt);
     }
@@ -393,14 +397,14 @@ mod tests {
     fn authenticated_encoding_rejects_storage_and_signature_tampering() {
         let receipt = fixture();
         let canonical = encode_audit_receipt(&receipt).unwrap();
-        let signed_transcript = transcript(&canonical).unwrap();
+        let signed_transcript = authenticated_audit_receipt_transcript(&canonical).unwrap();
         let mut authority = DigestAuthority {
             identity: [7u8; 64],
         };
         let mut signature = [0u8; 32];
         authority.sign(&signed_transcript, &mut signature).unwrap();
         let encoded = encode_authenticated(&canonical, authority.identity, &signature).unwrap();
-        let parsed = parse_authenticated(&encoded).unwrap();
+        let parsed = parse_authenticated_audit_receipt(&encoded).unwrap();
         assert_eq!(parsed.receipt, receipt);
         authority
             .verify(&signed_transcript, &parsed.signature)
@@ -409,7 +413,7 @@ mod tests {
         let mut storage_tamper = encoded.clone();
         storage_tamper[20] ^= 1;
         assert_eq!(
-            parse_authenticated(&storage_tamper),
+            parse_authenticated_audit_receipt(&storage_tamper),
             Err(DurableFailure::AuditReceipt)
         );
 
@@ -417,7 +421,7 @@ mod tests {
         signature_tamper[0] ^= 1;
         let resigned_container =
             encode_authenticated(&canonical, authority.identity, &signature_tamper).unwrap();
-        let parsed = parse_authenticated(&resigned_container).unwrap();
+        let parsed = parse_authenticated_audit_receipt(&resigned_container).unwrap();
         assert_eq!(
             authority.verify(&signed_transcript, &parsed.signature),
             Err(())

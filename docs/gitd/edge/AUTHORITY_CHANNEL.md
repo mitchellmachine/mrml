@@ -25,5 +25,13 @@ type, exact 32-byte size, expected owner, and mode `0400`, `0440`, or `0600`,
 then erases temporary key buffers. The receipt signer identity is an explicit
 nonzero 64-byte pin.
 
+Receipt authentication uses a purpose-separated Ed25519 signature. The
+authority retains the 32-byte private seed and exposes only the public verifier
+through the bounded `describe-receipt-verifier` administrative command. This
+permits clients and the protected signer to verify durable activation receipts
+without receiving symmetric receipt-forging authority. The authenticated
+receipt container and its canonical transcript parser are shared library
+interfaces; a checksum alone is never treated as authority.
+
 Patent review: **NOT_TRIGGERED**. This is conventional authenticated local RPC
 composition and replay sequencing. See `docs/patents/REVIEW_LOG.md`.

@@ -155,3 +155,16 @@ diff checks pass. A rebuilt hardened container completed a live v2 hello as UID
 `21007:21007` using its separately owned capability named volume; a different
 capability failed closed while the signer remained ready. Generation advancement
 is a separate incomplete gate and is not claimed by this result.
+
+## Publicly verifiable authority receipts
+
+The receipt authority now treats its existing 32-byte secret as an Ed25519 seed
+and emits a fixed 64-byte, purpose-separated signature instead of an HMAC. Its
+stable signer identity derives from the public verification key, and the new
+`describe-receipt-verifier` operation exports only that 32-byte public key. The
+authenticated receipt parser and canonical transcript constructor are exported
+for the signer lifecycle path. This removes the need to give the protected
+signer symmetric receipt-forging authority. Eight authority tests, 247 Git
+tests, strict clippy, formatting, diff checks, and the production authority
+release build pass. Delivery of the receipt to the client and durable signer
+generation consumption remain incomplete and are not claimed here.

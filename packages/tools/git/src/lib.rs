@@ -197,6 +197,7 @@ pub use sha1::{ObjectFormat, ObjectId, Sha1};
 pub use signed_audit_receipt::{
     AuditReceiptAuthority, AuthenticatedAuditReceipt, AuthenticatedAuditReceiptDirectory,
     AuthenticatedReceiveStore, MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES,
+    authenticated_audit_receipt_transcript, parse_authenticated_audit_receipt,
 };
 pub use smart_protocol::{
     MAX_PKT_LINE_BYTES, MAX_V2_ARGUMENTS, MAX_V2_REF_PREFIXES, PktLine, ProtocolBudget,

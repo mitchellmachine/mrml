@@ -246,9 +246,9 @@ See `docs/patents/REVIEW_LOG.md`.
 
 The authority binary now provides `describe-signer` with the same bounded,
 owner-checked inputs as `check-config`. It loads and validates the complete
-authority configuration, derives the receipt signer identity from the private
-receipt key, and emits only the 128-character lowercase hexadecimal public
-identity required by Gitd. It does not print or export the receipt key.
+authority configuration, derives the receipt signer identity from the public
+receipt-verification key, and emits only the 128-character lowercase hexadecimal
+identity required by Gitd. It does not print or export the private seed.
 
 The authority suite passed four library and three binary tests, including exact
 lowercase identity encoding.

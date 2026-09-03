@@ -12427,3 +12427,11 @@ challenge, absolute expiry, monotonic sequence bound, HMAC authentication, and
 Unix peer credentials to the existing signer channel. It introduces no new
 signature primitive, key-management mechanism, repository policy, or
 patent-sensitive selection method.
+
+# 2026-09-03 — Publicly verifiable authority receipts
+
+Patent review: **NOT_TRIGGERED**. This replaces a symmetric receipt MAC with the
+repository's existing audited Ed25519 primitive and purpose-separated canonical
+transcript so verification can be delegated without signing authority. It adds
+no new signature scheme, consensus protocol, storage selection, or
+patent-sensitive mechanism.
