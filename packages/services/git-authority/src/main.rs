@@ -9,7 +9,7 @@ use mrml_git_authority::{
     AuthorityFrameKind, AuthorityListener, AuthorityOperation, AuthorityPeer,
     AuthorityReplayWindow, AuthoritySession, ProductionAuthority, AUTHORITY_CAPABILITY_BYTES,
     AUTHORITY_HEADER_BYTES, LinuxAuthorityCandidateStore, LinuxAuthorityGenerationStore,
-    MAX_AUTHORITY_PAYLOAD_BYTES,
+    MAX_AUTHORITY_PAYLOAD_BYTES, ProductionAuthorityCatalog,
 };
 use mrml_openpgp::{
     MAX_OPENPGP_PUBLIC_KEY_BYTES, MAX_OPENPGP_SIGNATURE_BYTES, parse_public_key_v6_ascii,
@@ -26,6 +26,10 @@ const EX_CONFIG: i32 = 78;
 const O_NOFOLLOW: i32 = 0x20_000;
 const STATUS_OK: u16 = 0;
 const STATUS_UNAVAILABLE: u16 = 1;
+const MAX_AUTHORITY_CATALOG_BYTES: usize = 8 * 1024 * 1024;
+const MAX_AUTHORITY_REPOSITORIES: usize = 100_000;
+const AUTHORITY_WORKERS: usize = 16;
+const AUTHORITY_QUEUE_CAPACITY: usize = 256;
 
 fn main() {
     if run().is_err() {
@@ -86,6 +90,49 @@ fn run() -> Result<(), ()> {
                 repository_generation.parse().map_err(|_| ())?,
             )
         }
+        [_, command, socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, generations, catalog, openpgp, ml_dsa, receipt_key, validation_time]
+            if command == "serve-catalog" =>
+        {
+            let authority_peer = parse_peer(own_uid, own_gid)?;
+            let authority = load_production_authority_catalog(
+                authority_peer.uid,
+                policy,
+                proofs,
+                generations,
+                catalog,
+                openpgp,
+                ml_dsa,
+                receipt_key,
+                validation_time.parse().map_err(|_| ())?,
+            )?;
+            serve_authority_catalog(
+                socket,
+                capability,
+                parse_peer(peer_uid, peer_gid)?,
+                authority_peer,
+                authority,
+            )
+        }
+        [_, command, _socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, generations, catalog, openpgp, ml_dsa, receipt_key, validation_time]
+            if command == "check-catalog" =>
+        {
+            let _ = parse_peer(peer_uid, peer_gid)?;
+            let authority_peer = parse_peer(own_uid, own_gid)?;
+            let _ = read_capability(capability, authority_peer.uid)?;
+            let _ = load_production_authority_catalog(
+                authority_peer.uid,
+                policy,
+                proofs,
+                generations,
+                catalog,
+                openpgp,
+                ml_dsa,
+                receipt_key,
+                validation_time.parse().map_err(|_| ())?,
+            )?;
+            println!("valid");
+            Ok(())
+        }
         [_, command, socket, capability, own_uid, own_gid, authority_uid, authority_gid]
             if command == "healthcheck" =>
         {
@@ -140,7 +187,7 @@ fn run() -> Result<(), ()> {
         ),
         _ => {
             eprintln!(
-                "usage: mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-receipt-verifier SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority transition-policy POLICY_ROOT REPOSITORY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP NEXT_ML_DSA NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE VALIDATION_TIME EXPECTED_GENERATION EXPECTED_DIGEST OWN_UID\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
+                "usage: mrml-git-authority serve-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority check-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-receipt-verifier SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority transition-policy POLICY_ROOT REPOSITORY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP NEXT_ML_DSA NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE VALIDATION_TIME EXPECTED_GENERATION EXPECTED_DIGEST OWN_UID\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
             );
             std::process::exit(EX_USAGE);
         }
@@ -369,6 +416,92 @@ fn listener_health(socket: &Path, own_uid: u32, socket_gid: u32) -> Result<(), (
     Ok(())
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuthorityRepositoryBootstrap {
+    repository: RepositoryIdentity,
+    generation: u64,
+}
+
+fn parse_authority_repository_catalog(
+    input: &[u8],
+) -> Result<Vec<AuthorityRepositoryBootstrap>, ()> {
+    let text = std::str::from_utf8(input).map_err(|_| ())?;
+    if !text.ends_with('\n') {
+        return Err(());
+    }
+    let mut lines = text.lines();
+    if lines.next() != Some("version=1") {
+        return Err(());
+    }
+    let mut repositories = Vec::new();
+    for line in lines {
+        let (repository, generation) = line.split_once(" generation=").ok_or(())?;
+        let repository = repository.strip_prefix("repository=").ok_or(())?;
+        let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
+        let generation = generation.parse::<u64>().map_err(|_| ())?;
+        if generation == 0
+            || repositories.len() >= MAX_AUTHORITY_REPOSITORIES
+            || repositories
+                .last()
+                .is_some_and(|previous: &AuthorityRepositoryBootstrap| {
+                    previous.repository >= repository
+                })
+        {
+            return Err(());
+        }
+        repositories.push(AuthorityRepositoryBootstrap {
+            repository,
+            generation,
+        });
+    }
+    if repositories.is_empty() {
+        return Err(());
+    }
+    Ok(repositories)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_production_authority_catalog(
+    authority_uid: u32,
+    policy_path: &str,
+    proof_path: &str,
+    generation_path: &str,
+    catalog_path: &str,
+    openpgp_path: &str,
+    ml_dsa_path: &str,
+    receipt_key_path: &str,
+    validation_time: u64,
+) -> Result<ProductionAuthorityCatalog, ()> {
+    let catalog_bytes = read_regular(
+        catalog_path,
+        1,
+        MAX_AUTHORITY_CATALOG_BYTES,
+        authority_uid,
+        false,
+    )?;
+    let repositories = parse_authority_repository_catalog(&catalog_bytes)?;
+    let mut authorities = mrml_runtime::Vector::new();
+    authorities
+        .try_reserve_exact(repositories.len())
+        .map_err(|_| ())?;
+    for entry in repositories {
+        let authority = load_authority(
+            authority_uid,
+            policy_path,
+            proof_path,
+            generation_path,
+            entry.repository.as_str(),
+            openpgp_path,
+            ml_dsa_path,
+            receipt_key_path,
+            validation_time,
+            entry.generation,
+        )?;
+        authorities.push((entry.repository, authority));
+    }
+    ProductionAuthorityCatalog::new(authorities).map_err(|_| ())
+}
+
 fn serve(
     socket: &str,
     capability_path: &str,
@@ -384,9 +517,8 @@ fn serve(
     validation_time: u64,
     repository_generation: u64,
 ) -> Result<(), ()> {
-    let termination_signals = TerminationSignals::block_current()?;
-    let capability = read_capability(capability_path, authority_peer.uid)?;
-    let mut authority = load_authority(
+    let repository_identity = RepositoryIdentity::parse(repository).map_err(|_| ())?;
+    let authority = load_authority(
         authority_peer.uid,
         policy_path,
         proof_path,
@@ -398,11 +530,34 @@ fn serve(
         validation_time,
         repository_generation,
     )?;
+    let catalog = ProductionAuthorityCatalog::new(
+        [(repository_identity, authority)].into(),
+    )
+    .map_err(|_| ())?;
+    serve_authority_catalog(
+        socket,
+        capability_path,
+        expected_gitd,
+        authority_peer,
+        catalog,
+    )
+}
+
+fn serve_authority_catalog(
+    socket: &str,
+    capability_path: &str,
+    expected_gitd: AuthorityPeer,
+    authority_peer: AuthorityPeer,
+    authority: ProductionAuthorityCatalog,
+) -> Result<(), ()> {
+    let termination_signals = TerminationSignals::block_current()?;
+    let capability = Arc::new(read_capability(capability_path, authority_peer.uid)?);
+    let authority = Arc::new(authority);
     let listener = AuthorityListener::bind(Path::new(socket), 0o660, expected_gitd)
         .and_then(|listener| listener.allow_health_peer(authority_peer))
         .map_err(|_| ())?;
-    let mut replay = AuthorityReplayWindow::new();
-    let mut health_replay = AuthorityReplayWindow::new();
+    let replay = Arc::new(std::sync::Mutex::new(AuthorityReplayWindow::new()));
+    let health_replay = Arc::new(std::sync::Mutex::new(AuthorityReplayWindow::new()));
     let terminating = Arc::new(AtomicBool::new(false));
     let signal_terminating = terminating.clone();
     let signal_socket = PathBuf::from(socket);
@@ -412,66 +567,117 @@ fn serve(
             let _ = std::os::unix::net::UnixStream::connect(signal_socket);
         }
     });
+    let (jobs, receiver) = mrml_runtime::blocking_channel(AUTHORITY_QUEUE_CAPACITY);
+    let mut workers = Vec::with_capacity(AUTHORITY_WORKERS);
+    for index in 0..AUTHORITY_WORKERS {
+        let receiver = receiver.clone();
+        let capability = capability.clone();
+        let authority = authority.clone();
+        let replay = replay.clone();
+        let health_replay = health_replay.clone();
+        workers.push(
+            std::thread::Builder::new()
+                .name(format!("mrml-git-authority-{index}"))
+                .spawn(move || {
+                    while let Ok(session) = receiver.recv() {
+                        serve_authority_session(
+                            session,
+                            expected_gitd,
+                            authority_peer,
+                            &capability,
+                            &authority,
+                            &replay,
+                            &health_replay,
+                        );
+                    }
+                })
+                .map_err(|_| ())?,
+        );
+    }
+    drop(receiver);
     loop {
         if terminating.load(Ordering::Acquire) {
             break;
         }
-        let mut session = match listener.accept() {
+        let session = match listener.accept() {
             Ok(session) => session,
             Err(_) => continue,
         };
         if terminating.load(Ordering::Acquire) {
             break;
         }
-        let mut encoded = vec![0u8; AUTHORITY_HEADER_BYTES + MAX_AUTHORITY_PAYLOAD_BYTES];
-        let length = match session.read_frame(&mut encoded) {
-            Ok(length) => length,
-            Err(_) => continue,
-        };
-        let observed_peer = session.observed_peer();
-        let request_replay = if observed_peer == expected_gitd {
-            &mut replay
+        if jobs.send(session).is_err() {
+            break;
+        }
+    }
+    drop(jobs);
+    for worker in workers {
+        worker.join().map_err(|_| ())?;
+    }
+    signal_worker.join().map_err(|_| ())?;
+    Ok(())
+}
+
+fn serve_authority_session(
+    mut session: AuthoritySession,
+    expected_gitd: AuthorityPeer,
+    authority_peer: AuthorityPeer,
+    capability: &AuthorityCapability,
+    authority: &ProductionAuthorityCatalog,
+    replay: &std::sync::Mutex<AuthorityReplayWindow>,
+    health_replay: &std::sync::Mutex<AuthorityReplayWindow>,
+) {
+    let mut encoded = vec![0u8; AUTHORITY_HEADER_BYTES + MAX_AUTHORITY_PAYLOAD_BYTES];
+    let Ok(length) = session.read_frame(&mut encoded) else {
+        return;
+    };
+    let observed_peer = session.observed_peer();
+    let request = {
+        let replay = if observed_peer == expected_gitd {
+            replay
         } else {
-            &mut health_replay
+            health_replay
         };
-        let request = match decode_frame(
+        let Ok(mut replay) = replay.lock() else {
+            return;
+        };
+        match decode_frame(
             &encoded[..length],
             AuthorityFrameKind::Request,
             observed_peer,
             observed_peer,
-            &capability,
-            request_replay,
+            capability,
+            &mut replay,
         ) {
             Ok(request) => request,
-            Err(_) => continue,
-        };
-        if observed_peer != expected_gitd && request.operation != AuthorityOperation::Health {
-            continue;
+            Err(_) => return,
         }
-        let result = mrml_runtime::unix_time_seconds()
-            .ok_or(AuthorityDispatchError::Unavailable)
-            .and_then(|now| authority.set_validation_time(now))
-            .and_then(|()| authority.dispatch(request.operation, request.payload));
-        let (status, payload) = match &result {
-            Ok(payload) => (STATUS_OK, &payload[..]),
-            Err(AuthorityDispatchError::Malformed) => (2, &[][..]),
-            Err(AuthorityDispatchError::Unauthorized) => (3, &[][..]),
-            Err(AuthorityDispatchError::Unavailable) => (STATUS_UNAVAILABLE, &[][..]),
-            Err(AuthorityDispatchError::Resource) => (4, &[][..]),
-        };
-        let response = AuthorityFrame {
-            kind: AuthorityFrameKind::Response,
-            operation: request.operation,
-            request_id: request.request_id,
-            status,
-            peer: authority_peer,
-            payload,
-        };
-        let response_length = encode_frame(response, &capability, &mut encoded).map_err(|_| ())?;
-        let _ = session.write_frame(&encoded[..response_length]);
+    };
+    if observed_peer != expected_gitd && request.operation != AuthorityOperation::Health {
+        return;
     }
-    signal_worker.join().map_err(|_| ())?;
-    Ok(())
+    let result = mrml_runtime::unix_time_seconds()
+        .ok_or(AuthorityDispatchError::Unavailable)
+        .and_then(|now| authority.dispatch(request.operation, request.payload, now));
+    let (status, payload) = match &result {
+        Ok(payload) => (STATUS_OK, &payload[..]),
+        Err(AuthorityDispatchError::Malformed) => (2, &[][..]),
+        Err(AuthorityDispatchError::Unauthorized) => (3, &[][..]),
+        Err(AuthorityDispatchError::Unavailable) => (STATUS_UNAVAILABLE, &[][..]),
+        Err(AuthorityDispatchError::Resource) => (4, &[][..]),
+    };
+    let response = AuthorityFrame {
+        kind: AuthorityFrameKind::Response,
+        operation: request.operation,
+        request_id: request.request_id,
+        status,
+        peer: authority_peer,
+        payload,
+    };
+    let Ok(response_length) = encode_frame(response, capability, &mut encoded) else {
+        return;
+    };
+    let _ = session.write_frame(&encoded[..response_length]);
 }
 
 fn load_authority(
@@ -733,6 +939,29 @@ mod tests {
     use mrml_runtime::Vector;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn repository_catalog_is_exact_ordered_and_bounded() {
+        let parsed = parse_authority_repository_catalog(
+            b"version=1\nrepository=owner/first generation=3\nrepository=owner/second generation=9\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].repository.as_str(), "owner/first");
+        assert_eq!(parsed[0].generation, 3);
+        assert_eq!(parsed[1].repository.as_str(), "owner/second");
+        assert_eq!(parsed[1].generation, 9);
+        for invalid in [
+            &b"version=1\n"[..],
+            &b"version=2\nrepository=owner/first generation=3\n"[..],
+            &b"version=1\nrepository=owner/first generation=0\n"[..],
+            &b"version=1\nrepository=owner/second generation=3\nrepository=owner/first generation=4\n"[..],
+            &b"version=1\nrepository=owner/first generation=3"[..],
+            &b"version=1\nrepository=../escape generation=3\n"[..],
+        ] {
+            assert!(parse_authority_repository_catalog(invalid).is_err());
+        }
+    }
 
     #[test]
     fn listener_health_requires_exact_socket_identity_and_mode() {

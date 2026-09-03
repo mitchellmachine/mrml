@@ -15,7 +15,8 @@ use mrml_git::{
     RepositoryGeneration, RepositoryIdentity, SignaturePurpose, TrustPolicyState,
 };
 use mrml_openpgp::{PublicKeyV6, MAX_OPENPGP_SIGNATURE_BYTES};
-use mrml_runtime::{SpinMutex, Vector};
+use mrml_runtime::Vector;
+use std::sync::Mutex;
 
 use crate::{
     AuthorityCandidateContext, AuthorityCandidateStatus, AuthorityGenerationStore,
@@ -105,7 +106,7 @@ pub struct ProductionAuthority {
 }
 
 pub struct ProductionAuthorityCatalog {
-    authorities: Vector<(RepositoryIdentity, SpinMutex<ProductionAuthority>)>,
+    authorities: Vector<(RepositoryIdentity, Mutex<ProductionAuthority>)>,
 }
 
 impl ProductionAuthorityCatalog {
@@ -127,7 +128,7 @@ impl ProductionAuthorityCatalog {
             {
                 return Err(AuthorityDispatchError::Unauthorized);
             }
-            indexed.push((repository, SpinMutex::new(authority)));
+            indexed.push((repository, Mutex::new(authority)));
         }
         Ok(Self {
             authorities: indexed,
@@ -145,7 +146,9 @@ impl ProductionAuthorityCatalog {
                 return Err(AuthorityDispatchError::Malformed);
             }
             for (_, authority) in &self.authorities {
-                let mut authority = authority.lock();
+                let mut authority = authority
+                    .try_lock()
+                    .map_err(|_| AuthorityDispatchError::Unavailable)?;
                 authority.set_validation_time(validation_time)?;
                 authority.dispatch(operation, payload)?;
             }
@@ -156,7 +159,10 @@ impl ProductionAuthorityCatalog {
             .authorities
             .binary_search_by(|(candidate, _)| candidate.cmp(&repository))
             .map_err(|_| AuthorityDispatchError::Unauthorized)?;
-        let mut authority = self.authorities[index].1.lock();
+        let mut authority = self.authorities[index]
+            .1
+            .try_lock()
+            .map_err(|_| AuthorityDispatchError::Unavailable)?;
         authority.set_validation_time(validation_time)?;
         authority.dispatch(operation, payload)
     }
@@ -986,7 +992,7 @@ mod tests {
             Ok(Vector::new())
         );
 
-        let first_guard = catalog.authorities[0].1.lock();
+        let first_guard = catalog.authorities[0].1.lock().unwrap();
         let (sender, receiver) = std::sync::mpsc::channel();
         let second_catalog = catalog.clone();
         let second_worker = std::thread::spawn(move || {
@@ -1016,14 +1022,10 @@ mod tests {
                 .unwrap();
         });
         assert_eq!(
-            receiver.recv_timeout(std::time::Duration::from_millis(25)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            receiver.recv_timeout(std::time::Duration::from_secs(1)),
+            Ok(Err(AuthorityDispatchError::Unavailable))
         );
         drop(first_guard);
-        assert_eq!(
-            receiver.recv_timeout(std::time::Duration::from_secs(1)),
-            Ok(Ok(Vector::new()))
-        );
         first_worker.join().unwrap();
         mrml_runtime::remove_dir_all(&root).unwrap();
     }

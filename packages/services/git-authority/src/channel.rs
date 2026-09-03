@@ -121,19 +121,31 @@ impl Drop for AuthorityCapability {
 }
 
 pub struct AuthorityReplayWindow {
-    last_request_id: u64,
+    highest_request_id: u64,
+    accepted: [u64; 1_024],
 }
 
 impl AuthorityReplayWindow {
     pub const fn new() -> Self {
-        Self { last_request_id: 0 }
+        Self {
+            highest_request_id: 0,
+            accepted: [0; 1_024],
+        }
     }
 
     pub fn accept(&mut self, request_id: u64) -> Result<(), AuthorityError> {
-        if request_id == 0 || request_id <= self.last_request_id {
+        if request_id == 0
+            || (self.highest_request_id >= 1_024
+                && request_id <= self.highest_request_id - 1_024)
+        {
             return Err(AuthorityError::Replay);
         }
-        self.last_request_id = request_id;
+        let slot = request_id as usize % self.accepted.len();
+        if self.accepted[slot] == request_id {
+            return Err(AuthorityError::Replay);
+        }
+        self.accepted[slot] = request_id;
+        self.highest_request_id = self.highest_request_id.max(request_id);
         Ok(())
     }
 }
@@ -303,6 +315,19 @@ mod tests {
             ),
             Err(AuthorityError::Replay)
         );
+    }
+
+    #[test]
+    fn replay_window_accepts_bounded_reordering_and_rejects_old_or_duplicate_ids() {
+        let mut replay = AuthorityReplayWindow::new();
+        assert_eq!(replay.accept(2_000), Ok(()));
+        assert_eq!(replay.accept(1_999), Ok(()));
+        assert_eq!(replay.accept(1_500), Ok(()));
+        assert_eq!(replay.accept(1_999), Err(AuthorityError::Replay));
+        assert_eq!(replay.accept(976), Err(AuthorityError::Replay));
+        assert_eq!(replay.accept(977), Ok(()));
+        assert_eq!(replay.accept(3_001), Ok(()));
+        assert_eq!(replay.accept(1_977), Err(AuthorityError::Replay));
     }
 
     #[test]
