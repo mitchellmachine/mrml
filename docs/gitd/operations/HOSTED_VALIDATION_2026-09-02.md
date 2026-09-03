@@ -620,3 +620,54 @@ Patent review: **NOT_TRIGGERED**. This follow-up records conventional build,
 test, SBOM, archive transfer, checksum, Docker load, and configuration-render
 evidence; the transition implementation review is recorded separately in
 `docs/patents/REVIEW_LOG.md`.
+
+## Bounded SSH rekey and exact image refresh
+
+Signed local commit `aba80e24` completed native SSH packet, byte, and key-age
+accounting, encrypted Curve25519 rekey, sequence preservation, current-plus-next
+host-key revalidation, and phase/idle/total deadlines. The exact detached
+worktree passed manifest lock and manifest validation; 29 SSH, 228 Git library,
+4 Git CLI, 4 protected-signer, 75 HTTP, 34 TLS, 4 authority library, 4 authority
+binary, 32 Gitd library, and 4 Gitd binary tests passed. The first sandboxed
+SSH run passed 28 cases and was denied its loopback bind; the unchanged suite
+passed with local socket access.
+
+Network-disabled builds produced these binaries and exact Docker-format
+archives:
+
+```text
+mrml-git-authority binary sha256:662512725653aa0a9a42331a6ab6b100f182183156a345927dec1baa751ddc4b
+mrml-gitd binary sha256:6e83af3044cfdb5c55e2538a3b376de841767b5b42b6e874a8b17aa797890ea9
+git-authority.tar sha256:4c07f617c437a4f38ae9486a88712e935ec8a31bf5f31e1c06a98c5feccf73f8
+gitd.tar sha256:9b42d8c2a70d577e2f5caa9fde6e47448bc92f59e0a85427ad26db24dea2bcf3
+git-authority SPDX JSON sha256:efea8af38e6c613c803befae3281ba49bfca5d04265c1f99e26f4c77feb1da74
+gitd SPDX JSON sha256:e1a5f503e749fa96ba6ade8a9dab045380f168fdb08e87f66a9201a14c69d12f
+```
+
+Syft 1.51.0 scanned the two exact archives. Their strict SHA-256 manifest
+verified locally and again after SCP to the authorized VPS. Docker Snap could
+not open an archive below `/tmp` by pathname, so the already-verified bytes
+were streamed to `docker load` on standard input; no removable-media permission
+or bind mount was added. Podman archive tags were normalized locally on the VPS.
+Docker then reported Linux/amd64, users `21002:21002` and `21001:21001`, and
+entrypoints `/usr/bin/mrml-git-authority` and `/usr/bin/mrml-gitd`. The image IDs
+in Docker's store were respectively `sha256:bf6cbf70e6857c3acd4bad7c813f01e86e6dcc8549fe1d85f0f4a6df4ec49b3e`
+and `sha256:3c26fcf95628a635660c163f631725d83afa23900692fa3bdca59165c942861e`.
+No container was running after the load.
+
+The VPS retains the complete named-volume set. Metadata-only inspection showed
+the expected fixed-owner Gitd, authority, certd, and ACME channel secrets, but
+the authority configuration volume still has no owner OpenPGP/ML-DSA public
+keys and the certd/ACME configuration volumes remain empty. `git.mrml.ca` now
+resolves with `mrml.ca` to the VPS IPv6 address, superseding the earlier missing
+DNS evidence, but a real owner-selected signing policy and production
+certificate-service configuration are still absent. Starting Internet-facing
+services would therefore violate fail-closed startup requirements, so the
+images remain loaded and stopped. The production Cosign owner key required to
+create the signed distribution bundle was also not supplied; test keys were not
+substituted.
+
+Patent review: **NOT_TRIGGERED**. This follow-up records conventional SSH rekey
+bounds, exact release builds, SBOM generation, checksum transfer, standard-input
+Docker loading, and metadata-only volume inspection. See
+`docs/patents/REVIEW_LOG.md`.
