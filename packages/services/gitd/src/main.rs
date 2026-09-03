@@ -139,13 +139,20 @@ fn run() -> Result<(), ()> {
         if command != "validate-config" {
             return Err(());
         }
-        let config = load_gitd_config(Path::new(config)).map_err(|_| ())?;
+        let config = load_gitd_config(Path::new(config)).map_err(|error| {
+            eprintln!("component=mrml-gitd event=validation_configuration_failed category={error:?}");
+        })?;
+        operational_event("validation_configuration_loaded");
         validate_storage_layout(&config).map_err(|_| ())?;
+        operational_event("validation_storage_layout_valid");
         let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
+        operational_event("validation_catalog_authenticated");
         load_gitd_authentication(&config, &catalog).map_err(|_| ())?;
+        operational_event("validation_authentication_loaded");
         for repository in &catalog.repositories {
             admit_catalog_repository(&config, repository).map_err(|_| ())?;
         }
+        operational_event("validation_repositories_admitted");
         println!("valid");
         return Ok(());
     }
