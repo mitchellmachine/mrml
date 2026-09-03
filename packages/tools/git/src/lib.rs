@@ -25,6 +25,7 @@ mod index;
 mod inflate;
 mod local_repack;
 mod object;
+mod object_id_set;
 mod openpgp_provider;
 mod pack;
 mod pack_delta;

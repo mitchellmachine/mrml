@@ -6,6 +6,7 @@
 
 use mrml_runtime::Vector;
 
+use crate::object_id_set::ObjectIdSet;
 use crate::{
     ObjectFormat, ObjectId, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
     SignaturePurpose, TrustGeneration, TrustPolicyState,
@@ -271,13 +272,17 @@ where
             &mut read_parents,
             &mut legacy,
         )?;
-        if !cutover_history.contains(&checkpoint) || legacy.contains(&cutover) {
+        let cutover_set = object_id_set(&cutover_history, limits.max_existing_commits)?;
+        let legacy_set = object_id_set(&legacy, limits.max_existing_commits)?;
+        if !cutover_set.contains(&checkpoint) || legacy_set.contains(&cutover) {
             return Err(HistoryVerificationError::NotFastForward);
         }
     }
 
+    let legacy_set = object_id_set(&legacy, limits.max_existing_commits)?;
+
     let mut range = verify_introduced_history(old, new, limits, &mut read_parents, |id| {
-        if legacy.contains(&id) {
+        if legacy_set.contains(&id) {
             let proof = verify_legacy(id)?;
             if proof.commit != id
                 || proof.repository != *context.repository
@@ -343,9 +348,13 @@ where
         &mut read_parents,
         &mut old_reachable,
     )?;
+    let old_reachable_set = object_id_set(&old_reachable, limits.max_existing_commits)?;
 
     let mut verified = Vector::new();
-    let mut visiting = Vector::new();
+    let mut verified_set = ObjectIdSet::new(limits.max_introduced_commits as usize)
+        .map_err(|_| HistoryVerificationError::Resource)?;
+    let mut visiting = ObjectIdSet::new(limits.max_introduced_commits as usize)
+        .map_err(|_| HistoryVerificationError::Resource)?;
     let mut stack = Vector::new();
     push_frame(
         new,
@@ -356,11 +365,11 @@ where
     )?;
     let mut reached_old_history = old == new;
     while let Some(frame) = stack.last_mut() {
-        if old_reachable.contains(&frame.id) {
+        if old_reachable_set.contains(&frame.id) {
             reached_old_history |= frame.id == old;
             let id = frame.id;
             stack.pop();
-            remove_id(&mut visiting, id);
+            visiting.remove(&id);
             continue;
         }
         if frame.next_parent < frame.parents.len() {
@@ -369,11 +378,11 @@ where
             if parent.format() != new.format() {
                 return Err(HistoryVerificationError::ObjectFormatMismatch);
             }
-            if old_reachable.contains(&parent) {
+            if old_reachable_set.contains(&parent) {
                 reached_old_history |= parent == old;
             } else if visiting.contains(&parent) {
                 return Err(HistoryVerificationError::Cycle);
-            } else if !verified.contains(&parent) {
+            } else if !verified_set.contains(&parent) {
                 push_frame(
                     parent,
                     limits.max_parents_per_commit,
@@ -391,8 +400,11 @@ where
             return Err(HistoryVerificationError::Resource);
         }
         verified.push(id);
+        verified_set
+            .try_insert(id)
+            .map_err(|_| HistoryVerificationError::Resource)?;
         stack.pop();
-        remove_id(&mut visiting, id);
+        visiting.remove(&id);
     }
     if !reached_old_history {
         return Err(HistoryVerificationError::NotFastForward);
@@ -421,8 +433,13 @@ where
     R: FnMut(ObjectId) -> Result<Vector<ObjectId>, HistoryVerificationError>,
 {
     let mut pending = Vector::from([root]);
+    let mut seen =
+        ObjectIdSet::new(maximum as usize).map_err(|_| HistoryVerificationError::Resource)?;
     while let Some(id) = pending.pop() {
-        if output.contains(&id) {
+        if !seen
+            .try_insert(id)
+            .map_err(|_| HistoryVerificationError::Resource)?
+        {
             continue;
         }
         if output.len() >= maximum as usize {
@@ -448,7 +465,7 @@ fn push_frame<R>(
     id: ObjectId,
     max_parents: u16,
     read_parents: &mut R,
-    visiting: &mut Vector<ObjectId>,
+    visiting: &mut ObjectIdSet,
     stack: &mut Vector<Frame>,
 ) -> Result<(), HistoryVerificationError>
 where
@@ -458,7 +475,9 @@ where
     if parents.len() > max_parents as usize {
         return Err(HistoryVerificationError::Resource);
     }
-    visiting.push(id);
+    visiting
+        .try_insert(id)
+        .map_err(|_| HistoryVerificationError::Resource)?;
     stack.push(Frame {
         id,
         parents,
@@ -467,10 +486,17 @@ where
     Ok(())
 }
 
-fn remove_id(values: &mut Vector<ObjectId>, id: ObjectId) {
-    if let Some(index) = values.iter().position(|value| *value == id) {
-        values.remove(index);
+fn object_id_set(
+    values: &[ObjectId],
+    maximum: u32,
+) -> Result<ObjectIdSet, HistoryVerificationError> {
+    let mut set =
+        ObjectIdSet::new(maximum as usize).map_err(|_| HistoryVerificationError::Resource)?;
+    for id in values {
+        set.try_insert(*id)
+            .map_err(|_| HistoryVerificationError::Resource)?;
     }
+    Ok(set)
 }
 
 #[cfg(test)]
@@ -481,6 +507,43 @@ mod tests {
 
     fn id(value: u8) -> ObjectId {
         ObjectId::Sha1([value; 20])
+    }
+
+    fn linear_id(value: u32) -> ObjectId {
+        let mut bytes = [0u8; 32];
+        bytes[..4].copy_from_slice(&value.to_be_bytes());
+        ObjectId::Sha256(bytes)
+    }
+
+    fn verify_linear_count(count: u32) {
+        let mut parent_reads = 0u32;
+        let mut proof_checks = 0u32;
+        let range = verify_introduced_history(
+            linear_id(0),
+            linear_id(count),
+            HistoryVerificationLimits {
+                max_existing_commits: count + 1,
+                max_introduced_commits: count,
+                max_parents_per_commit: 1,
+            },
+            |node| {
+                parent_reads += 1;
+                let value = u32::from_be_bytes(node.as_bytes()[..4].try_into().unwrap());
+                Ok(if value == 0 {
+                    Vector::new()
+                } else {
+                    [linear_id(value - 1)].into()
+                })
+            },
+            |_| {
+                proof_checks += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(range.introduced().len(), count as usize);
+        assert_eq!(parent_reads, count + 1);
+        assert_eq!(proof_checks, count);
     }
 
     fn graph(node: ObjectId) -> Result<Vector<ObjectId>, HistoryVerificationError> {
@@ -834,11 +897,6 @@ mod tests {
 
     #[test]
     fn required_linear_range_scales_execute_at_exact_limits() {
-        fn linear_id(value: u32) -> ObjectId {
-            let mut bytes = [0u8; 32];
-            bytes[..4].copy_from_slice(&value.to_be_bytes());
-            ObjectId::Sha256(bytes)
-        }
         for count in [1u32, 100, 1_000, 5_000] {
             let range = verify_introduced_history(
                 linear_id(0),
@@ -876,5 +934,20 @@ mod tests {
             ),
             Err(HistoryVerificationError::Resource)
         );
+    }
+
+    #[test]
+    fn graph_scale_1000() {
+        verify_linear_count(1_000);
+    }
+
+    #[test]
+    fn graph_scale_2000() {
+        verify_linear_count(2_000);
+    }
+
+    #[test]
+    fn graph_scale_4000() {
+        verify_linear_count(4_000);
     }
 }

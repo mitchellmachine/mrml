@@ -12388,3 +12388,10 @@ ordered exact-key object locator, while retaining independent canonical object
 hash verification. It introduces no cryptographic primitive, compression or
 delta selection, similarity mechanism, adaptive cache policy, or recorded
 re-review trigger.
+
+# 2026-09-03 — Bounded Git object-graph membership
+
+Patent review: **NOT_TRIGGERED**. This increment replaces repeated vector scans
+with a conventional bounded open-addressed exact-ID set for graph membership.
+It introduces no graph-ranking, similarity, compression, cache-selection,
+cryptographic, or other patent-sensitive mechanism.

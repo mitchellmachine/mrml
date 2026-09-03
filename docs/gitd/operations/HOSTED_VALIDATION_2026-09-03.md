@@ -42,7 +42,7 @@ validation. The Git test suite and production Gitd build passed:
 
 ```text
 ./target/debug/mrml test org.mrml.tool.git --target linux
-  PASS: 228 library, 4 CLI, 4 protected-signer tests
+  PASS: 229 library, 4 CLI, 4 protected-signer tests
 ./target/debug/mrml build org.mrml.service.gitd --target linux
   PASS
 ```
@@ -66,3 +66,20 @@ immutable-generation snapshot and ordered exact-key locator, while retaining
 full content authentication. It introduces no cryptographic primitive,
 compression/delta-selection method, similarity mechanism, or adaptive cache
 policy. See `docs/patents/REVIEW_LOG.md`.
+
+## Graph membership correction
+
+Complete-history verification and upload-pack want/have traversal no longer use
+repeated linear `Vector::contains` membership checks. A bounded, growable exact
+object-ID set now deduplicates existing, visiting, verified, excluded, and
+scheduled nodes with amortized constant-time lookup; deterministic result order
+remains in separate vectors. Removal closes probe clusters, maximum cardinality
+fails closed, and every key comparison still uses the complete SHA-1/SHA-256 ID.
+The focused suite passes 233 library, 4 CLI, and 4 signer tests, including set
+growth, duplicate insertion, deletion across displaced entries, and exact
+linear parent-read/proof-check counts. Separate debug test-process timings on
+this hosted Linux machine were 0.04 s for 1,000 nodes, 0.07 s for 2,000, and
+0.14 s for 4,000. That is consistent with linear growth for the tested deep
+history. Wide/criss-cross million-scale timing and independent peak-memory
+measurements remain to be recorded; this increment therefore does not yet claim
+completion of the full graph scaling acceptance gate.

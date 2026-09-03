@@ -2,6 +2,7 @@
 
 use mrml_runtime::Vector;
 
+use crate::object_id_set::ObjectIdSet;
 #[cfg(test)]
 use crate::{
     ImmutablePackCacheDirectory, PackCacheFileError, PackCacheKey, encode_pack_with_format,
@@ -1590,12 +1591,12 @@ impl FilesystemRepositoryView {
         tip: ObjectId,
     ) -> Result<(), GitdCoreError> {
         let mut pending = Vector::from([(tip, ObjectKind::Commit)]);
-        let mut seen = Vector::new();
+        let mut seen = ObjectIdSet::new(1_000_000).map_err(|_| GitdCoreError::Resource)?;
         while let Some((id, expected)) = pending.pop() {
             if seen.contains(&id) {
                 continue;
             }
-            if seen.len() >= 1_000_000 || pending.len() > 1_000_000 {
+            if pending.len() > 1_000_000 {
                 return Err(GitdCoreError::Resource);
             }
             let object = self.read_object(state, id)?;
@@ -1624,7 +1625,7 @@ impl FilesystemRepositoryView {
                 ObjectKind::Blob => {}
                 ObjectKind::Tag => return Err(GitdCoreError::ObjectValidation),
             }
-            seen.push(id);
+            seen.try_insert(id).map_err(|_| GitdCoreError::Resource)?;
         }
         Ok(())
     }
@@ -1656,23 +1657,23 @@ impl FilesystemRepositoryView {
         wants: &[ObjectId],
         haves: &[ObjectId],
     ) -> Result<Vector<ObjectId>, GitdCoreError> {
-        let mut excluded = Vector::new();
+        let mut excluded = ObjectIdSet::new(1_000_000).map_err(|_| GitdCoreError::Resource)?;
         let mut pending: Vector<ObjectId> = haves.iter().copied().collect();
         while let Some(id) = pending.pop() {
             if excluded.contains(&id) {
                 continue;
             }
-            if excluded.len() >= 1_000_000 {
-                return Err(GitdCoreError::Resource);
-            }
             let object = self.read_object(state, id)?;
             append_reachable_children(&object, state.object_format, &mut pending)?;
-            excluded.push(id);
+            excluded
+                .try_insert(id)
+                .map_err(|_| GitdCoreError::Resource)?;
         }
         let mut pending: Vector<ObjectId> = wants.iter().copied().collect();
+        let mut seen_set = ObjectIdSet::new(1_000_000).map_err(|_| GitdCoreError::Resource)?;
         let mut seen = Vector::new();
         while let Some(id) = pending.pop() {
-            if excluded.contains(&id) || seen.contains(&id) {
+            if excluded.contains(&id) || seen_set.contains(&id) {
                 continue;
             }
             if seen.len() >= 1_000_000 {
@@ -1680,6 +1681,9 @@ impl FilesystemRepositoryView {
             }
             let object = self.read_object(state, id)?;
             append_reachable_children(&object, state.object_format, &mut pending)?;
+            seen_set
+                .try_insert(id)
+                .map_err(|_| GitdCoreError::Resource)?;
             seen.push(id);
         }
         Ok(seen)
