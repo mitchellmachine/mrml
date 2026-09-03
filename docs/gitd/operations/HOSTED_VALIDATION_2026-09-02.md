@@ -522,3 +522,57 @@ public-network, VPS, power-loss, or physical-hardware transfer evidence.
 Patent review: **NOT_TRIGGERED**. The fixed threshold selects conventional RFC
 1951 stored blocks by public object length and introduces no new compression,
 similarity, or storage-selection mechanism. See `docs/patents/REVIEW_LOG.md`.
+
+## Final offline image load on the VPS
+
+The clean detached release worktree at signed local commit `e87b9931` passed
+manifest lock and manifest validation. Unchanged final suites passed 4+3
+authority tests, 32+4 Gitd tests, 228+4+3 Git tests, 75 HTTP tests, 34 TLS
+tests, 137 certificate tests, and 14 ACME-worker tests. The first sandboxed
+authority run passed its three non-socket cases and was denied a local Unix
+bind; the unchanged suite passed with local socket access.
+
+Network-disabled builds produced the following release binaries and local
+Podman image IDs:
+
+```text
+mrml-git-authority binary sha256:63426fb1d7e22fee0204387bfa3026678f3c82514b90198f2cd7414d18fae54e
+mrml-gitd binary sha256:2b5acce6a0b543729c0baa7b2036eb58166a05a7ff094624448b9d6b288aae83
+mrml-certd binary sha256:562f397220ac08ad6cbf29bb42346c85a31b69fb8845c27108b4278334e670c6
+mrml-acmed binary sha256:2c116780a0d09d1f3889038165d5d1317f84919469bb6171f9072b205e7d191e
+mrml/git-authority:e87b9931 image id sha256:5e552bfde4aa315cde6682739d502ef383ecea23211ae0f256c6a4ab13e88e3e
+mrml/gitd:e87b9931 image id sha256:8cfa09d8c01152e98242b7afd013ef2c4ff505b3e5c6b332744c1a561c49d36e
+mrml/certd:e87b9931 image id sha256:97cbd28b123cfbb7600c2d1671ce658e1e472d01cf1a423c544d3b1a171a6928
+mrml/acmed:e87b9931 image id sha256:3bda639da1c29304dc64c00a63c595400530556df2ac40203e91ed29c700b089
+```
+
+Syft 1.51.0 scanned each exact Docker-format archive into SPDX JSON. The
+104 MiB staging set included those archives, image inspection JSON, SBOMs,
+both Compose files, both volume provisioners, the stopped-service volume input
+installer, and Git backup/restore scripts. Its inner SHA-256 manifest verified
+locally and again after SCP to the VPS. Exact archive digests were:
+
+```text
+git-authority.tar sha256:a0d3ea40bcf01802069dcad9e18546e738c3110b7034ba581fac613367f3924e
+gitd.tar sha256:2a6ccb358de31e795e1a0612e47c67513a214b79a5ddacc1e2c64ba0805c5e2a
+certd.tar sha256:5f8293aa5925a4b142aff608cf4284a77b88944658ed8f16bcb7899409e8056c
+acmed.tar sha256:013bd831325e6c401eb492055ee4652d67fe6230d264ef81241ee4a82ee87539
+```
+
+Docker Engine 29.6.1 on the owner-authorized VPS loaded all four archives.
+Because the Podman-produced Docker archives carried `localhost/mrml/...` tags,
+the VPS added equivalent `mrml/...:e87b9931` local aliases without pulling or
+rebuilding. Docker reported Linux/amd64, the intended entrypoints, and fixed
+users `21001`, `21002`, `21003`, and `21004`. The combined Git and ACME
+all-volume model rendered successfully against those tags. No MRML container
+was started.
+
+This completes build, test, export, checksum, metadata/SBOM, SCP, remote
+checksum verification, and `docker load` evidence. Production start remains
+intentionally blocked on the real DNS/provider configuration and owner-selected
+trust roots described above; substituting fixtures would violate the deployment
+and owner-sovereignty requirements.
+
+Patent review: **NOT_TRIGGERED**. This records conventional offline image
+export, checksums, SBOM generation, SSH transfer, Docker load, and Compose
+render evidence. See `docs/patents/REVIEW_LOG.md`.
