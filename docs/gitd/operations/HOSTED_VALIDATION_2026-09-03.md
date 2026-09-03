@@ -83,3 +83,19 @@ this hosted Linux machine were 0.04 s for 1,000 nodes, 0.07 s for 2,000, and
 history. Wide/criss-cross million-scale timing and independent peak-memory
 measurements remain to be recorded; this increment therefore does not yet claim
 completion of the full graph scaling acceptance gate.
+
+## Delta dependency resolution
+
+File-backed pack validation no longer makes repeated full passes over pending
+deltas or linearly scans all resolved objects for each base. It uses the pack's
+static ordered offsets, a bounded exact object-ID map, sorted reverse dependency
+tables, and a ready queue. Dependency-edge insertion, lookup attempts, and
+dependency releases are charged to the existing work budget. Missing or
+unreleasable bases fail closed after the queue drains; OFS bases still require
+an exact prior offset, REF bases are independently rehashed, maximum depth 50 is
+unchanged, and duplicate resolved IDs are rejected.
+
+Reverse-ordered REF chains at depths 10, 25, and 50 pass and assert exactly one
+base load per delta. The complete focused result is 236 Git library, 4 CLI, and
+4 signer tests. These small debug runs each rounded to 0.01 s in the shell timer;
+larger wide-fanout scaling and peak-memory measurements remain pending.

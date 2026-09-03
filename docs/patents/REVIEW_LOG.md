@@ -12395,3 +12395,10 @@ Patent review: **NOT_TRIGGERED**. This increment replaces repeated vector scans
 with a conventional bounded open-addressed exact-ID set for graph membership.
 It introduces no graph-ranking, similarity, compression, cache-selection,
 cryptographic, or other patent-sensitive mechanism.
+
+# 2026-09-03 — Dependency-indexed Git delta resolution
+
+Patent review: **NOT_TRIGGERED**. This increment replaces repeated pending-list
+scans with conventional exact-key maps, sorted reverse-dependency adjacency,
+and a ready queue. It changes no delta format, selection, similarity,
+compression, or cryptographic mechanism.

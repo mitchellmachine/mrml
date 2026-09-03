@@ -1,8 +1,9 @@
 //! Constant-memory authentication pass for quarantined pack files.
 
-use mrml_runtime::File;
+use mrml_runtime::{File, Vector};
 
 use crate::inflate::{InflateByteReader, inflate_zlib_reader};
+use crate::object_id_set::ObjectIdMap;
 use crate::sha1::GitObjectHasher;
 use crate::{ObjectFormat, ObjectId, ObjectKind, PackError, PackIndexEntry};
 
@@ -258,16 +259,21 @@ where
     };
     let mut resolved = mrml_runtime::Vector::new();
     let mut pending = mrml_runtime::Vector::new();
+    let mut object_offsets = mrml_runtime::Vector::new();
     resolved
         .try_reserve_exact(scan.object_count as usize)
         .map_err(|_| PackError::TooLarge)?;
     pending
         .try_reserve_exact(scan.object_count as usize)
         .map_err(|_| PackError::TooLarge)?;
+    object_offsets
+        .try_reserve_exact(scan.object_count as usize)
+        .map_err(|_| PackError::TooLarge)?;
     let mut expanded_bytes = 0u64;
     let mut largest_object = 0u64;
     for _ in 0..scan.object_count {
         let offset = cursor.position;
+        object_offsets.push(offset);
         cursor.start_crc();
         let first = cursor.read_protocol_byte()?;
         let object_type = (first >> 4) & 7;
@@ -363,88 +369,140 @@ where
         return Err(PackError::TrailingData);
     }
     let mut work_remaining = cursor.work_remaining;
-    while !pending.is_empty() {
-        let before = pending.len();
-        let mut deferred = mrml_runtime::Vector::new();
-        for delta in pending {
-            let known = match delta.base {
-                DeltaBase::Offset(base_offset) => resolved
-                    .iter()
-                    .find(|object| object.offset == Some(base_offset))
-                    .copied()
-                    .map(|object| (object, false)),
-                DeltaBase::Id(id) => resolved
-                    .iter()
-                    .find(|object| object.id == id)
-                    .copied()
-                    .map(|object| (object, false)),
-            };
-            let (base_meta, base_contents) = if let Some((object, _)) = known {
-                let contents =
-                    load_base(object.id, max_individual_bytes)?.ok_or(PackError::MissingBase)?;
-                if contents.0 != object.kind {
-                    return Err(PackError::ObjectId);
-                }
-                (object, contents.1)
-            } else if let DeltaBase::Id(id) = delta.base {
-                let Some((kind, contents)) = load_base(id, max_individual_bytes)? else {
-                    deferred.push(delta);
-                    continue;
-                };
-                if hash_object(format, kind, &contents) != id {
-                    return Err(PackError::ObjectId);
-                }
-                (
-                    ResolvedObject {
-                        offset: None,
-                        id,
-                        kind,
-                        depth: 0,
-                        crc32: 0,
-                    },
-                    contents,
-                )
-            } else {
-                deferred.push(delta);
+    let mut resolved_by_id =
+        ObjectIdMap::new(scan.object_count as usize).map_err(|_| PackError::TooLarge)?;
+    let mut resolved_by_offset = Vector::new();
+    resolved_by_offset
+        .try_reserve_exact(object_offsets.len())
+        .map_err(|_| PackError::TooLarge)?;
+    resolved_by_offset.resize(object_offsets.len(), None);
+    for object in &resolved {
+        let offset = object.offset.ok_or(PackError::Delta)?;
+        let slot = object_offsets
+            .binary_search(&offset)
+            .map_err(|_| PackError::Delta)?;
+        resolved_by_offset[slot] = Some(*object);
+        resolved_by_id
+            .try_insert(object.id, *object)
+            .map_err(|_| PackError::ObjectId)?;
+    }
+
+    let mut waiting_ids = Vector::new();
+    let mut waiting_offsets = Vector::new();
+    let mut ready = Vector::new();
+    waiting_ids
+        .try_reserve_exact(pending.len())
+        .map_err(|_| PackError::TooLarge)?;
+    waiting_offsets
+        .try_reserve_exact(pending.len())
+        .map_err(|_| PackError::TooLarge)?;
+    ready
+        .try_reserve_exact(pending.len())
+        .map_err(|_| PackError::TooLarge)?;
+    for (index, delta) in pending.iter().enumerate() {
+        charge_work(&mut work_remaining, 1)?;
+        match delta.base {
+            DeltaBase::Offset(offset) => waiting_offsets.push((offset, index)),
+            DeltaBase::Id(id) => waiting_ids.push((id, index)),
+        }
+        ready.push(index);
+    }
+    waiting_ids.sort_unstable_by_key(|entry| entry.0);
+    waiting_offsets.sort_unstable_by_key(|entry| entry.0);
+    let mut pending: Vector<Option<PendingDelta>> = pending.into_iter().map(Some).collect();
+    let mut resolved_delta_count = 0usize;
+
+    while let Some(index) = ready.pop() {
+        let Some(delta) = pending[index].clone() else {
+            continue;
+        };
+        charge_work(&mut work_remaining, 1)?;
+        let known = match delta.base {
+            DeltaBase::Offset(base_offset) => object_offsets
+                .binary_search(&base_offset)
+                .ok()
+                .and_then(|slot| resolved_by_offset[slot]),
+            DeltaBase::Id(id) => resolved_by_id.get(&id),
+        };
+        let (base_meta, base_contents) = if let Some(object) = known {
+            let contents =
+                load_base(object.id, max_individual_bytes)?.ok_or(PackError::MissingBase)?;
+            if contents.0 != object.kind {
+                return Err(PackError::ObjectId);
+            }
+            (object, contents.1)
+        } else if let DeltaBase::Id(id) = delta.base {
+            let Some((kind, contents)) = load_base(id, max_individual_bytes)? else {
                 continue;
             };
-            let depth = base_meta.depth.checked_add(1).ok_or(PackError::Delta)?;
-            if depth > MAX_DELTA_DEPTH {
-                return Err(PackError::Delta);
+            if hash_object(format, kind, &contents) != id {
+                return Err(PackError::ObjectId);
             }
-            let program = inflate_at(
-                path,
-                delta.payload_offset,
-                cursor.data_end,
-                max_individual_bytes,
-                &mut work_remaining,
-            )?;
-            if program.len() as u64 != delta.declared_size {
-                return Err(PackError::TooLarge);
-            }
-            let contents = apply_delta_bounded(
-                &base_contents,
-                &program,
-                max_individual_bytes,
-                &mut work_remaining,
-            )?;
-            let size = contents.len() as u64;
-            expanded_bytes = charge_expanded(expanded_bytes, size, max_expanded_bytes)?;
-            largest_object = largest_object.max(size);
-            let id = hash_object(format, base_meta.kind, &contents);
-            sink(id, base_meta.kind, &contents)?;
-            resolved.push(ResolvedObject {
-                offset: Some(delta.offset),
-                id,
-                kind: base_meta.kind,
-                depth,
-                crc32: delta.crc32,
-            });
+            (
+                ResolvedObject {
+                    offset: None,
+                    id,
+                    kind,
+                    depth: 0,
+                    crc32: 0,
+                },
+                contents,
+            )
+        } else {
+            continue;
+        };
+        let depth = base_meta.depth.checked_add(1).ok_or(PackError::Delta)?;
+        if depth > MAX_DELTA_DEPTH {
+            return Err(PackError::Delta);
         }
-        if deferred.len() == before {
-            return Err(PackError::MissingBase);
+        let program = inflate_at(
+            path,
+            delta.payload_offset,
+            cursor.data_end,
+            max_individual_bytes,
+            &mut work_remaining,
+        )?;
+        if program.len() as u64 != delta.declared_size {
+            return Err(PackError::TooLarge);
         }
-        pending = deferred;
+        let contents = apply_delta_bounded(
+            &base_contents,
+            &program,
+            max_individual_bytes,
+            &mut work_remaining,
+        )?;
+        let size = contents.len() as u64;
+        expanded_bytes = charge_expanded(expanded_bytes, size, max_expanded_bytes)?;
+        largest_object = largest_object.max(size);
+        let id = hash_object(format, base_meta.kind, &contents);
+        sink(id, base_meta.kind, &contents)?;
+        let object = ResolvedObject {
+            offset: Some(delta.offset),
+            id,
+            kind: base_meta.kind,
+            depth,
+            crc32: delta.crc32,
+        };
+        let slot = object_offsets
+            .binary_search(&delta.offset)
+            .map_err(|_| PackError::Delta)?;
+        resolved_by_offset[slot] = Some(object);
+        resolved_by_id
+            .try_insert(id, object)
+            .map_err(|_| PackError::ObjectId)?;
+        resolved.push(object);
+        pending[index] = None;
+        resolved_delta_count += 1;
+        enqueue_waiting(
+            &waiting_offsets,
+            &delta.offset,
+            &mut ready,
+            &mut work_remaining,
+        )?;
+        enqueue_waiting(&waiting_ids, &id, &mut ready, &mut work_remaining)?;
+    }
+    if resolved_delta_count != pending.len() {
+        return Err(PackError::MissingBase);
     }
     resolved.sort_unstable_by_key(|object| object.offset.unwrap_or(u64::MAX));
     let mut objects = mrml_runtime::Vector::new();
@@ -465,6 +523,26 @@ where
         largest_object,
         checksum: scan.checksum,
     })
+}
+
+fn charge_work(remaining: &mut u64, amount: u64) -> Result<(), PackError> {
+    *remaining = remaining.checked_sub(amount).ok_or(PackError::TooLarge)?;
+    Ok(())
+}
+
+fn enqueue_waiting<K: Ord>(
+    waiting: &[(K, usize)],
+    key: &K,
+    ready: &mut Vector<usize>,
+    work_remaining: &mut u64,
+) -> Result<(), PackError> {
+    let start = waiting.partition_point(|(candidate, _)| candidate < key);
+    let end = waiting.partition_point(|(candidate, _)| candidate <= key);
+    for (_, index) in &waiting[start..end] {
+        charge_work(work_remaining, 1)?;
+        ready.push(*index);
+    }
+    Ok(())
 }
 
 fn charge_expanded(current: u64, amount: u64, limit: u64) -> Result<u64, PackError> {
@@ -881,5 +959,103 @@ mod tests {
             Err(PackError::ObjectId)
         ));
         mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    fn verify_reverse_ordered_ref_delta_chain(count: usize) {
+        let root = join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-pack-ref-chain-{count}"),
+        );
+        let _ = mrml_runtime::remove_dir_all(&root);
+        mrml_runtime::create_dir_all(&root).unwrap();
+        let format = ObjectFormat::Sha256;
+        let mut contents = Vector::new();
+        contents.push(Vector::from([b'a']));
+        for index in 1..=count {
+            let mut next = contents[index - 1].clone();
+            next.push((index as u8).wrapping_add(31));
+            contents.push(next);
+        }
+
+        let mut pack = Vector::from(*b"PACK");
+        pack.extend(2u32.to_be_bytes());
+        pack.extend(((count + 1) as u32).to_be_bytes());
+        for index in (1..=count).rev() {
+            let base = &contents[index - 1];
+            let result = &contents[index];
+            let delta = [
+                base.len() as u8,
+                result.len() as u8,
+                0x90,
+                base.len() as u8,
+                1,
+                result[result.len() - 1],
+            ];
+            header(7, delta.len(), &mut pack);
+            pack.extend(
+                ObjectId::blob_with_format(format, base)
+                    .as_bytes()
+                    .iter()
+                    .copied(),
+            );
+            pack.extend(stored(&delta));
+        }
+        header(3, contents[0].len(), &mut pack);
+        pack.extend(stored(&contents[0]));
+        let pack = finish(pack, format);
+        let path = join_path(&root, "reverse-ref.pack");
+        mrml_runtime::write_file(&path, &pack).unwrap();
+        let stored_objects = RefCell::new(Vector::<(ObjectId, ObjectKind, Vector<u8>)>::new());
+        let loads = RefCell::new(0usize);
+        let validated = validate_pack_file_with_bases(
+            &path,
+            format,
+            pack.len() as u64,
+            (count + 1) as u32,
+            16_384,
+            128,
+            1_000_000,
+            &mut |id, kind, bytes| {
+                let mut copied = Vector::new();
+                copied
+                    .try_extend_from_slice(bytes)
+                    .map_err(|_| PackError::TooLarge)?;
+                stored_objects.borrow_mut().push((id, kind, copied));
+                Ok(())
+            },
+            |id, _| {
+                *loads.borrow_mut() += 1;
+                Ok(stored_objects
+                    .borrow()
+                    .iter()
+                    .find(|entry| entry.0 == id)
+                    .map(|entry| (entry.1, entry.2.clone())))
+            },
+        )
+        .unwrap();
+        assert_eq!(validated.objects.len(), count + 1);
+        assert_eq!(*loads.borrow(), count);
+        assert!(
+            validated
+                .objects
+                .iter()
+                .any(|(id, _)| *id == ObjectId::blob_with_format(format, &contents[count]))
+        );
+        mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn reverse_ref_delta_scale_10() {
+        verify_reverse_ordered_ref_delta_chain(10);
+    }
+
+    #[test]
+    fn reverse_ref_delta_scale_25() {
+        verify_reverse_ordered_ref_delta_chain(25);
+    }
+
+    #[test]
+    fn reverse_ref_delta_scale_50() {
+        verify_reverse_ordered_ref_delta_chain(50);
     }
 }

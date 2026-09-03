@@ -123,6 +123,82 @@ fn object_hash(id: &ObjectId) -> usize {
     hash as usize
 }
 
+#[derive(Debug)]
+pub(crate) struct ObjectIdMap<V: Copy> {
+    slots: Vector<Option<(ObjectId, V)>>,
+    len: usize,
+    maximum: usize,
+}
+
+impl<V: Copy> ObjectIdMap<V> {
+    pub(crate) fn new(maximum: usize) -> Result<Self, ()> {
+        if maximum == 0 {
+            return Err(());
+        }
+        let initial = maximum.min(16).next_power_of_two();
+        let mut slots = Vector::new();
+        slots.try_reserve_exact(initial).map_err(|_| ())?;
+        slots.resize(initial, None);
+        Ok(Self {
+            slots,
+            len: 0,
+            maximum,
+        })
+    }
+
+    pub(crate) fn get(&self, id: &ObjectId) -> Option<V> {
+        let mask = self.slots.len() - 1;
+        let mut index = object_hash(id) & mask;
+        for _ in 0..self.slots.len() {
+            match self.slots[index] {
+                Some((existing, value)) if existing == *id => return Some(value),
+                None => return None,
+                Some(_) => index = (index + 1) & mask,
+            }
+        }
+        None
+    }
+
+    /// Inserts a new exact key and rejects duplicates.
+    pub(crate) fn try_insert(&mut self, id: ObjectId, value: V) -> Result<(), ()> {
+        if self.get(&id).is_some() || self.len >= self.maximum {
+            return Err(());
+        }
+        if (self.len + 1).saturating_mul(4) > self.slots.len().saturating_mul(3) {
+            self.grow()?;
+        }
+        self.insert_unchecked(id, value);
+        Ok(())
+    }
+
+    fn grow(&mut self) -> Result<(), ()> {
+        let largest = self.maximum.saturating_mul(2).next_power_of_two();
+        let next = self.slots.len().saturating_mul(2).min(largest);
+        if next <= self.slots.len() {
+            return Err(());
+        }
+        let mut replacement = Vector::new();
+        replacement.try_reserve_exact(next).map_err(|_| ())?;
+        replacement.resize(next, None);
+        let old = core::mem::replace(&mut self.slots, replacement);
+        self.len = 0;
+        for (id, value) in old.into_iter().flatten() {
+            self.insert_unchecked(id, value);
+        }
+        Ok(())
+    }
+
+    fn insert_unchecked(&mut self, id: ObjectId, value: V) {
+        let mask = self.slots.len() - 1;
+        let mut index = object_hash(&id) & mask;
+        while self.slots[index].is_some() {
+            index = (index + 1) & mask;
+        }
+        self.slots[index] = Some((id, value));
+        self.len += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

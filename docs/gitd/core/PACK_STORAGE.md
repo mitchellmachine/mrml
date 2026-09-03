@@ -58,8 +58,13 @@ with an exact configured output ceiling, retains at most one object, charges
 compressed and expanded bytes as work, hashes the canonical loose-object form,
 and emits exact CRC/offset/index metadata. Installed-directory verification uses
 the same path instead of reloading the pack. The validator now defers OFS and
-REF deltas as bounded metadata and resolves them deterministically through exact
-scratch-object identities. OFS bases must name an earlier exact pack offset.
+REF deltas as bounded metadata and resolves them through a dependency-indexed
+ready queue rather than repeatedly scanning all unresolved deltas and resolved
+objects. A static sorted offset table, bounded exact object-ID map, and sorted
+reverse-dependency tables release a delta only when its exact base becomes
+available. Each dependency is initially examined once and can be released once;
+map lookup, dependency insertion, and release consume the pack work budget.
+Duplicate resolved object IDs fail closed. OFS bases must name an earlier exact pack offset.
 REF bases may appear later or come from a caller-supplied exact-generation view;
 external bases are re-hashed by full object ID and copied into the transaction's
 private scratch set so reopen verification does not depend on mutable ambient
