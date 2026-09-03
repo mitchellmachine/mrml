@@ -1,5 +1,8 @@
 //! AES-128-GCM authenticated encryption for TLS 1.3.
 
+#[cfg(target_arch = "x86_64")]
+use core::sync::atomic::{AtomicU8, Ordering};
+
 fn xtime(x: u8) -> u8 {
     (x << 1) ^ (0x1b & (0u8.wrapping_sub(x >> 7)))
 }
@@ -65,8 +68,7 @@ fn expand_key(key: &[u8; 16]) -> [u8; 176] {
     expanded
 }
 
-fn aes128_encrypt(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
-    let keys = expand_key(key);
+fn aes128_encrypt_software(keys: &[u8; 176], input: &[u8; 16]) -> [u8; 16] {
     let mut state = *input;
     add_round_key(&mut state, &keys[..16]);
     for round in 1..=10 {
@@ -94,6 +96,58 @@ fn aes128_encrypt(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
     state
 }
 
+#[cfg(target_arch = "x86_64")]
+fn aes_instructions_available() -> bool {
+    static AVAILABLE: AtomicU8 = AtomicU8::new(0);
+    match AVAILABLE.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let available = core::arch::x86_64::__cpuid(1).ecx & (1 << 25) != 0;
+            AVAILABLE.store(if available { 2 } else { 1 }, Ordering::Relaxed);
+            available
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "aes")]
+unsafe fn aes128_encrypt_instructions(keys: &[u8; 176], input: &[u8; 16]) -> [u8; 16] {
+    use core::arch::x86_64::{
+        __m128i, _mm_aesenc_si128, _mm_aesenclast_si128, _mm_loadu_si128, _mm_storeu_si128,
+        _mm_xor_si128,
+    };
+
+    // SAFETY: callers below provide pointers to at least 16 in-bounds bytes;
+    // the intrinsic explicitly permits unaligned loads.
+    let load = |bytes: *const u8| unsafe { _mm_loadu_si128(bytes.cast::<__m128i>()) };
+    let mut state = _mm_xor_si128(load(input.as_ptr()), load(keys.as_ptr()));
+    for round in 1..10 {
+        state = _mm_aesenc_si128(state, load(keys[16 * round..].as_ptr()));
+    }
+    state = _mm_aesenclast_si128(state, load(keys[160..].as_ptr()));
+    let mut output = [0u8; 16];
+    // SAFETY: output provides exactly 16 writable bytes and the store permits
+    // unaligned destinations.
+    unsafe { _mm_storeu_si128(output.as_mut_ptr().cast::<__m128i>(), state) };
+    output
+}
+
+fn aes128_encrypt_expanded(keys: &[u8; 176], input: &[u8; 16]) -> [u8; 16] {
+    #[cfg(target_arch = "x86_64")]
+    if aes_instructions_available() {
+        // SAFETY: CPUID above proves AES instruction support. The intrinsic
+        // implementation performs only unaligned fixed-width loads/stores
+        // within the supplied arrays.
+        return unsafe { aes128_encrypt_instructions(keys, input) };
+    }
+    aes128_encrypt_software(keys, input)
+}
+
+fn aes128_encrypt(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
+    aes128_encrypt_expanded(&expand_key(key), input)
+}
+
 /// Encrypt one AES-128 block. QUIC uses this primitive for header protection.
 pub fn aes128_encrypt_block(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
     aes128_encrypt(key, input)
@@ -117,8 +171,9 @@ pub fn aes128_ctr_xor(
         return Err(());
     }
     let mut counter = start;
+    let keys = expand_key(key);
     for (source, target) in input.chunks(16).zip(output.chunks_mut(16)) {
-        let stream = aes128_encrypt(key, &counter.to_be_bytes());
+        let stream = aes128_encrypt_expanded(&keys, &counter.to_be_bytes());
         for (index, byte) in source.iter().enumerate() {
             target[index] = *byte ^ stream[index];
         }
@@ -164,9 +219,9 @@ fn counter_block(nonce: &[u8; 12], counter: u32) -> [u8; 16] {
     block
 }
 
-fn crypt(key: &[u8; 16], nonce: &[u8; 12], input: &[u8], output: &mut [u8]) {
+fn crypt(keys: &[u8; 176], nonce: &[u8; 12], input: &[u8], output: &mut [u8]) {
     for (index, (source, target)) in input.chunks(16).zip(output.chunks_mut(16)).enumerate() {
-        let stream = aes128_encrypt(key, &counter_block(nonce, 2 + index as u32));
+        let stream = aes128_encrypt_expanded(keys, &counter_block(nonce, 2 + index as u32));
         for i in 0..source.len() {
             target[i] = source[i] ^ stream[i];
         }
@@ -184,10 +239,11 @@ pub fn aes128_gcm_seal(
     if ciphertext.len() != plaintext.len() {
         return false;
     }
-    crypt(key, nonce, plaintext, ciphertext);
-    let h = u128::from_be_bytes(aes128_encrypt(key, &[0; 16]));
+    let keys = expand_key(key);
+    crypt(&keys, nonce, plaintext, ciphertext);
+    let h = u128::from_be_bytes(aes128_encrypt_expanded(&keys, &[0; 16]));
     *tag = (ghash(h, aad, ciphertext)
-        ^ u128::from_be_bytes(aes128_encrypt(key, &counter_block(nonce, 1))))
+        ^ u128::from_be_bytes(aes128_encrypt_expanded(&keys, &counter_block(nonce, 1))))
     .to_be_bytes();
     true
 }
@@ -203,9 +259,10 @@ pub fn aes128_gcm_open(
     if plaintext.len() != ciphertext.len() {
         return false;
     }
-    let h = u128::from_be_bytes(aes128_encrypt(key, &[0; 16]));
+    let keys = expand_key(key);
+    let h = u128::from_be_bytes(aes128_encrypt_expanded(&keys, &[0; 16]));
     let expected = (ghash(h, aad, ciphertext)
-        ^ u128::from_be_bytes(aes128_encrypt(key, &counter_block(nonce, 1))))
+        ^ u128::from_be_bytes(aes128_encrypt_expanded(&keys, &counter_block(nonce, 1))))
     .to_be_bytes();
     let mut difference = 0u8;
     for i in 0..16 {
@@ -214,7 +271,7 @@ pub fn aes128_gcm_open(
     if difference != 0 {
         return false;
     }
-    crypt(key, nonce, ciphertext, plaintext);
+    crypt(&keys, nonce, ciphertext, plaintext);
     true
 }
 
@@ -227,6 +284,23 @@ mod tests {
             *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap();
         }
         out
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn aes_instructions_match_constant_time_software_fallback() {
+        if !aes_instructions_available() {
+            return;
+        }
+        let key = hex::<16>("000102030405060708090a0b0c0d0e0f");
+        let input = hex::<16>("00112233445566778899aabbccddeeff");
+        let keys = expand_key(&key);
+        let software = aes128_encrypt_software(&keys, &input);
+        // SAFETY: the availability check above proves the required CPU
+        // feature, and both arguments are complete fixed-size arrays.
+        let accelerated = unsafe { aes128_encrypt_instructions(&keys, &input) };
+        assert_eq!(accelerated, software);
+        assert_eq!(accelerated, hex("69c4e0d86a7b0430d8cdb78070b4c55a"));
     }
     #[test]
     fn nist_empty_and_single_block_vectors() {
