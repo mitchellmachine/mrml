@@ -15,7 +15,8 @@ use mrml_gitd::{
     initialize_catalog_repository, initialize_empty_token_store,
     inspect_admitted_repository_recovery, issue_access_token, load_deployment_catalog,
     load_gitd_authentication, load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
-    recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
+    recover_admitted_repository, refresh_certd_tls_config, reload_gitd_authentication,
+    revoke_access_token,
     validate_identity_snapshot, validate_storage_layout, GitAuthorityChannelClient,
     GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute, GitdCompositionError,
     GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
@@ -440,6 +441,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
         })?;
     operational_event("startup_recovery_complete");
     let operational_health = service.operational_health();
+    let authentication = service.authentication();
     let maximum_connections = usize::try_from(config.max_connections).map_err(|_| ())?;
     if !(4..=65_536).contains(&maximum_connections) {
         return Err(());
@@ -497,6 +499,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let fatal = Arc::new(AtomicBool::new(false));
     let terminating = Arc::new(AtomicBool::new(false));
     let rotation_stop = Arc::new(AtomicBool::new(false));
+    let authentication_stop = Arc::new(AtomicBool::new(false));
     let rotation_fatal = fatal.clone();
     let rotation_health = operational_health.clone();
     let worker_rotation_stop = rotation_stop.clone();
@@ -516,6 +519,35 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
                 rotation_health.fail();
                 rotation_fatal.store(true, Ordering::Release);
                 break;
+            }
+        }
+    })
+    .map_err(|_| ())?;
+    let reload_stop = authentication_stop.clone();
+    let reload_health = operational_health.clone();
+    let reload_config = config.clone();
+    let reload_catalog = catalog.clone();
+    let authentication_worker = mrml_runtime::spawn_joinable(move || {
+        while !reload_stop.load(Ordering::Acquire) {
+            std::thread::sleep(std::time::Duration::from_millis(1_000));
+            if reload_stop.load(Ordering::Acquire) {
+                break;
+            }
+            match reload_gitd_authentication(
+                &authentication,
+                &reload_config,
+                &reload_catalog,
+            ) {
+                Ok(changed) => {
+                    reload_health.recover_readiness();
+                    if changed {
+                        operational_event("authentication_generation_activated");
+                    }
+                }
+                Err(_) => {
+                    reload_health.degrade();
+                    operational_event("authentication_reload_failed");
+                }
             }
         }
     })
@@ -550,11 +582,17 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             operational_event("shutdown_signal_received");
             operational_health.begin_drain();
             rotation_stop.store(true, Ordering::Release);
+            authentication_stop.store(true, Ordering::Release);
             let _ = mrml_runtime::TcpStream::connect([127, 0, 0, 1], config.listen_port);
             let quic_result = reactor.shutdown(&mut quic);
             let rotation_result = rotation_worker.join();
+            let authentication_result = authentication_worker.join();
             let tcp_result = _tcp_worker.join();
-            return if quic_result.is_ok() && rotation_result && tcp_result {
+            return if quic_result.is_ok()
+                && rotation_result
+                && authentication_result
+                && tcp_result
+            {
                 operational_event("shutdown_complete");
                 Ok(())
             } else {
@@ -567,7 +605,9 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             operational_health.begin_drain();
             let _ = reactor.shutdown(&mut quic);
             rotation_stop.store(true, Ordering::Release);
+            authentication_stop.store(true, Ordering::Release);
             let _ = rotation_worker.join();
+            let _ = authentication_worker.join();
             return Err(());
         }
         if reactor.step(&mut quic).is_err() {
@@ -580,7 +620,9 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             let _ = reactor.shutdown(&mut quic);
             fatal.store(true, Ordering::Release);
             rotation_stop.store(true, Ordering::Release);
+            authentication_stop.store(true, Ordering::Release);
             let _ = rotation_worker.join();
+            let _ = authentication_worker.join();
             return Err(());
         }
     }

@@ -40,6 +40,10 @@ impl GitdComposedService {
     pub fn operational_health(&self) -> Shared<GitdOperationalHealth> {
         self.health.clone()
     }
+
+    pub fn authentication(&self) -> Shared<GitdAuthentication> {
+        self.authentication.clone()
+    }
 }
 
 /// Construct the routable Git service only after every catalog repository is

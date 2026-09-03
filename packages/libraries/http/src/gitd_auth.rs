@@ -1,6 +1,6 @@
 use core::fmt;
 
-use mrml_crypto::hmac_sha256;
+use mrml_crypto::{Sha256, hmac_sha256};
 use mrml_runtime::{SpinMutex, Text, Vector};
 
 use crate::{Header, RepositoryIdentity};
@@ -107,10 +107,16 @@ pub struct RepositoryAccessPolicy {
 }
 
 pub struct GitdAuthentication {
+    snapshot: SpinMutex<GitdAuthenticationSnapshot>,
+    failures: SpinMutex<AuthenticationFailures>,
+}
+
+struct GitdAuthenticationSnapshot {
+    generation: u64,
+    identity: [u8; 32],
     authority: TokenAuthority,
     policies: Vector<RepositoryAccessPolicy>,
     records: Vector<TokenRecord>,
-    failures: SpinMutex<AuthenticationFailures>,
 }
 
 #[derive(Clone, Copy)]
@@ -161,10 +167,33 @@ impl AuthenticationFailures {
 impl GitdAuthentication {
     pub fn new(
         authority: TokenAuthority,
+        policies: Vector<RepositoryAccessPolicy>,
+        records: Vector<TokenRecord>,
+    ) -> Result<Self, AuthenticationError> {
+        Self::new_with_generation(1, authority, policies, records)
+    }
+
+    pub fn new_with_generation(
+        generation: u64,
+        authority: TokenAuthority,
+        policies: Vector<RepositoryAccessPolicy>,
+        records: Vector<TokenRecord>,
+    ) -> Result<Self, AuthenticationError> {
+        let snapshot = Self::validated_snapshot(generation, authority, policies, records)?;
+        Ok(Self {
+            snapshot: SpinMutex::new(snapshot),
+            failures: SpinMutex::new(AuthenticationFailures::new()?),
+        })
+    }
+
+    fn validated_snapshot(
+        generation: u64,
+        authority: TokenAuthority,
         mut policies: Vector<RepositoryAccessPolicy>,
         mut records: Vector<TokenRecord>,
-    ) -> Result<Self, AuthenticationError> {
-        if policies.is_empty()
+    ) -> Result<GitdAuthenticationSnapshot, AuthenticationError> {
+        if generation == 0
+            || policies.is_empty()
             || policies.len() > 100_000
             || records.len() > 1_000_000
             || policies
@@ -192,12 +221,40 @@ impl GitdAuthentication {
         {
             return Err(AuthenticationError::InvalidConfiguration);
         }
-        Ok(Self {
+        let identity = authentication_snapshot_identity(generation, &policies, &records);
+        Ok(GitdAuthenticationSnapshot {
+            generation,
+            identity,
             authority,
             policies,
             records,
-            failures: SpinMutex::new(AuthenticationFailures::new()?),
         })
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.snapshot.lock().generation
+    }
+
+    pub fn replace_authenticated_snapshot(
+        &self,
+        generation: u64,
+        authority: TokenAuthority,
+        policies: Vector<RepositoryAccessPolicy>,
+        records: Vector<TokenRecord>,
+    ) -> Result<bool, AuthenticationError> {
+        let replacement = Self::validated_snapshot(generation, authority, policies, records)?;
+        let mut current = self.snapshot.lock();
+        if replacement.generation < current.generation
+            || (replacement.generation == current.generation
+                && replacement.identity != current.identity)
+        {
+            return Err(AuthenticationError::StaleGeneration);
+        }
+        if replacement.generation == current.generation {
+            return Ok(false);
+        }
+        *current = replacement;
+        Ok(true)
     }
 
     pub fn authorize(
@@ -207,25 +264,26 @@ impl GitdAuthentication {
         action: RepositoryAction,
         now: u64,
     ) -> Result<AuthenticatedAccess, AuthenticationError> {
-        let failure_bucket = self.authority.failure_bucket(headers, repository);
+        let snapshot = self.snapshot.lock();
+        let failure_bucket = snapshot.authority.failure_bucket(headers, repository);
         if self.failures.lock().limited(failure_bucket, now) {
             return Err(AuthenticationError::Denied);
         }
-        let result = self
+        let result = snapshot
             .policies
             .binary_search_by(|policy| policy.repository.cmp(repository))
             .ok()
-            .map(|index| &self.policies[index])
+            .map(|index| &snapshot.policies[index])
             .ok_or(AuthenticationError::Denied)
             .and_then(|policy| {
-                self.authority.authorize(
+                snapshot.authority.authorize(
                     headers,
                     repository,
                     action,
                     policy.profile,
                     now,
                     policy.revocation_generation,
-                    &self.records,
+                    &snapshot.records,
                 )
             });
         if result == Err(AuthenticationError::Denied) {
@@ -604,6 +662,7 @@ pub enum AuthenticationError {
     Entropy,
     Denied,
     Resource,
+    StaleGeneration,
 }
 
 fn single_authorization(headers: &[Header]) -> Result<Option<&str>, AuthenticationError> {
@@ -615,6 +674,29 @@ fn single_authorization(headers: &[Header]) -> Result<Option<&str>, Authenticati
         return Err(AuthenticationError::Denied);
     }
     Ok(value)
+}
+
+fn authentication_snapshot_identity(
+    generation: u64,
+    policies: &[RepositoryAccessPolicy],
+    records: &[TokenRecord],
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"MRML git authentication snapshot identity v1\0");
+    digest.update(&generation.to_be_bytes());
+    for policy in policies {
+        digest.update(policy.repository.as_str().as_bytes());
+        digest.update(&[match policy.profile {
+            RepositoryProfile::PublicRead => 1,
+            RepositoryProfile::Private => 2,
+            RepositoryProfile::Protected => 3,
+        }]);
+        digest.update(&policy.revocation_generation.to_be_bytes());
+    }
+    for record in records {
+        digest.update(&record.integrity);
+    }
+    digest.finalize()
 }
 
 fn append_field(output: &mut Vector<u8>, value: &[u8]) -> Result<(), AuthenticationError> {
@@ -898,6 +980,8 @@ mod tests {
         )
         .unwrap();
         let bucket = authentication
+            .snapshot
+            .lock()
             .authority
             .failure_bucket(&invalid, &repository);
         for _ in 0..AUTH_FAILURES_PER_WINDOW {
@@ -923,6 +1007,90 @@ mod tests {
             Err(AuthenticationError::Denied)
         );
         assert_eq!(authentication.failures.lock().buckets[bucket].failures, 1);
+    }
+
+    #[test]
+    fn authenticated_snapshots_advance_and_reject_rollback() {
+        let repository = RepositoryIdentity::parse("owner/live").unwrap();
+        let policy = || RepositoryAccessPolicy {
+            repository: repository.clone(),
+            profile: RepositoryProfile::Private,
+            revocation_generation: 4,
+        };
+        let first_authority = TokenAuthority::new([0x27; 32]).unwrap();
+        let (mut first_token, first_record) = first_authority
+            .issue(
+                repository.clone(),
+                AccessScopes::READ,
+                10,
+                30,
+                4,
+                "first",
+            )
+            .unwrap();
+        let first_headers = authorization(&first_token.reveal_once().unwrap());
+        let authentication = GitdAuthentication::new_with_generation(
+            7,
+            first_authority,
+            [policy()].into(),
+            [first_record].into(),
+        )
+        .unwrap();
+        assert_eq!(authentication.generation(), 7);
+        assert_eq!(
+            authentication.authorize(&first_headers, &repository, RepositoryAction::Read, 20),
+            Ok(AuthenticatedAccess::Token)
+        );
+
+        let next_authority = TokenAuthority::new([0x27; 32]).unwrap();
+        let (mut next_token, next_record) = next_authority
+            .issue(
+                repository.clone(),
+                AccessScopes::READ,
+                10,
+                30,
+                4,
+                "next",
+            )
+            .unwrap();
+        let next_headers = authorization(&next_token.reveal_once().unwrap());
+        assert_eq!(
+            authentication.replace_authenticated_snapshot(
+                8,
+                next_authority,
+                [policy()].into(),
+                [next_record].into(),
+            ),
+            Ok(true)
+        );
+        assert_eq!(authentication.generation(), 8);
+        assert_eq!(
+            authentication.replace_authenticated_snapshot(
+                8,
+                TokenAuthority::new([0x27; 32]).unwrap(),
+                [policy()].into(),
+                Vector::new(),
+            ),
+            Err(AuthenticationError::StaleGeneration)
+        );
+        assert_eq!(
+            authentication.authorize(&first_headers, &repository, RepositoryAction::Read, 20),
+            Err(AuthenticationError::Denied)
+        );
+        assert_eq!(
+            authentication.authorize(&next_headers, &repository, RepositoryAction::Read, 20),
+            Ok(AuthenticatedAccess::Token)
+        );
+        assert_eq!(
+            authentication.replace_authenticated_snapshot(
+                7,
+                TokenAuthority::new([0x27; 32]).unwrap(),
+                [policy()].into(),
+                Vector::new(),
+            ),
+            Err(AuthenticationError::StaleGeneration)
+        );
+        assert_eq!(authentication.generation(), 8);
     }
 
     #[test]

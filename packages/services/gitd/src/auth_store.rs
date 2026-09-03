@@ -30,6 +30,7 @@ pub enum AuthenticationStoreError {
     Decode,
     Catalog,
     Lock,
+    Rollback,
 }
 
 pub fn initialize_empty_token_store(
@@ -226,12 +227,68 @@ pub fn load_gitd_authentication(
     config: &GitdConfig,
     catalog: &DeploymentCatalog,
 ) -> Result<GitdAuthentication, AuthenticationStoreError> {
-    let mut pepper = read_pepper(&config.token_pepper, config.gitd_uid)?;
+    let (generation, authority, policies, records) =
+        load_gitd_authentication_material(
+            &config.token_records,
+            &config.token_pepper,
+            config.gitd_uid,
+            catalog,
+        )?;
+    GitdAuthentication::new_with_generation(generation, authority, policies, records)
+        .map_err(|_| AuthenticationStoreError::Catalog)
+}
+
+pub fn reload_gitd_authentication(
+    current: &GitdAuthentication,
+    config: &GitdConfig,
+    catalog: &DeploymentCatalog,
+) -> Result<bool, AuthenticationStoreError> {
+    reload_gitd_authentication_from_store(
+        current,
+        &config.token_records,
+        &config.token_pepper,
+        config.gitd_uid,
+        catalog,
+    )
+}
+
+fn reload_gitd_authentication_from_store(
+    current: &GitdAuthentication,
+    token_records: &Path,
+    token_pepper: &Path,
+    gitd_uid: u32,
+    catalog: &DeploymentCatalog,
+) -> Result<bool, AuthenticationStoreError> {
+    let (generation, authority, policies, records) =
+        load_gitd_authentication_material(token_records, token_pepper, gitd_uid, catalog)?;
+    current
+        .replace_authenticated_snapshot(generation, authority, policies, records)
+        .map_err(|error| match error {
+            mrml_http::AuthenticationError::StaleGeneration => AuthenticationStoreError::Rollback,
+            _ => AuthenticationStoreError::Catalog,
+        })
+}
+
+fn load_gitd_authentication_material(
+    token_records: &Path,
+    token_pepper: &Path,
+    gitd_uid: u32,
+    catalog: &DeploymentCatalog,
+) -> Result<
+    (
+        u64,
+        TokenAuthority,
+        Vector<RepositoryAccessPolicy>,
+        Vector<TokenRecord>,
+    ),
+    AuthenticationStoreError,
+> {
+    let mut pepper = read_pepper(token_pepper, gitd_uid)?;
     let authority = TokenAuthority::new(pepper).map_err(|_| AuthenticationStoreError::Decode);
     erase_secret_bytes(&mut pepper);
     let authority = authority?;
-    let bytes = read_token_store(&config.token_records, config.gitd_uid)?;
-    let (_, records) = authority
+    let bytes = read_token_store(token_records, gitd_uid)?;
+    let (generation, records) = authority
         .decode_record_snapshot(&bytes)
         .map_err(|_| AuthenticationStoreError::Decode)?;
     let mut policies = Vector::new();
@@ -252,8 +309,7 @@ pub fn load_gitd_authentication(
             revocation_generation: entry.revocation_generation.0,
         });
     }
-    GitdAuthentication::new(authority, policies, records)
-        .map_err(|_| AuthenticationStoreError::Catalog)
+    Ok((generation, authority, policies, records))
 }
 
 fn read_pepper(path: &Path, gitd_uid: u32) -> Result<[u8; 32], AuthenticationStoreError> {
@@ -460,6 +516,97 @@ mod tests {
             .unwrap();
         assert_eq!(generation, 3);
         assert_eq!(records.len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn live_reload_revokes_without_restart_and_rejects_store_rollback() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-gitd-auth-live-reload-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = fs::metadata(&root).unwrap().uid();
+        let pepper_path = root.join("pepper");
+        fs::write(&pepper_path, [0x74; 32]).unwrap();
+        fs::set_permissions(&pepper_path, fs::Permissions::from_mode(0o400)).unwrap();
+        let store_path = root.join("tokens.v2");
+        initialize_empty_token_store(&store_path, &pepper_path, uid).unwrap();
+        let repository = RepositoryIdentity::parse("owner/live").unwrap();
+        let mut token = issue_access_token(
+            &store_path,
+            &pepper_path,
+            uid,
+            repository.clone(),
+            AccessScopes::READ,
+            10,
+            30,
+            4,
+            "emergency-revocation",
+        )
+        .unwrap();
+        let encoded = token.reveal_once().unwrap();
+        let headers: mrml_runtime::Vector<mrml_http::Header> = [mrml_http::Header {
+            name: "authorization".into(),
+            value: mrml_runtime::mrml_format!("Bearer {encoded}"),
+        }]
+        .into();
+        let catalog = DeploymentCatalog {
+            repositories: vec![crate::DeploymentRepository {
+                repository: mrml_git::RepositoryIdentity::parse("owner/live").unwrap(),
+                profile: crate::DeploymentProfile {
+                    name: "private".into(),
+                    class: DeploymentRepositoryProfile::Private,
+                    max_object_bytes: 1024,
+                },
+                repository_generation: mrml_git::RepositoryGeneration(1),
+                trust_generation: mrml_git::TrustGeneration(1),
+                revocation_generation: mrml_git::RevocationGeneration(4),
+            }],
+        };
+        let (generation, authority, policies, records) =
+            load_gitd_authentication_material(&store_path, &pepper_path, uid, &catalog).unwrap();
+        let current =
+            GitdAuthentication::new_with_generation(generation, authority, policies, records)
+                .unwrap();
+        assert_eq!(
+            current.authorize(&headers, &repository, mrml_http::RepositoryAction::Read, 20),
+            Ok(mrml_http::AuthenticatedAccess::Token)
+        );
+        let previous = fs::read(&store_path).unwrap();
+        assert_eq!(
+            revoke_access_token(&store_path, &pepper_path, uid, &encoded),
+            Ok(true)
+        );
+        assert_eq!(
+            reload_gitd_authentication_from_store(
+                &current,
+                &store_path,
+                &pepper_path,
+                uid,
+                &catalog,
+            ),
+            Ok(true)
+        );
+        assert_eq!(current.generation(), 3);
+        assert_eq!(
+            current.authorize(&headers, &repository, mrml_http::RepositoryAction::Read, 20),
+            Err(mrml_http::AuthenticationError::Denied)
+        );
+        fs::write(&store_path, previous).unwrap();
+        assert_eq!(
+            reload_gitd_authentication_from_store(
+                &current,
+                &store_path,
+                &pepper_path,
+                uid,
+                &catalog,
+            ),
+            Err(AuthenticationStoreError::Rollback)
+        );
+        assert_eq!(current.generation(), 3);
         fs::remove_dir_all(root).unwrap();
     }
 }

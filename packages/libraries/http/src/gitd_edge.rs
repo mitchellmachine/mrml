@@ -22,6 +22,7 @@ const HEALTH_STARTING: u8 = 0;
 const HEALTH_READY: u8 = 1;
 const HEALTH_DRAINING: u8 = 2;
 const HEALTH_FAILED: u8 = 3;
+const HEALTH_DEGRADED: u8 = 4;
 
 pub struct GitdOperationalHealth {
     state: AtomicU8,
@@ -51,6 +52,24 @@ impl GitdOperationalHealth {
 
     pub fn fail(&self) {
         self.state.store(HEALTH_FAILED, Ordering::Release);
+    }
+
+    pub fn degrade(&self) {
+        let _ = self.state.compare_exchange(
+            HEALTH_READY,
+            HEALTH_DEGRADED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub fn recover_readiness(&self) {
+        let _ = self.state.compare_exchange(
+            HEALTH_DEGRADED,
+            HEALTH_READY,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
     }
 
     pub fn is_ready(&self) -> bool {
@@ -2608,6 +2627,16 @@ mod tests {
             .headers
             .iter()
             .any(|header| header.name == "cache-control" && header.value == "no-store"));
+        health.degrade();
+        assert_eq!(
+            server.handle(&request("GET", "/health/ready", false)).status,
+            503
+        );
+        health.recover_readiness();
+        assert_eq!(
+            server.handle(&request("GET", "/health/ready", false)).status,
+            200
+        );
         health.begin_drain();
         assert_eq!(
             server.handle(&request("GET", "/health/ready", false)).status,
