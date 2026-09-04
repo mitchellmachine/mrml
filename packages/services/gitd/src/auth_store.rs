@@ -9,7 +9,7 @@ use mrml_http::{
     AccessScopes, GitdAuthentication, MAX_TOKEN_STORE_BYTES, OneTimeAccessToken,
     RepositoryAccessPolicy, RepositoryIdentity, RepositoryProfile, TokenAuthority, TokenRecord,
 };
-use mrml_runtime::Vector;
+use mrml_runtime::{DirectoryCapability, Text, Vector};
 
 use crate::{DeploymentCatalog, DeploymentRepositoryProfile, GitdConfig};
 
@@ -31,6 +31,145 @@ pub enum AuthenticationStoreError {
     Catalog,
     Lock,
     Rollback,
+}
+
+/// A production token snapshot source retained before listeners are created.
+/// The mutable token filename is resolved beneath this descriptor on every
+/// reload, so replacing an ambient parent path cannot redirect authentication.
+pub struct RetainedAuthenticationStore {
+    directory: DirectoryCapability,
+    token_name: Text,
+    pepper: [u8; 32],
+    gitd_uid: u32,
+}
+
+impl RetainedAuthenticationStore {
+    pub fn open(config: &GitdConfig) -> Result<Self, AuthenticationStoreError> {
+        Self::open_paths(
+            &config.token_records,
+            &config.token_pepper,
+            config.gitd_uid,
+            config.gitd_gid,
+        )
+    }
+
+    fn open_paths(
+        token_records: &Path,
+        token_pepper: &Path,
+        gitd_uid: u32,
+        gitd_gid: u32,
+    ) -> Result<Self, AuthenticationStoreError> {
+        let parent = token_records
+            .parent()
+            .ok_or(AuthenticationStoreError::Open)?;
+        let token_name = token_records
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(AuthenticationStoreError::Open)?;
+        if !token_records.is_absolute()
+            || token_name.is_empty()
+            || token_name.contains('/')
+            || token_name == "."
+            || token_name == ".."
+        {
+            return Err(AuthenticationStoreError::Open);
+        }
+        let directory = DirectoryCapability::open_root(
+            parent.to_str().ok_or(AuthenticationStoreError::Open)?,
+        )
+        .map_err(|_| AuthenticationStoreError::Open)?;
+        let metadata = directory
+            .metadata()
+            .map_err(|_| AuthenticationStoreError::Metadata)?;
+        if metadata.uid != gitd_uid
+            || metadata.gid != gitd_gid
+            || metadata.mode & 0o777 != 0o700
+            || metadata.links < 2
+        {
+            return Err(AuthenticationStoreError::Permissions);
+        }
+        Ok(Self {
+            directory,
+            token_name: token_name.into(),
+            pepper: read_pepper(token_pepper, gitd_uid)?,
+            gitd_uid,
+        })
+    }
+
+    pub fn load(
+        &self,
+        catalog: &DeploymentCatalog,
+    ) -> Result<GitdAuthentication, AuthenticationStoreError> {
+        let (generation, authority, policies, records) = self.material(catalog)?;
+        GitdAuthentication::new_with_generation(generation, authority, policies, records)
+            .map_err(|_| AuthenticationStoreError::Catalog)
+    }
+
+    pub fn reload(
+        &self,
+        current: &GitdAuthentication,
+        catalog: &DeploymentCatalog,
+    ) -> Result<bool, AuthenticationStoreError> {
+        let (generation, authority, policies, records) = self.material(catalog)?;
+        current
+            .replace_authenticated_snapshot(generation, authority, policies, records)
+            .map_err(|error| match error {
+                mrml_http::AuthenticationError::StaleGeneration => {
+                    AuthenticationStoreError::Rollback
+                }
+                _ => AuthenticationStoreError::Catalog,
+            })
+    }
+
+    fn material(
+        &self,
+        catalog: &DeploymentCatalog,
+    ) -> Result<
+        (
+            u64,
+            TokenAuthority,
+            Vector<RepositoryAccessPolicy>,
+            Vector<TokenRecord>,
+        ),
+        AuthenticationStoreError,
+    > {
+        let authority = TokenAuthority::new(self.pepper)
+            .map_err(|_| AuthenticationStoreError::Decode)?;
+        let bytes = self.read_snapshot()?;
+        authentication_material(authority, &bytes, catalog)
+    }
+
+    fn read_snapshot(&self) -> Result<Vec<u8>, AuthenticationStoreError> {
+        let mut file = self
+            .directory
+            .open_regular(self.token_name.as_str())
+            .map_err(|_| AuthenticationStoreError::Open)?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| AuthenticationStoreError::Metadata)?;
+        let file_length = file
+            .len()
+            .map_err(|_| AuthenticationStoreError::Metadata)?;
+        if metadata.links != 1
+            || (metadata.uid != 0 && metadata.uid != self.gitd_uid)
+            || metadata.mode & 0o077 != 0
+            || metadata.mode & 0o400 == 0
+            || !(52..=MAX_TOKEN_STORE_BYTES as u64).contains(&file_length)
+        {
+            return Err(AuthenticationStoreError::Permissions);
+        }
+        let length = usize::try_from(file_length).map_err(|_| AuthenticationStoreError::Size)?;
+        let mut bytes = vec![0u8; length];
+        file.read_exact(&mut bytes)
+            .map_err(|_| AuthenticationStoreError::Read)?;
+        Ok(bytes)
+    }
+}
+
+impl Drop for RetainedAuthenticationStore {
+    fn drop(&mut self) {
+        erase_secret_bytes(&mut self.pepper);
+    }
 }
 
 pub fn initialize_empty_token_store(
@@ -308,8 +447,24 @@ fn load_gitd_authentication_material(
     erase_secret_bytes(&mut pepper);
     let authority = authority?;
     let bytes = read_token_store(token_records, gitd_uid)?;
+    authentication_material(authority, &bytes, catalog)
+}
+
+fn authentication_material(
+    authority: TokenAuthority,
+    bytes: &[u8],
+    catalog: &DeploymentCatalog,
+) -> Result<
+    (
+        u64,
+        TokenAuthority,
+        Vector<RepositoryAccessPolicy>,
+        Vector<TokenRecord>,
+    ),
+    AuthenticationStoreError,
+> {
     let (generation, records) = authority
-        .decode_record_snapshot(&bytes)
+        .decode_record_snapshot(bytes)
         .map_err(|_| AuthenticationStoreError::Decode)?;
     let mut policies = Vector::new();
     policies
@@ -628,6 +783,76 @@ mod tests {
         );
         assert_eq!(current.generation(), 3);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_reload_survives_ambient_token_directory_replacement() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-gitd-auth-retained-reload-{}",
+            std::process::id()
+        ));
+        let displaced = root.with_extension("displaced");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&displaced);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let metadata = fs::metadata(&root).unwrap();
+        let uid = metadata.uid();
+        let gid = metadata.gid();
+        let pepper_path = root.join("pepper");
+        fs::write(&pepper_path, [0x76; 32]).unwrap();
+        fs::set_permissions(&pepper_path, fs::Permissions::from_mode(0o400)).unwrap();
+        let store_path = root.join("tokens.v2");
+        initialize_empty_token_store(&store_path, &pepper_path, uid).unwrap();
+        let repository = RepositoryIdentity::parse("owner/retained").unwrap();
+        let mut token = issue_access_token(
+            &store_path,
+            &pepper_path,
+            uid,
+            repository.clone(),
+            AccessScopes::READ,
+            10,
+            30,
+            4,
+            "retained-revocation",
+        )
+        .unwrap();
+        let encoded = token.reveal_once().unwrap();
+        let catalog = DeploymentCatalog {
+            repositories: vec![crate::DeploymentRepository {
+                repository: mrml_git::RepositoryIdentity::parse("owner/retained").unwrap(),
+                profile: crate::DeploymentProfile {
+                    name: "private".into(),
+                    class: DeploymentRepositoryProfile::Private,
+                    max_object_bytes: 1024,
+                },
+                repository_generation: mrml_git::RepositoryGeneration(1),
+                trust_generation: mrml_git::TrustGeneration(1),
+                revocation_generation: mrml_git::RevocationGeneration(4),
+            }],
+        };
+        let retained =
+            RetainedAuthenticationStore::open_paths(&store_path, &pepper_path, uid, gid).unwrap();
+        let current = retained.load(&catalog).unwrap();
+
+        fs::rename(&root, &displaced).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(retained.reload(&current, &catalog), Ok(false));
+
+        assert_eq!(
+            revoke_access_token(
+                &displaced.join("tokens.v2"),
+                &displaced.join("pepper"),
+                uid,
+                &encoded,
+            ),
+            Ok(true)
+        );
+        assert_eq!(retained.reload(&current, &catalog), Ok(true));
+        assert_eq!(current.generation(), 3);
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(displaced).unwrap();
     }
 
     #[test]

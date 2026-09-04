@@ -15,11 +15,11 @@ use mrml_gitd::{
     initialize_catalog_repository, initialize_empty_token_store,
     inspect_admitted_repository_recovery, issue_access_token, load_deployment_catalog,
     load_gitd_authentication, load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
-    recover_admitted_repository, refresh_certd_tls_config, reload_gitd_authentication,
-    revoke_access_token,
+    recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
     validate_identity_snapshot, validate_storage_layout, GitAuthorityChannelClient,
     GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute, GitdCompositionError,
     GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
+    RetainedAuthenticationStore,
 };
 use mrml_http::{AccessScopes, RepositoryIdentity};
 use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
@@ -365,6 +365,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let _termination_signals = TerminationSignals::install()?;
     let config = load_gitd_config(config_path).map_err(|_| ())?;
     validate_storage_layout(&config).map_err(|_| ())?;
+    let authentication_store = RetainedAuthenticationStore::open(&config).map_err(|_| ())?;
     let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
     operational_event("startup_configuration_valid");
     let authority_capability =
@@ -442,6 +443,9 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     operational_event("startup_recovery_complete");
     let operational_health = service.operational_health();
     let authentication = service.authentication();
+    authentication_store
+        .reload(&authentication, &catalog)
+        .map_err(|_| ())?;
     let maximum_connections = usize::try_from(config.max_connections).map_err(|_| ())?;
     if !(4..=65_536).contains(&maximum_connections) {
         return Err(());
@@ -525,7 +529,6 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     .map_err(|_| ())?;
     let reload_stop = authentication_stop.clone();
     let reload_health = operational_health.clone();
-    let reload_config = config.clone();
     let reload_catalog = catalog.clone();
     let authentication_worker = mrml_runtime::spawn_joinable(move || {
         while !reload_stop.load(Ordering::Acquire) {
@@ -533,11 +536,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             if reload_stop.load(Ordering::Acquire) {
                 break;
             }
-            match reload_gitd_authentication(
-                &authentication,
-                &reload_config,
-                &reload_catalog,
-            ) {
+            match authentication_store.reload(&authentication, &reload_catalog) {
                 Ok(changed) => {
                     reload_health.recover_readiness();
                     if changed {

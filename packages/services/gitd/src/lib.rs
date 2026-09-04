@@ -20,6 +20,7 @@ mod tls_identity;
 pub use auth_store::{
     initialize_empty_token_store, issue_access_token, load_gitd_authentication,
     reload_gitd_authentication, revoke_access_token, AuthenticationStoreError,
+    RetainedAuthenticationStore,
 };
 pub use authority_rpc::{GitAuthorityChannelClient, GitAuthorityChannelError};
 pub use backend::{GitdRepositorySet, SharedGitdRepositorySet};
