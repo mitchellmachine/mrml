@@ -1,5 +1,5 @@
 use std::fs;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use mrml_git::{
@@ -219,8 +219,9 @@ fn validate_policy_capability(
 }
 
 /// Initializes one exact catalog entry and no other repository. All derived
-/// paths are preflighted before creation; a definite failure removes only leaf
-/// directories created by this invocation.
+/// paths are validated through retained roots before each creation. Any failure
+/// leaves an incomplete, non-admissible generation for explicit inspection;
+/// cleanup never follows a replaceable ambient path.
 pub fn initialize_catalog_repository(
     config: &GitdConfig,
     entry: &DeploymentRepository,
@@ -241,78 +242,88 @@ pub fn initialize_catalog_repository(
         &config.cache_root,
         &config.receipt_root,
     ];
-    let mut leaves = Vec::new();
+    let mut capabilities = Vec::new();
     for root in roots {
-        let owner_path = root.join(owner);
-        if owner_path.exists() {
-            validate_directory(&owner_path, config.gitd_uid, config.gitd_gid, true)
-                .map_err(|_| RepositoryInitializationError::Layout)?;
-        } else {
-            fs::create_dir(&owner_path).map_err(|_| RepositoryInitializationError::Create)?;
-            fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o700))
-                .map_err(|_| RepositoryInitializationError::Create)?;
-        }
-        let leaf = owner_path.join(repository);
-        if leaf.exists() || leaf.symlink_metadata().is_ok() {
+        let root_capability = DirectoryCapability::open_root(
+            root.to_str().ok_or(RepositoryInitializationError::Identity)?,
+        )
+        .map_err(|_| RepositoryInitializationError::Layout)?;
+        validate_directory_metadata(
+            root_capability
+                .metadata()
+                .map_err(|_| RepositoryInitializationError::Layout)?,
+            config.gitd_uid,
+            config.gitd_gid,
+        )
+        .map_err(|_| RepositoryInitializationError::Layout)?;
+        let owner_directory = match root_capability.open_directory(owner) {
+            Ok(directory) => directory,
+            Err(_) => root_capability
+                .create_directory(owner, 0o700)
+                .map_err(|_| RepositoryInitializationError::Create)?,
+        };
+        validate_directory_metadata(
+            owner_directory
+                .metadata()
+                .map_err(|_| RepositoryInitializationError::Layout)?,
+            config.gitd_uid,
+            config.gitd_gid,
+        )
+        .map_err(|_| RepositoryInitializationError::Layout)?;
+        if owner_directory
+            .read_directory()
+            .map_err(|_| RepositoryInitializationError::Layout)?
+            .iter()
+            .any(|entry| entry.name.as_str() == repository)
+        {
             return Err(RepositoryInitializationError::Exists);
         }
-        leaves.push(leaf);
+        let leaf_directory = owner_directory
+            .create_directory(repository, 0o700)
+            .map_err(|_| RepositoryInitializationError::Create)?;
+        owner_directory
+            .sync()
+            .and_then(|()| root_capability.sync())
+            .map_err(|_| RepositoryInitializationError::Create)?;
+        capabilities.push((owner_directory, leaf_directory));
     }
-    for leaf in &leaves {
-        if fs::create_dir(leaf).is_err()
-            || fs::set_permissions(leaf, fs::Permissions::from_mode(0o700)).is_err()
-        {
-            for created in leaves.iter().filter(|path| path.exists()) {
-                let _ = fs::remove_dir_all(created);
-            }
-            return Err(RepositoryInitializationError::Create);
-        }
+    for name in ["quarantine", "arrivals"] {
+        capabilities[2]
+            .1
+            .create_directory(name, 0o700)
+            .and_then(|directory| directory.sync())
+            .map_err(|_| RepositoryInitializationError::Create)?;
     }
-    let initialized = mrml_git::FilesystemRepositoryView::initialize_sha256(
+    capabilities[2]
+        .1
+        .sync()
+        .map_err(|_| RepositoryInitializationError::Create)?;
+    let initialized = mrml_git::FilesystemRepositoryView::initialize_sha256_capabilities(
         entry.repository.clone(),
-        leaves[0]
-            .to_str()
-            .ok_or(RepositoryInitializationError::Identity)?,
-        leaves[1]
-            .to_str()
-            .ok_or(RepositoryInitializationError::Identity)?,
+        capabilities[0]
+            .1
+            .try_clone()
+            .map_err(|_| RepositoryInitializationError::Initialize)?,
+        capabilities[1]
+            .1
+            .try_clone()
+            .map_err(|_| RepositoryInitializationError::Initialize)?,
         entry.repository_generation,
         entry.trust_generation,
         entry.revocation_generation,
     );
     if initialized.is_err() {
-        for leaf in &leaves {
-            let _ = fs::remove_dir_all(leaf);
-        }
         return Err(RepositoryInitializationError::Initialize);
     }
     drop(initialized);
-    for name in ["quarantine", "arrivals"] {
-        let directory = leaves[2].join(name);
-        if fs::create_dir(&directory).is_err()
-            || fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).is_err()
-        {
-            for leaf in &leaves {
-                let _ = fs::remove_dir_all(leaf);
-            }
-            return Err(RepositoryInitializationError::Create);
-        }
-    }
-    let admitted = admit_catalog_repository(config, entry).map_err(|_| {
-        for leaf in &leaves {
-            let _ = fs::remove_dir_all(leaf);
-        }
-        RepositoryInitializationError::Verify
-    })?;
+    let admitted =
+        admit_catalog_repository(config, entry).map_err(|_| RepositoryInitializationError::Verify)?;
     let tip = admitted
         .view
         .resolve_ref(&entry.repository, "refs/heads/main")
         .map_err(|_| RepositoryInitializationError::Verify);
     if tip.is_err() {
         drop(admitted);
-        for leaf in &leaves {
-            let _ = fs::remove_dir_all(leaf);
-        }
     }
     tip
 }
@@ -450,28 +461,24 @@ pub fn admit_catalog_repository(
     };
     validate_private_child_directory(&capabilities.quarantine, "quarantine")?;
     validate_private_child_directory(&capabilities.quarantine, "arrivals")?;
-    let mut view = FilesystemRepositoryView::open_with_arrivals(
+    let mut view = FilesystemRepositoryView::open_capabilities(
         entry.repository.clone(),
-        paths
+        capabilities
             .objects
-            .to_str()
-            .ok_or(RepositoryAdmissionError::Identity)?,
-        paths
-            .state
-            .to_str()
-            .ok_or(RepositoryAdmissionError::Identity)?,
-        paths
-            .quarantine
-            .to_str()
-            .ok_or(RepositoryAdmissionError::Identity)?,
-        receive_pack_limit(config.max_body_bytes),
-    )
-    .map_err(|_| RepositoryAdmissionError::Open)?;
-    view.retain_ref_directory(
+            .try_clone()
+            .map_err(|_| RepositoryAdmissionError::Open)?,
         capabilities
             .state
             .try_clone()
             .map_err(|_| RepositoryAdmissionError::Open)?,
+    )
+    .map_err(|_| RepositoryAdmissionError::Open)?;
+    view.retain_arrival_directory(
+        capabilities
+            .quarantine
+            .open_directory("arrivals")
+            .map_err(|_| RepositoryAdmissionError::Open)?,
+        receive_pack_limit(config.max_body_bytes),
     )
     .map_err(|_| RepositoryAdmissionError::Open)?;
     verify_repository_admission(entry, &view).map_err(|_| RepositoryAdmissionError::Generation)?;
@@ -951,6 +958,26 @@ mod tests {
             admitted.paths.receipts,
             config.receipt_root.join("owner/project")
         );
+        let mut stale = entry.clone();
+        stale.revocation_generation = RevocationGeneration(9);
+        assert!(matches!(
+            admit_catalog_repository(&config, &stale),
+            Err(RepositoryAdmissionError::Generation)
+        ));
+        let displaced_objects = config.repository_root.join("owner/project-displaced");
+        let displaced_state = config.state_root.join("owner/project-displaced");
+        fs::rename(&admitted.paths.objects, &displaced_objects).unwrap();
+        fs::rename(&admitted.paths.state, &displaced_state).unwrap();
+        fs::create_dir(&admitted.paths.objects).unwrap();
+        fs::create_dir(&admitted.paths.state).unwrap();
+        assert_eq!(
+            admitted
+                .view
+                .resolve_ref(&entry.repository, "refs/heads/main"),
+            Ok(tip)
+        );
+        assert!(!admitted.paths.objects.join(".git").exists());
+        assert!(!admitted.paths.state.join("active.refs").exists());
         assert_eq!(
             recover_admitted_repository(&config, &entry, &admitted, &mut TestReceiptAuthority),
             Ok(RepositoryRecoverySummary::default())
@@ -976,12 +1003,6 @@ mod tests {
             ),
             Err(mrml_http::BackendError::NotFound)
         );
-        let mut stale = entry.clone();
-        stale.revocation_generation = RevocationGeneration(9);
-        assert!(matches!(
-            admit_catalog_repository(&config, &stale),
-            Err(RepositoryAdmissionError::Generation)
-        ));
         fs::remove_dir_all(root).unwrap();
     }
 }

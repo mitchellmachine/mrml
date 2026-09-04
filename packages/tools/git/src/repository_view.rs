@@ -519,6 +519,25 @@ impl FilesystemRepositoryView {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn retain_arrival_directory(
+        &mut self,
+        capability: DirectoryCapability,
+        max_pack_bytes: u64,
+    ) -> Result<(), GitdCoreError> {
+        self.arrivals = Some(
+            ArrivalPackStore::open_capability(
+                capability,
+                self.objects.object_format(),
+                max_pack_bytes,
+            )
+            .map_err(|_| GitdCoreError::Storage)?,
+        );
+        let state = self.load_state()?;
+        self.selected_pack_set(&state)?;
+        Ok(())
+    }
+
     /// Creates the canonical empty SHA-256 state used by a deployment-owned
     /// repository catalog. The initial root commit is deterministic and carries
     /// no authorization; protected policy activation remains a separate gate.
