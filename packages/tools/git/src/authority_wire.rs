@@ -21,9 +21,62 @@ const CANDIDATE_MAGIC: &[u8; 8] = b"MRGACD01";
 const CANDIDATE_STATUS_MAGIC: &[u8; 8] = b"MRGACS01";
 const CANDIDATE_LOOKUP_MAGIC: &[u8; 8] = b"MRGACL01";
 const CANDIDATE_RESULT_MAGIC: &[u8; 8] = b"MRGCSR01";
+const GENERATION_QUERY_MAGIC: &[u8; 8] = b"MRGAGQ01";
+const GENERATION_RESULT_MAGIC: &[u8; 8] = b"MRGAGR01";
 const MAX_AUTHORITY_CANDIDATE_BYTES: usize = 1024;
 pub const MAX_AUTHORITY_COMMIT_BYTES: usize = 1024 * 1024;
 pub const MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES: usize = 128 * 1024;
+
+pub fn encode_authority_generation_query(
+    repository: &RepositoryIdentity,
+) -> Result<Vector<u8>, GitdCoreError> {
+    let mut output = Vector::new();
+    append(&mut output, GENERATION_QUERY_MAGIC)?;
+    append_counted(&mut output, repository.as_str().as_bytes())?;
+    Ok(output)
+}
+
+pub fn parse_authority_generation_query(input: &[u8]) -> Result<RepositoryIdentity, GitdCoreError> {
+    let mut cursor = Cursor::new(input);
+    cursor.magic(GENERATION_QUERY_MAGIC)?;
+    let repository =
+        RepositoryIdentity::parse(cursor.counted_text(MAX_REPOSITORY_IDENTITY_BYTES)?)?;
+    cursor.finish()?;
+    Ok(repository)
+}
+
+pub fn encode_authority_generation_result(
+    repository: RepositoryGeneration,
+    trust: TrustGeneration,
+    revocation: RevocationGeneration,
+) -> Result<Vector<u8>, GitdCoreError> {
+    if repository.0 == 0 || trust.0 == 0 || revocation.0 == 0 {
+        return Err(GitdCoreError::Authorization);
+    }
+    let mut output = Vector::new();
+    append(&mut output, GENERATION_RESULT_MAGIC)?;
+    append(&mut output, &repository.0.to_be_bytes())?;
+    append(&mut output, &trust.0.to_be_bytes())?;
+    append(&mut output, &revocation.0.to_be_bytes())?;
+    Ok(output)
+}
+
+pub fn parse_authority_generation_result(
+    input: &[u8],
+) -> Result<(RepositoryGeneration, TrustGeneration, RevocationGeneration), GitdCoreError> {
+    let mut cursor = Cursor::new(input);
+    cursor.magic(GENERATION_RESULT_MAGIC)?;
+    let result = (
+        RepositoryGeneration(cursor.u64()?),
+        TrustGeneration(cursor.u64()?),
+        RevocationGeneration(cursor.u64()?),
+    );
+    cursor.finish()?;
+    if result.0.0 == 0 || result.1.0 == 0 || result.2.0 == 0 {
+        return Err(GitdCoreError::Authorization);
+    }
+    Ok(result)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthorityCommitRequest {
@@ -87,9 +140,8 @@ pub fn parse_authority_candidate_status_result(
 ) -> Result<AuthorityCandidateStatusResult, GitdCoreError> {
     let mut cursor = Cursor::new(input);
     cursor.magic(CANDIDATE_RESULT_MAGIC)?;
-    let record = parse_authority_candidate_record(
-        cursor.counted_bytes(MAX_AUTHORITY_CANDIDATE_BYTES)?,
-    )?;
+    let record =
+        parse_authority_candidate_record(cursor.counted_bytes(MAX_AUTHORITY_CANDIDATE_BYTES)?)?;
     let receipt_length = usize::try_from(cursor.u32()?).map_err(|_| GitdCoreError::Resource)?;
     if receipt_length > crate::MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES {
         return Err(GitdCoreError::Resource);
@@ -151,9 +203,8 @@ pub fn parse_authority_candidate_lookup(
 ) -> Result<AuthorityCandidateLookup, GitdCoreError> {
     let mut cursor = Cursor::new(input);
     cursor.magic(CANDIDATE_LOOKUP_MAGIC)?;
-    let repository = RepositoryIdentity::parse(
-        cursor.counted_text(MAX_REPOSITORY_IDENTITY_BYTES)?,
-    )?;
+    let repository =
+        RepositoryIdentity::parse(cursor.counted_text(MAX_REPOSITORY_IDENTITY_BYTES)?)?;
     let mut id = [0; 16];
     id.copy_from_slice(cursor.take(16)?);
     cursor.finish()?;
@@ -287,9 +338,7 @@ pub fn encode_authority_candidate(
     Ok(output)
 }
 
-pub fn parse_authority_candidate(
-    input: &[u8],
-) -> Result<AuthorityCandidateContext, GitdCoreError> {
+pub fn parse_authority_candidate(input: &[u8]) -> Result<AuthorityCandidateContext, GitdCoreError> {
     let mut cursor = Cursor::new(input);
     cursor.magic(CANDIDATE_MAGIC)?;
     let mut id = [0; 16];
@@ -337,10 +386,9 @@ pub fn parse_authority_candidate_record(
     if input.len() < 9 || &input[..8] != CANDIDATE_STATUS_MAGIC {
         return Err(GitdCoreError::MalformedInput);
     }
-    let status = AuthorityCandidateStatus::from_code(
-        *input.last().ok_or(GitdCoreError::MalformedInput)?,
-    )
-    .ok_or(GitdCoreError::MalformedInput)?;
+    let status =
+        AuthorityCandidateStatus::from_code(*input.last().ok_or(GitdCoreError::MalformedInput)?)
+            .ok_or(GitdCoreError::MalformedInput)?;
     let mut context = Vector::new();
     context
         .try_extend_from_slice(&input[..input.len() - 1])
@@ -352,9 +400,7 @@ pub fn parse_authority_candidate_record(
     })
 }
 
-fn validate_candidate_context(
-    context: &AuthorityCandidateContext,
-) -> Result<(), GitdCoreError> {
+fn validate_candidate_context(context: &AuthorityCandidateContext) -> Result<(), GitdCoreError> {
     if context.id.0 == [0; 16]
         || context.current_generation.0 == 0
         || context.current_generation.0.checked_add(1) != Some(context.next_generation.0)
@@ -864,14 +910,9 @@ mod tests {
             &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES],
         )
         .unwrap();
-        let encoded = encode_authority_candidate_proof(
-            &candidate,
-            context,
-            commit,
-            b"tree contents",
-            &proof,
-        )
-        .unwrap();
+        let encoded =
+            encode_authority_candidate_proof(&candidate, context, commit, b"tree contents", &proof)
+                .unwrap();
         let parsed = parse_authority_candidate_proof(&encoded).unwrap();
         assert_eq!(parsed.candidate, candidate);
         assert_eq!(parsed.proof.commit, commit);
@@ -988,5 +1029,37 @@ mod tests {
             object_format: ObjectFormat::Sha1,
         };
         assert!(encode_authority_commit(context, sha1, b"commit").is_err());
+    }
+
+    #[test]
+    fn generation_query_and_result_are_exact_bounded_and_nonzero() {
+        let repository = RepositoryIdentity::parse("owner/repository").unwrap();
+        let query = encode_authority_generation_query(&repository).unwrap();
+        assert_eq!(parse_authority_generation_query(&query), Ok(repository));
+        let result = encode_authority_generation_result(
+            RepositoryGeneration(9),
+            TrustGeneration(5),
+            RevocationGeneration(7),
+        )
+        .unwrap();
+        assert_eq!(
+            parse_authority_generation_result(&result),
+            Ok((
+                RepositoryGeneration(9),
+                TrustGeneration(5),
+                RevocationGeneration(7)
+            ))
+        );
+        assert!(
+            encode_authority_generation_result(
+                RepositoryGeneration(0),
+                TrustGeneration(5),
+                RevocationGeneration(7)
+            )
+            .is_err()
+        );
+        for end in 0..query.len() {
+            assert!(parse_authority_generation_query(&query[..end]).is_err());
+        }
     }
 }

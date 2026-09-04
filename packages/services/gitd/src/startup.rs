@@ -5,9 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use mrml_git::{
     AuditReceiptAuthority, AuthenticatedAuditReceiptDirectory, AuthenticatedReceiveStore,
     AuthorizedHybridPair, FilesystemRepositoryView, FullRefName, GitdCoreError,
-    LinuxDurableReceiveStore,
-    LinuxDurableTrustPolicyStore, ObjectFormat, PolicyPairStatus, RecoveryAction,
-    TrustPolicyCandidate, TrustPolicyState,
+    LinuxDurableReceiveStore, LinuxDurableTrustPolicyStore, ObjectFormat, PolicyPairStatus,
+    RecoveryAction, TrustPolicyCandidate, TrustPolicyState,
 };
 use mrml_openpgp::PublicKeyV6;
 use mrml_runtime::{DirectoryCapability, DirectoryMetadata, Vector};
@@ -550,7 +549,22 @@ pub fn admit_catalog_repository(
         receive_pack_limit(config.max_body_bytes),
     )
     .map_err(RepositoryAdmissionError::Arrival)?;
-    verify_repository_admission(entry, &view).map_err(|_| RepositoryAdmissionError::Generation)?;
+    let live = view
+        .authority_generations()
+        .map_err(|_| RepositoryAdmissionError::Generation)?;
+    let catalog = (
+        entry.repository_generation,
+        entry.trust_generation,
+        entry.revocation_generation,
+    );
+    if entry.profile.class == DeploymentRepositoryProfile::Protected {
+        if live.0.0 < catalog.0.0 || live.1 != catalog.1 || live.2 != catalog.2 {
+            return Err(RepositoryAdmissionError::Generation);
+        }
+    } else {
+        verify_repository_admission(entry, &view)
+            .map_err(|_| RepositoryAdmissionError::Generation)?;
+    }
     Ok(AdmittedRepository {
         paths,
         capabilities,
@@ -1271,14 +1285,18 @@ mod tests {
         );
         let objects = config.repository_root.join("owner/project");
         let admitted = admit_catalog_repository(&config, &entry).unwrap();
-        assert!(!config
-            .quarantine_root
-            .join("owner/project/arrivals/arrivals")
-            .exists());
-        assert!(!config
-            .quarantine_root
-            .join("owner/project/arrivals/quarantine")
-            .exists());
+        assert!(
+            !config
+                .quarantine_root
+                .join("owner/project/arrivals/arrivals")
+                .exists()
+        );
+        assert!(
+            !config
+                .quarantine_root
+                .join("owner/project/arrivals/quarantine")
+                .exists()
+        );
         assert_eq!(admitted.paths.objects, objects);
         assert_eq!(
             admitted.paths.receipts,

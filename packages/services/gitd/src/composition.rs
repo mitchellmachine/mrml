@@ -78,7 +78,12 @@ pub fn compose_gitd_service<A: ProtectedReceiveAuthority + Send + Clone + 'stati
         let admitted =
             admit_catalog_repository(config, entry).map_err(GitdCompositionError::Admission)?;
         let summary = if entry.profile.class == crate::DeploymentRepositoryProfile::Protected {
-            recover_admitted_protected_repository(config, entry, &admitted, &mut authority)
+            verify_protected_live_generations(entry, &admitted, &mut authority)?;
+            let summary =
+                recover_admitted_protected_repository(config, entry, &admitted, &mut authority)
+                    .map_err(GitdCompositionError::Recovery)?;
+            verify_protected_live_generations(entry, &admitted, &mut authority)?;
+            Ok(summary)
         } else {
             recover_admitted_repository(config, entry, &admitted, &mut authority)
         }
@@ -119,4 +124,28 @@ pub fn compose_gitd_service<A: ProtectedReceiveAuthority + Send + Clone + 'stati
         health,
         operation_limits,
     })
+}
+
+fn verify_protected_live_generations<A: ProtectedReceiveAuthority>(
+    entry: &crate::DeploymentRepository,
+    admitted: &crate::AdmittedRepository,
+    authority: &mut A,
+) -> Result<(), GitdCompositionError> {
+    let live = admitted
+        .view
+        .authority_generations()
+        .map_err(|_| GitdCompositionError::Admission(RepositoryAdmissionError::Generation))?;
+    let authoritative = authority
+        .current_generations(&entry.repository)
+        .map_err(|_| GitdCompositionError::Admission(RepositoryAdmissionError::Generation))?;
+    if live != authoritative
+        || live.0.0 < entry.repository_generation.0
+        || live.1 != entry.trust_generation
+        || live.2 != entry.revocation_generation
+    {
+        return Err(GitdCompositionError::Admission(
+            RepositoryAdmissionError::Generation,
+        ));
+    }
+    Ok(())
 }

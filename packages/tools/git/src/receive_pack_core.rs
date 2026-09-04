@@ -3,12 +3,12 @@
 use crate::receive_backend::prepare_authority_classified_receive;
 use crate::{
     ActiveRefState, AuditReceiptAuthority, AuthenticatedAuditReceiptDirectory,
-    AuthenticatedReceiveStore, BoundedRead, BoundedWrite, GitdCoreError,
-    HistoryVerificationLimits, LinuxDurableReceiveStore, ProtectedCommitVerifier,
-    QuarantineLimits, QuarantineTransactionId, Repository, RepositoryGeneration,
-    RepositoryIdentity, RevocationGeneration, SmartGitRequest, SmartGitResponse, TrustGeneration,
-    TrustPolicyState, WorkBudget, finish_prepared_protected_receive,
-    prepare_policy_classified_receive, prepare_protected_receive,
+    AuthenticatedReceiveStore, BoundedRead, BoundedWrite, GitdCoreError, HistoryVerificationLimits,
+    LinuxDurableReceiveStore, ProtectedCommitVerifier, QuarantineLimits, QuarantineTransactionId,
+    Repository, RepositoryGeneration, RepositoryIdentity, RevocationGeneration, SmartGitRequest,
+    SmartGitResponse, TrustGeneration, TrustPolicyState, WorkBudget,
+    finish_prepared_protected_receive, prepare_policy_classified_receive,
+    prepare_protected_receive,
 };
 
 /// Exact public context presented to the capability-bearing protected Git
@@ -28,6 +28,13 @@ pub struct ProtectedReceiveAuthorization {
 /// this API exposes only exact-context authorization, commit verification, and
 /// purpose-separated receipt signing.
 pub trait ProtectedReceiveAuthority: ProtectedCommitVerifier + AuditReceiptAuthority {
+    fn current_generations(
+        &mut self,
+        _repository: &RepositoryIdentity,
+    ) -> Result<(RepositoryGeneration, TrustGeneration, RevocationGeneration), GitdCoreError> {
+        Err(GitdCoreError::Authorization)
+    }
+
     fn authorize_receive(
         &mut self,
         request: &ProtectedReceiveAuthorization,
@@ -227,12 +234,9 @@ impl ReceivePackCore {
         )?;
         let candidate = prepared.candidate_context(policy.digest())?;
         authority.begin_candidate(&candidate)?;
-        if let Err(error) = prepared.install_candidate_proofs(
-            store,
-            active_objects,
-            authority,
-            &candidate,
-        ) {
+        if let Err(error) =
+            prepared.install_candidate_proofs(store, active_objects, authority, &candidate)
+        {
             let _ = authority.abort_candidate(&candidate);
             return Err(error);
         }
@@ -249,12 +253,7 @@ impl ReceivePackCore {
             authority,
             candidate,
         );
-        finish_prepared_protected_receive(
-            prepared,
-            &mut authenticated,
-            output,
-            self.work_budget,
-        )
+        finish_prepared_protected_receive(prepared, &mut authenticated, output, self.work_budget)
     }
 
     /// Parses, quarantines, verifies, durably activates, and reports one atomic

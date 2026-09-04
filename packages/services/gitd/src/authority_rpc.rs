@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use mrml_git::ProtectedAuthorityRpc;
 use mrml_git_authority::{
@@ -163,6 +166,7 @@ const fn authority_denied_event(operation: AuthorityOperation) -> &'static str {
         AuthorityOperation::VerifyProof => "authority_proof_verify_denied",
         AuthorityOperation::InstallCandidateProof => "authority_candidate_proof_install_denied",
         AuthorityOperation::QueryCandidateById => "authority_candidate_lookup_denied",
+        AuthorityOperation::QueryGenerations => "authority_generation_query_denied",
         AuthorityOperation::BeginCandidate => "authority_candidate_begin_denied",
         AuthorityOperation::SealCandidateProofSet => "authority_candidate_seal_denied",
         AuthorityOperation::AuthorizeCandidate => "authority_candidate_authorize_denied",

@@ -1,4 +1,4 @@
-use mrml_crypto::{erase_secret_bytes, hmac_sha256, Sha256};
+use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 
 const MAGIC: &[u8; 8] = b"MRMLGAV1";
 const VERSION: u16 = 1;
@@ -36,6 +36,7 @@ pub enum AuthorityOperation {
     VerifyProof = 18,
     InstallCandidateProof = 19,
     QueryCandidateById = 20,
+    QueryGenerations = 21,
 }
 
 impl AuthorityOperation {
@@ -61,6 +62,7 @@ impl AuthorityOperation {
             18 => Self::VerifyProof,
             19 => Self::InstallCandidateProof,
             20 => Self::QueryCandidateById,
+            21 => Self::QueryGenerations,
             _ => return None,
         })
     }
@@ -135,8 +137,7 @@ impl AuthorityReplayWindow {
 
     pub fn accept(&mut self, request_id: u64) -> Result<(), AuthorityError> {
         if request_id == 0
-            || (self.highest_request_id >= 1_024
-                && request_id <= self.highest_request_id - 1_024)
+            || (self.highest_request_id >= 1_024 && request_id <= self.highest_request_id - 1_024)
         {
             return Err(AuthorityError::Replay);
         }

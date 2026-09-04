@@ -1,14 +1,15 @@
 //! Protected receive authority adapter over a narrow authenticated RPC.
 
 use crate::{
+    AuditReceiptAuthority, AuthorityCandidateContext, AuthorityCandidateRecord,
+    CandidateRefTransaction, DetachedCommitProofRecord, GitdCoreError, HistoryVerificationError,
+    ObjectId, ProtectedCommitVerifier, ProtectedHistoryContext, ProtectedReceiveAuthority,
+    ProtectedReceiveAuthorization, VerifiedCommitProof, VerifiedLegacyCommitProof,
     encode_authority_candidate, encode_authority_candidate_lookup,
-    encode_authority_candidate_proof, encode_authority_proof_install,
-    encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
-    parse_authority_candidate_record, AuditReceiptAuthority, AuthorityCandidateContext,
-    AuthorityCandidateRecord, CandidateRefTransaction, DetachedCommitProofRecord, GitdCoreError,
-    HistoryVerificationError, ObjectId, ProtectedCommitVerifier, ProtectedHistoryContext,
-    ProtectedReceiveAuthority, ProtectedReceiveAuthorization, VerifiedCommitProof,
-    VerifiedLegacyCommitProof,
+    encode_authority_candidate_proof, encode_authority_generation_query,
+    encode_authority_proof_install, encode_authority_receipt, encode_authority_receive,
+    encode_authority_ref_transaction, parse_authority_candidate_record,
+    parse_authority_generation_result,
 };
 
 pub const AUTHORITY_OP_AUTHORIZE_RECEIVE: u8 = 2;
@@ -29,6 +30,7 @@ pub const AUTHORITY_OP_COMPLETE_CANDIDATE: u8 = 17;
 pub const AUTHORITY_OP_VERIFY_PROOF: u8 = 18;
 pub const AUTHORITY_OP_INSTALL_CANDIDATE_PROOF: u8 = 19;
 pub const AUTHORITY_OP_QUERY_CANDIDATE_BY_ID: u8 = 20;
+pub const AUTHORITY_OP_QUERY_GENERATIONS: u8 = 21;
 const MAX_AUTHORITY_RESULT_BYTES: usize = 1024;
 
 /// Transport-only capability. Implementations must authenticate the peer,
@@ -107,13 +109,8 @@ impl<T: ProtectedAuthorityRpc> RemoteProtectedReceiveAuthority<T> {
         exact_contents: &[u8],
         proof: &DetachedCommitProofRecord,
     ) -> Result<(), GitdCoreError> {
-        let encoded = encode_authority_candidate_proof(
-            candidate,
-            context,
-            commit,
-            exact_contents,
-            proof,
-        )?;
+        let encoded =
+            encode_authority_candidate_proof(candidate, context, commit, exact_contents, proof)?;
         self.empty_response(AUTHORITY_OP_INSTALL_CANDIDATE_PROOF, &encoded)
     }
 
@@ -218,6 +215,26 @@ impl<T: ProtectedAuthorityRpc> RemoteProtectedReceiveAuthority<T> {
 }
 
 impl<T: ProtectedAuthorityRpc> ProtectedReceiveAuthority for RemoteProtectedReceiveAuthority<T> {
+    fn current_generations(
+        &mut self,
+        repository: &crate::RepositoryIdentity,
+    ) -> Result<
+        (
+            crate::RepositoryGeneration,
+            crate::TrustGeneration,
+            crate::RevocationGeneration,
+        ),
+        GitdCoreError,
+    > {
+        let encoded = encode_authority_generation_query(repository)?;
+        let mut response = [0u8; 32];
+        let length = self
+            .transport
+            .call(AUTHORITY_OP_QUERY_GENERATIONS, &encoded, &mut response)
+            .map_err(|_| GitdCoreError::Authorization)?;
+        parse_authority_generation_result(&response[..length])
+    }
+
     fn authorize_receive(
         &mut self,
         request: &ProtectedReceiveAuthorization,
@@ -250,13 +267,7 @@ impl<T: ProtectedAuthorityRpc> ProtectedReceiveAuthority for RemoteProtectedRece
         exact_contents: &[u8],
         proof: &DetachedCommitProofRecord,
     ) -> Result<(), GitdCoreError> {
-        self.install_candidate_commit_proof(
-            candidate,
-            context,
-            commit,
-            exact_contents,
-            proof,
-        )
+        self.install_candidate_commit_proof(candidate, context, commit, exact_contents, proof)
     }
 
     fn seal_candidate_proof_set(
@@ -411,11 +422,11 @@ impl<T: ProtectedAuthorityRpc> AuditReceiptAuthority for RemoteProtectedReceiveA
 mod tests {
     use super::*;
     use crate::{
+        AuthorityCandidateStatus, ObjectFormat, QuarantineTransactionId, RepositoryGeneration,
+        RepositoryIdentity, RevocationGeneration, SignaturePurpose, TrustGeneration,
         encode_authority_candidate_record, parse_authority_candidate,
         parse_authority_candidate_lookup, parse_authority_candidate_proof, parse_authority_commit,
-        parse_authority_proof_install, parse_authority_receive, AuthorityCandidateStatus,
-        ObjectFormat, QuarantineTransactionId, RepositoryGeneration, RepositoryIdentity,
-        RevocationGeneration, SignaturePurpose, TrustGeneration,
+        parse_authority_proof_install, parse_authority_receive,
     };
     use mrml_runtime::Vector;
 
@@ -535,13 +546,12 @@ mod tests {
         allowed
             .begin_receive_proofs(core::slice::from_ref(&proof))
             .unwrap();
-        assert!(allowed
-            .verify_commit(context, commit, b"commit bytes")
-            .is_ok());
-        assert_eq!(
-            &allowed.transport.calls[..],
-            &[AUTHORITY_OP_VERIFY_PROOF]
+        assert!(
+            allowed
+                .verify_commit(context, commit, b"commit bytes")
+                .is_ok()
         );
+        assert_eq!(&allowed.transport.calls[..], &[AUTHORITY_OP_VERIFY_PROOF]);
         assert_eq!(allowed.finish_receive_proofs(), Ok(()));
         let mut signature = [0u8; 64];
         assert_eq!(allowed.sign(b"receipt", &mut signature), Ok(32));
@@ -563,13 +573,7 @@ mod tests {
         };
         allowed.begin_candidate(&candidate).unwrap();
         allowed
-            .install_candidate_commit_proof(
-                &candidate,
-                context,
-                commit,
-                b"commit bytes",
-                &proof,
-            )
+            .install_candidate_commit_proof(&candidate, context, commit, b"commit bytes", &proof)
             .unwrap();
         assert_eq!(
             allowed.query_candidate(&candidate).unwrap().status,

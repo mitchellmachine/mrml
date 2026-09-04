@@ -1,20 +1,20 @@
 use mrml_crypto::{
-    ed25519_public, ed25519_sign, ed25519_verify, erase_secret_bytes, Sha3_512,
-    ML_DSA_65_PUBLIC_KEY_BYTES,
+    ML_DSA_65_PUBLIC_KEY_BYTES, Sha3_512, ed25519_public, ed25519_sign, ed25519_verify,
+    erase_secret_bytes,
 };
 use mrml_git::{
-    authority_receipt_signature_transcript, bind_verified_commit_proof,
-    candidate_activation_digest,
-    encode_authority_candidate_record, parse_authority_candidate, parse_authority_candidate_lookup,
-    parse_authority_candidate_proof, parse_authority_commit, parse_authority_proof_install,
+    AuthorizedHybridPair, DurableDetachedCommitProofDirectory, DurableDetachedHybridCommitVerifier,
+    GitObjectType, GitdCoreError, HybridVerificationRequest, LinuxDurableTrustPolicyStore,
+    ProtectedCommitVerifier, ProtectedHistoryContext, RepositoryGeneration, RepositoryIdentity,
+    SignaturePurpose, TrustPolicyState, authority_receipt_signature_transcript,
+    bind_verified_commit_proof, candidate_activation_digest, encode_authority_candidate_record,
+    encode_authority_generation_result, parse_authenticated_audit_receipt_transcript,
+    parse_authority_candidate, parse_authority_candidate_lookup, parse_authority_candidate_proof,
+    parse_authority_commit, parse_authority_generation_query, parse_authority_proof_install,
     parse_authority_receipt, parse_authority_receive, parse_authority_ref_transaction,
-    parse_authenticated_audit_receipt_transcript,
-    verify_hybrid_signature, AuthorizedHybridPair, DurableDetachedCommitProofDirectory,
-    DurableDetachedHybridCommitVerifier, GitObjectType, GitdCoreError, HybridVerificationRequest,
-    LinuxDurableTrustPolicyStore, ProtectedCommitVerifier, ProtectedHistoryContext,
-    RepositoryGeneration, RepositoryIdentity, SignaturePurpose, TrustPolicyState,
+    verify_hybrid_signature,
 };
-use mrml_openpgp::{PublicKeyV6, MAX_OPENPGP_SIGNATURE_BYTES};
+use mrml_openpgp::{MAX_OPENPGP_SIGNATURE_BYTES, PublicKeyV6};
 use mrml_runtime::Vector;
 use std::sync::Mutex;
 
@@ -41,7 +41,9 @@ fn authority_request_repository(
 ) -> Result<RepositoryIdentity, AuthorityDispatchError> {
     let repository = match operation {
         AuthorityOperation::AuthorizeReceive => {
-            parse_authority_receive(payload).map_err(map_git_error)?.repository
+            parse_authority_receive(payload)
+                .map_err(map_git_error)?
+                .repository
         }
         AuthorityOperation::AuthorizeRefTransaction => {
             parse_authority_ref_transaction(payload)
@@ -50,7 +52,9 @@ fn authority_request_repository(
                 .repository
         }
         AuthorityOperation::VerifyCommit => {
-            parse_authority_commit(payload).map_err(map_git_error)?.repository
+            parse_authority_commit(payload)
+                .map_err(map_git_error)?
+                .repository
         }
         AuthorityOperation::InstallProof | AuthorityOperation::VerifyProof => {
             parse_authority_proof_install(payload)
@@ -69,6 +73,9 @@ fn authority_request_repository(
                 .map_err(map_git_error)?
                 .repository
         }
+        AuthorityOperation::QueryGenerations => {
+            parse_authority_generation_query(payload).map_err(map_git_error)?
+        }
         AuthorityOperation::BeginCandidate
         | AuthorityOperation::SealCandidateProofSet
         | AuthorityOperation::AuthorizeCandidate
@@ -78,7 +85,9 @@ fn authority_request_repository(
         | AuthorityOperation::QueryCandidate
         | AuthorityOperation::PersistCandidateReceipt
         | AuthorityOperation::CompleteCandidate => {
-            parse_authority_candidate(payload).map_err(map_git_error)?.repository
+            parse_authority_candidate(payload)
+                .map_err(map_git_error)?
+                .repository
         }
         AuthorityOperation::SignReceipt | AuthorityOperation::VerifyReceipt => {
             let request = parse_authority_receipt(payload).map_err(map_git_error)?;
@@ -170,7 +179,8 @@ impl ProductionAuthorityCatalog {
 
 impl ProductionAuthority {
     pub fn repository(&self) -> Result<RepositoryIdentity, AuthorityDispatchError> {
-        self.current_policy().map(|policy| policy.repository().clone())
+        self.current_policy()
+            .map(|policy| policy.repository().clone())
     }
     pub fn new(
         policy: LinuxDurableTrustPolicyStore,
@@ -295,6 +305,7 @@ impl ProductionAuthority {
             AuthorityOperation::VerifyProof => self.verify_proof(payload),
             AuthorityOperation::InstallCandidateProof => self.install_candidate_proof(payload),
             AuthorityOperation::QueryCandidateById => self.query_candidate_by_id(payload),
+            AuthorityOperation::QueryGenerations => self.query_generations(payload),
             AuthorityOperation::BeginCandidate => self.begin_candidate(payload),
             AuthorityOperation::SealCandidateProofSet => self.seal_candidate_proofs(payload),
             AuthorityOperation::AuthorizeCandidate => self.transition_candidate(
@@ -322,6 +333,20 @@ impl ProductionAuthority {
             ),
             AuthorityOperation::Health => Err(AuthorityDispatchError::Malformed),
         }
+    }
+
+    fn query_generations(&self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
+        let repository = parse_authority_generation_query(payload).map_err(map_git_error)?;
+        let policy = self.current_policy()?;
+        if repository != *policy.repository() {
+            return Err(AuthorityDispatchError::Unauthorized);
+        }
+        encode_authority_generation_result(
+            self.current_generation(&repository)?,
+            policy.generation(),
+            policy.revocation_generation(),
+        )
+        .map_err(map_git_error)
     }
 
     fn policy_checked_candidate_context(
@@ -461,10 +486,7 @@ impl ProductionAuthority {
         encode_authority_candidate_record(&record).map_err(map_git_error)
     }
 
-    fn query_candidate_by_id(
-        &self,
-        payload: &[u8],
-    ) -> Result<Vector<u8>, AuthorityDispatchError> {
+    fn query_candidate_by_id(&self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
         let lookup = parse_authority_candidate_lookup(payload).map_err(map_git_error)?;
         let policy = self.current_policy()?;
         if lookup.repository != *policy.repository() {
@@ -603,8 +625,8 @@ impl ProductionAuthority {
         payload: &[u8],
     ) -> Result<Vector<u8>, AuthorityDispatchError> {
         let request = parse_authority_candidate_proof(payload).map_err(map_git_error)?;
-        let encoded_candidate = mrml_git::encode_authority_candidate(&request.candidate)
-            .map_err(map_git_error)?;
+        let encoded_candidate =
+            mrml_git::encode_authority_candidate(&request.candidate).map_err(map_git_error)?;
         let candidate = self.policy_checked_candidate_context(&encoded_candidate)?;
         self.verify_proof_request(&request.proof)?;
         let proof_context = ProtectedHistoryContext {
@@ -621,10 +643,7 @@ impl ProductionAuthority {
         Ok(Vector::new())
     }
 
-    fn seal_candidate_proofs(
-        &self,
-        payload: &[u8],
-    ) -> Result<Vector<u8>, AuthorityDispatchError> {
+    fn seal_candidate_proofs(&self, payload: &[u8]) -> Result<Vector<u8>, AuthorityDispatchError> {
         let context = self.policy_checked_candidate_context(payload)?;
         self.candidate_store()?
             .seal_proofs(&context)
@@ -741,7 +760,8 @@ impl ProductionAuthority {
                 || record.context.trust_generation != receipt.trust_generation
                 || record.context.revocation_generation != receipt.revocation_generation
                 || record.context.policy_digest != policy.digest()
-                || record.context.activation_digest != candidate_activation_digest(&request.transcript)
+                || record.context.activation_digest
+                    != candidate_activation_digest(&request.transcript)
                 || current != record.context.next_generation
                 || !matches!(
                     record.status,
@@ -865,25 +885,24 @@ fn map_git_error(error: GitdCoreError) -> AuthorityDispatchError {
 mod tests {
     use super::*;
     use mrml_crypto::{
-        ml_dsa_65_keygen, ml_dsa_65_sign, ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES,
+        ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES, ml_dsa_65_keygen, ml_dsa_65_sign,
     };
     use mrml_git::{
-        authenticated_audit_receipt_transcript, candidate_proof_set_digest,
-        canonical_hybrid_transcript,
-        encode_audit_receipt, encode_authority_candidate, encode_authority_commit,
-        encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
-        encode_loose_object_with_format, parse_authority_candidate_record, AuditReceipt,
-        AuthorityCandidateContext, AuthorityCandidateStatus, CandidateRefTransaction,
+        AuditReceipt, AuthorityCandidateContext, AuthorityCandidateStatus, CandidateRefTransaction,
         CandidateRefUpdate, DetachedCommitProofRecord, FullRefName, GitObjectType, ObjectFormat,
         ObjectId, ObjectKind, PolicyPairStatus, ProtectedReceiveAuthorization,
         QuarantineTransactionId, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
-        TrustGeneration, TrustPolicyCandidate,
+        TrustGeneration, TrustPolicyCandidate, authenticated_audit_receipt_transcript,
+        candidate_proof_set_digest, canonical_hybrid_transcript, encode_audit_receipt,
+        encode_authority_candidate, encode_authority_commit, encode_authority_receipt,
+        encode_authority_receive, encode_authority_ref_transaction,
+        encode_loose_object_with_format, parse_authority_candidate_record,
     };
     use mrml_openpgp::{
-        sign_detached_v6_ascii_with_salt, DigestAlgorithm, SigningKeyV6,
-        MAX_OPENPGP_SIGNATURE_BYTES,
+        DigestAlgorithm, MAX_OPENPGP_SIGNATURE_BYTES, SigningKeyV6,
+        sign_detached_v6_ascii_with_salt,
     };
-    use mrml_runtime::{join_path, Vector};
+    use mrml_runtime::{Vector, join_path};
     use std::os::unix::fs::MetadataExt;
 
     fn catalog_authority(
@@ -1275,14 +1294,26 @@ mod tests {
             candidate
         );
         assert_eq!(
+            mrml_git::parse_authority_generation_result(
+                &authority
+                    .dispatch(
+                        AuthorityOperation::QueryGenerations,
+                        &mrml_git::encode_authority_generation_query(&repository).unwrap(),
+                    )
+                    .unwrap(),
+            )
+            .unwrap(),
+            (
+                RepositoryGeneration(3),
+                TrustGeneration(4),
+                RevocationGeneration(8)
+            )
+        );
+        assert_eq!(
             authority.dispatch(
                 AuthorityOperation::InstallCandidateProof,
                 &mrml_git::encode_authority_candidate_proof(
-                    &candidate,
-                    context,
-                    commit,
-                    contents,
-                    &proof,
+                    &candidate, context, commit, contents, &proof,
                 )
                 .unwrap()
             ),
@@ -1350,7 +1381,10 @@ mod tests {
         };
         let receipt_candidate_request = encode_authority_candidate(&receipt_candidate).unwrap();
         assert_eq!(
-            authority.dispatch(AuthorityOperation::BeginCandidate, &receipt_candidate_request),
+            authority.dispatch(
+                AuthorityOperation::BeginCandidate,
+                &receipt_candidate_request
+            ),
             Ok(Vector::new())
         );
         let receipt_proof_context = ProtectedHistoryContext {
@@ -1425,8 +1459,7 @@ mod tests {
             ),
             Ok(Vector::new())
         );
-        let signature_array: &[u8; RECEIPT_SIGNATURE_BYTES] =
-            (&signature[..]).try_into().unwrap();
+        let signature_array: &[u8; RECEIPT_SIGNATURE_BYTES] = (&signature[..]).try_into().unwrap();
         assert!(ed25519_verify(
             &authority.receipt_verification_key(),
             &authority_receipt_signature_transcript(&receipt_transcript).unwrap(),
