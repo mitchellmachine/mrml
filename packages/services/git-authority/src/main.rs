@@ -15,8 +15,7 @@ use mrml_openpgp::{
     MAX_OPENPGP_PUBLIC_KEY_BYTES, MAX_OPENPGP_SIGNATURE_BYTES, parse_public_key_v6_ascii,
 };
 use mrml_runtime::DirectoryCapability;
-use std::fs;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -730,26 +729,18 @@ fn load_authority(
     let mut receipt_key = [0u8; 32];
     receipt_key.copy_from_slice(&receipt_bytes);
     erase_secret_bytes(&mut receipt_bytes);
-    fs::create_dir_all(generation_path).map_err(|_| ())?;
-    fs::set_permissions(generation_path, fs::Permissions::from_mode(0o700)).map_err(|_| ())?;
-    let generations = LinuxAuthorityGenerationStore::open(
-        generation_path,
+    let (generation_directory, candidate_directory) =
+        open_authority_state_directories(generation_path, authority_uid)?;
+    let generations = LinuxAuthorityGenerationStore::open_capability(
+        generation_directory,
         authority_uid,
         &repository_identity,
         mrml_git::RepositoryGeneration(repository_generation),
     )
     .map_err(|_| ())?;
-    let candidate_path = Path::new(generation_path)
-        .parent()
-        .ok_or(())?
-        .join("candidates");
-    fs::create_dir_all(&candidate_path).map_err(|_| ())?;
-    fs::set_permissions(&candidate_path, fs::Permissions::from_mode(0o700)).map_err(|_| ())?;
-    let candidates = LinuxAuthorityCandidateStore::open(
-        candidate_path.to_str().ok_or(())?,
-        authority_uid,
-    )
-    .map_err(|_| ())?;
+    let candidates =
+        LinuxAuthorityCandidateStore::open_capability(candidate_directory, authority_uid)
+            .map_err(|_| ())?;
     let authority = ProductionAuthority::new_with_stores(
         policy,
         proofs,
@@ -763,6 +754,47 @@ fn load_authority(
     .map_err(|_| ())?;
     erase_secret_bytes(&mut receipt_key);
     Ok(authority)
+}
+
+fn open_authority_state_directories(
+    generation_path: &str,
+    authority_uid: u32,
+) -> Result<(DirectoryCapability, DirectoryCapability), ()> {
+    let generation_path = Path::new(generation_path);
+    if !generation_path.is_absolute() {
+        return Err(());
+    }
+    let parent_path = generation_path.parent().ok_or(())?;
+    let generation_name = generation_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(())?;
+    let parent = DirectoryCapability::open_root(parent_path.to_str().ok_or(())?).map_err(|_| ())?;
+    let parent_metadata = parent.metadata().map_err(|_| ())?;
+    if parent_metadata.uid != authority_uid
+        || parent_metadata.mode & 0o777 != 0o700
+        || parent_metadata.links < 2
+    {
+        return Err(());
+    }
+    let open_or_create = |name: &str| match parent.open_directory(name) {
+        Ok(directory) => Ok(directory),
+        Err(_) => parent.create_directory(name, 0o700).map_err(|_| ()),
+    };
+    let generations = open_or_create(generation_name)?;
+    let candidates = open_or_create("candidates")?;
+    for directory in [&generations, &candidates] {
+        let metadata = directory.metadata().map_err(|_| ())?;
+        if metadata.uid != parent_metadata.uid
+            || metadata.gid != parent_metadata.gid
+            || metadata.mode & 0o777 != 0o700
+            || metadata.links < 2
+        {
+            return Err(());
+        }
+    }
+    parent.sync().map_err(|_| ())?;
+    Ok((generations, candidates))
 }
 
 fn open_or_create_authority_repository_directory(
@@ -964,9 +996,7 @@ fn read_regular_from(
     expected_owner: u32,
     secret: bool,
 ) -> Result<Vec<u8>, ()> {
-    let mut file = directory
-        .open_regular(name)
-        .map_err(|_| ())?;
+    let mut file = directory.open_regular(name).map_err(|_| ())?;
     let metadata = file.metadata().map_err(|_| ())?;
     let length = file.len().map_err(|_| ())?;
     let mode = metadata.mode & 0o777;
@@ -1092,6 +1122,39 @@ mod tests {
         }
         assert!(authority_storage_paths("policy", "/proof", "owner/project").is_err());
         assert!(authority_storage_paths("/policy", "proof", "owner/project").is_err());
+    }
+
+    #[test]
+    fn authority_state_directories_share_one_retained_parent() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-authority-state-retained-{}",
+            std::process::id()
+        ));
+        let displaced = root.with_extension("displaced");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&displaced);
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&root).unwrap());
+        let generation_path = root.join("generations");
+        let (generations, candidates) =
+            open_authority_state_directories(generation_path.to_str().unwrap(), uid).unwrap();
+        std::fs::rename(&root, &displaced).unwrap();
+        std::fs::create_dir(&root).unwrap();
+
+        generations
+            .create_new_file("retained-generation", 0o600)
+            .unwrap();
+        candidates
+            .create_new_file("retained-candidate", 0o600)
+            .unwrap();
+        assert!(displaced.join("generations/retained-generation").is_file());
+        assert!(displaced.join("candidates/retained-candidate").is_file());
+        assert!(!root.join("generations").exists());
+        assert!(!root.join("candidates").exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(displaced).unwrap();
     }
 
     #[test]
