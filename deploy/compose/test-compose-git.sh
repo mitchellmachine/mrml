@@ -99,6 +99,10 @@ require 'volume_name runtime-certd-gitd' deploy/compose/provision-git-host.sh
 require 'volume_name git-authority-transition' deploy/compose/provision-git-host.sh
 require 'gitd-token-pepper' deploy/compose/provision-git-host.sh
 reject '$deployment_root/secrets/channels' deploy/compose/provision-git-host.sh
+require 'mktemp "$path.new.XXXXXX"' deploy/compose/provision-git-host.sh
+require 'mktemp "$authority_secrets/.git-authority.seed.XXXXXX"' deploy/compose/provision-git-host.sh
+reject '.git-authority.seed.$$' deploy/compose/provision-git-host.sh
+reject 'temporary=$path.new.$$' deploy/compose/provision-git-host.sh
 
 for operator in deploy/compose/initialize-git.sh deploy/compose/initialize-git-repository.sh deploy/compose/initialize-git-protected-policy.sh deploy/compose/transition-git-trust.sh deploy/compose/token-git.sh deploy/compose/recovery-git.sh deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh deploy/compose/load-offline-git-images.sh; do
   [ -x "$operator" ] || {

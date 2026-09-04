@@ -160,12 +160,14 @@ ensure_secret() {
     length=$4
     verify_components "$(dirname "$path")"
     if [ ! -e "$path" ] && [ ! -L "$path" ]; then
-        temporary=$path.new.$$
         umask 077
+        temporary=$(mktemp "$path.new.XXXXXX") || fail "cannot reserve temporary secret for $path"
+        trap 'rm -f "$temporary"' EXIT HUP INT TERM
         dd if=/dev/urandom of="$temporary" bs="$length" count=1 status=none || fail "cannot create $path"
         chown "$uid:$gid" "$temporary" || fail "cannot set owner on $path"
         chmod 0400 "$temporary" || fail "cannot set mode on $path"
         mv "$temporary" "$path" || fail "cannot install $path"
+        trap - EXIT HUP INT TERM
     fi
     [ ! -L "$path" ] && [ -f "$path" ] || fail "unsafe secret: $path"
     [ "$(stat -c '%u:%g' "$path")" = "$uid:$gid" ] || fail "wrong secret owner: $path"
@@ -184,8 +186,10 @@ create_channel_pair() {
         fail "incomplete Git authority channel pair"
     fi
     if [ ! -e "$authority_copy" ] && [ ! -e "$gitd_copy" ]; then
-        seed=$authority_secrets/.git-authority.seed.$$
         umask 077
+        seed=$(mktemp "$authority_secrets/.git-authority.seed.XXXXXX") ||
+            fail "cannot reserve temporary channel seed"
+        trap 'rm -f "$seed"' EXIT HUP INT TERM
         dd if=/dev/urandom of="$seed" bs=32 count=1 status=none || fail "cannot create channel seed"
         cp "$seed" "$authority_copy"
         chown "$authority_uid:$authority_gid" "$authority_copy"
@@ -194,6 +198,7 @@ create_channel_pair() {
         chown "$gitd_uid:$gitd_gid" "$gitd_copy"
         chmod 0400 "$gitd_copy"
         rm -f "$seed"
+        trap - EXIT HUP INT TERM
     fi
     ensure_secret "$authority_copy" "$authority_uid" "$authority_gid" 32
     ensure_secret "$gitd_copy" "$gitd_uid" "$gitd_gid" 32
