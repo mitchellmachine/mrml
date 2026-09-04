@@ -12,5 +12,5 @@ acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
 }
 docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
   run --rm --no-deps --entrypoint /usr/bin/mrml-gitd gitd \
-  initialize-token-store /mnt/mrml/gitd/state/tokens.v1 /run/secrets/gitd-token-pepper 21001
+  initialize-token-store /mnt/mrml/gitd/state/tokens.v2 /run/secrets/gitd-token-pepper 21001
 echo "empty authenticated token store initialized; no access token was created"

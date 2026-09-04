@@ -31,9 +31,13 @@ On a new host the scripts create paired Gitd/authority and Gitd/certd channel
 capabilities in separate service-scoped secret volumes, plus a receipt key,
 token pepper, and QUIC Retry key exactly once, then
 revalidate type, owner, mode, link count, and exact length on every run.
-`install-volume-inputs.sh` is the stopped-service, no-overwrite installer for
-reviewed Gitd/certd/acmed configuration, authority public keys, trust roots, and
-the DNS-provider token; it rejects running consumers and unsafe inputs. It
+`install-volume-inputs.sh` is the no-overwrite installer for reviewed
+Gitd/certd/acmed configuration, the ordered authority repository bootstrap
+catalog, authority public keys, trust roots, and the DNS-provider token; it
+rejects running consumers and unsafe inputs. The authority catalog uses exact
+`RepositoryIdentity` values and nonzero bootstrap generations; after first open,
+the authenticated per-repository generation stores are authoritative and the
+catalog cannot roll them back. It
 never creates certificates, repositories, access tokens, trust policies,
 detached proofs, or publisher keys. Those require explicit authority-bearing
 administration so provisioning cannot replace selected policy or repository
@@ -65,7 +69,7 @@ After installing the production environment and policy/catalog files, run
 `deploy/compose/initialize-git.sh` exactly once. It starts the preloaded Gitd
 image as a network-unpublished one-shot process with `--no-deps`, reads the
 mounted pepper through the same strict loader as the daemon, and creates an
-authenticated empty `tokens.v1`. Creation uses a private same-directory
+authenticated empty generation-1 `tokens.v2`. Creation uses a private same-directory
 temporary file, file sync, a no-overwrite hard-link activation, temporary
 unlink, and directory sync. It refuses an existing destination and creates no
 access token.
@@ -87,16 +91,21 @@ requires the exact hybrid pair; it neither reads nor creates private signing
 keys. Existing policy state is never overwritten. An ambiguous storage failure
 is retained for inspection instead of being represented as safely retryable.
 
-`token-git.sh issue` and `token-git.sh revoke` are cold one-shot operations:
-they refuse a running Gitd so its authenticated in-memory snapshot cannot race
-the durable store. Issuance accepts an exact repository identity, the bounded
+`token-git.sh issue` and `token-git.sh revoke` are transactional one-shot
+operations that may run while Gitd is serving. An exclusive private
+administration lock serializes concurrent issue/revoke operations, every
+successful mutation advances the authenticated store generation, and Gitd
+validates and atomically publishes the new immutable snapshot within one second.
+Invalid, partial, same-generation-substituted, or rolled-back stores retain the
+last authenticated snapshot and degrade readiness until a valid newer or exact
+current generation is visible. Issuance accepts an exact repository identity, the bounded
 `read`, `write`, or `admin` scope profile, validity interval, revocation
 generation, and non-authoritative label. It displays the 256-bit token exactly
 once and stores only a keyed verifier plus authenticated metadata. Revocation
 accepts the token only on standard input, never an argument or environment
-variable, uses constant-time verifier comparison, and atomically replaces the
-authenticated store with file and directory sync. Restart Gitd after either
-operation so startup reauthenticates the complete store.
+variable, uses an indexed verifier lookup with constant-time candidate
+comparison, and atomically replaces the authenticated store with file and
+directory sync. No Gitd restart is required.
 
 `recovery-git.sh status` is a cold, read-only scan of every authenticated
 repository journal. It reports only bounded aggregate counts for receipt

@@ -128,7 +128,9 @@ require 'mrml-git-authority-transition' deploy/compose/install-volume-inputs.sh
 require 'authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC' deploy/compose/install-volume-inputs.sh
 require 'repositories.v1' deploy/compose/install-volume-inputs.sh
 reject '$deployment_root/gitd/policies' deploy/compose/transition-git-trust.sh
-require 'token administration requires stopped Gitd' deploy/compose/token-git.sh
+reject 'token administration requires stopped Gitd' deploy/compose/token-git.sh
+require 'tokens.v2' deploy/compose/token-git.sh
+require 'reload any new generation within one second' deploy/compose/token-git.sh
 require 'run -T --rm --no-deps' deploy/compose/token-git.sh
 require 'recovery administration requires stopped Gitd' deploy/compose/recovery-git.sh
 require 'recover-safe' deploy/compose/recovery-git.sh

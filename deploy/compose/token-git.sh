@@ -10,14 +10,9 @@ acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
   echo "missing or unsafe mode-0600 production environment file: $environment" >&2
   exit 1
 }
-[ -z "$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" ps --status running -q gitd)" ] || {
-  echo "token administration requires stopped Gitd" >&2
-  exit 1
-}
-
 action=${1-}
 shift || true
-base="/mnt/mrml/gitd/state/tokens.v1"
+base="/mnt/mrml/gitd/state/tokens.v2"
 pepper="/run/secrets/gitd-token-pepper"
 case "$action" in
   issue)
@@ -37,3 +32,5 @@ case "$action" in
     ;;
   *) echo "usage: $0 issue|revoke ..." >&2; exit 64 ;;
 esac
+
+echo "token administration completed; running Gitd instances reload any new generation within one second" >&2
