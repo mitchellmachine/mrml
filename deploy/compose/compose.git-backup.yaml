@@ -17,7 +17,7 @@ services:
     ulimits:
       nofile: {soft: 256, hard: 256}
     tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=0,gid=0,mode=0700
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,mode=0700
     volumes:
       - "mrml-git-backups:/backup:rw"
       - "mrml-git-backup-key:/backup-key:rw"
