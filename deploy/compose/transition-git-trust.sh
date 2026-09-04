@@ -6,10 +6,7 @@ environment=${MRML_ENV_FILE:-$directory/.env.production}
 git_compose=${MRML_GIT_COMPOSE_FILE:-$directory/compose.git.yaml}
 acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
 signer_compose=${MRML_SIGNER_COMPOSE_FILE:-$directory/compose.signer.yaml}
-volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 runtime=${MRML_CONTAINER_RUNTIME:-docker}
-case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
-[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
 case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
 
 phase=select-and-advance
@@ -26,6 +23,20 @@ fi
   echo "missing or unsafe mode-0600 production environment file: $environment" >&2
   exit 1
 }
+read_environment_value() {
+  [ "$(grep -c "^$1=" "$environment")" -eq 1 ] || { echo "environment must contain exactly one $1 assignment" >&2; exit 1; }
+  sed -n "s/^$1=//p" "$environment"
+}
+volume_prefix=$(read_environment_value MRML_VOLUME_PREFIX)
+[ -z "${MRML_VOLUME_PREFIX+x}" ] || [ "$MRML_VOLUME_PREFIX" = "$volume_prefix" ] || {
+  echo "MRML_VOLUME_PREFIX does not match the production environment" >&2
+  exit 1
+}
+case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
+openpgp_created_at=$(read_environment_value MRML_OPENPGP_CREATED_AT)
+case $openpgp_created_at in ''|*[!0-9]*) echo "invalid MRML_OPENPGP_CREATED_AT" >&2; exit 1 ;; esac
+[ "$openpgp_created_at" -gt 0 ] || { echo "invalid MRML_OPENPGP_CREATED_AT" >&2; exit 1; }
 case $2:$3 in
   *[!0-9:]*|:*|*:) echo "validation time and generation must be decimal integers" >&2; exit 64 ;;
 esac
@@ -34,7 +45,7 @@ case $4 in
   *[!0-9a-f]*) echo "expected policy digest must be lowercase hexadecimal" >&2; exit 64 ;;
 esac
 [ "${#4}" -eq 128 ] || { echo "expected policy digest must contain 128 lowercase hexadecimal digits" >&2; exit 64; }
-selected_repository=$(sed -n 's/^MRML_PROTECTED_REPOSITORY=//p' "$environment")
+selected_repository=$(read_environment_value MRML_PROTECTED_REPOSITORY)
 [ "$selected_repository" = "$1" ] || { echo "repository does not match MRML_PROTECTED_REPOSITORY" >&2; exit 1; }
 if [ "$runtime" = podman ]; then
   for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
@@ -72,7 +83,7 @@ fi
   /run/mrml-transition/previous-policy.bin \
   /run/mrml-transition/next-policy.bin \
   /var/lib/mrml/git-protected-signer/keys/openpgp.seed \
-  "${MRML_OPENPGP_CREATED_AT:?set MRML_OPENPGP_CREATED_AT}" \
+  "$openpgp_created_at" \
   /var/lib/mrml/git-protected-signer/keys/ml-dsa-public.bin \
   /var/lib/mrml/git-protected-signer/keys/ml-dsa-secret.bin \
   /run/mrml-transition/previous-openpgp.sig \

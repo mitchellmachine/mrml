@@ -89,6 +89,12 @@ for operator in deploy/compose/construct-git-trust-policy.sh deploy/compose/sign
   require 'running=$(docker compose' "$operator"
   require 'cannot query service state for $service' "$operator"
 done
+for operator in deploy/compose/construct-git-trust-policy.sh deploy/compose/sign-git-trust-policy.sh deploy/compose/select-git-signer-key-slot.sh deploy/compose/stage-git-trust-transition.sh deploy/compose/transition-git-trust.sh; do
+  require 'volume_prefix=$(read_environment_value MRML_VOLUME_PREFIX)' "$operator"
+  require 'MRML_VOLUME_PREFIX does not match the production environment' "$operator"
+done
+require 'openpgp_created_at=$(read_environment_value MRML_OPENPGP_CREATED_AT)' deploy/compose/transition-git-trust.sh
+reject '"${MRML_OPENPGP_CREATED_AT:?set MRML_OPENPGP_CREATED_AT}"' deploy/compose/transition-git-trust.sh
 require 'volume_spec=$signer_volume:/keys:nocopy' deploy/compose/generate-git-signer-keys.sh
 require 'volume_spec=type=volume,source=$signer_volume,target=/keys,volume-nocopy' deploy/compose/generate-git-signer-keys.sh
 require '"21006:21006 400 32 1"' deploy/compose/generate-git-signer-keys.sh
