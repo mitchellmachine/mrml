@@ -773,7 +773,6 @@ fn open_authority_state_directories(
     let parent_metadata = parent.metadata().map_err(|_| ())?;
     if parent_metadata.uid != authority_uid
         || parent_metadata.mode & 0o777 != 0o700
-        || parent_metadata.links < 2
     {
         return Err(());
     }
@@ -788,7 +787,6 @@ fn open_authority_state_directories(
         if metadata.uid != parent_metadata.uid
             || metadata.gid != parent_metadata.gid
             || metadata.mode & 0o777 != 0o700
-            || metadata.links < 2
         {
             return Err(());
         }
@@ -806,7 +804,6 @@ fn open_or_create_authority_repository_directory(
     let root_metadata = root.metadata().map_err(|_| ())?;
     if root_metadata.uid != authority_uid
         || root_metadata.mode & 0o777 != 0o700
-        || root_metadata.links < 2
     {
         return Err(());
     }
@@ -824,7 +821,6 @@ fn open_or_create_authority_repository_directory(
         if metadata.uid != root_metadata.uid
             || metadata.gid != root_metadata.gid
             || metadata.mode & 0o777 != 0o700
-            || metadata.links < 2
         {
             return Err(());
         }

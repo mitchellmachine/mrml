@@ -237,7 +237,7 @@ fn validate_directory(
     let metadata = directory
         .metadata()
         .map_err(|_| GenerationStoreError::Unavailable)?;
-    if metadata.uid != owner_uid || metadata.mode & 0o022 != 0 || metadata.links < 2 {
+    if metadata.uid != owner_uid || metadata.mode & 0o022 != 0 {
         return Err(GenerationStoreError::Invalid);
     }
     Ok(())
