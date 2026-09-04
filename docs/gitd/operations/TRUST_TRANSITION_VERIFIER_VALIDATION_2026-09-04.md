@@ -193,6 +193,19 @@ again passed all six startup gates. A fresh authenticated fetch advertised the
 pushed objects and left local `main` and `origin/main` at zero ahead and zero
 behind.
 
+Syft 1.51.0 generated SPDX 2.3 JSON SBOMs directly from all three OCI
+archives. Each document contained 12 packages. Their SHA-256 values were
+`80d21aebbb56da702ae14045afa2f2abbfd575bd7e83d2227f47d983abe9b761`
+for authority,
+`fcb3bab7a3f5e4e017129514755487d0f61e06e74b5c35a9492739e208a2da1f`
+for Gitd, and
+`b2a7cea0d694e06c6421875cf4e156b8ed9a7254ec7339236bff361c083bad7c`
+for the validation client. Syft's optional online update check failed under
+restricted DNS; local archive enumeration and JSON validation completed.
+`git fsck --full --no-reflogs --no-dangling`, `mrml manifest check` (71
+packages and 214 dependencies), and `mrml manifest lock --check` (71 packages
+and 5 interfaces) passed after the exercise.
+
 All client, Gitd, authority, signer, certificate, policy, key, state, and
 runtime container mounts in this exercise were named volumes. Older Podman
 rejected its `subpath=socket` option, so the signer runtime named volume was
