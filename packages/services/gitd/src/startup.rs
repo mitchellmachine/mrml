@@ -678,7 +678,7 @@ pub fn recover_admitted_repository(
             }
             RecoveryAction::DiscardBeforeActivation => {
                 store
-                    .discard_recovered_before_activation(&journal)
+                    .discard_recovered_unactivated(&journal)
                     .map_err(|_| RepositoryRecoveryError::Journal)?;
                 summary.discarded_journals = summary
                     .discarded_journals
@@ -686,7 +686,13 @@ pub fn recover_admitted_repository(
                     .ok_or(RepositoryRecoveryError::Count)?;
             }
             RecoveryAction::ReverifyBeforeActivation => {
-                return Err(RepositoryRecoveryError::PreActivationReverificationRequired);
+                store
+                    .discard_recovered_unactivated(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
+                summary.discarded_journals = summary
+                    .discarded_journals
+                    .checked_add(1)
+                    .ok_or(RepositoryRecoveryError::Count)?;
             }
             RecoveryAction::ManualUncertain => {
                 return Err(RepositoryRecoveryError::ManualUncertain);
@@ -781,7 +787,7 @@ pub fn recover_admitted_protected_repository(
                         .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
                 }
                 store
-                    .discard_recovered_before_activation(&journal)
+                    .discard_recovered_unactivated(&journal)
                     .map_err(|_| RepositoryRecoveryError::Journal)?;
                 summary.discarded_journals = summary
                     .discarded_journals
@@ -789,7 +795,22 @@ pub fn recover_admitted_protected_repository(
                     .ok_or(RepositoryRecoveryError::Count)?;
             }
             RecoveryAction::ReverifyBeforeActivation => {
-                return Err(RepositoryRecoveryError::PreActivationReverificationRequired);
+                let record = authority
+                    .query_candidate_by_id(&journal.repository, journal.transaction)
+                    .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+                validate_pre_activation_candidate(&journal, &record)?;
+                if protected_discard_requires_abort(record.status)? {
+                    authority
+                        .abort_candidate(&record.context)
+                        .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+                }
+                store
+                    .discard_recovered_unactivated(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
+                summary.discarded_journals = summary
+                    .discarded_journals
+                    .checked_add(1)
+                    .ok_or(RepositoryRecoveryError::Count)?;
             }
             RecoveryAction::ManualUncertain => {
                 return Err(RepositoryRecoveryError::ManualUncertain);

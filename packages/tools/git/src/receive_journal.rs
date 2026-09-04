@@ -45,7 +45,8 @@ pub enum RecoveryAction {
     /// No ref can have changed; remove inaccessible quarantine/staging state.
     DiscardBeforeActivation,
     /// Objects exist but refs are still old. Re-run all generation, ancestry,
-    /// signature and policy verification before constructing new typestate.
+    /// signature and policy verification before constructing new typestate, or
+    /// discard the exact unselected candidate so a fresh receive can retry.
     ReverifyBeforeActivation,
     /// Every ref is already new; append/recover the auditable receipt.
     RecoverAuditReceipt,

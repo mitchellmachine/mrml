@@ -26,8 +26,12 @@ then removes the exact journal. Protected recovery exact-matches the authority
 candidate generations and aborts only pre-activation authority states; activated
 or completed authority state is contradictory and fails closed.
 
-`ReverifyBeforeActivation` remains a separate fail-closed gate. This increment
-does not reinterpret durable installed objects as newly verified authorization.
+The follow-up recovery gate treats `ReverifyBeforeActivation` as an explicit
+abort-and-clean-retry outcome. The durable journal lacks the complete proof and
+reservation transcript needed to reconstruct receive typestate, so recovery
+does not reinterpret installed objects as newly verified authorization or
+activate them. It exact-matches and aborts the protected candidate, proves the
+arrival is unselected, removes its retained state, and permits a fresh receive.
 
 ## Native verification
 

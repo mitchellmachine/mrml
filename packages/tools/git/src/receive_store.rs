@@ -254,7 +254,7 @@ impl LinuxDurableReceiveStore {
 
     /// Discards a journal and its exact pre-activation transaction directory
     /// only while live refs prove that activation did not occur.
-    pub fn discard_recovered_before_activation(
+    pub fn discard_recovered_unactivated(
         &self,
         journal: &ReceiveJournalRecord,
     ) -> Result<(), DurableFailure> {
@@ -262,9 +262,12 @@ impl LinuxDurableReceiveStore {
             .journals
             .load(journal.transaction)
             .map_err(|_| DurableFailure::VerifierCrash)?;
+        let action = classify_receive_recovery(journal, &self.recovery_snapshot(journal)?);
         if &reread != journal
-            || classify_receive_recovery(journal, &self.recovery_snapshot(journal)?)
-                != RecoveryAction::DiscardBeforeActivation
+            || !matches!(
+                action,
+                RecoveryAction::DiscardBeforeActivation | RecoveryAction::ReverifyBeforeActivation
+            )
         {
             return Err(DurableFailure::VerifierCrash);
         }
@@ -653,12 +656,12 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn preactivation_discard_is_exact_for_quarantined_and_installed_pack() {
-        for install_before_discard in [false, true] {
+    fn preactivation_discard_is_exact_at_every_unactivated_pack_boundary() {
+        for durable_phase in 0..=2 {
             let root = join_path(
                 &mrml_runtime::temporary_directory(),
                 &mrml_runtime::mrml_format!(
-                    "mrml-receive-discard-{}-{install_before_discard}",
+                    "mrml-receive-discard-{}-{durable_phase}",
                     mrml_runtime::process_id()
                 ),
             );
@@ -669,14 +672,27 @@ mod tests {
             store
                 .persist_journal_and_fsync(&transaction, &verified)
                 .unwrap();
-            if install_before_discard {
+            if durable_phase >= 1 {
                 store
                     .install_arrival_pack_and_fsync(transaction.id())
                     .unwrap();
             }
+            if durable_phase == 2 {
+                transaction.objects_durably_installed().unwrap();
+                store
+                    .persist_journal_and_fsync(&transaction, &verified)
+                    .unwrap();
+            }
             let (journal, action) = store.recovery_actions().unwrap().pop().unwrap();
-            assert_eq!(action, RecoveryAction::DiscardBeforeActivation);
-            store.discard_recovered_before_activation(&journal).unwrap();
+            assert_eq!(
+                action,
+                if durable_phase == 2 {
+                    RecoveryAction::ReverifyBeforeActivation
+                } else {
+                    RecoveryAction::DiscardBeforeActivation
+                }
+            );
+            store.discard_recovered_unactivated(&journal).unwrap();
             assert!(store.recovery_actions().unwrap().is_empty());
             assert!(
                 read_directory(&path(&root, "packs/quarantine"))
