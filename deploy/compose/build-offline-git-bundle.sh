@@ -145,6 +145,8 @@ install -m 0555 deploy/compose/initialize-git-protected-policy.sh "$payload/depl
 install -m 0555 deploy/compose/transition-git-trust.sh "$payload/deploy/transition-git-trust.sh"
 install -m 0555 deploy/compose/construct-git-trust-policy.sh "$payload/deploy/construct-git-trust-policy.sh"
 install -m 0555 deploy/compose/sign-git-trust-policy.sh "$payload/deploy/sign-git-trust-policy.sh"
+install -m 0555 deploy/compose/select-git-signer-key-slot.sh "$payload/deploy/select-git-signer-key-slot.sh"
+install -m 0555 deploy/compose/stage-git-trust-transition.sh "$payload/deploy/stage-git-trust-transition.sh"
 install -m 0555 deploy/compose/token-git.sh "$payload/deploy/token-git.sh"
 install -m 0555 deploy/compose/recovery-git.sh "$payload/deploy/recovery-git.sh"
 install -m 0555 deploy/compose/switch-git-version.sh "$payload/deploy/switch-git-version.sh"

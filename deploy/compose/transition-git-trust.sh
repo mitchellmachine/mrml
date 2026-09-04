@@ -78,4 +78,18 @@ for input in previous-policy.bin next-policy.bin previous-openpgp-public.asc pre
   rm -- "$transition_volume/$input"
 done
 sync -f "$transition_volume"
-echo "trust transition selected; consumed public transition inputs removed"
+
+construction_volume=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-trust-construction")
+signature_volume=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-trust-signatures")
+case $construction_volume:$signature_volume in /*/_data:/*/_data) ;; *) echo "unsafe trust workspace mountpoint" >&2; exit 1 ;; esac
+for input in candidate-openpgp-public.asc candidate-ml-dsa-public.bin previous-policy.bin next-policy.bin; do
+  [ -f "$construction_volume/$input" ] && [ ! -L "$construction_volume/$input" ] || exit 1
+  rm -- "$construction_volume/$input"
+done
+for input in previous-openpgp-public.asc previous-openpgp.sig previous-ml-dsa.sig next-openpgp-public.asc next-openpgp.sig next-ml-dsa.sig; do
+  [ -f "$signature_volume/$input" ] && [ ! -L "$signature_volume/$input" ] || exit 1
+  rm -- "$signature_volume/$input"
+done
+sync -f "$construction_volume"
+sync -f "$signature_volume"
+echo "trust transition selected; consumed public transition and workspace inputs removed"

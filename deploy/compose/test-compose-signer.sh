@@ -45,6 +45,7 @@ require 'source: mrml-runtime-git-signer' "$compose"
 require 'volume: {nocopy: true}' "$compose"
 require 'mrml-git-signer-state:' "$compose"
 require 'mrml-git-signer-keys:' "$compose"
+require 'name: "${MRML_GIT_SIGNER_KEYS_VOLUME:-${MRML_VOLUME_PREFIX:-mrml}-git-signer-keys}"' "$compose"
 require 'mrml-git-signer-channel:' "$compose"
 require 'name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-state"' "$compose"
 require 'name: "${MRML_VOLUME_PREFIX:-mrml}-runtime-git-signer"' "$compose"
@@ -88,9 +89,18 @@ require '--profile admin run --rm --no-deps git-signer-trust-advance' deploy/com
 require 'advance-trust 21006 21001 21002 "$1"' deploy/compose/transition-git-trust.sh
 require 'if [ "${1:-}" = --resume-signer ]' deploy/compose/transition-git-trust.sh
 require 'if [ "$phase" = select-and-advance ]' deploy/compose/transition-git-trust.sh
+require 'git-trust-construction' deploy/compose/transition-git-trust.sh
+require 'git-trust-signatures' deploy/compose/transition-git-trust.sh
+require 'consumed public transition and workspace inputs removed' deploy/compose/transition-git-trust.sh
 require '--profile admin run --rm --no-deps git-trust-sign-current' deploy/compose/sign-git-trust-policy.sh
 require '--profile admin run --rm --no-deps git-trust-sign-next' deploy/compose/sign-git-trust-policy.sh
 require 'sign-key-rotation 21006 21001' deploy/compose/sign-git-trust-policy.sh
 require 'trust policy signing requires stopped Gitd, authority, and signer' deploy/compose/sign-git-trust-policy.sh
+require 'signer key selection requires stopped Gitd, authority, and signer' deploy/compose/select-git-signer-key-slot.sh
+require 'MRML_GIT_SIGNER_KEYS_VOLUME' deploy/compose/select-git-signer-key-slot.sh
+require 'sync -f "$temporary"' deploy/compose/select-git-signer-key-slot.sh
+require 'selected signer key volume is outside the managed key slots' deploy/compose/stage-git-trust-transition.sh
+require 'install-volume-inputs.sh" authority-transition' deploy/compose/stage-git-trust-transition.sh
+require 'git-trust-signatures' deploy/compose/stage-git-trust-transition.sh
 
 echo "protected signer Compose and image isolation policy PASS"
