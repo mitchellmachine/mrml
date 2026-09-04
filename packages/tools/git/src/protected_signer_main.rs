@@ -476,20 +476,23 @@ fn sign_key_rotation(
         .public_key()
         .encode_ascii(&mut openpgp_public)
         .map_err(|_| ())?;
-    write_new_public(
+    write_new_exact(
         openpgp_public_output,
         &openpgp_public[..openpgp_public_length],
         signer_owner_uid,
+        0o444,
     )?;
-    write_new_public(
+    write_new_exact(
         openpgp_signature_output,
         &openpgp_signature[..openpgp_length],
         signer_owner_uid,
+        0o444,
     )?;
-    write_new_public(
+    write_new_exact(
         ml_dsa_signature_output,
         &ml_dsa_signature,
         signer_owner_uid,
+        0o444,
     )?;
     erase_secret_bytes(&mut ml_dsa_signature);
     println!("key-rotation authorization written");
@@ -1409,36 +1412,6 @@ fn validate_new_public_output(path: &Path, expected_owner: u32) -> Result<(), ()
         return Err(());
     }
     Ok(())
-}
-
-fn write_new_public(path: &Path, bytes: &[u8], expected_owner: u32) -> Result<(), ()> {
-    validate_new_public_output(path, expected_owner)?;
-    let mut output = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
-        .map_err(|_| ())?;
-    output.write_all(bytes).map_err(|_| ())?;
-    output.sync_all().map_err(|_| ())?;
-    drop(output);
-    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
-    if metadata.file_type().is_symlink()
-        || !metadata.file_type().is_file()
-        || metadata.nlink() != 1
-        || metadata.uid() != expected_owner
-        || metadata.mode() & 0o777 != 0o600
-        || metadata.len() != bytes.len() as u64
-    {
-        return Err(());
-    }
-    let directory = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path.parent().ok_or(())?)
-        .map_err(|_| ())?;
-    directory.sync_all().map_err(|_| ())
 }
 
 fn write_new_exact(
