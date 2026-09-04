@@ -103,7 +103,7 @@ git fsck --full --no-reflogs --no-dangling                    PASS
 target/debug/mrml manifest check                              PASS (71 packages, 214 dependencies)
 target/debug/mrml manifest lock --check                       PASS (71 packages, 5 interfaces)
 deploy/compose/test-compose-git.sh                            PASS
-target/debug/mrml test org.mrml.tool.git --target linux          PASS (268 library, 4 CLI, 7 signer)
+target/debug/mrml test org.mrml.tool.git --target linux          PASS (271 library, 4 CLI, 7 signer after scaling continuation)
 target/debug/mrml test org.mrml.library.crypto --target linux    PASS (56)
 target/debug/mrml test org.mrml.library.tls --target linux       PASS (34)
 target/debug/mrml test org.mrml.library.http --target linux      PASS (79; socket tests outside restricted sandbox)
@@ -120,6 +120,52 @@ The interrupted comparison clones were deliberately stopped after collecting
 diagnostic evidence and are not counted as successful runs. Their named volumes
 were retained. The final and repeat clones exited zero and printed their normal
 completion line.
+
+## Delta and graph scaling continuation
+
+Signed commit `638514a4` removes the remaining repeated deferred-list scan and
+linear REF-base search from the bounded full-buffer pack parser used by local
+import, compaction, and compatibility paths. It now builds an exact object-ID
+map, a sorted offset table, reverse-dependency ranges, and a ready queue. Each
+entry is attempted initially and thereafter only when its exact base resolves;
+resolved objects are sorted into pack order once at the end. The production
+file validator already used the corresponding indexed dependency architecture
+from `d8a51397`. Missing or cyclic dependencies leave pending entries and fail
+closed, duplicate resolved object IDs are rejected, and delta expansion remains
+subject to the existing object/count limits. Production full-pack response
+caching remains compile-time disabled and its regression test passes.
+
+History verification and upload-pack reachability already use bounded
+`ObjectIdSet` instances for old-reachable, visiting, verified, excluded, and
+seen membership. Deterministic result order remains a separate vector. Nodes
+are scheduled once after exact-set membership checks, every parent edge is
+bounded, and merge-side ancestry uses the same traversal.
+
+The following measurements used the final debug test executable directly on
+the same Linux host. Wall samples include process and test-harness startup, so
+they are conservative for the smallest case. Each timing row is the median of
+20 or 30 successful single-threaded process runs; VmHWM rows are ten or twenty
+separately monitored successful runs.
+
+| Workload | Count | Median wall | Maximum wall | Median VmHWM |
+| --- | ---: | ---: | ---: | ---: |
+| introduced linear graph | 1,000 | 55.683 ms | 59.464 ms | 4,248 KiB |
+| introduced linear graph | 2,000 | 112.856 ms | 123.521 ms | 4,192 KiB |
+| introduced linear graph | 4,000 | 224.250 ms | 246.529 ms | 4,192 KiB |
+| production file REF-delta chain | 10 | 1.755 ms | 1.962 ms | 4,248 KiB |
+| production file REF-delta chain | 25 | 2.085 ms | 2.219 ms | 4,198 KiB |
+| production file REF-delta chain | 50 | 2.733 ms | 2.823 ms | 4,194 KiB |
+| full-buffer reverse REF-delta chain | 50 | 2.526 ms | 3.851 ms | 4,208 KiB |
+| full-buffer reverse REF-delta chain | 100 | 3.806 ms | 4.413 ms | 4,198 KiB |
+| full-buffer reverse REF-delta chain | 200 | 7.166 ms | 7.681 ms | 4,210 KiB |
+
+Graph median time ratios are 2.03 for 1,000 to 2,000 nodes and 1.99 for 2,000
+to 4,000 nodes. The full-buffer reverse-chain ratios are 1.51 for 50 to 100 and
+1.88 for 100 to 200 despite fixed process startup. These observations are
+consistent with the inspected O((objects + dependencies) log objects) offset
+operations and amortized constant-time exact-ID membership, not repeated
+all-pending or all-visited scans. They do not constitute a million-object
+physical-host claim.
 
 Patent review: **NOT_TRIGGERED** for each increment. These are bounded
 read-ahead, standardized GHASH instruction acceleration, conventional HTTP/2
