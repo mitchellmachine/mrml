@@ -169,6 +169,10 @@ reject '$deployment_root/gitd/policies' deploy/compose/initialize-git-protected-
 require 'trust transition requires stopped Gitd, authority, and signer' deploy/compose/transition-git-trust.sh
 require '--profile admin run --rm --no-deps git-trust-transition' deploy/compose/transition-git-trust.sh
 require 'git_volume git-authority-transition' deploy/compose/install-volume-inputs.sh
+require 'previous-openpgp-public.asc' deploy/compose/install-volume-inputs.sh
+require 'previous-ml-dsa-public.bin' deploy/compose/install-volume-inputs.sh
+require '/run/mrml-transition/previous-openpgp-public.asc /run/mrml-transition/previous-ml-dsa-public.bin' deploy/compose/transition-git-trust.sh
+reject '/etc/mrml/authority/openpgp-public.asc /etc/mrml/authority/ml-dsa-public.bin' deploy/compose/transition-git-trust.sh
 require 'authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC' deploy/compose/install-volume-inputs.sh
 require 'repositories.v1' deploy/compose/install-volume-inputs.sh
 reject '$deployment_root/gitd/policies' deploy/compose/transition-git-trust.sh

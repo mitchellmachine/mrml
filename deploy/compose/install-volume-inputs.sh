@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: $0 gitd CONFIG | authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC | signer OPENPGP_SEED ML_DSA_PUBLIC ML_DSA_SECRET AUTHORITY_RECEIPT_PUBLIC | credential-agent TOKEN | authority-transition PREVIOUS_POLICY NEXT_POLICY NEXT_OPENPGP NEXT_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE | certd CONFIG TRUST_ROOTS | acmed CONFIG | cloudflare-token TOKEN" >&2
+  echo "usage: $0 gitd CONFIG | authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC | signer OPENPGP_SEED ML_DSA_PUBLIC ML_DSA_SECRET AUTHORITY_RECEIPT_PUBLIC | credential-agent TOKEN | authority-transition PREVIOUS_POLICY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA NEXT_OPENPGP NEXT_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE | certd CONFIG TRUST_ROOTS | acmed CONFIG | cloudflare-token TOKEN" >&2
   exit 2
 }
 
@@ -76,16 +76,18 @@ case ${1:-} in
     install_file "$2" "$destination/token" 21009 21009 0400 64
     ;;
   authority-transition)
-    [ "$#" -eq 9 ] || usage
+    [ "$#" -eq 11 ] || usage
     destination=$(volume_path "$(git_volume git-authority-transition)")
     install_file "$2" "$destination/previous-policy.bin" 21002 21002 0444 524288
     install_file "$3" "$destination/next-policy.bin" 21002 21002 0444 524288
-    install_file "$4" "$destination/next-openpgp-public.asc" 21002 21002 0444 1048576
-    install_file "$5" "$destination/next-ml-dsa-public.bin" 21002 21002 0444 1048576
-    install_file "$6" "$destination/previous-openpgp.sig" 21002 21002 0444 1024
-    install_file "$7" "$destination/previous-ml-dsa.sig" 21002 21002 0444 3309
-    install_file "$8" "$destination/next-openpgp.sig" 21002 21002 0444 1024
-    install_file "$9" "$destination/next-ml-dsa.sig" 21002 21002 0444 3309
+    install_file "$4" "$destination/previous-openpgp-public.asc" 21002 21002 0444 1048576
+    install_file "$5" "$destination/previous-ml-dsa-public.bin" 21002 21002 0444 1048576
+    install_file "$6" "$destination/next-openpgp-public.asc" 21002 21002 0444 1048576
+    install_file "$7" "$destination/next-ml-dsa-public.bin" 21002 21002 0444 1048576
+    install_file "$8" "$destination/previous-openpgp.sig" 21002 21002 0444 1024
+    install_file "$9" "$destination/previous-ml-dsa.sig" 21002 21002 0444 3309
+    install_file "${10}" "$destination/next-openpgp.sig" 21002 21002 0444 1024
+    install_file "${11}" "$destination/next-ml-dsa.sig" 21002 21002 0444 3309
     ;;
   certd)
     [ "$#" -eq 3 ] || usage

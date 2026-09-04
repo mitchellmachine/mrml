@@ -46,7 +46,7 @@ if [ "$phase" = select-and-advance ]; then
     --profile admin run --rm --no-deps git-trust-transition \
     transition-policy /var/lib/mrml/git-policies "$1" \
     /run/mrml-transition/next-policy.bin \
-    /etc/mrml/authority/openpgp-public.asc /etc/mrml/authority/ml-dsa-public.bin \
+    /run/mrml-transition/previous-openpgp-public.asc /run/mrml-transition/previous-ml-dsa-public.bin \
     /run/mrml-transition/previous-openpgp.sig /run/mrml-transition/previous-ml-dsa.sig \
     /run/mrml-transition/next-openpgp-public.asc /run/mrml-transition/next-ml-dsa-public.bin \
     /run/mrml-transition/next-openpgp.sig /run/mrml-transition/next-ml-dsa.sig \
@@ -73,7 +73,7 @@ docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f
 transition_volume=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-authority-transition")
 case $transition_volume in /*/_data) ;; *) echo "unsafe transition volume mountpoint" >&2; exit 1 ;; esac
 [ -d "$transition_volume" ] && [ ! -L "$transition_volume" ] || exit 1
-for input in previous-policy.bin next-policy.bin next-openpgp-public.asc next-ml-dsa-public.bin previous-openpgp.sig previous-ml-dsa.sig next-openpgp.sig next-ml-dsa.sig; do
+for input in previous-policy.bin next-policy.bin previous-openpgp-public.asc previous-ml-dsa-public.bin next-openpgp-public.asc next-ml-dsa-public.bin previous-openpgp.sig previous-ml-dsa.sig next-openpgp.sig next-ml-dsa.sig; do
   [ -f "$transition_volume/$input" ] && [ ! -L "$transition_volume/$input" ] || exit 1
   rm -- "$transition_volume/$input"
 done
