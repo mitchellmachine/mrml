@@ -418,16 +418,13 @@ fn lock_token_administration(
     let name = ".tokens.v2.admin.lock";
     let lock = match location.directory.open_regular(name) {
         Ok(lock) => lock,
-        Err(_) if !location.entry_exists(name)? => {
-            match location.directory.create_new_file(name, 0o600) {
-                Ok(lock) => lock,
-                Err(_) => location
-                    .directory
-                    .open_regular(name)
-                    .map_err(|_| AuthenticationStoreError::Lock)?,
-            }
-        }
-        Err(_) => return Err(AuthenticationStoreError::Lock),
+        Err(_) => match location.directory.create_new_file(name, 0o600) {
+            Ok(lock) => lock,
+            Err(_) => location
+                .directory
+                .open_regular(name)
+                .map_err(|_| AuthenticationStoreError::Lock)?,
+        },
     };
     let metadata = lock
         .metadata()
