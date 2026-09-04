@@ -1402,6 +1402,26 @@ impl TrustPolicyState {
         Ok(Self::from_candidate(candidate))
     }
 
+    /// Verifies that one already decoded canonical policy is the exact normal
+    /// successor authorized by both the current and successor hybrid pairs.
+    /// This performs no persistence and grants no policy-selection authority.
+    pub fn verify_normal_successor(
+        &self,
+        next: &Self,
+        previous_authorization: &VerifiedHybridSignature,
+        new_authorization: &VerifiedHybridSignature,
+    ) -> Result<(), HybridPolicyError> {
+        let selected = self.transition(
+            next.as_candidate(),
+            previous_authorization,
+            new_authorization,
+        )?;
+        if &selected != next {
+            return Err(HybridPolicyError::InvalidPolicy);
+        }
+        Ok(())
+    }
+
     /// Applies one exact owner-pinned emergency transition. The authorization
     /// is consumed by value; persisted replay also fails because the old
     /// policy digest and generations cease to match after activation.
