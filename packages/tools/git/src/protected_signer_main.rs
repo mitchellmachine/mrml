@@ -1427,14 +1427,13 @@ fn write_new_exact(
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .mode(mode)
         .custom_flags(O_NOFOLLOW)
         .open(path)
         .map_err(|_| ())?;
     output.write_all(bytes).map_err(|_| ())?;
     output.sync_all().map_err(|_| ())?;
     drop(output);
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|_| ())?;
     let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
     if metadata.file_type().is_symlink()
         || !metadata.file_type().is_file()
