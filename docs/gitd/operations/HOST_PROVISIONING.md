@@ -46,8 +46,8 @@ state.
 For a normal trust transition, construct the canonical next policy and obtain
 detached OpenPGP-v6 and ML-DSA-65 signatures over its exact
 `MRML-GIT-HYBRID-V1` key-rotation transcript from both one currently active
-pair and one pair active in the next generation. Install the next policy, next
-public keys, and four detached signatures with
+pair and one pair active in the next generation. Install the exact previous
+policy, next policy, next public keys, and four detached signatures with
 `install-volume-inputs.sh authority-transition ...`. This no-overwrite command
 places only public material in `mrml-git-authority-transition`; private signing
 keys never enter the VPS or a production container. Stop Gitd and the authority,
@@ -68,6 +68,15 @@ current trust generation's retained pair and revalidates that pair against the
 current policy. Stale, substituted, malformed, unauthorized, or uncertain
 transitions fail closed; a retained lock or temporary file requires operator
 inspection.
+With Gitd, authority, and the protected signer stopped, the same script next
+runs the networkless signer admin profile. It verifies the already selected
+policy against the reviewed previous policy and both hybrid authorizations,
+requires the current signer keys to match the previous active pair, preserves
+repository generation, and durably advances signer trust and revocation state.
+Only after reopening that exact state does the script remove public transition
+uploads. If interruption occurs after policy selection, rerun with
+`--resume-signer`; this skips selection, repeats the full signer verification,
+and retains inputs again on any failure.
 The candidate should retain the configured previous pair during a planned
 overlap so the authority remains startable while operators validate the new
 generation. Emergency transition is deliberately a separate residual operation

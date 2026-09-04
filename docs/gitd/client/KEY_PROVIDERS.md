@@ -182,6 +182,24 @@ signature came from which generation. The candidate policy remains data until
 the separately stopped, volume-fed authority transition independently verifies
 both hybrid authorizations and durably selects it.
 
+After selection, the same networkless admin workflow advances the current
+signer's durable trust state with:
+
+```text
+mrml-git-protected-signer advance-trust SIGNER_OWNER_UID SELECTED_POLICY_OWNER_UID TRANSITION_OWNER_UID REPOSITORY STATE_FILE PREVIOUS_POLICY SELECTED_POLICY CURRENT_OPENPGP_SEED CURRENT_OPENPGP_CREATED_AT CURRENT_ML_DSA_PUBLIC CURRENT_ML_DSA_SECRET PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP_PUBLIC NEXT_ML_DSA_PUBLIC NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE
+```
+
+This operation requires the policy volume's already selected canonical state,
+the exact previous canonical policy, both public transition authorizations, the
+current use-only signer keys, and the candidate public pair. It applies the same
+normal monotonic-transition rules as the authority, requires the current signer
+pair to be active in the previous policy and the next pair to be active in the
+selected policy, preserves repository generation, and atomically advances trust
+and revocation generations. Replays and attempts made before policy selection
+fail closed. If execution is interrupted after policy selection, rerun
+`transition-git-trust.sh --resume-signer ...`; public inputs are retained until
+the signer has reopened its exact new state.
+
 The experimental native SSH proposal advertises `rsa-sha2-256` only; the SHA-1 `ssh-rsa`
 signature algorithm is not negotiable. Duplicate algorithm-list entries fail
 closed. Independent inbound and outbound encrypted states force a complete
