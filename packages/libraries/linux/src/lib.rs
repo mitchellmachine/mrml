@@ -102,6 +102,7 @@ unsafe extern "C" {
     fn lseek(file: c_int, offset: isize, whence: c_int) -> isize;
     fn close(file: c_int) -> c_int;
     fn fsync(file: c_int) -> c_int;
+    fn flock(file: c_int, operation: c_int) -> c_int;
     fn fstat(file: c_int, status: *mut Stat) -> c_int;
     fn geteuid() -> u32;
     fn mkdir(path: *const i8, mode: u32) -> c_int;
@@ -1530,6 +1531,12 @@ impl NativeDirectory {
     pub fn sync(&self) -> bool {
         let descriptor = unsafe { dirfd(self.0) };
         descriptor >= 0 && (unsafe { fsync(descriptor) }) == 0
+    }
+
+    pub fn lock_exclusive(&self) -> bool {
+        const LOCK_EXCLUSIVE: c_int = 2;
+        let descriptor = unsafe { dirfd(self.0) };
+        descriptor >= 0 && (unsafe { flock(descriptor, LOCK_EXCLUSIVE) }) == 0
     }
 }
 

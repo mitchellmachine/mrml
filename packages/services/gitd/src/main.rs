@@ -1,7 +1,6 @@
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -23,15 +22,10 @@ use mrml_gitd::{
 };
 use mrml_http::{AccessScopes, RepositoryIdentity};
 use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
+use mrml_runtime::DirectoryCapability;
 
 const O_NOFOLLOW: i32 = 0x20_000;
-const O_DIRECTORY: i32 = 0x1_0000;
-const LOCK_EX: i32 = 2;
 const REQUEST_ID_LEASE_SIZE: u64 = 1 << 32;
-
-unsafe extern "C" {
-    fn flock(fd: i32, operation: i32) -> i32;
-}
 
 fn main() {
     if run().is_err() {
@@ -708,94 +702,105 @@ fn reserve_request_id_leases(
     if !state_root.is_absolute() || authority_floor == 0 || certd_floor == 0 {
         return Err(());
     }
-    let directory = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_DIRECTORY | O_NOFOLLOW)
-        .open(state_root)
-        .map_err(|_| ())?;
+    let directory =
+        DirectoryCapability::open_root(state_root.to_str().ok_or(())?).map_err(|_| ())?;
+    reserve_request_id_leases_capability(&directory, expected_owner, authority_floor, certd_floor)
+}
+
+fn reserve_request_id_leases_capability(
+    directory: &DirectoryCapability,
+    expected_owner: u32,
+    authority_floor: u64,
+    certd_floor: u64,
+) -> Result<((u64, u64), (u64, u64)), ()> {
     let metadata = directory.metadata().map_err(|_| ())?;
-    if !metadata.is_dir()
-        || metadata.file_type().is_symlink()
-        || metadata.uid() != expected_owner
-        || metadata.permissions().mode() & 0o077 != 0
-    {
+    if metadata.uid != expected_owner || metadata.mode & 0o077 != 0 || metadata.links < 2 {
         return Err(());
     }
     // The directory lock serializes every cooperating Gitd process while both
     // channel high-water marks are advanced and made durable.
-    if unsafe { flock(directory.as_raw_fd(), LOCK_EX) } != 0 {
-        return Err(());
-    }
+    directory.lock_exclusive().map_err(|_| ())?;
     let authority = reserve_request_id_lease(
-        state_root,
+        &directory,
         "authority-request-id.v1",
         expected_owner,
         authority_floor,
     )?;
     let certd = reserve_request_id_lease(
-        state_root,
+        &directory,
         "certd-request-id.v1",
         expected_owner,
         certd_floor,
     )?;
-    directory.sync_all().map_err(|_| ())?;
+    directory.sync().map_err(|_| ())?;
     Ok((authority, certd))
 }
 
 fn reserve_request_id_lease(
-    state_root: &Path,
+    state_root: &DirectoryCapability,
     name: &str,
     expected_owner: u32,
     configured_floor: u64,
 ) -> Result<(u64, u64), ()> {
-    let path = state_root.join(name);
-    let persisted = if path.exists() {
-        read_request_id_high_watermark(&path, expected_owner)?
-    } else {
-        configured_floor
+    let persisted = match state_root.open_regular(name) {
+        Ok(file) => read_request_id_high_watermark_file(file, expected_owner)?,
+        Err(_)
+            if state_root
+                .read_directory()
+                .map_err(|_| ())?
+                .iter()
+                .any(|entry| entry.name.as_str() == name) =>
+        {
+            return Err(());
+        }
+        Err(_) => configured_floor,
     };
     let start = persisted.max(configured_floor);
     let next = start.checked_add(REQUEST_ID_LEASE_SIZE).ok_or(())?;
-    let temporary = state_root.join(format!(".{name}.{}.tmp", std::process::id()));
+    let temporary = format!(".{name}.{}.tmp", std::process::id());
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(O_NOFOLLOW)
-            .open(&temporary)
+        let mut file = state_root
+            .create_new_file(&temporary, 0o600)
             .map_err(|_| ())?;
-        writeln!(file, "{next}").map_err(|_| ())?;
-        file.sync_all().map_err(|_| ())?;
-        std::fs::rename(&temporary, &path).map_err(|_| ())?;
+        file.write_all(format!("{next}\n").as_bytes())
+            .map_err(|_| ())?;
+        file.sync().map_err(|_| ())?;
+        state_root.rename_child(&temporary, name).map_err(|_| ())?;
         Ok(())
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        let _ = state_root.remove_file(&temporary);
     }
     result?;
     Ok((start, next))
 }
 
+#[cfg(test)]
 fn read_request_id_high_watermark(path: &Path, expected_owner: u32) -> Result<u64, ()> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
-        .map_err(|_| ())?;
+    let parent = path.parent().ok_or(())?;
+    let name = path.file_name().and_then(|name| name.to_str()).ok_or(())?;
+    let directory = DirectoryCapability::open_root(parent.to_str().ok_or(())?).map_err(|_| ())?;
+    let file = directory.open_regular(name).map_err(|_| ())?;
+    read_request_id_high_watermark_file(file, expected_owner)
+}
+
+fn read_request_id_high_watermark_file(
+    mut file: mrml_runtime::File,
+    expected_owner: u32,
+) -> Result<u64, ()> {
     let metadata = file.metadata().map_err(|_| ())?;
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.nlink() != 1
-        || metadata.uid() != expected_owner
-        || metadata.permissions().mode() & 0o777 != 0o600
-        || metadata.len() == 0
-        || metadata.len() > 21
+    let length = file.len().map_err(|_| ())?;
+    if metadata.links != 1
+        || metadata.uid != expected_owner
+        || metadata.mode & 0o777 != 0o600
+        || length == 0
+        || length > 21
     {
         return Err(());
     }
-    let mut encoded = String::new();
-    file.read_to_string(&mut encoded).map_err(|_| ())?;
+    let mut encoded = vec![0; length as usize];
+    file.read_exact(&mut encoded).map_err(|_| ())?;
+    let encoded = core::str::from_utf8(&encoded).map_err(|_| ())?;
     let value = encoded.strip_suffix('\n').ok_or(())?;
     if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(());
@@ -933,6 +938,32 @@ mod tests {
         symlink(&target, &authority).unwrap();
         assert!(reserve_request_id_leases(&root, uid, 1, 1).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn request_id_leases_remain_bound_to_retained_state_root() {
+        let (root, uid) = request_sequence_root("retained");
+        let retained = DirectoryCapability::open_root(root.to_str().unwrap()).unwrap();
+        let displaced = root.with_extension("displaced");
+        let _ = std::fs::remove_dir_all(&displaced);
+        std::fs::rename(&root, &displaced).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(
+            reserve_request_id_leases_capability(&retained, uid, 17, 19),
+            Ok((
+                (17, 17 + REQUEST_ID_LEASE_SIZE),
+                (19, 19 + REQUEST_ID_LEASE_SIZE)
+            ))
+        );
+        assert!(displaced.join("authority-request-id.v1").is_file());
+        assert!(displaced.join("certd-request-id.v1").is_file());
+        assert!(!root.join("authority-request-id.v1").exists());
+        assert!(!root.join("certd-request-id.v1").exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(displaced).unwrap();
     }
 
     #[test]

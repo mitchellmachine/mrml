@@ -182,6 +182,14 @@ impl DirectoryCapability {
             .ok_or(FileError::WriteFailed)
     }
 
+    /// Holds an exclusive advisory lock until this capability is dropped.
+    pub fn lock_exclusive(&self) -> Result<(), FileError> {
+        self.inner
+            .lock_exclusive()
+            .then_some(())
+            .ok_or(FileError::DirectoryFailed)
+    }
+
     pub fn metadata(&self) -> Result<DirectoryMetadata, FileError> {
         let metadata = self.inner.metadata().ok_or(FileError::MetadataFailed)?;
         Ok(DirectoryMetadata {
