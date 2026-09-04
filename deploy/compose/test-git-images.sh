@@ -57,7 +57,7 @@ reject "curl" "$signer"
 reject "openssh" "$signer"
 reject "gnupg" "$signer"
 
-require "USER 21007:21007" "$credential"
+require "USER 21009:21009" "$credential"
 require 'ENTRYPOINT ["/usr/bin/mrml-git-credential-agent"]' "$credential"
 reject "mrml-gitd /" "$credential"
 reject "mrml-git-protected-signer" "$credential"

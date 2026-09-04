@@ -19,10 +19,10 @@ reject() {
 }
 
 [ -f "$compose" ] && [ -f "$dockerfile" ]
-require 'USER 21007:21007' "$dockerfile"
+require 'USER 21009:21009' "$dockerfile"
 require 'ENTRYPOINT ["/usr/bin/mrml-git-credential-agent"]' "$dockerfile"
-require 'user: "21007:21007"' "$compose"
-require 'group_add: ["21907"]' "$compose"
+require 'user: "21009:21009"' "$compose"
+require 'group_add: ["21909"]' "$compose"
 require 'network_mode: none' "$compose"
 require 'read_only: true' "$compose"
 require 'cap_drop: [ALL]' "$compose"
@@ -44,6 +44,6 @@ require 'docker volume create --label org.mrml.managed=true' deploy/compose/prov
 require 'client and credential-agent UID must differ' deploy/compose/provision-git-credential-agent-host.sh
 require 'credential-agent channel copies differ' deploy/compose/provision-git-credential-agent-host.sh
 require 'credential-agent)' deploy/compose/install-volume-inputs.sh
-require '21007 21007 0400 64' deploy/compose/install-volume-inputs.sh
+require '21009 21009 0400 64' deploy/compose/install-volume-inputs.sh
 
 echo "credential-agent Compose and image isolation policy PASS"

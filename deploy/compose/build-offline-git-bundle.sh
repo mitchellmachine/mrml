@@ -124,7 +124,7 @@ done
       git-authority) user=21002:21002 entrypoint=/usr/bin/mrml-git-authority ;;
       gitd) user=21001:21001 entrypoint=/usr/bin/mrml-gitd ;;
       git-protected-signer) user=21006:21006 entrypoint=/usr/bin/mrml-git-protected-signer ;;
-      git-credential-agent) user=21007:21007 entrypoint=/usr/bin/mrml-git-credential-agent ;;
+      git-credential-agent) user=21009:21009 entrypoint=/usr/bin/mrml-git-credential-agent ;;
       git-backup) user=0:0 entrypoint=/usr/bin/mrml-git-backup ;;
       *) exit 1 ;;
     esac

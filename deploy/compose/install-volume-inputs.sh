@@ -73,7 +73,7 @@ case ${1:-} in
       exit 1
     }
     destination=$(volume_path "$(git_volume git-credential-agent-token)")
-    install_file "$2" "$destination/token" 21007 21007 0400 64
+    install_file "$2" "$destination/token" 21009 21009 0400 64
     ;;
   authority-transition)
     [ "$#" -eq 8 ] || usage

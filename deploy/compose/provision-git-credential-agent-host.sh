@@ -4,9 +4,9 @@ set -eu
 [ "$#" -eq 2 ] || { echo "usage: $0 CLIENT_UID CLIENT_GID" >&2; exit 2; }
 client_uid=$1
 client_gid=$2
-agent_uid=21007
-agent_gid=21007
-socket_gid=21907
+agent_uid=21009
+agent_gid=21009
+socket_gid=21909
 volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 
 case $client_uid in ''|*[!0-9]*|0) echo "client UID must be nonzero decimal" >&2; exit 2 ;; esac

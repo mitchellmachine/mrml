@@ -26,7 +26,8 @@ serves one request. Wrong capabilities, peers, sessions, scope, action,
 generation, expiry, and frame bounds fail closed. Secret-bearing input, token,
 response, and authorization buffers receive volatile erasure.
 
-The daemon is fixed at UID/GID `21007:21007`; socket group `21907` is distinct.
+The daemon is fixed at UID/GID `21009:21009`; socket group `21909` is distinct
+from the existing controlled Git client identity `21007:21007`.
 Its production Compose fragment has `network_mode: none`, no ports, read-only
 root, all capabilities dropped, no-new-privileges, and explicit memory, CPU,
 PID, descriptor, and log bounds. Token, channel, client channel-copy, and Unix
@@ -81,19 +82,19 @@ podman build --network none --pull=never \
 ```
 
 - Image ID:
-  `62b366e0ee72a09e4f1e445165de475787ffef51a4e4f0b235cc9b1db3374ecd`.
-- User: `21007:21007`.
+  `ff251ae0e1101a80b9910dc09be3e247c6b1d2b8b09d4dccf980181130594dce`.
+- User: `21009:21009`.
 - Entrypoint: `/usr/bin/mrml-git-credential-agent`.
 - Exported test archive SHA-256:
-  `81eaf65fa3fef73ec5003fe789e8e8707765da2fba54ee35d4d7df1efe2ac5ba`.
+  `c570984f264bf19e3f3f74bad8cae7848ca5961c5de09a9993cf906d25086491`.
 - Syft SPDX JSON SHA-256:
-  `a6b3e9e2ced67672878a729aa2e2b9bae0a7bcf1c791b447a9ab46e93ac18688`.
+  `5853360682df6d2195f964ab113b909f0c6a39a1d74993817c8d29e323830807`.
 
 Podman Compose 1.5.0 accepted the complete model with non-secret test values.
 A disposable, non-running runtime container inspection reported:
 
 ```text
-user=21007:21007 network=none readonly_root=true pids=16 memory=67108864
+user=21009:21009 network=none readonly_root=true pids=16 memory=67108864
 cap_drop=all security_opt=no-new-privileges
 ```
 
