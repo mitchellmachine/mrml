@@ -217,8 +217,13 @@ idempotent public-input cleanup without repeating authority selection. Marker
 symlinks, link-count or metadata changes, truncated content, and a marker bound
 to different arguments fail closed. Focused Git tests passed 276 library, 5
 CLI, 9 signer, and 2 credential-agent tests; both Compose static suites, shell
-syntax, formatting, strict Clippy, and diff checks passed. This is deterministic
-restart-path test evidence, not yet a real process-kill or power-loss result.
+syntax, formatting, strict Clippy, and diff checks passed. A hosted shell test
+delivered real `SIGKILL` after marker synchronization and before the first
+public-input removal; the exact resume ran no authority or signer container
+operation, consumed the remaining public inputs, retained the marker, and
+rejected marker tampering. Container operations were deterministic fakes, so
+this is process-kill evidence for the operator recovery layer only, not daemon,
+container-runtime, filesystem power-loss, or physical-storage evidence.
 
 All client, Gitd, authority, signer, certificate, policy, key, state, and
 runtime container mounts in this exercise were named volumes. Older Podman

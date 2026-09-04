@@ -130,5 +130,6 @@ require 'sync -f "$temporary"' deploy/compose/select-git-signer-key-slot.sh
 require 'signer key volume is outside the managed key slots' deploy/compose/stage-git-trust-transition.sh
 require 'install-volume-inputs.sh" authority-transition' deploy/compose/stage-git-trust-transition.sh
 require 'git-trust-signatures' deploy/compose/stage-git-trust-transition.sh
+deploy/compose/test-transition-git-trust-resume.sh
 
 echo "protected signer Compose and image isolation policy PASS"
