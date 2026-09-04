@@ -12482,3 +12482,11 @@ GHASH's standardized field or polynomial, keys, nonces, tags, records, or the
 constant-time software fallback. It uses the standardized x86-64 carry-less
 multiplication instruction after an explicit CPUID check to implement the
 existing GHASH operation, not a new cryptographic mechanism.
+
+# 2026-09-04 — Coalesced HTTP/2 flow-control credit
+
+Patent review: **NOT_TRIGGERED**. This increment applies the conventional
+HTTP/2 WINDOW_UPDATE mechanism at a fixed bounded consumption threshold and
+flushes residual credit at end-of-stream. It changes no wire protocol,
+congestion algorithm, compression, cryptographic mechanism, or adaptive
+selection policy.

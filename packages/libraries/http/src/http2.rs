@@ -8,6 +8,7 @@ use crate::{
 
 pub const HTTP2_CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const MAX_FRAME: usize = 16 * 1024;
+const WINDOW_UPDATE_THRESHOLD: u32 = 32 * 1024;
 const ESTABLISHED_HTTP2_IO_TIMEOUT_MILLIS: u64 = 15 * 60 * 1_000;
 const ESTABLISHED_HTTP2_SERVER_IO_TIMEOUT_MILLIS: u64 = 5 * 60 * 1_000;
 const HPACK_STATIC: [(&str, &str); 61] = [
@@ -710,6 +711,7 @@ pub struct Http2ClientConnection {
     peer_initial_stream_window: i64,
     peer_maximum_frame: usize,
     pending_response_frames: Vector<Http2Frame>,
+    pending_receive_credit: u32,
 }
 struct LimitedBody {
     bytes: Vector<u8>,
@@ -784,6 +786,7 @@ impl Http2ClientConnection {
             peer_initial_stream_window: initial_window,
             peer_maximum_frame: maximum_frame.unwrap_or(16_384),
             pending_response_frames: Vector::new(),
+            pending_receive_credit: 0,
         })
     }
     pub fn request(
@@ -1031,21 +1034,7 @@ impl Http2ClientConnection {
                     let consumed =
                         u32::try_from(frame.payload.len()).map_err(|_| HttpError::BodyTooLarge)?;
                     output.write(&frame.payload)?;
-                    if consumed != 0 {
-                        for target in [0, stream_id] {
-                            self.stream
-                                .write_all(
-                                    &Http2Frame {
-                                        kind: Http2FrameKind::WindowUpdate,
-                                        flags: 0,
-                                        stream_id: target,
-                                        payload: consumed.to_be_bytes().into(),
-                                    }
-                                    .encode()?,
-                                )
-                                .map_err(map_tls_read_error)?;
-                        }
-                    }
+                    self.acknowledge_response_bytes(stream_id, consumed, false)?;
                     if frame.flags & 1 != 0 {
                         break;
                     }
@@ -1054,7 +1043,41 @@ impl Http2ClientConnection {
                 _ => {}
             }
         }
+        self.acknowledge_response_bytes(stream_id, 0, true)?;
         head.ok_or(HttpError::InvalidResponse)
+    }
+
+    fn acknowledge_response_bytes(
+        &mut self,
+        stream_id: u32,
+        count: u32,
+        force: bool,
+    ) -> Result<(), HttpError> {
+        self.pending_receive_credit = self
+            .pending_receive_credit
+            .checked_add(count)
+            .filter(|credit| *credit <= 0x7fff_ffff)
+            .ok_or(HttpError::InvalidResponse)?;
+        if self.pending_receive_credit < WINDOW_UPDATE_THRESHOLD
+            && !(force && self.pending_receive_credit != 0)
+        {
+            return Ok(());
+        }
+        let credit = core::mem::take(&mut self.pending_receive_credit);
+        for target in [0, stream_id] {
+            self.stream
+                .write_all(
+                    &Http2Frame {
+                        kind: Http2FrameKind::WindowUpdate,
+                        flags: 0,
+                        stream_id: target,
+                        payload: credit.to_be_bytes().into(),
+                    }
+                    .encode()?,
+                )
+                .map_err(map_tls_read_error)?;
+        }
+        Ok(())
     }
 }
 
@@ -1074,6 +1097,7 @@ pub struct Http2ServerConnection {
     send_stream_window: i64,
     peer_initial_stream_window: i64,
     peer_maximum_frame: usize,
+    pending_request_credit: u32,
 }
 impl Http2ServerConnection {
     pub fn accept(mut stream: TlsServerStream) -> Result<Self, HttpError> {
@@ -1120,6 +1144,7 @@ impl Http2ServerConnection {
             send_stream_window: initial_window.unwrap_or(65_535),
             peer_initial_stream_window: initial_window.unwrap_or(65_535),
             peer_maximum_frame: maximum_frame.unwrap_or(MAX_FRAME),
+            pending_request_credit: 0,
         })
     }
     pub fn next_request(&mut self) -> Result<(u32, RequestHead), HttpError> {
@@ -1182,6 +1207,8 @@ impl Http2ServerConnection {
                     if self.pending_request_data.is_empty() {
                         if self.pending_request_end {
                             self.request_ended = true;
+                            self.pending_request_end = false;
+                            self.acknowledge_request_bytes(stream_id, 0, true)?;
                             return Ok(0);
                         }
                         continue;
@@ -1219,21 +1246,36 @@ impl Http2ServerConnection {
         let count = remaining.len().min(output.len());
         output[..count].copy_from_slice(&remaining[..count]);
         self.pending_request_offset += count;
+        let mut request_ended = false;
         if self.pending_request_offset == self.pending_request_data.len() {
             self.pending_request_data.clear();
             self.pending_request_offset = 0;
             if self.pending_request_end {
                 self.request_ended = true;
                 self.pending_request_end = false;
+                request_ended = true;
             }
         }
-        self.acknowledge_request_bytes(stream_id, count as u32)?;
+        self.acknowledge_request_bytes(stream_id, count as u32, request_ended)?;
         Ok(count)
     }
-    fn acknowledge_request_bytes(&mut self, stream_id: u32, count: u32) -> Result<(), HttpError> {
-        if count == 0 {
+    fn acknowledge_request_bytes(
+        &mut self,
+        stream_id: u32,
+        count: u32,
+        force: bool,
+    ) -> Result<(), HttpError> {
+        self.pending_request_credit = self
+            .pending_request_credit
+            .checked_add(count)
+            .filter(|credit| *credit <= 0x7fff_ffff)
+            .ok_or(HttpError::InvalidResponse)?;
+        if self.pending_request_credit < WINDOW_UPDATE_THRESHOLD
+            && !(force && self.pending_request_credit != 0)
+        {
             return Ok(());
         }
+        let credit = core::mem::take(&mut self.pending_request_credit);
         for target in [0, stream_id] {
             self.stream
                 .write_all(
@@ -1241,7 +1283,7 @@ impl Http2ServerConnection {
                         kind: Http2FrameKind::WindowUpdate,
                         flags: 0,
                         stream_id: target,
-                        payload: count.to_be_bytes().into(),
+                        payload: credit.to_be_bytes().into(),
                     }
                     .encode()?,
                 )
