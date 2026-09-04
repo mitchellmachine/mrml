@@ -77,6 +77,10 @@ require '--security-opt no-new-privileges' deploy/compose/generate-git-signer-ke
 require 'runtime=${MRML_CONTAINER_RUNTIME:-docker}' deploy/compose/generate-git-signer-keys.sh
 require 'case $runtime in docker|podman)' deploy/compose/generate-git-signer-keys.sh
 require 'if [ "$runtime" = podman ]' deploy/compose/generate-git-signer-keys.sh
+for operator in deploy/compose/install-volume-inputs.sh deploy/compose/construct-git-trust-policy.sh deploy/compose/sign-git-trust-policy.sh deploy/compose/select-git-signer-key-slot.sh deploy/compose/stage-git-trust-transition.sh deploy/compose/transition-git-trust.sh; do
+  require 'runtime=${MRML_CONTAINER_RUNTIME:-docker}' "$operator"
+  require 'case $runtime in docker|podman)' "$operator"
+done
 require 'volume_spec=$signer_volume:/keys:nocopy' deploy/compose/generate-git-signer-keys.sh
 require 'volume_spec=type=volume,source=$signer_volume,target=/keys,volume-nocopy' deploy/compose/generate-git-signer-keys.sh
 require '"21006:21006 400 32 1"' deploy/compose/generate-git-signer-keys.sh

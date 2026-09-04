@@ -7,6 +7,7 @@ git_compose=${MRML_GIT_COMPOSE_FILE:-$directory/compose.git.yaml}
 acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
 signer_compose=${MRML_SIGNER_COMPOSE_FILE:-$directory/compose.signer.yaml}
 volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
+runtime=${MRML_CONTAINER_RUNTIME:-docker}
 
 [ "$(id -u)" -eq 0 ] || { echo "trust policy construction must run as root" >&2; exit 1; }
 [ -f "$environment" ] && [ ! -L "$environment" ] && [ "$(stat -c %a "$environment")" = 600 ] || {
@@ -15,6 +16,7 @@ volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 }
 case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
 [ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
+case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
 
 operation=${1:-}
 repository=${2:-}
@@ -41,16 +43,16 @@ esac
 selected_repository=$(sed -n 's/^MRML_PROTECTED_REPOSITORY=//p' "$environment")
 [ "$selected_repository" = "$repository" ] || { echo "repository does not match MRML_PROTECTED_REPOSITORY" >&2; exit 1; }
 for service in gitd git-authority git-protected-signer; do
-  [ -z "$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service")" ] || {
+  [ -z "$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service")" ] || {
     echo "trust policy construction requires stopped Gitd, authority, and signer" >&2
     exit 1
   }
 done
 
-docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
+"$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
   --profile admin run --rm --no-deps git-trust-policy-construct "$@"
 
-construction_volume=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-trust-construction")
+construction_volume=$("$runtime" volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-trust-construction")
 case $construction_volume in /*/_data) ;; *) echo "unsafe construction volume mountpoint" >&2; exit 1 ;; esac
 [ -d "$construction_volume" ] && [ ! -L "$construction_volume" ] || exit 1
 for output in previous-policy.bin next-policy.bin; do

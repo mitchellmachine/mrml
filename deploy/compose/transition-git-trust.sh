@@ -7,8 +7,10 @@ git_compose=${MRML_GIT_COMPOSE_FILE:-$directory/compose.git.yaml}
 acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
 signer_compose=${MRML_SIGNER_COMPOSE_FILE:-$directory/compose.signer.yaml}
 volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
+runtime=${MRML_CONTAINER_RUNTIME:-docker}
 case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
 [ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
+case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
 
 phase=select-and-advance
 if [ "${1:-}" = --resume-signer ]; then
@@ -35,14 +37,14 @@ esac
 selected_repository=$(sed -n 's/^MRML_PROTECTED_REPOSITORY=//p' "$environment")
 [ "$selected_repository" = "$1" ] || { echo "repository does not match MRML_PROTECTED_REPOSITORY" >&2; exit 1; }
 for service in gitd git-authority git-protected-signer; do
-  [ -z "$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service")" ] || {
+  [ -z "$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service")" ] || {
     echo "trust transition requires stopped Gitd, authority, and signer" >&2
     exit 1
   }
 done
 
 if [ "$phase" = select-and-advance ]; then
-  docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
+  "$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
     --profile admin run --rm --no-deps git-trust-transition \
     transition-policy /var/lib/mrml/git-policies "$1" \
     /run/mrml-transition/next-policy.bin \
@@ -53,7 +55,7 @@ if [ "$phase" = select-and-advance ]; then
     "$2" "$3" "$4" 21002
 fi
 
-docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" \
+"$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" \
   --profile admin run --rm --no-deps git-signer-trust-advance \
   advance-trust 21006 21001 21002 "$1" \
   /var/lib/mrml/git-protected-signer/state/generation.state \
@@ -70,7 +72,7 @@ docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f
   /run/mrml-transition/next-openpgp.sig \
   /run/mrml-transition/next-ml-dsa.sig
 
-transition_volume=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-authority-transition")
+transition_volume=$("$runtime" volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-authority-transition")
 case $transition_volume in /*/_data) ;; *) echo "unsafe transition volume mountpoint" >&2; exit 1 ;; esac
 [ -d "$transition_volume" ] && [ ! -L "$transition_volume" ] || exit 1
 for input in previous-policy.bin next-policy.bin previous-openpgp-public.asc previous-ml-dsa-public.bin next-openpgp-public.asc next-ml-dsa-public.bin previous-openpgp.sig previous-ml-dsa.sig next-openpgp.sig next-ml-dsa.sig; do
@@ -79,8 +81,8 @@ for input in previous-policy.bin next-policy.bin previous-openpgp-public.asc pre
 done
 sync -f "$transition_volume"
 
-construction_volume=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-trust-construction")
-signature_volume=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-trust-signatures")
+construction_volume=$("$runtime" volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-trust-construction")
+signature_volume=$("$runtime" volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-trust-signatures")
 case $construction_volume:$signature_volume in /*/_data:/*/_data) ;; *) echo "unsafe trust workspace mountpoint" >&2; exit 1 ;; esac
 for input in candidate-openpgp-public.asc candidate-ml-dsa-public.bin previous-policy.bin next-policy.bin; do
   [ -f "$construction_volume/$input" ] && [ ! -L "$construction_volume/$input" ] || exit 1

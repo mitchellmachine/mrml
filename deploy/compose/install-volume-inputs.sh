@@ -7,7 +7,9 @@ usage() {
 }
 
 [ "$(id -u)" -eq 0 ] || { echo "volume input installation must run as root" >&2; exit 1; }
-command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
+runtime=${MRML_CONTAINER_RUNTIME:-docker}
+case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
+command -v "$runtime" >/dev/null 2>&1 || { echo "$runtime is required" >&2; exit 1; }
 volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
 [ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
@@ -15,11 +17,11 @@ git_volume() { printf '%s-%s\n' "$volume_prefix" "$1"; }
 
 volume_path() {
   volume=$1
-  [ -z "$(docker ps -q --filter volume="$volume")" ] || {
+  [ -z "$("$runtime" ps -q --filter volume="$volume")" ] || {
     echo "refusing to update a volume used by a running container: $volume" >&2
     exit 1
   }
-  path=$(docker volume inspect --format '{{.Mountpoint}}' "$volume") || exit 1
+  path=$("$runtime" volume inspect --format '{{.Mountpoint}}' "$volume") || exit 1
   case $path in /*/_data) ;; *) echo "unsafe Docker volume mountpoint: $volume" >&2; exit 1 ;; esac
   [ -d "$path" ] && [ ! -L "$path" ] || exit 1
   printf '%s\n' "$path"
