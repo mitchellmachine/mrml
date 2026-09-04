@@ -106,6 +106,12 @@ The signer generation state is format-versioned and binds the exact active
 OpenPGP/ML-DSA public pair. A dual-authorized trust transition upgrades legacy
 generation-only state to the key-bound format; ordinary startup never performs
 that migration and rejects a key pair different from the persisted binding.
+Before restarting Gitd, run `update-git-trust-generation.sh OWNER/REPOSITORY
+TRUST_GENERATION REVOCATION_GENERATION`. It exact-matches the protected catalog
+entry, atomically advances its trust fields, reopens and hashes the catalog,
+then atomically updates the config's bound catalog digest. A crash between the
+two replacements leaves Gitd fail-closed on digest mismatch; the operation is
+safe to resume while all three daemons remain stopped.
 The networkless admin-profile container receives only the read-only current-key
 and transition-input volumes plus a writable policy volume. It reopens the exact
 expected generation, independently verifies both hybrid authorizations against

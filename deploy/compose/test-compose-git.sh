@@ -189,6 +189,11 @@ require '/run/mrml-transition/previous-openpgp-public.asc /run/mrml-transition/p
 reject '/etc/mrml/authority/openpgp-public.asc /etc/mrml/authority/ml-dsa-public.bin' deploy/compose/transition-git-trust.sh
 require 'authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC' deploy/compose/install-volume-inputs.sh
 require 'repositories.v1' deploy/compose/install-volume-inputs.sh
+require 'Gitd catalog selected trust generation' deploy/compose/update-git-trust-generation.sh
+require 'repository_catalog_sha256=' deploy/compose/update-git-trust-generation.sh
+require 'Git trust catalog update requires stopped Gitd, authority, and signer' deploy/compose/update-git-trust-generation.sh
+require 'sync -f "$policy_root"' deploy/compose/update-git-trust-generation.sh
+require 'sync -f "$config_root"' deploy/compose/update-git-trust-generation.sh
 reject '$deployment_root/gitd/policies' deploy/compose/transition-git-trust.sh
 reject 'token administration requires stopped Gitd' deploy/compose/token-git.sh
 require 'tokens.v2' deploy/compose/token-git.sh
