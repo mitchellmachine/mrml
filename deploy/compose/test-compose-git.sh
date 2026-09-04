@@ -122,7 +122,8 @@ require 'volume_mount "$volume_prefix-gitd-repos"' tools/containers/measure-git-
 reject '$deploy_root/gitd/' tools/containers/measure-git-streaming.sh
 require '--no-build --pull never git-authority gitd' deploy/compose/switch-git-version.sh
 require 'repository data was not rolled back' deploy/compose/switch-git-version.sh
-require 'docker load -i' deploy/compose/load-offline-git-images.sh
+require 'docker load < "$bundle/images/$image.tar"' deploy/compose/load-offline-git-images.sh
+reject 'docker load -i' deploy/compose/load-offline-git-images.sh
 require 'loaded image runtime identity does not match images.git.lock' deploy/compose/load-offline-git-images.sh
 require 'archive_sha256=' deploy/compose/build-offline-git-bundle.sh
 require 'localhost/mrml/$image:$version' deploy/compose/load-offline-git-images.sh

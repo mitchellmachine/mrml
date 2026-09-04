@@ -22,7 +22,10 @@ for image in git-authority gitd git-protected-signer git-backup; do
     echo "image archive does not match images.git.lock: mrml/$image:$version" >&2
     exit 1
   }
-  docker load -i "$bundle/images/$image.tar" >/dev/null
+  # Open the verified archive in the operator shell and stream it to the
+  # engine. This also works when a confined Docker CLI cannot resolve the
+  # bundle's host path (for example Docker Snap's private /tmp namespace).
+  docker load < "$bundle/images/$image.tar" >/dev/null
   if ! docker image inspect "mrml/$image:$version" >/dev/null 2>&1; then
     docker image inspect "localhost/mrml/$image:$version" >/dev/null 2>&1 || {
       echo "loaded archive did not provide its locked image tag: mrml/$image:$version" >&2
