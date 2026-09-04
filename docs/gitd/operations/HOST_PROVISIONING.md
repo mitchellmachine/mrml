@@ -54,6 +54,21 @@ places only public material in `mrml-git-authority-transition`; private signing
 keys never enter the VPS or a production container. Stop Gitd and the authority,
 then run
 `transition-git-trust.sh OWNER/REPOSITORY VALIDATION_TIME EXPECTED_GENERATION EXPECTED_POLICY_DIGEST`.
+
+The bundled construction path does not require a host bind mount. First install
+only the candidate public pair with `install-volume-inputs.sh
+trust-construction OPENPGP_PUBLIC ML_DSA_PUBLIC`. With Gitd, authority, and the
+signer stopped, run `construct-git-trust-policy.sh overlap OWNER/REPOSITORY
+VALID_FROM VALID_UNTIL`, or use its `retirement OWNER/REPOSITORY RETIRED_AT`
+form. A networkless authority-image process reads the durably selected policy
+from the read-only policy volume and writes canonical `previous-policy.bin` and
+`next-policy.bin` files to the separately scoped
+`mrml-git-trust-construction` named volume. Inputs and outputs are immutable and
+the command is exact-idempotent; a different operation cannot overwrite stale
+workspace artifacts. The policy constructor never mounts signer private-key
+volumes. The operator must independently review the decoded generation,
+validity, active/retired pairs, previous digest, and printed next digest before
+asking either signer pair to authorize the bytes.
 The networkless admin-profile container receives only the read-only current-key
 and transition-input volumes plus a writable policy volume. It reopens the exact
 expected generation, independently verifies both hybrid authorizations against

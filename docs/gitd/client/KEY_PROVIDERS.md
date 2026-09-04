@@ -167,7 +167,7 @@ mrml-git-protected-signer socket-health SOCKET CAPABILITY CAPABILITY_OWNER_UID S
 The same binary provides a cold, offline owner operation for policy rotation:
 
 ```text
-mrml-git-protected-signer sign-key-rotation OWNER_UID REPOSITORY TRUST_GENERATION OPENPGP_SEED OPENPGP_CREATED_AT ML_DSA_PUBLIC ML_DSA_SECRET NEXT_POLICY OPENPGP_PUBLIC_OUTPUT OPENPGP_SIGNATURE_OUTPUT ML_DSA_SIGNATURE_OUTPUT
+mrml-git-protected-signer sign-key-rotation SIGNER_OWNER_UID POLICY_OWNER_UID REPOSITORY TRUST_GENERATION OPENPGP_SEED OPENPGP_CREATED_AT ML_DSA_PUBLIC ML_DSA_SECRET NEXT_POLICY OPENPGP_PUBLIC_OUTPUT OPENPGP_SIGNATURE_OUTPUT ML_DSA_SIGNATURE_OUTPUT
 ```
 
 It parses the complete canonical next policy, requires its repository to match,
