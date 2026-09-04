@@ -1,10 +1,8 @@
-use std::fs::OpenOptions;
-use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
+use mrml_runtime::DirectoryCapability;
+
 const MAX_CONFIG_BYTES: usize = 32 * 1024;
-const O_NOFOLLOW: i32 = 0x20_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GitdConfig {
@@ -63,29 +61,42 @@ pub fn load_gitd_config(path: &Path) -> Result<GitdConfig, GitdConfigError> {
     if !path.is_absolute() {
         return Err(GitdConfigError::InvalidValue);
     }
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
+    let parent = path.parent().ok_or(GitdConfigError::Open)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(GitdConfigError::Open)?;
+    let directory = DirectoryCapability::open_root(
+        parent.to_str().ok_or(GitdConfigError::Open)?,
+    )
+    .map_err(|_| GitdConfigError::Open)?;
+    load_gitd_config_capability(&directory, name)
+}
+
+fn load_gitd_config_capability(
+    directory: &DirectoryCapability,
+    name: &str,
+) -> Result<GitdConfig, GitdConfigError> {
+    let mut file = directory
+        .open_regular(name)
         .map_err(|_| GitdConfigError::Open)?;
     let metadata = file.metadata().map_err(|_| GitdConfigError::Metadata)?;
-    let mode = metadata.mode() & 0o777;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.nlink() != 1
+    let length = file.len().map_err(|_| GitdConfigError::Metadata)?;
+    let mode = metadata.mode & 0o777;
+    if metadata.links != 1
         || mode & 0o022 != 0
         || mode & 0o444 == 0
-        || metadata.len() == 0
-        || metadata.len() > MAX_CONFIG_BYTES as u64
+        || length == 0
+        || length > MAX_CONFIG_BYTES as u64
     {
         return Err(GitdConfigError::Permissions);
     }
-    let length = usize::try_from(metadata.len()).map_err(|_| GitdConfigError::Size)?;
+    let length = usize::try_from(length).map_err(|_| GitdConfigError::Size)?;
     let mut input = vec![0u8; length];
     file.read_exact(&mut input)
         .map_err(|_| GitdConfigError::Read)?;
     let config = parse_gitd_config(&input)?;
-    if metadata.uid() != 0 && metadata.uid() != config.gitd_uid {
+    if metadata.uid != 0 && metadata.uid != config.gitd_uid {
         return Err(GitdConfigError::Permissions);
     }
     Ok(config)
@@ -486,7 +497,10 @@ mod tests {
         fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
         let owned = VALID.replace(
             "gitd_uid=21001",
-            &format!("gitd_uid={}", fs::metadata(&config).unwrap().uid()),
+            &format!(
+                "gitd_uid={}",
+                std::os::unix::fs::MetadataExt::uid(&fs::metadata(&config).unwrap())
+            ),
         );
         fs::write(&config, owned).unwrap();
         assert!(load_gitd_config(&config).is_ok());
@@ -497,5 +511,33 @@ mod tests {
         fs::set_permissions(&config, fs::Permissions::from_mode(0o666)).unwrap();
         assert_eq!(load_gitd_config(&config), Err(GitdConfigError::Permissions));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn config_load_remains_bound_to_retained_parent_directory() {
+        let root =
+            std::env::temp_dir().join(format!("mrml-gitd-config-retained-{}", std::process::id()));
+        let displaced = root.with_extension("displaced");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&displaced);
+        fs::create_dir(&root).unwrap();
+        let config = root.join("gitd.conf");
+        fs::write(&config, VALID).unwrap();
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+        let uid = std::os::unix::fs::MetadataExt::uid(&fs::metadata(&config).unwrap());
+        fs::write(
+            &config,
+            VALID.replace("gitd_uid=21001", &format!("gitd_uid={uid}")),
+        )
+        .unwrap();
+        let retained = DirectoryCapability::open_root(root.to_str().unwrap()).unwrap();
+        fs::rename(&root, &displaced).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("gitd.conf"), b"attacker-controlled").unwrap();
+
+        assert!(load_gitd_config_capability(&retained, "gitd.conf").is_ok());
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(displaced).unwrap();
     }
 }
