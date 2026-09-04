@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use mrml_http::Http2ServerConnection;
+use mrml_http::{Http2ServerConnection, HttpError};
 use mrml_runtime::{blocking_channel, spawn_joinable, JoinHandle, Sender, Vector};
 use mrml_tls::TlsServerStream;
 
@@ -120,9 +120,12 @@ impl GitdHttp2WorkerPool {
                     };
                     let mut connection = match Http2ServerConnection::accept(tls_stream) {
                         Ok(connection) => connection,
-                        Err(_) => {
+                        Err(error) => {
                             increment(&worker_counters.protocol_failures);
-                            eprintln!("component=mrml-gitd event=http2_protocol_failed");
+                            eprintln!(
+                                "component=mrml-gitd event=http2_protocol_failed category={}",
+                                protocol_failure_category(error)
+                            );
                             continue;
                         }
                     };
@@ -262,6 +265,24 @@ fn increment(counter: &AtomicU64) {
     });
 }
 
+fn protocol_failure_category(error: HttpError) -> &'static str {
+    match error {
+        HttpError::InvalidResponse
+        | HttpError::InvalidUrl
+        | HttpError::UnsupportedScheme
+        | HttpError::RedirectLimit => "invalid_connection_sequence",
+        HttpError::HeaderTooLarge => "header_limit",
+        HttpError::BodyTooLarge => "frame_limit",
+        HttpError::Allocation => "allocation_limit",
+        HttpError::Io | HttpError::TlsTransport => "transport",
+        HttpError::Tls
+        | HttpError::TlsRecord
+        | HttpError::TlsAuthentication
+        | HttpError::TlsHandshake
+        | HttpError::TlsCertificate => "tls_state",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +311,24 @@ mod tests {
             validate_limits(64, 65_472, 65_536, 1024 * 1024, u64::MAX, 300_000),
             Ok(())
         );
+    }
+
+    #[test]
+    fn protocol_admission_failures_have_bounded_nonsecret_categories() {
+        for (error, expected) in [
+            (HttpError::InvalidResponse, "invalid_connection_sequence"),
+            (HttpError::HeaderTooLarge, "header_limit"),
+            (HttpError::BodyTooLarge, "frame_limit"),
+            (HttpError::Allocation, "allocation_limit"),
+            (HttpError::Io, "transport"),
+            (HttpError::TlsTransport, "transport"),
+            (HttpError::Tls, "tls_state"),
+            (HttpError::TlsCertificate, "tls_state"),
+        ] {
+            let category = protocol_failure_category(error);
+            assert_eq!(category, expected);
+            assert!(category.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_'));
+            assert!(category.len() <= 32);
+        }
     }
 }

@@ -12569,3 +12569,9 @@ Patent review: **NOT_TRIGGERED**. This validation uses conventional container
 runtime isolation, fixed numeric identities, named volumes, loopback port
 publication, TLS 1.3, and HTTP/2. It introduces no new production mechanism,
 cryptographic primitive, compression method, adaptive policy, or protocol.
+
+# 2026-09-04 — HTTP/2 admission failure classification
+
+Patent review: **NOT_TRIGGERED**. This increment maps existing bounded HTTP/TLS
+error variants to fixed nonsecret operational categories. It introduces no
+protocol, cryptographic primitive, classifier, or adaptive policy.
