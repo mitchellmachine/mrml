@@ -12512,3 +12512,11 @@ rescans and linear object-ID searches with conventional exact hash lookup,
 sorted offset lookup, reverse-dependency ranges, and a ready queue. It adds no
 compression format, delta encoding, content-selection heuristic, cryptographic
 mechanism, or adaptive ranking method.
+
+# 2026-09-04 — Retained TCP peer identity
+
+Patent review: **NOT_TRIGGERED**. This increment exposes the conventional
+getpeername socket operation through the existing bounded runtime abstraction
+so admission policy can bind an accepted stream to its kernel-reported IPv4
+peer. It adds no network protocol, address-classification heuristic,
+cryptographic mechanism, or adaptive policy.

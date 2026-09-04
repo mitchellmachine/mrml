@@ -25,7 +25,7 @@ packages/gpu/tensor/src/parallel.rs	4	2	1	0	0	2	Baseline-admitted accelerator, m
 packages/gpu/tensor/src/quant.rs	6	5	0	0	0	6	Baseline-admitted accelerator, media, or GPU ABI boundary; count growth is blocked pending focused file-level invariant review.
 packages/gpu/tensor/src/tensor.rs	1	0	0	0	0	1	Baseline-admitted accelerator, media, or GPU ABI boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/crypto/src/aes_gcm.rs	8	2	0	0	0	0	Runtime-gated x86-64 AES and PCLMULQDQ instructions; CPUID gates each target feature and fixed arrays bound every unaligned intrinsic load and store.
-packages/libraries/linux/src/lib.rs	171	7	5	6	0	169	Baseline-admitted Linux platform FFI boundary plus one reviewed TCP_NODELAY setsockopt call with fixed level, option, integer value, and exact length.
+packages/libraries/linux/src/lib.rs	172	7	5	6	0	170	Baseline-admitted Linux platform FFI boundary plus reviewed TCP_NODELAY and getpeername calls with fixed socket ABI types and exact lengths.
 packages/libraries/math/src/lib.rs	8	0	0	1	0	8	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/opus/examples/opus_range_diff.rs	4	0	0	1	0	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/percent-encoding/src/lib.rs	1	0	0	0	0	1	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
@@ -73,7 +73,7 @@ packages/libraries/storage-nvme/src/userspace_syscall_adapter.rs	4	2	2	0	1	4	Bas
 packages/libraries/uefi/src/lib.rs	84	13	1	40	0	84	Baseline-admitted firmware, boot, or freestanding hardware boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/uefi/src/main.rs	110	11	9	2	0	107	Baseline-admitted firmware, boot, or freestanding hardware boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/uefi/src/tpm.rs	4	1	5	0	1	4	Baseline-admitted firmware, boot, or freestanding hardware boundary; count growth is blocked pending focused file-level invariant review.
-packages/libraries/windows/src/lib.rs	228	7	9	26	0	219	Baseline-admitted Windows platform FFI boundary plus one reviewed TCP_NODELAY setsockopt call with fixed level, option, integer value, and exact length.
+packages/libraries/windows/src/lib.rs	229	7	9	26	0	220	Baseline-admitted Windows platform FFI boundary plus reviewed TCP_NODELAY and getpeername calls with fixed socket ABI types and exact lengths.
 packages/libraries/zim/src/service_probe_main.rs	11	4	0	1	0	11	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/zstd/src/kernel_transport.rs	0	0	1	0	0	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/zstd/src/service_loop.rs	0	0	1	0	1	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.

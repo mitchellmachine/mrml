@@ -668,6 +668,7 @@ unsafe extern "system" {
     fn accept(socket: usize, address: *mut SockAddr, length: *mut i32) -> usize;
     fn connect(socket: usize, address: *const SockAddr, length: i32) -> i32;
     fn getsockname(socket: usize, address: *mut SockAddr, length: *mut i32) -> i32;
+    fn getpeername(socket: usize, address: *mut SockAddr, length: *mut i32) -> i32;
     fn setsockopt(socket: usize, level: i32, name: i32, value: *const i8, length: i32) -> i32;
     fn recv(socket: usize, buffer: *mut i8, length: i32, flags: i32) -> i32;
     fn send(socket: usize, buffer: *const i8, length: i32, flags: i32) -> i32;
@@ -1164,6 +1165,15 @@ impl NativeTcpStream {
             )
         };
         (amount >= 0).then_some(amount as usize)
+    }
+
+    pub fn peer_address(&self) -> Option<([u8; 4], u16)> {
+        let mut address = socket_address([0; 4], 0);
+        let mut length = core::mem::size_of::<SockAddr>() as i32;
+        (unsafe { getpeername(self.0, &mut address, &mut length) } == 0
+            && length as usize >= core::mem::size_of::<SockAddr>()
+            && address.family == 2)
+            .then(|| (address.address, u16::from_be_bytes(address.port)))
     }
 
     pub fn set_timeout_millis(&self, read_timeout: bool, milliseconds: u64) -> bool {

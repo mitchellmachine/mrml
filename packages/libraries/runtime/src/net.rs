@@ -234,6 +234,13 @@ impl TcpStream {
         Ok(())
     }
 
+    pub fn peer_address(&self) -> Result<SocketAddress, NetError> {
+        self.native
+            .peer_address()
+            .map(|(ip, port)| SocketAddress { ip, port })
+            .ok_or(NetError::InvalidAddress)
+    }
+
     pub fn set_read_timeout_millis(&self, milliseconds: u64) -> Result<(), NetError> {
         self.native
             .set_timeout_millis(true, milliseconds)
@@ -267,6 +274,9 @@ mod tests {
         assert!(
             crate::spawn_detached(move || {
                 let mut stream = listener.accept().unwrap();
+                let peer = stream.peer_address().unwrap();
+                assert_eq!(peer.ip, [127, 0, 0, 1]);
+                assert_ne!(peer.port, 0);
                 let mut request = [0u8; 5];
                 stream.read_exact(&mut request).unwrap();
                 assert_eq!(&request, b"hello");
@@ -275,6 +285,13 @@ mod tests {
             .is_ok()
         );
         let mut stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
+        assert_eq!(
+            stream.peer_address().unwrap(),
+            SocketAddress {
+                ip: [127, 0, 0, 1],
+                port
+            }
+        );
         stream.set_no_delay(true).unwrap();
         stream.set_no_delay(false).unwrap();
         stream.set_no_delay(true).unwrap();
