@@ -468,12 +468,34 @@ impl Repository {
         #[cfg(target_os = "linux")]
         if let Some(retained) = &self.retained_git {
             let objects = retained.capability.open_directory("objects")?;
-            if let Ok(file) = objects.open_regular(&mrml_runtime::mrml_format!(
-                "{}/{}",
-                &hex[..2],
-                &hex[2..]
-            )) {
-                return decode_retained_object(file, id, self.object_format);
+            let prefix_name = &hex[..2];
+            match objects.open_directory(prefix_name) {
+                Ok(prefix) => {
+                    let object_name = &hex[2..];
+                    if let Some(entry) = prefix
+                        .read_directory()?
+                        .iter()
+                        .find(|entry| entry.name.as_str() == object_name)
+                    {
+                        if entry.is_directory || entry.is_symlink {
+                            return Err(RepositoryError::UnsupportedFileType);
+                        }
+                        return decode_retained_object(
+                            prefix.open_regular(object_name)?,
+                            id,
+                            self.object_format,
+                        );
+                    }
+                }
+                Err(_) => {
+                    if objects
+                        .read_directory()?
+                        .iter()
+                        .any(|entry| entry.name.as_str() == prefix_name)
+                    {
+                        return Err(RepositoryError::UnsupportedFileType);
+                    }
+                }
             }
             if let Some(object) = self.cached_object(id) {
                 return Ok(object);
@@ -4183,6 +4205,17 @@ mod tests {
             &mrml_runtime::mrml_format!(".git/objects/{}/{}", &hex[..2], &hex[2..])
         )));
         assert!(!path_exists(&join_path(&path, ".git")));
+
+        let loose = join_path(
+            &displaced,
+            &mrml_runtime::mrml_format!(".git/objects/{}/{}", &hex[..2], &hex[2..]),
+        );
+        remove_file(&loose).unwrap();
+        create_dir_all(&loose).unwrap();
+        assert_eq!(
+            repository.read_object(id),
+            Err(RepositoryError::UnsupportedFileType)
+        );
 
         drop(repository);
         remove_dir_all(&path).unwrap();
