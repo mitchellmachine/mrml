@@ -1,21 +1,19 @@
 #![feature(peer_credentials_unix_socket)]
 
 use mrml_crypto::{
-    ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES,
-    Sha256, Sha3_512, erase_secret_bytes, ml_dsa_65_keygen_random, ml_dsa_65_sign,
-    ml_dsa_65_verify,
+    ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES, Sha3_512,
+    Sha256, erase_secret_bytes, ml_dsa_65_keygen_random, ml_dsa_65_sign, ml_dsa_65_verify,
 };
 use mrml_git::{
     AuthorizedHybridPair, GitObjectType, HybridCommitSignatures, HybridVerificationRequest,
-    ObjectFormat, ProtectedSignerCapability, RepositoryGeneration, RepositoryIdentity,
+    MAX_ENCODED_TRUST_POLICY_BYTES, OP_ADVANCE_GENERATION, OP_HEALTH, ObjectFormat,
+    ProtectedSignerCapability, ProtectedSignerSession, RepositoryGeneration, RepositoryIdentity,
     RevocationGeneration, SignaturePurpose, TrustGeneration, UnixProtectedSignerError,
-    canonical_hybrid_transcript, OP_ADVANCE_GENERATION, OP_HEALTH, decode_advance_request,
-    decode_health_request, decode_health_response, decode_protected_signer_request,
-    encode_advance_response, encode_health_request, encode_health_response,
-    encode_loose_object_with_format, encode_protected_signer_hello,
-    encode_protected_signer_response, parse_trust_policy, protected_signer_operation,
-    verify_hybrid_signature, verify_signer_generation_advancement, ProtectedSignerSession,
-    MAX_ENCODED_TRUST_POLICY_BYTES,
+    canonical_hybrid_transcript, decode_advance_request, decode_health_request,
+    decode_health_response, decode_protected_signer_request, encode_advance_response,
+    encode_health_request, encode_health_response, encode_loose_object_with_format,
+    encode_protected_signer_hello, encode_protected_signer_response, parse_trust_policy,
+    protected_signer_operation, verify_hybrid_signature, verify_signer_generation_advancement,
 };
 use mrml_openpgp::{
     DigestAlgorithm, MAX_OPENPGP_SIGNATURE_BYTES, SigningKeyV6, sign_detached_v6_ascii_with_salt,
@@ -214,13 +212,11 @@ fn run() -> Result<(), ()> {
         config.owner_uid,
     )?;
     validate_ml_dsa_pair(&ml_dsa_public, &ml_dsa)?;
-    let authority_receipt_public = read_public(
-        &config.authority_receipt_public_file,
-        32,
-        config.owner_uid,
-    )?;
+    let authority_receipt_public =
+        read_public(&config.authority_receipt_public_file, 32, config.owner_uid)?;
     let authority_receipt_public: [u8; 32] = authority_receipt_public.try_into().map_err(|_| ())?;
-    let mut state = SignerState::open(&config)?;
+    let key_identity = signer_key_identity(&openpgp, &ml_dsa_public)?;
+    let mut state = SignerState::open(&config, key_identity)?;
 
     let signals = TerminationSignals::block_current()?;
     let terminating = Arc::new(AtomicBool::new(false));
@@ -274,7 +270,10 @@ fn generate_key_material(
         ml_dsa_public_path.as_path(),
         ml_dsa_secret_path.as_path(),
     ];
-    if outputs.iter().any(|path| fs::symlink_metadata(path).is_ok()) {
+    if outputs
+        .iter()
+        .any(|path| fs::symlink_metadata(path).is_ok())
+    {
         return Err(());
     }
 
@@ -312,12 +311,8 @@ fn generate_key_material(
                 0o444,
             )
         })
-        .and_then(|_| {
-            write_new_exact(&ml_dsa_public_path, &ml_dsa_public, owner_uid, 0o444)
-        })
-        .and_then(|_| {
-            write_new_exact(&ml_dsa_secret_path, &ml_dsa_secret, owner_uid, 0o400)
-        })
+        .and_then(|_| write_new_exact(&ml_dsa_public_path, &ml_dsa_public, owner_uid, 0o444))
+        .and_then(|_| write_new_exact(&ml_dsa_secret_path, &ml_dsa_secret, owner_uid, 0o400))
         .and_then(|_| sync_parent(&openpgp_seed_path));
     erase_secret_bytes(&mut openpgp_seed);
     erase_secret_bytes(&mut ml_dsa_secret);
@@ -565,8 +560,8 @@ fn advance_trust(
         return Err(());
     }
 
-    let encoded_state = read_public(state_file, SIGNER_STATE_BYTES, signer_owner_uid)?;
-    let state = SignerState::decode(&encoded_state, &repository)?;
+    let encoded_state = read_public_bounded(state_file, 1, SIGNER_STATE_BYTES, signer_owner_uid)?;
+    let state = SignerState::decode_for_transition(&encoded_state, &repository)?;
     if state.trust_generation != previous_policy.generation()
         || state.revocation_generation != previous_policy.revocation_generation()
     {
@@ -591,11 +586,23 @@ fn advance_trust(
         signer_owner_uid,
     )?;
     validate_ml_dsa_pair(&current_ml_dsa_public, &current_ml_dsa_secret)?;
-    let current_ml_dsa_public: &[u8; ML_DSA_65_PUBLIC_KEY_BYTES] =
-        current_ml_dsa_public.as_slice().try_into().map_err(|_| ())?;
-    let current_pair = AuthorizedHybridPair::bind(&current_openpgp.public_key(), current_ml_dsa_public);
+    let current_ml_dsa_public: &[u8; ML_DSA_65_PUBLIC_KEY_BYTES] = current_ml_dsa_public
+        .as_slice()
+        .try_into()
+        .map_err(|_| ())?;
+    let current_key_identity = signer_key_identity(&current_openpgp, current_ml_dsa_public)?;
+    if state.key_identity != [0; 64] && state.key_identity != current_key_identity {
+        erase_secret_bytes(&mut current_ml_dsa_secret);
+        return Err(());
+    }
+    let current_pair =
+        AuthorizedHybridPair::bind(&current_openpgp.public_key(), current_ml_dsa_public);
     let current_verification_policy = previous_policy
-        .active_verification_policy_at(current_pair, mrml_runtime::unix_time_seconds().ok_or(())?, true)
+        .active_verification_policy_at(
+            current_pair,
+            mrml_runtime::unix_time_seconds().ok_or(())?,
+            true,
+        )
         .map_err(|_| ())?;
 
     let next_openpgp_bytes = read_public_bounded(
@@ -616,6 +623,7 @@ fn advance_trust(
     let next_ml_dsa_public: &[u8; ML_DSA_65_PUBLIC_KEY_BYTES] =
         next_ml_dsa_public.as_slice().try_into().map_err(|_| ())?;
     let next_pair = AuthorizedHybridPair::bind(&next_openpgp, next_ml_dsa_public);
+    let next_key_identity = signer_public_key_identity(&next_openpgp, next_ml_dsa_public)?;
     let validation_time = mrml_runtime::unix_time_seconds().ok_or(())?;
     let next_verification_policy = selected_policy
         .active_verification_policy_at(next_pair, validation_time, true)
@@ -694,6 +702,7 @@ fn advance_trust(
         repository_generation: state.repository_generation,
         trust_generation: selected_policy.generation(),
         revocation_generation: selected_policy.revocation_generation(),
+        key_identity: next_key_identity,
     };
     let temporary = state_file.with_extension("state.trust-next");
     candidate.persist_new_for(&temporary, signer_owner_uid, &repository)?;
@@ -706,6 +715,7 @@ fn advance_trust(
     if reopened.repository_generation != state.repository_generation
         || reopened.trust_generation != selected_policy.generation()
         || reopened.revocation_generation != selected_policy.revocation_generation()
+        || reopened.key_identity != next_key_identity
     {
         return Err(());
     }
@@ -740,17 +750,20 @@ fn validate_ml_dsa_pair(public: &[u8], secret: &[u8]) -> Result<(), ()> {
     result.map_err(|_| ())
 }
 
-const SIGNER_STATE_MAGIC: &[u8; 8] = b"MRGSTA01";
-const SIGNER_STATE_BYTES: usize = 8 + 8 + 8 + 8 + 32;
+const LEGACY_SIGNER_STATE_MAGIC: &[u8; 8] = b"MRGSTA01";
+const LEGACY_SIGNER_STATE_BYTES: usize = 8 + 8 + 8 + 8 + 32;
+const SIGNER_STATE_MAGIC: &[u8; 8] = b"MRGSTA02";
+const SIGNER_STATE_BYTES: usize = 8 + 8 + 8 + 8 + 64 + 32;
 
 struct SignerState {
     repository_generation: RepositoryGeneration,
     trust_generation: TrustGeneration,
     revocation_generation: RevocationGeneration,
+    key_identity: [u8; 64],
 }
 
 impl SignerState {
-    fn open(config: &Configuration) -> Result<Self, ()> {
+    fn open(config: &Configuration, key_identity: [u8; 64]) -> Result<Self, ()> {
         if !config.state_file.is_absolute() {
             return Err(());
         }
@@ -759,6 +772,7 @@ impl SignerState {
                 repository_generation: config.repository_generation,
                 trust_generation: config.trust_generation,
                 revocation_generation: config.revocation_generation,
+                key_identity,
             };
             initial.persist_new(&config.state_file, config)?;
         }
@@ -766,6 +780,7 @@ impl SignerState {
         let state = Self::decode(&bytes, &config.repository)?;
         if state.trust_generation != config.trust_generation
             || state.revocation_generation != config.revocation_generation
+            || state.key_identity != key_identity
         {
             return Err(());
         }
@@ -796,6 +811,7 @@ impl SignerState {
             repository_generation: next,
             trust_generation: self.trust_generation,
             revocation_generation: self.revocation_generation,
+            key_identity: self.key_identity,
         };
         let temporary = config.state_file.with_extension("state.next");
         candidate.persist_new(&temporary, config)?;
@@ -808,6 +824,7 @@ impl SignerState {
         if reopened.repository_generation != next
             || reopened.trust_generation != self.trust_generation
             || reopened.revocation_generation != self.revocation_generation
+            || reopened.key_identity != self.key_identity
         {
             return Err(());
         }
@@ -846,13 +863,39 @@ impl SignerState {
         output[8..16].copy_from_slice(&self.repository_generation.0.to_be_bytes());
         output[16..24].copy_from_slice(&self.trust_generation.0.to_be_bytes());
         output[24..32].copy_from_slice(&self.revocation_generation.0.to_be_bytes());
-        let checksum = signer_state_checksum(repository, &output[..32]);
-        output[32..].copy_from_slice(&checksum);
+        output[32..96].copy_from_slice(&self.key_identity);
+        let checksum = signer_state_checksum(repository, &output[..96]);
+        output[96..].copy_from_slice(&checksum);
         output
     }
 
     fn decode(bytes: &[u8], repository: &RepositoryIdentity) -> Result<Self, ()> {
         if bytes.len() != SIGNER_STATE_BYTES || &bytes[..8] != SIGNER_STATE_MAGIC {
+            return Err(());
+        }
+        let expected = signer_state_checksum(repository, &bytes[..96]);
+        if bytes[96..] != expected {
+            return Err(());
+        }
+        let read = |range: core::ops::Range<usize>| {
+            u64::from_be_bytes(bytes[range].try_into().map_err(|_| ())?)
+                .checked_sub(0)
+                .filter(|value| *value != 0)
+                .ok_or(())
+        };
+        Ok(Self {
+            repository_generation: RepositoryGeneration(read(8..16)?),
+            trust_generation: TrustGeneration(read(16..24)?),
+            revocation_generation: RevocationGeneration(read(24..32)?),
+            key_identity: bytes[32..96].try_into().map_err(|_| ())?,
+        })
+    }
+
+    fn decode_for_transition(bytes: &[u8], repository: &RepositoryIdentity) -> Result<Self, ()> {
+        if bytes.len() == SIGNER_STATE_BYTES {
+            return Self::decode(bytes, repository);
+        }
+        if bytes.len() != LEGACY_SIGNER_STATE_BYTES || &bytes[..8] != LEGACY_SIGNER_STATE_MAGIC {
             return Err(());
         }
         let expected = signer_state_checksum(repository, &bytes[..32]);
@@ -869,8 +912,28 @@ impl SignerState {
             repository_generation: RepositoryGeneration(read(8..16)?),
             trust_generation: TrustGeneration(read(16..24)?),
             revocation_generation: RevocationGeneration(read(24..32)?),
+            key_identity: [0; 64],
         })
     }
+}
+
+fn signer_key_identity(openpgp: &SigningKeyV6, ml_dsa_public: &[u8]) -> Result<[u8; 64], ()> {
+    signer_public_key_identity(&openpgp.public_key(), ml_dsa_public)
+}
+
+fn signer_public_key_identity(
+    openpgp: &mrml_openpgp::PublicKeyV6,
+    ml_dsa_public: &[u8],
+) -> Result<[u8; 64], ()> {
+    let mut encoded = [0; mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES];
+    let length = openpgp.encode_ascii(&mut encoded).map_err(|_| ())?;
+    let mut identity = Sha3_512::new();
+    identity.update(b"MRML protected signer key identity v1\0");
+    identity.update(&(length as u32).to_be_bytes());
+    identity.update(&encoded[..length]);
+    identity.update(&(ml_dsa_public.len() as u32).to_be_bytes());
+    identity.update(ml_dsa_public);
+    Ok(identity.finalize())
 }
 
 fn signer_state_checksum(repository: &RepositoryIdentity, state: &[u8]) -> [u8; 32] {
@@ -952,7 +1015,9 @@ fn serve(
             }) {
             Some(session) => session,
             None => {
-                eprintln!("component=mrml-git-protected-signer event=request_failed category=random");
+                eprintln!(
+                    "component=mrml-git-protected-signer event=request_failed category=random"
+                );
                 continue;
             }
         };
@@ -1108,7 +1173,8 @@ fn serve_one(
     let frame = read_frame(stream).map_err(|_| ServeError::Read)?;
     let operation = protected_signer_operation(&frame).map_err(|_| ServeError::Authenticate)?;
     if operation == OP_HEALTH {
-        let request = decode_health_request(&frame, capability).map_err(|_| ServeError::Authenticate)?;
+        let request =
+            decode_health_request(&frame, capability).map_err(|_| ServeError::Authenticate)?;
         let now = mrml_runtime::unix_time_seconds().ok_or(ServeError::Authenticate)?;
         validate_session_fields(
             session,
@@ -1118,19 +1184,15 @@ fn serve_one(
             now,
         )
         .map_err(|_| ServeError::Authenticate)?;
-        let response = encode_health_response(
-            request.request_id,
-            session,
-            request.sequence,
-            capability,
-        )
-        .map_err(|_| ServeError::Encode)?;
+        let response =
+            encode_health_response(request.request_id, session, request.sequence, capability)
+                .map_err(|_| ServeError::Encode)?;
         write_frame(stream, &response).map_err(|_| ServeError::Write)?;
         return Ok(ServeCompletion::Health);
     }
     if operation == OP_ADVANCE_GENERATION {
-        let request = decode_advance_request(&frame, capability)
-            .map_err(|_| ServeError::Authenticate)?;
+        let request =
+            decode_advance_request(&frame, capability).map_err(|_| ServeError::Authenticate)?;
         let now = mrml_runtime::unix_time_seconds().ok_or(ServeError::Authenticate)?;
         validate_session_fields(
             session,
@@ -1176,15 +1238,17 @@ fn serve_one(
     )
     .map_err(|_| ServeError::Encode)?;
     write_frame(stream, &response).map_err(|_| ServeError::Write)?;
-    result.map(|_| ServeCompletion::Sign).map_err(|error| match error {
-        SignError::Context => ServeError::SignContext,
-        SignError::Commit => ServeError::SignCommit,
-        SignError::Transcript => ServeError::SignTranscript,
-        SignError::Random => ServeError::SignRandom,
-        SignError::OpenPgp => ServeError::SignOpenPgp,
-        SignError::MlDsa => ServeError::SignMlDsa,
-        SignError::Output => ServeError::SignOutput,
-    })
+    result
+        .map(|_| ServeCompletion::Sign)
+        .map_err(|error| match error {
+            SignError::Context => ServeError::SignContext,
+            SignError::Commit => ServeError::SignCommit,
+            SignError::Transcript => ServeError::SignTranscript,
+            SignError::Random => ServeError::SignRandom,
+            SignError::OpenPgp => ServeError::SignOpenPgp,
+            SignError::MlDsa => ServeError::SignMlDsa,
+            SignError::Output => ServeError::SignOutput,
+        })
 }
 
 fn validate_session_request(
@@ -1414,12 +1478,7 @@ fn validate_new_public_output(path: &Path, expected_owner: u32) -> Result<(), ()
     Ok(())
 }
 
-fn write_new_exact(
-    path: &Path,
-    bytes: &[u8],
-    expected_owner: u32,
-    mode: u32,
-) -> Result<(), ()> {
+fn write_new_exact(path: &Path, bytes: &[u8], expected_owner: u32, mode: u32) -> Result<(), ()> {
     if !matches!(mode, 0o400 | 0o444) {
         return Err(());
     }
@@ -1589,6 +1648,7 @@ mod tests {
             repository_generation: RepositoryGeneration(2),
             trust_generation: TrustGeneration(3),
             revocation_generation: RevocationGeneration(4),
+            key_identity: [5; 64],
         };
         let signatures =
             sign_request(&config, &state, &openpgp, &ml_public, &ml_secret, request).unwrap();
@@ -1655,7 +1715,8 @@ mod tests {
             ml_dsa_public_file: root.join("ml.pub"),
             ml_dsa_secret_file: root.join("ml.secret"),
         };
-        let mut state = SignerState::open(&config).unwrap();
+        let key_identity = [9; 64];
+        let mut state = SignerState::open(&config, key_identity).unwrap();
         let seed = [0x42; 32];
         let public = mrml_crypto::ed25519_public(&seed);
         let receipt = AuditReceipt {
@@ -1691,18 +1752,17 @@ mod tests {
         encoded.extend_from_slice(&checksum);
         state.advance(&config, &public, &encoded).unwrap();
         assert_eq!(state.repository_generation, RepositoryGeneration(8));
-        let reopened = SignerState::open(&config).unwrap();
+        let reopened = SignerState::open(&config, key_identity).unwrap();
         assert_eq!(reopened.repository_generation, RepositoryGeneration(8));
+        assert!(SignerState::open(&config, [8; 64]).is_err());
         assert!(state.advance(&config, &public, &encoded).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn one_shot_key_rotation_outputs_are_exact_and_independently_verified() {
-        let root = std::env::temp_dir().join(format!(
-            "mrml-key-rotation-signer-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mrml-key-rotation-signer-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -1781,11 +1841,9 @@ mod tests {
         );
         let openpgp_public_bytes = fs::read(&openpgp_public_output).unwrap();
         let mut public_scratch = vec![0; mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES];
-        let exported_openpgp = mrml_openpgp::parse_public_key_v6_ascii(
-            &openpgp_public_bytes,
-            &mut public_scratch,
-        )
-        .unwrap();
+        let exported_openpgp =
+            mrml_openpgp::parse_public_key_v6_ascii(&openpgp_public_bytes, &mut public_scratch)
+                .unwrap();
         assert_eq!(exported_openpgp, openpgp.public_key());
         let openpgp_signature = fs::read(&openpgp_signature_output).unwrap();
         let ml_signature = fs::read(&ml_signature_output).unwrap();
@@ -1818,10 +1876,8 @@ mod tests {
 
     #[test]
     fn selected_policy_advances_signer_trust_once_and_preserves_repository_generation() {
-        let root = std::env::temp_dir().join(format!(
-            "mrml-signer-trust-advance-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mrml-signer-trust-advance-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -1832,23 +1888,14 @@ mod tests {
         let old_openpgp = SigningKeyV6::from_seed(old_seed, 1_700_000_000).unwrap();
         let mut old_ml_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
         let mut old_ml_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
-        mrml_crypto::ml_dsa_65_keygen(
-            &[0x32; 32],
-            &mut old_ml_public,
-            &mut old_ml_secret,
-        )
-        .unwrap();
+        mrml_crypto::ml_dsa_65_keygen(&[0x32; 32], &mut old_ml_public, &mut old_ml_secret).unwrap();
         let old_pair = AuthorizedHybridPair::bind(&old_openpgp.public_key(), &old_ml_public);
         let next_seed = [0x41; 32];
         let next_openpgp = SigningKeyV6::from_seed(next_seed, 1_700_000_000).unwrap();
         let mut next_ml_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
         let mut next_ml_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
-        mrml_crypto::ml_dsa_65_keygen(
-            &[0x42; 32],
-            &mut next_ml_public,
-            &mut next_ml_secret,
-        )
-        .unwrap();
+        mrml_crypto::ml_dsa_65_keygen(&[0x42; 32], &mut next_ml_public, &mut next_ml_secret)
+            .unwrap();
         let next_pair = AuthorizedHybridPair::bind(&next_openpgp.public_key(), &next_ml_public);
 
         let current = TrustPolicyState::establish(TrustPolicyCandidate {
@@ -1973,13 +2020,16 @@ mod tests {
         )
         .unwrap();
         let state_path = root.join("generation.state");
-        SignerState {
-            repository_generation: RepositoryGeneration(7),
-            trust_generation: TrustGeneration(1),
-            revocation_generation: RevocationGeneration(1),
-        }
-        .persist_new_for(&state_path, owner_uid, &repository)
-        .unwrap();
+        let old_identity = signer_key_identity(&old_openpgp, &old_ml_public).unwrap();
+        let next_identity = signer_key_identity(&next_openpgp, &next_ml_public).unwrap();
+        let mut legacy_state = [0; LEGACY_SIGNER_STATE_BYTES];
+        legacy_state[..8].copy_from_slice(LEGACY_SIGNER_STATE_MAGIC);
+        legacy_state[8..16].copy_from_slice(&7_u64.to_be_bytes());
+        legacy_state[16..24].copy_from_slice(&1_u64.to_be_bytes());
+        legacy_state[24..32].copy_from_slice(&1_u64.to_be_bytes());
+        let legacy_checksum = signer_state_checksum(&repository, &legacy_state[..32]);
+        legacy_state[32..].copy_from_slice(&legacy_checksum);
+        write_test_input(&state_path, &legacy_state, 0o600);
 
         let run = || {
             advance_trust(
@@ -2011,16 +2061,16 @@ mod tests {
         assert_eq!(advanced.repository_generation, RepositoryGeneration(7));
         assert_eq!(advanced.trust_generation, TrustGeneration(2));
         assert_eq!(advanced.revocation_generation, RevocationGeneration(1));
+        assert_eq!(advanced.key_identity, next_identity);
+        assert_ne!(advanced.key_identity, old_identity);
         assert!(run().is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn one_shot_key_generation_is_exact_private_and_non_overwriting() {
-        let root = std::env::temp_dir().join(format!(
-            "mrml-key-generation-signer-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mrml-key-generation-signer-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
