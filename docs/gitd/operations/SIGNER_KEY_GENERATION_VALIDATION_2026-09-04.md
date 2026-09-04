@@ -112,8 +112,72 @@ same `21006:21006` mode-`0600` 64-byte generation state, and completed a second
 authenticated health operation. No `request_failed` event was emitted by either
 successful probe.
 
-A current-image live sign/generation-advance sequence and fresh end-to-end
-protected receive remain separate pending gates and are not claimed here.
+## Fresh protected receive and restart continuation
+
+The current image was then connected to a fresh controlled protected repository,
+`owner/keygen`, on the same authorized VPS. The authority, Gitd, signer, client,
+repository, quarantine, cache, receipt, policy, secret, state, and runtime socket
+storage all used Podman named volumes. Gitd listened only on VPS loopback port
+`18446`; this was not a public-service probe. The run reused the previously
+documented test certd fixture and test CA, so it is not ACME, public-PKI, HTTP/3,
+or production-certificate evidence.
+
+The protected policy used the public keys generated inside
+`mrml-podman0c26-git-signer-keys`. The fresh authority had an independent receipt
+key. Its public 32-byte receipt verifier was derived inside an isolated authority
+container and installed in the signer key volume without exposing the receipt
+secret. A second derivation, performed while the live authority was stopped to
+avoid its exclusive generation-store lock, produced the same SHA-256 digest as
+the signer-mounted verifier:
+
+```text
+83b4d7587962dd69bcef1d0618bac259ab6800f90565dc8f54066d496c2e40b1
+```
+
+The first receive persisted and activated candidate
+`c45048f33ad0fe5977794f873ba3ea75`, but the initial client result was uncertain
+because the signer still had the preceding authority verifier. The authenticated
+receipt remained durable while the signer stayed at repository generation 1.
+After installing the exact fresh public verifier, the client exercised the
+pending-candidate status path rather than retransmitting the pack. During probe
+reconstruction, omitting Podman's supplemental socket-access group prevented the
+client from reaching the signer: the client peer remains `21007:21007`, the
+signer peer is `21006:21006`, and group `21906` grants access only to the
+mode-`0660` socket. Restoring the exact 175-byte non-secret pending journal and
+running with supplemental group `21906` completed the authenticated advance and
+reported:
+
+```text
+Pushed abea63c8bdb4 to origin/main
+component=mrml-git-protected-signer event=request_complete category=advance
+```
+
+Two further protected pushes used newly issued one-hour, repository-scoped write
+tokens passed directly from Gitd to client standard input. They advanced the tip
+to `c1c4fa74ebe8`, then the signer was restarted, completed an authenticated
+cross-UID health operation, reopened durable generation 3, and advanced the tip
+to `d8532f795f18`. Final exact state was repository generation 4 in both the
+signer and authority, trust generation 1, revocation generation 1, three retained
+authenticated receipts, and no pending client journal. The signer logged exact
+`sign` and `advance` completion categories for both later pushes.
+
+Finally, a separately initialized named client volume received only the public
+trust policy, OpenPGP public key, ML-DSA public key, and non-secret protected
+routing configuration. With a newly issued read-only token it fetched 11 objects
+and one branch and independently recorded exact remote tip:
+
+```text
+d8532f795f1836281ecb58badf344c1639177ad497c6103fa1b6f72b6ff0f373 main
+```
+
+The signer, fresh authority, and fresh Gitd remained running after the probe.
+Inspection showed only `volume:` mounts for all three; no host bind directory was
+introduced. This establishes controlled Linux/rootful-Podman protected receive,
+uncertain-result reconciliation, consecutive generation advances, signer restart
+continuation, and independent protected fetch. It does not establish production
+key custody, public reachability, real ACME/certd operation, HTTP/3, destructive
+restore, key rotation, large-push limits, physical hardware, or independent
+security audit.
 
 Patent review: **NOT_TRIGGERED**. This increment adds conventional local key
 generation, exclusive filesystem creation, and container-volume orchestration;
