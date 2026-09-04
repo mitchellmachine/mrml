@@ -287,7 +287,9 @@ fn construct_overlap_policy(
     write_public_output(next_output, &next_bytes, output_owner_uid)?;
     let next = parse_trust_policy(&next_bytes).map_err(|_| ())?;
     println!(
-        "generation={} digest={}",
+        "previous_generation={} previous_digest={} generation={} digest={}",
+        current.generation().0,
+        lower_hex(&current.digest()),
         next.generation().0,
         lower_hex(&next.digest())
     );
@@ -334,7 +336,9 @@ fn construct_retirement_policy(
     write_public_output(next_output, &next_bytes, output_owner_uid)?;
     let next = parse_trust_policy(&next_bytes).map_err(|_| ())?;
     println!(
-        "generation={} digest={}",
+        "previous_generation={} previous_digest={} generation={} digest={}",
+        current.generation().0,
+        lower_hex(&current.digest()),
         next.generation().0,
         lower_hex(&next.digest())
     );
