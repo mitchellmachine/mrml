@@ -109,6 +109,10 @@ require 'advance-trust 21006 21002 21002 "$1"' deploy/compose/transition-git-tru
 reject '"/var/lib/mrml/git-policies/$1/trust-policy.current"' deploy/compose/transition-git-trust.sh
 require 'if [ "${1:-}" = --resume-signer ]' deploy/compose/transition-git-trust.sh
 require 'if [ "$phase" = select-and-advance ]' deploy/compose/transition-git-trust.sh
+require '.signer-trust-advance.$transition_id.complete' deploy/compose/transition-git-trust.sh
+require 'invalid or stale signer trust-advance completion marker' deploy/compose/transition-git-trust.sh
+require 'if [ "$advance_complete" = false ]' deploy/compose/transition-git-trust.sh
+require 'sync -f "$temporary_marker"' deploy/compose/transition-git-trust.sh
 require 'git-trust-construction' deploy/compose/transition-git-trust.sh
 require 'git-trust-signatures' deploy/compose/transition-git-trust.sh
 require 'consumed public transition and workspace inputs removed' deploy/compose/transition-git-trust.sh

@@ -562,11 +562,17 @@ fn advance_trust(
 
     let encoded_state = read_public_bounded(state_file, 1, SIGNER_STATE_BYTES, signer_owner_uid)?;
     let state = SignerState::decode_for_transition(&encoded_state, &repository)?;
-    if state.trust_generation != previous_policy.generation()
-        || state.revocation_generation != previous_policy.revocation_generation()
+    let already_advanced = if state.trust_generation == previous_policy.generation()
+        && state.revocation_generation == previous_policy.revocation_generation()
     {
+        false
+    } else if state.trust_generation == selected_policy.generation()
+        && state.revocation_generation == selected_policy.revocation_generation()
+    {
+        true
+    } else {
         return Err(());
-    }
+    };
 
     let mut seed_bytes = read_secret(current_openpgp_seed_path, 32, signer_owner_uid)?;
     let mut seed = [0; 32];
@@ -591,7 +597,10 @@ fn advance_trust(
         .try_into()
         .map_err(|_| ())?;
     let current_key_identity = signer_key_identity(&current_openpgp, current_ml_dsa_public)?;
-    if state.key_identity != [0; 64] && state.key_identity != current_key_identity {
+    if !already_advanced
+        && state.key_identity != [0; 64]
+        && state.key_identity != current_key_identity
+    {
         erase_secret_bytes(&mut current_ml_dsa_secret);
         return Err(());
     }
@@ -697,6 +706,17 @@ fn advance_trust(
             &next_authorization,
         )
         .map_err(|_| ())?;
+
+    if already_advanced {
+        if state.key_identity != next_key_identity {
+            return Err(());
+        }
+        println!(
+            "trust-generation={} revocation-generation={}",
+            state.trust_generation.0, state.revocation_generation.0
+        );
+        return Ok(());
+    }
 
     let candidate = SignerState {
         repository_generation: state.repository_generation,
@@ -2063,6 +2083,16 @@ mod tests {
         assert_eq!(advanced.revocation_generation, RevocationGeneration(1));
         assert_eq!(advanced.key_identity, next_identity);
         assert_ne!(advanced.key_identity, old_identity);
+        let first_persisted = fs::read(&state_path).unwrap();
+        run().unwrap();
+        assert_eq!(fs::read(&state_path).unwrap(), first_persisted);
+        let wrong_advanced = SignerState {
+            repository_generation: RepositoryGeneration(7),
+            trust_generation: TrustGeneration(2),
+            revocation_generation: RevocationGeneration(1),
+            key_identity: old_identity,
+        };
+        fs::write(&state_path, wrong_advanced.encode(&repository)).unwrap();
         assert!(run().is_err());
         fs::remove_dir_all(root).unwrap();
     }

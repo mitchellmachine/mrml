@@ -102,6 +102,18 @@ the same transition command. On complete signer advancement, the transition,
 construction, and signature volumes are synchronized after their exact public
 one-operation artifacts are consumed, allowing the next rotation without
 deleting either private-key volume.
+The signer advance is exact-idempotent after it has reverified both policies,
+both hybrid authorizations, the retiring private pair, and the selected public
+pair. The operator writes and synchronizes an invocation-bound completion
+marker in the transition named volume only after that advance reopens exact
+state. If the operator is interrupted before the marker, rerun with
+`--resume-signer`; an already-advanced exact state is accepted without another
+replacement. If interruption occurs during public-input cleanup, the marker
+allows the same invocation to resume cleanup without rerunning either authority
+selection or signer advancement. A marker for any other repository, validation
+time, generation, or expected digest does not authorize cleanup. Completed
+markers are retained as non-secret recovery evidence and never contain policy,
+signature, key, or repository bytes.
 The signer generation state is format-versioned and binds the exact active
 OpenPGP/ML-DSA public pair. A dual-authorized trust transition upgrades legacy
 generation-only state to the key-bound format; ordinary startup never performs

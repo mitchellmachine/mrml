@@ -206,6 +206,20 @@ restricted DNS; local archive enumeration and JSON validation completed.
 packages and 214 dependencies), and `mrml manifest lock --check` (71 packages
 and 5 interfaces) passed after the exercise.
 
+The subsequent crash-resume hardening makes an exact already-completed signer
+trust advance idempotent only after revalidating both canonical policies, both
+hybrid authorizations, the retiring private pair, the selected public pair, and
+the exact advanced key-bound state. A mismatched advanced key identity remains
+rejected. The operator persists a synchronized invocation-bound completion
+marker only after the signer state is reopened. An exact rerun before that
+marker safely revalidates the signer operation; an exact rerun after it resumes
+idempotent public-input cleanup without repeating authority selection. Marker
+symlinks, link-count or metadata changes, truncated content, and a marker bound
+to different arguments fail closed. Focused Git tests passed 276 library, 5
+CLI, 9 signer, and 2 credential-agent tests; both Compose static suites, shell
+syntax, formatting, strict Clippy, and diff checks passed. This is deterministic
+restart-path test evidence, not yet a real process-kill or power-loss result.
+
 All client, Gitd, authority, signer, certificate, policy, key, state, and
 runtime container mounts in this exercise were named volumes. Older Podman
 rejected its `subpath=socket` option, so the signer runtime named volume was
