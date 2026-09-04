@@ -25,7 +25,9 @@ pub use auth_store::{
 };
 pub use authority_rpc::{GitAuthorityChannelClient, GitAuthorityChannelError};
 pub use backend::{GitdRepositorySet, SharedGitdRepositorySet};
-pub use backup_volume::{BackupVolumeError, collect_backup_volume};
+pub use backup_volume::{
+    BACKUP_VOLUME_ORDER, BackupVolumeError, collect_backup_inventory, collect_backup_volume,
+};
 pub use catalog::{
     load_deployment_catalog, parse_deployment_catalog, verify_repository_admission,
     DeploymentCatalog, DeploymentCatalogError, DeploymentProfile, DeploymentRepository,

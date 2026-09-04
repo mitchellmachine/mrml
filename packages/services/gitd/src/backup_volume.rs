@@ -2,9 +2,15 @@
 
 use mrml_crypto::Sha256;
 use mrml_git::{
-    BackupInventoryEntry, BackupInventoryFileKind, BackupVolume, MAX_BACKUP_INVENTORY_ENTRIES,
+    authority_generation_record_name, parse_authority_generation_record, ActiveRefFile,
+    BackupInventory, BackupInventoryEntry, BackupInventoryFileKind, BackupRepositoryGeneration,
+    BackupVolume, AUTHORITY_GENERATION_RECORD_MAX_BYTES, MAX_BACKUP_INVENTORY_ENTRIES,
 };
 use mrml_runtime::{DirectoryCapability, Text, Vector};
+
+use crate::{
+    load_deployment_catalog, verify_repository_admission, DeploymentRepositoryProfile, GitdConfig,
+};
 
 const MAX_BACKUP_PATH_BYTES: usize = 1024;
 const MAX_BACKUP_DEPTH: usize = 64;
@@ -18,6 +24,141 @@ pub enum BackupVolumeError {
     Resource,
     Read,
     Changed,
+    Catalog,
+    Generation,
+}
+
+pub const BACKUP_VOLUME_ORDER: [BackupVolume; 10] = [
+    BackupVolume::GitdRepositories,
+    BackupVolume::GitdState,
+    BackupVolume::GitdQuarantine,
+    BackupVolume::GitdReceipts,
+    BackupVolume::GitdPolicies,
+    BackupVolume::GitdSecrets,
+    BackupVolume::GitdConfiguration,
+    BackupVolume::AuthorityState,
+    BackupVolume::AuthoritySecrets,
+    BackupVolume::AuthorityConfiguration,
+];
+
+/// Constructs the complete canonical inventory from all ten mounted source
+/// volumes and exact live repository generations. The roots are positional in
+/// `BACKUP_VOLUME_ORDER`; cache is intentionally not accepted.
+pub fn collect_backup_inventory(
+    config: &GitdConfig,
+    backup_generation: u64,
+    volume_roots: [&str; 10],
+    authority_generation_root: &str,
+) -> Result<BackupInventory, BackupVolumeError> {
+    if backup_generation == 0 {
+        return Err(BackupVolumeError::Generation);
+    }
+    let catalog = load_deployment_catalog(config).map_err(|_| BackupVolumeError::Catalog)?;
+    let state_root =
+        DirectoryCapability::open_root(config.state_root.to_str().ok_or(BackupVolumeError::Open)?)
+            .map_err(|_| BackupVolumeError::Open)?;
+    let repository_root = DirectoryCapability::open_root(
+        config
+            .repository_root
+            .to_str()
+            .ok_or(BackupVolumeError::Open)?,
+    )
+    .map_err(|_| BackupVolumeError::Open)?;
+    let authority_root = DirectoryCapability::open_root(authority_generation_root)
+        .map_err(|_| BackupVolumeError::Open)?;
+    let mut repositories = Vector::new();
+    repositories
+        .try_reserve_exact(catalog.repositories.len())
+        .map_err(|_| BackupVolumeError::Resource)?;
+    for entry in &catalog.repositories {
+        let state_directory = state_root
+            .open_directory(entry.repository.as_str())
+            .map_err(|_| BackupVolumeError::Generation)?;
+        let state = ActiveRefFile::open_capability(state_directory)
+            .and_then(|active| active.load())
+            .map_err(|_| BackupVolumeError::Generation)?;
+        let view = mrml_git::FilesystemRepositoryView::open_capabilities(
+            entry.repository.clone(),
+            repository_root
+                .open_directory(entry.repository.as_str())
+                .map_err(|_| BackupVolumeError::Generation)?,
+            state_root
+                .open_directory(entry.repository.as_str())
+                .map_err(|_| BackupVolumeError::Generation)?,
+        )
+        .map_err(|_| BackupVolumeError::Generation)?;
+        verify_repository_admission(entry, &view).map_err(|_| BackupVolumeError::Generation)?;
+        if state.repository != entry.repository
+            || state.repository_generation != entry.repository_generation
+            || state.trust_generation != entry.trust_generation
+            || state.revocation_generation != entry.revocation_generation
+        {
+            return Err(BackupVolumeError::Generation);
+        }
+        let authority_generation = if entry.profile.class == DeploymentRepositoryProfile::Protected
+        {
+            read_authority_generation(&authority_root, config.authority_uid, &entry.repository)?
+        } else {
+            0
+        };
+        repositories.push(BackupRepositoryGeneration {
+            repository: entry.repository.clone(),
+            repository_generation: state.repository_generation,
+            pack_generation: state.pack_generation,
+            trust_generation: state.trust_generation,
+            revocation_generation: state.revocation_generation,
+            authority_generation,
+        });
+    }
+
+    let mut entries = Vector::new();
+    for (volume, root) in BACKUP_VOLUME_ORDER.into_iter().zip(volume_roots) {
+        let collected = collect_backup_volume(root, volume)?;
+        if entries
+            .len()
+            .checked_add(collected.len())
+            .is_none_or(|count| count > MAX_BACKUP_INVENTORY_ENTRIES)
+        {
+            return Err(BackupVolumeError::Resource);
+        }
+        entries
+            .try_reserve(collected.len())
+            .map_err(|_| BackupVolumeError::Resource)?;
+        entries.extend(collected);
+    }
+    Ok(BackupInventory {
+        backup_generation,
+        repositories,
+        entries,
+    })
+}
+
+fn read_authority_generation(
+    root: &DirectoryCapability,
+    authority_uid: u32,
+    repository: &mrml_git::RepositoryIdentity,
+) -> Result<u64, BackupVolumeError> {
+    let name = authority_generation_record_name(repository);
+    let mut file = root
+        .open_regular(name.as_str())
+        .map_err(|_| BackupVolumeError::Generation)?;
+    let metadata = file.metadata().map_err(|_| BackupVolumeError::Generation)?;
+    let length = usize::try_from(file.len().map_err(|_| BackupVolumeError::Generation)?)
+        .map_err(|_| BackupVolumeError::Resource)?;
+    if metadata.mode & 0o170000 != 0o100000
+        || metadata.mode & 0o777 != 0o600
+        || metadata.uid != authority_uid
+        || metadata.links != 1
+        || length > AUTHORITY_GENERATION_RECORD_MAX_BYTES
+    {
+        return Err(BackupVolumeError::Generation);
+    }
+    let mut bytes = vec![0; length];
+    file.read_exact(&mut bytes)
+        .map_err(|_| BackupVolumeError::Generation)?;
+    parse_authority_generation_record(&bytes, repository)
+        .map(|generation| generation.0)
+        .map_err(|_| BackupVolumeError::Generation)
 }
 
 /// Enumerates one retained volume without converting descendants back to
@@ -160,6 +301,7 @@ fn push_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_git::{encode_authority_generation_record, RepositoryGeneration, RepositoryIdentity};
     use std::fs;
     use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
@@ -210,6 +352,34 @@ mod tests {
         assert_eq!(
             collect_backup_volume(root.to_str().unwrap(), BackupVolume::GitdState),
             Err(BackupVolumeError::UnsafeEntry)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn authority_generation_is_exact_repository_bound_state() {
+        let root = root("authority-generation");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let repository = RepositoryIdentity::parse("owner/protected").unwrap();
+        let name = authority_generation_record_name(&repository);
+        fs::write(
+            root.join(name.as_str()),
+            encode_authority_generation_record(&repository, RepositoryGeneration(23)).unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(root.join(name.as_str()), fs::Permissions::from_mode(0o600)).unwrap();
+        let owner = fs::metadata(root.join(name.as_str())).unwrap().uid();
+        let retained = DirectoryCapability::open_root(root.to_str().unwrap()).unwrap();
+        assert_eq!(
+            read_authority_generation(&retained, owner, &repository),
+            Ok(23)
+        );
+        let other = RepositoryIdentity::parse("owner/other").unwrap();
+        assert_eq!(
+            read_authority_generation(&retained, owner, &other),
+            Err(BackupVolumeError::Generation)
         );
         fs::remove_dir_all(root).unwrap();
     }

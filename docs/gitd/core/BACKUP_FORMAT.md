@@ -65,6 +65,15 @@ canonical byte-ordered paths and rejects symlinks, special files, hard-linked
 regular files, invalid directory metadata, overlong paths, short reads, growth
 during hashing, and descriptor-relative replacement races.
 
+Inventory assembly authenticates the configured Gitd catalog, then reads every
+repository's `active.refs` beneath retained repository/state roots. Catalog and
+live repository, trust, and revocation generations must exact-match; the live
+pack generation is recorded. Protected entries additionally require the exact
+mode-0600, single-link authority record beneath the retained generation root,
+parsed against the repository identity. Conventional entries record authority
+generation zero. Operator- or environment-supplied generation values are not
+accepted.
+
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,
 and authenticated EOF in a conventional encrypted-record stream. It introduces
