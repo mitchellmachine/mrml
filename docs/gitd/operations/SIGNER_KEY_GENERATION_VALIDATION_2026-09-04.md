@@ -78,9 +78,42 @@ selecting `MRML_CONTAINER_RUNTIME=podman`, proving it addressed the host's
 separate Docker Snap and rootful Podman stores without guessing.
 
 No private key or secret file content crossed SSH, appeared in arguments or
-environment variables, or was printed. The current-image live signer
-sign/restart/generation-advance sequence and a fresh end-to-end protected
-receive remain separate pending gates and are not claimed here.
+environment variables, or was printed.
+
+## Authenticated health and restart continuation
+
+The first exact-image health probe returned `ready` to the cross-UID client but
+left `request_failed category=read` in the signer log because the client closed
+after authenticating the server hello. Source inspection also showed that every
+successful generation advance was logged as `category=sign`. Signed commit
+`140f9c95` adds a distinct authenticated health request/response operation and
+exact `health`, `sign`, and `advance` completion categories. The health frame is
+bound to the channel capability, random session, absolute expiry, single-use
+sequence, and request ID; wrong capability, session, or request ID fails closed.
+
+The updated focused suite passed 274 Git library, five CLI, eight signer, and
+two credential-agent tests, strict clippy, formatting, and diff checks. A clean
+worktree release build produced exact signer image
+`094823000fd4e43f0a05d513ca1e4539c1ce52398d8d827938372fb406abd6f9`.
+That image was streamed directly into the VPS Podman store and replaced the
+controlled signer while retaining the older stopped container. It reused the
+same five named volumes, reached `ready`, and completed the cross-UID health
+operation with exactly:
+
+```text
+component=mrml-git-protected-signer event=request_complete category=health
+```
+
+The container remained `network=none`, read-only, UID/GID `21006:21006`, with
+all capabilities dropped, `no-new-privileges`, 32 PIDs, 512 MiB, one CPU, no
+ports, and only named volumes. It stopped within the whole-second timer's zero
+second bucket, restarted without changing bootstrap arguments, reopened the
+same `21006:21006` mode-`0600` 64-byte generation state, and completed a second
+authenticated health operation. No `request_failed` event was emitted by either
+successful probe.
+
+A current-image live sign/generation-advance sequence and fresh end-to-end
+protected receive remain separate pending gates and are not claimed here.
 
 Patent review: **NOT_TRIGGERED**. This increment adds conventional local key
 generation, exclusive filesystem creation, and container-volume orchestration;

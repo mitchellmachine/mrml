@@ -156,7 +156,9 @@ reopening the new state. A replay or skipped generation is rejected, including
 after daemon restart; bootstrap generation arguments cannot roll an existing
 state volume backward.
 
-An external readiness probe authenticates both the Unix peer and the v2 hello:
+An external readiness probe authenticates the Unix peer and v2 hello, then
+sends a capability-, session-, expiry-, sequence-, and request-ID-bound health
+request and requires the matching authenticated empty response:
 
 ```text
 mrml-git-protected-signer socket-health SOCKET CAPABILITY CAPABILITY_OWNER_UID SIGNER_UID SIGNER_GID
