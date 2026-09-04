@@ -108,12 +108,13 @@ pub fn write_backup_archive(
             .ok_or(BackupArchiveError::Inventory)?;
         match entry.kind {
             BackupInventoryFileKind::Directory => {
-                let directory = root
-                    .open_directory(entry.path.as_str())
-                    .map_err(|_| BackupArchiveError::Changed)?;
-                let metadata = directory
-                    .metadata()
-                    .map_err(|_| BackupArchiveError::Changed)?;
+                let metadata = if entry.path.as_str() == "." {
+                    root.metadata().map_err(|_| BackupArchiveError::Changed)?
+                } else {
+                    root.open_directory(entry.path.as_str())
+                        .and_then(|directory| directory.metadata())
+                        .map_err(|_| BackupArchiveError::Changed)?
+                };
                 if metadata.mode & 0o170000 != 0o040000
                     || metadata.mode & 0o7777 != u32::from(entry.mode)
                     || metadata.uid != entry.uid
@@ -417,6 +418,32 @@ mod tests {
         fs::write(&file_path, b"hello").unwrap();
         fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
         let metadata = fs::metadata(&file_path).unwrap();
+        let mut entries = Vector::new();
+        for (index, volume) in BackupVolume::ALL.into_iter().enumerate() {
+            let root_metadata = fs::metadata(&paths[index]).unwrap();
+            entries.push(BackupInventoryEntry {
+                volume,
+                path: Text::from("."),
+                kind: BackupInventoryFileKind::Directory,
+                mode: (root_metadata.mode() & 0o7777) as u16,
+                uid: root_metadata.uid(),
+                gid: root_metadata.gid(),
+                size: 0,
+                digest: [0; 32],
+            });
+            if index == 0 {
+                entries.push(BackupInventoryEntry {
+                    volume,
+                    path: Text::from("objects.pack"),
+                    kind: BackupInventoryFileKind::Regular,
+                    mode: 0o600,
+                    uid: metadata.uid(),
+                    gid: metadata.gid(),
+                    size: 5,
+                    digest: Sha256::digest(b"hello"),
+                });
+            }
+        }
         let inventory = BackupInventory {
             backup_generation: 9,
             repositories: Vector::from([BackupRepositoryGeneration {
@@ -427,16 +454,7 @@ mod tests {
                 revocation_generation: RevocationGeneration(1),
                 authority_generation: 0,
             }]),
-            entries: Vector::from([BackupInventoryEntry {
-                volume: BackupVolume::GitdRepositories,
-                path: Text::from("objects.pack"),
-                kind: BackupInventoryFileKind::Regular,
-                mode: 0o600,
-                uid: metadata.uid(),
-                gid: metadata.gid(),
-                size: 5,
-                digest: Sha256::digest(b"hello"),
-            }]),
+            entries,
         };
         let path_refs: [&str; 10] = core::array::from_fn(|index| paths[index].to_str().unwrap());
         let header = BackupStreamHeader {

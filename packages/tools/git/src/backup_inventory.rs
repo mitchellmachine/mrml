@@ -34,6 +34,19 @@ pub enum BackupVolume {
 }
 
 impl BackupVolume {
+    pub const ALL: [Self; 10] = [
+        Self::GitdRepositories,
+        Self::GitdState,
+        Self::GitdQuarantine,
+        Self::GitdReceipts,
+        Self::GitdPolicies,
+        Self::GitdSecrets,
+        Self::GitdConfiguration,
+        Self::AuthorityState,
+        Self::AuthoritySecrets,
+        Self::AuthorityConfiguration,
+    ];
+
     const fn from_code(code: u8) -> Option<Self> {
         Some(match code {
             1 => Self::GitdRepositories,
@@ -260,9 +273,14 @@ fn validate_inventory(inventory: &BackupInventory) -> Result<(), BackupInventory
         previous_repository = Some(repository.repository.as_str());
     }
     let mut previous_entry: Option<(BackupVolume, &str)> = None;
+    let mut root_mask = 0u16;
     for entry in &inventory.entries {
-        validate_path(entry.path.as_str())?;
+        let is_root = entry.path.as_str() == ".";
+        if !is_root {
+            validate_path(entry.path.as_str())?;
+        }
         if entry.mode & !0o7777 != 0
+            || is_root && entry.kind != BackupInventoryFileKind::Directory
             || matches!(entry.kind, BackupInventoryFileKind::Directory)
                 && (entry.size != 0 || entry.digest != [0; 32])
             || matches!(entry.kind, BackupInventoryFileKind::Regular) && entry.digest == [0; 32]
@@ -271,9 +289,18 @@ fn validate_inventory(inventory: &BackupInventory) -> Result<(), BackupInventory
         {
             return Err(BackupInventoryError::NonCanonical);
         }
+        if is_root {
+            let bit = 1u16 << (entry.volume as u8 - 1);
+            if root_mask & bit != 0 {
+                return Err(BackupInventoryError::NonCanonical);
+            }
+            root_mask |= bit;
+        }
         previous_entry = Some((entry.volume, entry.path.as_str()));
     }
-    Ok(())
+    (root_mask == BACKUP_VOLUME_MASK)
+        .then_some(())
+        .ok_or(BackupInventoryError::NonCanonical)
 }
 
 fn validate_path(path: &str) -> Result<(), BackupInventoryError> {
@@ -385,6 +412,61 @@ mod tests {
     use super::*;
 
     fn inventory() -> BackupInventory {
+        let mut entries = Vector::new();
+        for volume in BackupVolume::ALL {
+            entries.push(BackupInventoryEntry {
+                volume,
+                path: ".".into(),
+                kind: BackupInventoryFileKind::Directory,
+                mode: 0o700,
+                uid: if volume >= BackupVolume::AuthorityState {
+                    21002
+                } else {
+                    21001
+                },
+                gid: if volume >= BackupVolume::AuthorityState {
+                    21002
+                } else {
+                    21001
+                },
+                size: 0,
+                digest: [0; 32],
+            });
+            if volume == BackupVolume::GitdRepositories {
+                entries.push(BackupInventoryEntry {
+                    volume,
+                    path: "owner".into(),
+                    kind: BackupInventoryFileKind::Directory,
+                    mode: 0o700,
+                    uid: 21001,
+                    gid: 21001,
+                    size: 0,
+                    digest: [0; 32],
+                });
+                entries.push(BackupInventoryEntry {
+                    volume,
+                    path: "owner/repository/.git/HEAD".into(),
+                    kind: BackupInventoryFileKind::Regular,
+                    mode: 0o600,
+                    uid: 21001,
+                    gid: 21001,
+                    size: 21,
+                    digest: Sha256::digest(b"ref: refs/heads/main\n"),
+                });
+            }
+            if volume == BackupVolume::AuthorityState {
+                entries.push(BackupInventoryEntry {
+                    volume,
+                    path: "generations/owner".into(),
+                    kind: BackupInventoryFileKind::Directory,
+                    mode: 0o700,
+                    uid: 21002,
+                    gid: 21002,
+                    size: 0,
+                    digest: [0; 32],
+                });
+            }
+        }
         BackupInventory {
             backup_generation: 9,
             repositories: [BackupRepositoryGeneration {
@@ -396,39 +478,7 @@ mod tests {
                 authority_generation: 7,
             }]
             .into(),
-            entries: [
-                BackupInventoryEntry {
-                    volume: BackupVolume::GitdRepositories,
-                    path: "owner".into(),
-                    kind: BackupInventoryFileKind::Directory,
-                    mode: 0o700,
-                    uid: 21001,
-                    gid: 21001,
-                    size: 0,
-                    digest: [0; 32],
-                },
-                BackupInventoryEntry {
-                    volume: BackupVolume::GitdRepositories,
-                    path: "owner/repository/.git/HEAD".into(),
-                    kind: BackupInventoryFileKind::Regular,
-                    mode: 0o600,
-                    uid: 21001,
-                    gid: 21001,
-                    size: 21,
-                    digest: Sha256::digest(b"ref: refs/heads/main\n"),
-                },
-                BackupInventoryEntry {
-                    volume: BackupVolume::AuthorityState,
-                    path: "generations/owner".into(),
-                    kind: BackupInventoryFileKind::Directory,
-                    mode: 0o700,
-                    uid: 21002,
-                    gid: 21002,
-                    size: 0,
-                    digest: [0; 32],
-                },
-            ]
-            .into(),
+            entries,
         }
     }
 
@@ -473,7 +523,7 @@ mod tests {
         candidate.entries[0].size = 1;
         assert!(encode_backup_inventory(&candidate).is_err());
         let mut candidate = inventory();
-        candidate.entries[1].digest = [0; 32];
+        candidate.entries[2].digest = [0; 32];
         assert!(encode_backup_inventory(&candidate).is_err());
     }
 }

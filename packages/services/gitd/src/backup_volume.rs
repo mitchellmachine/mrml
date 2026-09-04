@@ -28,18 +28,7 @@ pub enum BackupVolumeError {
     Generation,
 }
 
-pub const BACKUP_VOLUME_ORDER: [BackupVolume; 10] = [
-    BackupVolume::GitdRepositories,
-    BackupVolume::GitdState,
-    BackupVolume::GitdQuarantine,
-    BackupVolume::GitdReceipts,
-    BackupVolume::GitdPolicies,
-    BackupVolume::GitdSecrets,
-    BackupVolume::GitdConfiguration,
-    BackupVolume::AuthorityState,
-    BackupVolume::AuthoritySecrets,
-    BackupVolume::AuthorityConfiguration,
-];
+pub const BACKUP_VOLUME_ORDER: [BackupVolume; 10] = BackupVolume::ALL;
 
 /// Constructs the complete canonical inventory from all ten mounted source
 /// volumes and exact live repository generations. The roots are positional in
@@ -171,6 +160,20 @@ pub fn collect_backup_volume(
     let root = DirectoryCapability::open_root(root_path).map_err(|_| BackupVolumeError::Open)?;
     validate_directory(&root)?;
     let mut output = Vector::new();
+    let metadata = root.metadata().map_err(|_| BackupVolumeError::Open)?;
+    push_entry(
+        &mut output,
+        BackupInventoryEntry {
+            volume,
+            path: Text::from("."),
+            kind: BackupInventoryFileKind::Directory,
+            mode: (metadata.mode & 0o7777) as u16,
+            uid: metadata.uid,
+            gid: metadata.gid,
+            size: 0,
+            digest: [0; 32],
+        },
+    )?;
     collect_directory(&root, "", volume, 0, &mut output)?;
     Ok(output)
 }
@@ -325,12 +328,12 @@ mod tests {
                 .iter()
                 .map(|entry| entry.path.as_str())
                 .collect::<Vec<_>>(),
-            ["a", "a/first", "z"]
+            [".", "a", "a/first", "z"]
         );
-        assert_eq!(entries[1].size, 7);
-        assert_eq!(entries[1].digest, Sha256::digest(b"content"));
+        assert_eq!(entries[2].size, 7);
+        assert_eq!(entries[2].digest, Sha256::digest(b"content"));
         assert_eq!(
-            entries[1].uid,
+            entries[2].uid,
             fs::metadata(root.join("a/first")).unwrap().uid()
         );
         fs::remove_dir_all(root).unwrap();

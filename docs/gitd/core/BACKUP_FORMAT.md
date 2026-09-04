@@ -54,6 +54,12 @@ UID, GID, size, and SHA-256 content digest. Directories have zero size and
 digest. The inventory is limited to 64 MiB and ends in a digest that detects
 internal corruption independently of the enclosing encrypted frames.
 
+Every one of the ten volumes begins with exactly one directory entry whose
+canonical path is `.`. This reserved entry binds the named-volume root's mode,
+UID, and GID and has zero size and digest. It cannot represent a regular file,
+cannot be duplicated, and is required for the fixed volume mask. Descendant
+paths continue to forbid `.` components, so the root marker is unambiguous.
+
 Protected authority generations are read with the same bounded `MRAGEN01`
 codec used by the live authority store. The checksum domain, repository
 identity, and nonzero generation therefore cannot drift between online writes
