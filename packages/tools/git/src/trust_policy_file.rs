@@ -69,7 +69,57 @@ impl LinuxDurableTrustPolicyStore {
     }
 
     #[cfg(target_os = "linux")]
+    pub fn create_capability(
+        root: mrml_runtime::DirectoryCapability,
+        state: &TrustPolicyState,
+    ) -> Result<Self, TrustPolicyFileError> {
+        let store = Self::from_capability(root)?;
+        let entries = store
+            .retained
+            .as_ref()
+            .ok_or(TrustPolicyFileError::Io)?
+            .read_directory()
+            .map_err(|_| TrustPolicyFileError::Io)?;
+        if entries.iter().any(|entry| {
+            entry.name.as_str() == store.active.as_str()
+                || entry.name.as_str() == store.temporary.as_str()
+        }) {
+            return Err(TrustPolicyFileError::AlreadyExists);
+        }
+        let bytes = encode_file(state)?;
+        let mut file = store.create_file(&store.temporary, TrustPolicyFileError::AlreadyExists)?;
+        file.write_all(&bytes)
+            .map_err(|_| TrustPolicyFileError::Io)?;
+        file.sync().map_err(|_| TrustPolicyFileError::Durability)?;
+        drop(file);
+        let root = store.retained.as_ref().ok_or(TrustPolicyFileError::Io)?;
+        if root
+            .hard_link_child(&store.temporary, &store.active)
+            .is_err()
+        {
+            let _ = root.remove_file(&store.temporary);
+            return Err(TrustPolicyFileError::AlreadyExists);
+        }
+        root.remove_file(&store.temporary)
+            .map_err(|_| TrustPolicyFileError::Durability)?;
+        store.sync()?;
+        if store.load()? != *state {
+            return Err(TrustPolicyFileError::Integrity);
+        }
+        Ok(store)
+    }
+
+    #[cfg(target_os = "linux")]
     pub fn open_capability(
+        root: mrml_runtime::DirectoryCapability,
+    ) -> Result<Self, TrustPolicyFileError> {
+        let store = Self::from_capability(root)?;
+        store.load()?;
+        Ok(store)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_capability(
         root: mrml_runtime::DirectoryCapability,
     ) -> Result<Self, TrustPolicyFileError> {
         let metadata = root.metadata().map_err(|_| TrustPolicyFileError::Io)?;
@@ -77,15 +127,13 @@ impl LinuxDurableTrustPolicyStore {
         if mode & 0o022 != 0 || mode & 0o500 != 0o500 || mode & 0o200 == 0 || metadata.links < 2 {
             return Err(TrustPolicyFileError::Io);
         }
-        let store = Self {
+        Ok(Self {
             root: Text::new(),
             active: Text::from("trust-policy.current"),
             temporary: Text::from("trust-policy.next"),
             lock: Text::from("trust-policy.lock"),
             retained: Some(root),
-        };
-        store.load()?;
-        Ok(store)
+        })
     }
 
     pub fn load(&self) -> Result<TrustPolicyState, TrustPolicyFileError> {
@@ -633,6 +681,36 @@ mod tests {
             &root,
             "trust-policy.current",
         )));
+        remove_dir_all(&root).unwrap();
+        remove_dir_all(&displaced).unwrap();
+    }
+
+    #[test]
+    fn retained_policy_creation_survives_ambient_replacement() {
+        let (fixture_root, fixture_store, state, _, _, _) = fixture();
+        drop(fixture_store);
+        remove_dir_all(&fixture_root).unwrap();
+        let root = root("create-retained");
+        let displaced = mrml_runtime::mrml_format!("{root}-displaced");
+        let _ = remove_dir_all(&root);
+        let _ = remove_dir_all(&displaced);
+        create_dir_all(&root).unwrap();
+        let capability = mrml_runtime::DirectoryCapability::open_root(&root).unwrap();
+        mrml_runtime::rename_file(&root, &displaced).unwrap();
+        create_dir_all(&root).unwrap();
+
+        let store = LinuxDurableTrustPolicyStore::create_capability(capability, &state).unwrap();
+        assert_eq!(store.load().unwrap(), state);
+        assert!(mrml_runtime::path_exists(&join_path(
+            &displaced,
+            "trust-policy.current",
+        )));
+        assert!(!mrml_runtime::path_exists(&join_path(
+            &root,
+            "trust-policy.current",
+        )));
+
+        drop(store);
         remove_dir_all(&root).unwrap();
         remove_dir_all(&displaced).unwrap();
     }
