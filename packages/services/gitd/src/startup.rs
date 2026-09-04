@@ -3,9 +3,10 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use mrml_git::{
-    AuditReceiptAuthority, AuthenticatedReceiveStore, AuthorizedHybridPair,
-    FilesystemRepositoryView, FullRefName, LinuxDurableReceiveStore, LinuxDurableTrustPolicyStore,
-    ObjectFormat, PolicyPairStatus, RecoveryAction, TrustPolicyCandidate, TrustPolicyState,
+    AuditReceiptAuthority, AuthenticatedAuditReceiptDirectory, AuthenticatedReceiveStore,
+    AuthorizedHybridPair, FilesystemRepositoryView, FullRefName, LinuxDurableReceiveStore,
+    LinuxDurableTrustPolicyStore, ObjectFormat, PolicyPairStatus, RecoveryAction,
+    TrustPolicyCandidate, TrustPolicyState,
 };
 use mrml_openpgp::PublicKeyV6;
 use mrml_runtime::{DirectoryCapability, DirectoryMetadata, Vector};
@@ -236,6 +237,17 @@ pub fn initialize_catalog_repository(
         return Err(RepositoryInitializationError::Initialize);
     }
     drop(initialized);
+    for name in ["quarantine", "arrivals"] {
+        let directory = leaves[2].join(name);
+        if fs::create_dir(&directory).is_err()
+            || fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).is_err()
+        {
+            for leaf in &leaves {
+                let _ = fs::remove_dir_all(leaf);
+            }
+            return Err(RepositoryInitializationError::Create);
+        }
+    }
     let admitted = admit_catalog_repository(config, entry).map_err(|_| {
         for leaf in &leaves {
             let _ = fs::remove_dir_all(leaf);
@@ -286,17 +298,7 @@ pub fn inspect_admitted_repository_recovery(
     config: &GitdConfig,
     admitted: &AdmittedRepository,
 ) -> Result<RepositoryRecoveryStatus, RepositoryRecoveryError> {
-    let journals = admitted.paths.state.join("receive-journals");
-    let plain_receipts = admitted.paths.receipts.join("plain");
-    let store = LinuxDurableReceiveStore::open(
-        recovery_path(&journals)?,
-        recovery_path(&admitted.paths.quarantine)?,
-        recovery_path(&admitted.paths.state)?,
-        recovery_path(&plain_receipts)?,
-        ObjectFormat::Sha256,
-        receive_pack_limit(config.max_body_bytes),
-    )
-    .map_err(|_| RepositoryRecoveryError::Open)?;
+    let store = open_recovery_store(admitted, receive_pack_limit(config.max_body_bytes))?;
     let actions = store
         .recovery_actions()
         .map_err(|_| RepositoryRecoveryError::Journal)?;
@@ -396,6 +398,8 @@ pub fn admit_catalog_repository(
             })
             .transpose()?,
     };
+    validate_private_child_directory(&capabilities.quarantine, "quarantine")?;
+    validate_private_child_directory(&capabilities.quarantine, "arrivals")?;
     let mut view = FilesystemRepositoryView::open_with_arrivals(
         entry.repository.clone(),
         paths
@@ -507,18 +511,7 @@ pub fn recover_admitted_repository(
     admitted: &AdmittedRepository,
     receipt_authority: &mut dyn AuditReceiptAuthority,
 ) -> Result<RepositoryRecoverySummary, RepositoryRecoveryError> {
-    let journals = admitted.paths.state.join("receive-journals");
-    let plain_receipts = admitted.paths.receipts.join("plain");
-    let authenticated_receipts = admitted.paths.receipts.join("authenticated");
-    let mut store = LinuxDurableReceiveStore::open(
-        recovery_path(&journals)?,
-        recovery_path(&admitted.paths.quarantine)?,
-        recovery_path(&admitted.paths.state)?,
-        recovery_path(&plain_receipts)?,
-        ObjectFormat::Sha256,
-        receive_pack_limit(config.max_body_bytes),
-    )
-    .map_err(|_| RepositoryRecoveryError::Open)?;
+    let mut store = open_recovery_store(admitted, receive_pack_limit(config.max_body_bytes))?;
     let actions = store
         .recovery_actions()
         .map_err(|_| RepositoryRecoveryError::Journal)?;
@@ -528,12 +521,19 @@ pub fn recover_admitted_repository(
             RecoveryAction::RecoverAuditReceipt
                 if entry.profile.class == DeploymentRepositoryProfile::Protected =>
             {
-                let mut authenticated = AuthenticatedReceiveStore::new(
-                    &mut store,
-                    recovery_path(&authenticated_receipts)?,
-                    receipt_authority,
+                let receipts = AuthenticatedAuditReceiptDirectory::open_capability(
+                    admitted
+                        .capabilities
+                        .receipts
+                        .open_directory("authenticated")
+                        .map_err(|_| RepositoryRecoveryError::Receipt)?,
                 )
                 .map_err(|_| RepositoryRecoveryError::Receipt)?;
+                let mut authenticated = AuthenticatedReceiveStore::new_with_receipts(
+                    &mut store,
+                    receipts,
+                    receipt_authority,
+                );
                 authenticated
                     .recover_audit_receipt(&journal)
                     .map_err(|_| RepositoryRecoveryError::Receipt)?;
@@ -578,8 +578,83 @@ pub fn recover_admitted_repository(
     Ok(summary)
 }
 
-fn recovery_path(path: &Path) -> Result<&str, RepositoryRecoveryError> {
-    path.to_str().ok_or(RepositoryRecoveryError::Path)
+fn open_recovery_store(
+    admitted: &AdmittedRepository,
+    max_pack_bytes: u64,
+) -> Result<LinuxDurableReceiveStore, RepositoryRecoveryError> {
+    let journals =
+        open_or_create_private_directory(&admitted.capabilities.state, "receive-journals")?;
+    let plain_receipts =
+        open_or_create_private_directory(&admitted.capabilities.receipts, "plain")?;
+    let _authenticated_receipts =
+        open_or_create_private_directory(&admitted.capabilities.receipts, "authenticated")?;
+    LinuxDurableReceiveStore::open_with_capabilities(
+        journals,
+        admitted
+            .capabilities
+            .quarantine
+            .try_clone()
+            .map_err(|_| RepositoryRecoveryError::Open)?,
+        admitted
+            .capabilities
+            .state
+            .try_clone()
+            .map_err(|_| RepositoryRecoveryError::Open)?,
+        plain_receipts,
+        ObjectFormat::Sha256,
+        max_pack_bytes,
+    )
+    .map_err(|_| RepositoryRecoveryError::Open)
+}
+
+fn validate_private_child_directory(
+    parent: &DirectoryCapability,
+    name: &str,
+) -> Result<(), RepositoryAdmissionError> {
+    let parent_metadata = parent
+        .metadata()
+        .map_err(|_| RepositoryAdmissionError::Open)?;
+    let child = parent
+        .open_directory(name)
+        .map_err(|_| RepositoryAdmissionError::Open)?;
+    let metadata = child
+        .metadata()
+        .map_err(|_| RepositoryAdmissionError::Open)?;
+    if metadata.uid != parent_metadata.uid
+        || metadata.gid != parent_metadata.gid
+        || metadata.mode & 0o777 != 0o700
+        || metadata.links < 2
+    {
+        return Err(RepositoryAdmissionError::Open);
+    }
+    Ok(())
+}
+
+fn open_or_create_private_directory(
+    parent: &DirectoryCapability,
+    name: &str,
+) -> Result<DirectoryCapability, RepositoryRecoveryError> {
+    let directory = match parent.open_directory(name) {
+        Ok(directory) => directory,
+        Err(_) => parent
+            .create_directory(name, 0o700)
+            .map_err(|_| RepositoryRecoveryError::Open)?,
+    };
+    let parent_metadata = parent
+        .metadata()
+        .map_err(|_| RepositoryRecoveryError::Open)?;
+    let metadata = directory
+        .metadata()
+        .map_err(|_| RepositoryRecoveryError::Open)?;
+    if metadata.uid != parent_metadata.uid
+        || metadata.gid != parent_metadata.gid
+        || metadata.mode & 0o777 != 0o700
+        || metadata.links < 2
+    {
+        return Err(RepositoryRecoveryError::Open);
+    }
+    parent.sync().map_err(|_| RepositoryRecoveryError::Open)?;
+    Ok(directory)
 }
 
 fn validate_directory(

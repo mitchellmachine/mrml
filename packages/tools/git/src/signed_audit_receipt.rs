@@ -256,17 +256,29 @@ impl ReceiveReceiptAuthority<'_> {
 }
 
 impl<'a> AuthenticatedReceiveStore<'a> {
+    pub fn new_with_receipts(
+        inner: &'a mut LinuxDurableReceiveStore,
+        receipts: AuthenticatedAuditReceiptDirectory,
+        authority: &'a mut dyn AuditReceiptAuthority,
+    ) -> Self {
+        Self {
+            inner,
+            receipts,
+            authority: ReceiveReceiptAuthority::Receipt(authority),
+            last_authenticated_receipt: None,
+        }
+    }
+
     pub fn new(
         inner: &'a mut LinuxDurableReceiveStore,
         signed_receipts_path: &str,
         authority: &'a mut dyn AuditReceiptAuthority,
     ) -> Result<Self, DurableFailure> {
-        Ok(Self {
+        Ok(Self::new_with_receipts(
             inner,
-            receipts: AuthenticatedAuditReceiptDirectory::open(signed_receipts_path)?,
-            authority: ReceiveReceiptAuthority::Receipt(authority),
-            last_authenticated_receipt: None,
-        })
+            AuthenticatedAuditReceiptDirectory::open(signed_receipts_path)?,
+            authority,
+        ))
     }
 
     pub fn new_candidate(
