@@ -2,7 +2,7 @@
 //! service and offline backup verification.
 
 use mrml_crypto::Sha256;
-use mrml_runtime::Vector;
+use mrml_runtime::{Text, Vector};
 
 use crate::{RepositoryGeneration, RepositoryIdentity};
 
@@ -14,6 +14,20 @@ pub const AUTHORITY_GENERATION_RECORD_MAX_BYTES: usize = 8 + 2 + MAX_REPOSITORY_
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthorityGenerationRecordError {
     Invalid,
+}
+
+pub fn authority_generation_record_name(repository: &RepositoryIdentity) -> Text {
+    let mut digest = Sha256::new();
+    digest.update(b"MRML authority repository catalog key v1\0");
+    digest.update(repository.as_str().as_bytes());
+    let digest = digest.finalize();
+    let mut output = Text::new();
+    use core::fmt::Write as _;
+    for byte in digest {
+        let _ = write!(&mut output, "{byte:02x}");
+    }
+    output.push_str(".generation");
+    output
 }
 
 pub fn encode_authority_generation_record(
@@ -100,6 +114,8 @@ mod tests {
             parse_authority_generation_record(&encoded, &repository),
             Ok(RepositoryGeneration(19))
         );
+        assert_eq!(authority_generation_record_name(&repository).len(), 75);
+        assert!(authority_generation_record_name(&repository).ends_with(".generation"));
         let other = RepositoryIdentity::parse("owner/other").unwrap();
         assert_eq!(
             parse_authority_generation_record(&encoded, &other),

@@ -1,7 +1,7 @@
-use mrml_crypto::Sha256;
 use mrml_git::{
-    AUTHORITY_GENERATION_RECORD_MAX_BYTES, RepositoryGeneration, RepositoryIdentity,
-    encode_authority_generation_record, parse_authority_generation_record,
+    authority_generation_record_name, encode_authority_generation_record,
+    parse_authority_generation_record, RepositoryGeneration, RepositoryIdentity,
+    AUTHORITY_GENERATION_RECORD_MAX_BYTES,
 };
 use mrml_runtime::{DirectoryCapability, File, Vector};
 #[cfg(test)]
@@ -143,11 +143,11 @@ impl LinuxAuthorityGenerationStore {
     }
 
     fn name(&self, repository: &RepositoryIdentity) -> String {
-        format!("{}.generation", repository_key(repository))
+        authority_generation_record_name(repository).to_string()
     }
 
     fn temporary_name(&self, repository: &RepositoryIdentity) -> String {
-        format!("{}.generation.next", repository_key(repository))
+        format!("{}.next", self.name(repository))
     }
 
     fn write_new(
@@ -228,19 +228,6 @@ fn encode(
 ) -> Result<Vector<u8>, GenerationStoreError> {
     encode_authority_generation_record(repository, generation)
         .map_err(|_| GenerationStoreError::Invalid)
-}
-
-fn repository_key(repository: &RepositoryIdentity) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"MRML authority repository catalog key v1\0");
-    digest.update(repository.as_str().as_bytes());
-    let digest = digest.finalize();
-    let mut output = String::with_capacity(64);
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(&mut output, "{byte:02x}");
-    }
-    output
 }
 
 fn validate_directory(

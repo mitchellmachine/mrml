@@ -98,7 +98,7 @@ pub use authority_wire::{
 };
 pub use authority_generation_record::{
     AUTHORITY_GENERATION_RECORD_MAX_BYTES, AuthorityGenerationRecordError,
-    encode_authority_generation_record,
+    authority_generation_record_name, encode_authority_generation_record,
     parse_authority_generation_record,
 };
 pub use backup_stream::{
