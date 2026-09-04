@@ -117,7 +117,8 @@ fn run() -> Result<(), ()> {
     if let [
         _,
         command,
-        owner_uid,
+        signer_owner_uid,
+        policy_owner_uid,
         repository,
         trust_generation,
         openpgp_seed,
@@ -132,7 +133,8 @@ fn run() -> Result<(), ()> {
         && command == "sign-key-rotation"
     {
         return sign_key_rotation(
-            owner_uid.parse().map_err(|_| ())?,
+            signer_owner_uid.parse().map_err(|_| ())?,
+            policy_owner_uid.parse().map_err(|_| ())?,
             repository,
             trust_generation.parse().map_err(|_| ())?,
             Path::new(openpgp_seed),
@@ -379,7 +381,8 @@ fn socket_health(
 
 #[allow(clippy::too_many_arguments)]
 fn sign_key_rotation(
-    owner_uid: u32,
+    signer_owner_uid: u32,
+    policy_owner_uid: u32,
     repository: &str,
     trust_generation: u64,
     openpgp_seed_path: &Path,
@@ -391,7 +394,11 @@ fn sign_key_rotation(
     openpgp_signature_output: &Path,
     ml_dsa_signature_output: &Path,
 ) -> Result<(), ()> {
-    if owner_uid == 0 || trust_generation == 0 || openpgp_created_at == 0 {
+    if signer_owner_uid == 0
+        || policy_owner_uid == 0
+        || trust_generation == 0
+        || openpgp_created_at == 0
+    {
         return Err(());
     }
     let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
@@ -399,16 +406,16 @@ fn sign_key_rotation(
         next_policy_path,
         1,
         MAX_ENCODED_TRUST_POLICY_BYTES,
-        owner_uid,
+        policy_owner_uid,
     )?;
     let next_policy = parse_trust_policy(&next_policy_bytes).map_err(|_| ())?;
     if next_policy.repository() != &repository {
         return Err(());
     }
-    validate_new_public_output(openpgp_public_output, owner_uid)?;
-    validate_new_public_output(openpgp_signature_output, owner_uid)?;
-    validate_new_public_output(ml_dsa_signature_output, owner_uid)?;
-    let mut seed_bytes = read_secret(openpgp_seed_path, 32, owner_uid)?;
+    validate_new_public_output(openpgp_public_output, signer_owner_uid)?;
+    validate_new_public_output(openpgp_signature_output, signer_owner_uid)?;
+    validate_new_public_output(ml_dsa_signature_output, signer_owner_uid)?;
+    let mut seed_bytes = read_secret(openpgp_seed_path, 32, signer_owner_uid)?;
     let mut seed = [0; 32];
     seed.copy_from_slice(&seed_bytes);
     erase_secret_bytes(&mut seed_bytes);
@@ -417,12 +424,12 @@ fn sign_key_rotation(
     let ml_dsa_public = read_public(
         ml_dsa_public_path,
         ML_DSA_65_PUBLIC_KEY_BYTES,
-        owner_uid,
+        signer_owner_uid,
     )?;
     let mut ml_dsa_secret = read_secret(
         ml_dsa_secret_path,
         ML_DSA_65_SECRET_KEY_BYTES,
-        owner_uid,
+        signer_owner_uid,
     )?;
     validate_ml_dsa_pair(&ml_dsa_public, &ml_dsa_secret)?;
     let public_ml_dsa: &[u8; ML_DSA_65_PUBLIC_KEY_BYTES] =
@@ -472,14 +479,18 @@ fn sign_key_rotation(
     write_new_public(
         openpgp_public_output,
         &openpgp_public[..openpgp_public_length],
-        owner_uid,
+        signer_owner_uid,
     )?;
     write_new_public(
         openpgp_signature_output,
         &openpgp_signature[..openpgp_length],
-        owner_uid,
+        signer_owner_uid,
     )?;
-    write_new_public(ml_dsa_signature_output, &ml_dsa_signature, owner_uid)?;
+    write_new_public(
+        ml_dsa_signature_output,
+        &ml_dsa_signature,
+        signer_owner_uid,
+    )?;
     erase_secret_bytes(&mut ml_dsa_signature);
     println!("key-rotation authorization written");
     Ok(())
@@ -1766,6 +1777,7 @@ mod tests {
         let ml_signature_output = root.join("ml.sig");
         sign_key_rotation(
             owner_uid,
+            owner_uid,
             repository.as_str(),
             2,
             &seed_path,
@@ -1780,6 +1792,7 @@ mod tests {
         .unwrap();
         assert!(
             sign_key_rotation(
+                owner_uid,
                 owner_uid,
                 repository.as_str(),
                 2,
@@ -1959,6 +1972,7 @@ mod tests {
         let next_ml_signature = root.join("next-ml.sig");
         sign_key_rotation(
             owner_uid,
+            owner_uid,
             repository.as_str(),
             1,
             &old_seed_path,
@@ -1972,6 +1986,7 @@ mod tests {
         )
         .unwrap();
         sign_key_rotation(
+            owner_uid,
             owner_uid,
             repository.as_str(),
             2,
