@@ -15,7 +15,7 @@ if [ "${1:-}" = --resume-signer ]; then
   shift
 fi
 [ "$#" -eq 4 ] || {
-  echo "usage: $0 [--resume-signer] OWNER/REPOSITORY VALIDATION_TIME EXPECTED_GENERATION EXPECTED_POLICY_DIGEST" >&2
+  echo "usage: $0 [--resume-signer] OWNER/REPOSITORY VALIDATION_TIME CURRENT_GENERATION CURRENT_POLICY_DIGEST" >&2
   exit 64
 }
 [ "$(id -u)" -eq 0 ] || { echo "trust transition must run as root" >&2; exit 1; }

@@ -305,12 +305,61 @@ remained running. This is hosted stale-authority rollback rejection across a
 Gitd restart, not malicious-storage, power-loss, distributed rollback, or
 physical-hardware evidence.
 
-Remaining Phase 24 gates include a protected push during the overlap interval,
-process-kill injection around the remaining daemon/transition phases, and the
-broader release gates listed in the earlier records. This exercise used a
-controlled certificate fixture, loopback publication, and test keys; it does
-not establish public-service, real-certificate-renewal, production-key, or
-physical-hardware evidence.
+## Generation-5 retirement and protected push
+
+The hosted stack then selected generation 5 as an actual retirement policy.
+Generation 4's selected digest was
+`ea4bad82847538d4effe8d736aeb0acb4ccea02e5c5a73da8170fd7e9ee52da53425de83abe9e6ccf839f994a571a419d2d9c5fbcfa212b849e7ba546f06f151`;
+the canonical generation-5 retirement digest was
+`710077e3047222340305215bbfe699086b860f6f25289058d3fb67e7b0aea9c8c1aae914297873c2a75754963196a4aa1830003a8c57bc56ffff64d136f715ae`.
+The retired generation-3 pair was removed and the surviving generation-4 pair
+remained byte-for-byte the generation-5 public pair.
+
+The first staged input mixed the surviving OpenPGP key with the inactive
+candidate ML-DSA key. Authority rejected it with exit 78 and did not change the
+selected generation. After the retirement staging fix, two operator attempts
+incorrectly supplied the successor tuple as the compare-and-swap input. The
+bounded diagnostic category was `durable_selection`, and generation 4 remained
+selected. Supplying the exact current tuple selected generation 5 and consumed
+the transition inputs. Gitd's catalog then selected trust generation 5 and
+revocation generation 1.
+
+The exact signer/admin image was
+`3c1a4b5767cb653b899f79465ad035d203e6369d4f3a8836cc272aa1c93046f2`;
+its OCI archive SHA-256 was
+`c34f095372a0f33e530503225431486ca7090990edde5e10515b84a48ac697f5`.
+The diagnostic authority image was
+`f05885edb79558bb602dea86989cc122e2c3a5f5abded0de5d62caa5a1040c38`;
+its OCI archive SHA-256 was
+`77a4ea4ce1fd230dadffb73efd56fd0d07286956bae8c6211c1ca0d3f986dba0`.
+Syft 1.51.0 generated SPDX-JSON SBOMs directly from those OCI archives. The
+signer SBOM SHA-256 was
+`20ddf5f1120a30201f37a11cc804022ca290f1f22de49b8383257667809a9b35`;
+the authority SBOM SHA-256 was
+`1643490585ea6ece3214243108b3f3e92d24817647c0cc98073fe2cfcaf4d945`.
+Syft's optional latest-version lookup failed because restricted DNS was
+unavailable, but both local archive scans completed successfully.
+
+A protected client push after retirement selected commit
+`d9c75029e0608c983b766a7b3c0fdef946b60e33284b462d25dcbfc4fe709671`.
+The Gitd active-reference state SHA-256 became
+`527f78024224646d66cbb6a182cd5ac361e8a3357e3c6ac2326b2fc14f8e6683`,
+and signer state SHA-256 became
+`39c4ea0f68803b8a629482ebbdb19ac0c56dc5843ee0774b651d4e30d623da2c`.
+After an ordered stop and restart of Gitd, authority, and signer, Gitd passed
+all startup gates. A fresh authenticated fetch obtained 17 objects and one
+branch, resolved the exact pushed commit, reported zero ahead and zero behind,
+and left the client clean.
+
+All persistent and runtime container state used named volumes. The only host
+file was the mode-0600 Compose interpolation environment; it was not mounted as
+container state. Generation 4 therefore has an overlap protected push and
+generation 5 has a post-retirement protected push. Remaining Phase 24 work is
+process-kill injection around the remaining daemon/transition phases and the
+broader release gates listed in earlier records. This controlled hosted-Linux
+exercise used test keys, a loopback listener, and a certificate fixture; it is
+not public-service, real-certificate-renewal, production-key, malicious-storage,
+power-loss, or physical-hardware evidence.
 
 Patent review: **NOT_TRIGGERED**. This uses conventional immutable public-key
 files, exact metadata/content validation, directory capabilities, and ordered

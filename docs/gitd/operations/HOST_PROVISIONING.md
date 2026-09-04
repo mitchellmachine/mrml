@@ -53,7 +53,10 @@ signatures with
 places only public material in `mrml-git-authority-transition`; private signing
 keys never enter the VPS or a production container. Stop Gitd and the authority,
 then run
-`transition-git-trust.sh OWNER/REPOSITORY VALIDATION_TIME EXPECTED_GENERATION EXPECTED_POLICY_DIGEST`.
+`transition-git-trust.sh OWNER/REPOSITORY VALIDATION_TIME CURRENT_GENERATION CURRENT_POLICY_DIGEST`.
+The final two arguments are the exact currently selected generation/digest CAS
+tuple, not the successor tuple. Both hybrid authorizations independently bind
+the successor policy bytes and successor generation.
 
 The bundled construction path does not require a host bind mount. First install
 only the candidate public pair with `install-volume-inputs.sh
