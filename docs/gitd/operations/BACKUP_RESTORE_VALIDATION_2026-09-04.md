@@ -1,8 +1,8 @@
 # Git backup and destructive restore validation — 2026-09-04
 
-Status: hosted Linux rootless-Podman evidence using generated/disposable test
-state. This is not production-key, public-network, physical-hardware, power-loss,
-or complete protected-push evidence.
+Status: hosted Linux Podman disaster-recovery evidence using
+generated/disposable test state. This is not production-key, public-network,
+physical-hardware, power-loss, or production-certificate evidence.
 
 The validation used Podman 6.1.1, Linux/amd64 images, Docker-managed named
 volumes only, and no host bind directory. The current Gitd one-shot initializer
@@ -77,13 +77,11 @@ deploy/compose/test-compose-git.sh
   PASS
 ```
 
-This validates archive creation, complete cryptographic verification,
+This first run validates archive creation, complete cryptographic verification,
 destruction of disposable sources, restoration into fresh named volumes,
-automatic excluded-cache reconstruction, and cold recovery. It does not claim
-the mission's clone/fetch/multiple-protected-push/receipt portion: the run used
-an initialized repository without a live authority, signer, certd fixture, or
-HTTP/2 stack. That remaining transaction sequence must be performed before the
-broader destructive-restore acceptance item is complete.
+automatic excluded-cache reconstruction, and cold recovery. It did not exercise
+the mission's clone/fetch/multiple-protected-push/receipt portion; the later
+source-independent live sequence below exercises those paths.
 
 A later activation audit found that the restore model originally named its
 authority secret and configuration targets `NAMESPACE-authority-secrets` and
@@ -95,7 +93,7 @@ selecting it as `MRML_VOLUME_PREFIX`. The restore script and Compose external
 volume names now use the canonical production suffixes. A profile-enabled
 Podman Compose render with distinct source and target prefixes resolved all
 eleven targets, including the corrected authority volumes. The full live
-transaction sequence remains required and will use the corrected names.
+transaction sequence below used the corrected names.
 
 The same activation audit found that the operator scripts invoked Docker
 directly and used Docker Compose's `ps --status` syntax. That made the declared
@@ -121,7 +119,7 @@ repository generation must exact-match the authenticated authority record.
 Focused tests accept only authority-confirmed forward progress, reject a stale
 authority record, catalog rollback, and trust/revocation drift, and preserve
 exact conventional admission. The live encrypted archive and destructive
-restore sequence remain pending after this correction.
+restore sequence was then repeated successfully with this correction.
 
 The subsequent destructive simulation retained only the encrypted backup and
 backup-key volumes after deleting the label-guarded disposable source service,
@@ -132,8 +130,79 @@ service, whose mount set includes all destroyed source volumes even though the
 uses the restore service against the already-created empty target namespace;
 the restore service mounts the archive and key read-only and verification still
 precedes any restore write. Static policy tests forbid the source-dependent
-verification invocation. The generation-9200 archive remains authenticated and
-the fresh target namespace remains disabled pending a retry with this fix.
+verification invocation. The retry with this fix succeeded as part of the
+source-independent sequence below.
+
+## Source-independent live protected restore
+
+The real-server continuation used exact implementation bundle commit
+`750f0c62` (bundle SHA-256
+`a5ec3bebb8f348afe55eec53578f116caa48d7fdb8783eb9323990d0677ed704`).
+The independently verified bundle was uploaded over SSH and loaded without a
+registry, source checkout, compiler, or Rust toolchain on the server. All
+durable container state used Docker-compatible named volumes. The only host
+file was the mode-`0600` Compose environment interpolation file; it was not
+mounted into a container and contained deployment metadata rather than daemon
+state.
+
+Cold backup generation 9100 was created and verified before the first restore:
+
+```text
+git-9100.mrb 537,011,613 bytes root:root mode 0600
+sha256 a5d40e2ff5c609784f98d20ced1b5e4ff52acd102b6526c0440dfa22669dac36
+```
+
+Generation 9100 restored into eleven newly provisioned, labeled named volumes.
+The restored authority and Gitd passed read-only configuration validation and
+the ordered startup gates. A native client fetched the restored repository and
+two consecutive protected pushes activated commits `0adb83cde53b` and
+`20e770102b73`. Each receive produced an authenticated 360-byte receipt.
+
+With those receives durable, cold backup generation 9200 was created and
+verified in separate backup and backup-key named volumes:
+
+```text
+git-9200.mrb 537,042,182 bytes root:root mode 0600
+sha256 e29ca4d855cfda2d9288aa297aecc8963d6f2ce33e7643fd9bad1a5474f047b8
+```
+
+The source authority and Gitd containers were stopped and removed. All eleven
+label-guarded source authoritative, policy, receipt, quarantine, configuration,
+secret, runtime, and cache volumes, plus the disposable source client volume,
+were deleted. Only the encrypted generation-9200 archive and its independent
+backup-key named volume remained. The retained pre-existing
+`mrml-podman140f-fresh-*` volumes were not modified or deleted.
+
+Generation 9200 was then cryptographically verified and restored without any
+source volume into a second eleven-volume target namespace. Read-only
+configuration validation passed. The target authority and Gitd completed
+configuration, authenticated-dependency, identity, recovery, listener, and
+ready gates using the exact `750f0c62` images. TLS used the explicit certd test
+fixture and a loopback listener at `127.0.0.1:30443`; this is controlled hosted
+evidence and not a production-certificate or public-network claim.
+
+A fresh native clone into an empty disposable client named volume succeeded.
+An explicit subsequent fetch reported 29 objects and one branch ref. The fetch
+was CPU-bound for about 14 minutes while remaining near 59 MiB RSS, confirming
+the known unacceptable pack-performance limitation rather than whole-pack
+resident-memory growth. Finally, the restored target accepted a new protected
+commit and advanced `origin/main`:
+
+```text
+[634b09f0c0d1] validate post-disaster restored push
+Pushed 634b09f0c0d1 to origin/main
+```
+
+The target receipt volume contains nine owner-only authenticated receipts and
+the restored authority retains its authenticated candidate, proof-set,
+per-commit proof, and generation records. Token plaintext was captured only in
+the remote shell, checked for exact canonical lower-hex length, piped to the
+native client on standard input, and unset; it was never printed, placed in an
+argument or environment variable, or written to a file. The target authority
+and Gitd remain running on loopback for inspection. This completes the hosted
+destructive-restore acceptance item, but it does not resolve the separately
+recorded pack-performance defect or establish production ACME/certd, public
+network, power-loss, or physical-hardware evidence.
 
 Patent review: **NOT_TRIGGERED**. The changes use conventional container image
 layout, filesystem metadata validation, encrypted streaming backup, and cache
