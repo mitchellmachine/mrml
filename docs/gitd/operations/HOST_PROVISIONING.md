@@ -232,7 +232,9 @@ containers not created by the current Compose project. `restore-git.sh` refuses
 any pre-existing target data
 volume, validates the archive before extraction, provisions fresh volumes, and
 extracts each subtree into only its exact volume before a final structural
-revalidation. Runtime socket volumes and the rebuildable cache are not restored.
+revalidation. The scripts explicitly enable the isolated `admin` profile for
+every one-shot Compose run on both engines. Runtime socket volumes and the
+rebuildable cache are not restored.
 The disposable restore namespace uses the same persistent volume suffixes as a
 normal deployment, including `git-authority-secrets` and
 `git-authority-config`. After recovery and validation, the operator can select

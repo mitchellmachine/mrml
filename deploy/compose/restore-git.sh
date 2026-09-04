@@ -32,8 +32,8 @@ done
 for suffix in $suffixes; do
   "$runtime" volume create --label org.mrml.managed=true --label org.mrml.restore-disposable=true "$namespace-$suffix" >/dev/null
 done
-"$runtime" compose --env-file "$environment" -f "$backup_compose" run --rm --no-deps git-backup verify "$generation"
-MRML_GIT_RESTORE_NAMESPACE=$namespace "$runtime" compose --env-file "$environment" -f "$restore_compose" run --rm --no-deps git-restore restore "$generation" || {
+"$runtime" compose --env-file "$environment" --profile admin -f "$backup_compose" run --rm --no-deps git-backup verify "$generation"
+MRML_GIT_RESTORE_NAMESPACE=$namespace "$runtime" compose --env-file "$environment" --profile admin -f "$restore_compose" run --rm --no-deps git-restore restore "$generation" || {
   echo "restore failed; every $namespace-* volume is invalid and must remain disabled or be removed" >&2
   exit 1
 }

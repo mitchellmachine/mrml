@@ -104,7 +104,9 @@ volume consumer. Backup and restore now route both engine and Compose operations
 through the exact `MRML_CONTAINER_RUNTIME` selection and determine cold state
 from engine-level consumers of the prefix's Gitd-state and authority-state
 named volumes. The check is independent of Compose project names and does not
-depend on ACME Compose rendering.
+depend on ACME Compose rendering. Every one-shot invocation explicitly enables
+the `admin` profile, which is required by Podman Compose even when the service
+is named directly.
 
 Patent review: **NOT_TRIGGERED**. The changes use conventional container image
 layout, filesystem metadata validation, encrypted streaming backup, and cache

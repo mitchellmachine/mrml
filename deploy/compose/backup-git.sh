@@ -17,7 +17,7 @@ for volume in "$volume_prefix-gitd-state" "$volume_prefix-authority-state"; do
   running=$("$runtime" ps -q --filter volume="$volume") || exit 1
   [ -z "$running" ] || { echo "cold backup requires Gitd and authority to be stopped" >&2; exit 1; }
 done
-"$runtime" compose --env-file "$environment" -f "$backup_compose" run --rm --no-deps git-backup ensure-key
-"$runtime" compose --env-file "$environment" -f "$backup_compose" run --rm --no-deps git-backup create "$generation"
-"$runtime" compose --env-file "$environment" -f "$backup_compose" run --rm --no-deps git-backup verify "$generation"
+"$runtime" compose --env-file "$environment" --profile admin -f "$backup_compose" run --rm --no-deps git-backup ensure-key
+"$runtime" compose --env-file "$environment" --profile admin -f "$backup_compose" run --rm --no-deps git-backup create "$generation"
+"$runtime" compose --env-file "$environment" --profile admin -f "$backup_compose" run --rm --no-deps git-backup verify "$generation"
 echo "authenticated encrypted named-volume backup generation $generation created and verified"
