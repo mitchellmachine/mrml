@@ -1,13 +1,13 @@
 //! Streaming emission of authenticated Git backup archives.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use mrml_crypto::Sha256;
 use mrml_git::{
-    encode_backup_inventory, encode_backup_stream_header, open_backup_frame,
-    parse_backup_inventory, parse_backup_stream_header, seal_backup_frame, BackupInventory,
-    BackupInventoryFileKind, BackupStreamHeader, BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES,
-    MAX_BACKUP_INVENTORY_BYTES,
+    BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES, BackupInventory, BackupInventoryFileKind,
+    BackupStreamHeader, MAX_BACKUP_INVENTORY_BYTES, encode_backup_inventory,
+    encode_backup_stream_header, open_backup_frame, parse_backup_inventory,
+    parse_backup_stream_header, seal_backup_frame,
 };
 use mrml_runtime::DirectoryCapability;
 
@@ -28,6 +28,8 @@ pub enum BackupArchiveError {
     Authentication,
     Truncated,
     Trailing,
+    TargetNotEmpty,
+    Metadata,
 }
 
 /// Authenticates and structurally verifies a complete archive without writing
@@ -71,6 +73,148 @@ pub fn verify_backup_archive(
     }
     frames.finish()?;
     Ok(inventory)
+}
+
+/// Restores into ten distinct, empty target volumes. The complete archive is
+/// authenticated before any target is opened, then authenticated again while
+/// bytes are written. Any error leaves a disposable, invalid target set.
+pub fn restore_backup_archive<R: Read + Seek>(
+    reader: &mut R,
+    backup_key: &[u8; 32],
+    target_roots: [&str; 10],
+) -> Result<BackupInventory, BackupArchiveError> {
+    let verified = verify_backup_archive(reader, backup_key)?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| BackupArchiveError::Read)?;
+    let mut encoded_header = [0u8; BACKUP_STREAM_HEADER_BYTES];
+    read_exact_archive(reader, &mut encoded_header)?;
+    let header =
+        parse_backup_stream_header(&encoded_header).map_err(|_| BackupArchiveError::Header)?;
+    let mut frames = FrameReader::new(reader, backup_key, encoded_header, header.chunk_bytes)?;
+    let mut prefix = [0u8; PAYLOAD_PREFIX_BYTES];
+    frames.read_exact_plaintext(&mut prefix)?;
+    let inventory_length = backup_payload_inventory_length(&prefix)?;
+    let mut encoded_inventory = vec![0; inventory_length];
+    frames.read_exact_plaintext(&mut encoded_inventory)?;
+    let inventory =
+        parse_backup_inventory(&encoded_inventory).map_err(|_| BackupArchiveError::Inventory)?;
+    if inventory != verified {
+        return Err(BackupArchiveError::Authentication);
+    }
+
+    let roots = open_empty_target_roots(target_roots)?;
+    let mut buffer = [0u8; COPY_BUFFER_BYTES];
+    for entry in &inventory.entries {
+        if entry.path.as_str() == "." || entry.kind == BackupInventoryFileKind::Directory {
+            if entry.path.as_str() != "." {
+                let (parent, name) = retained_parent(&roots, entry.volume, entry.path.as_str())?;
+                parent
+                    .create_directory(name, 0o700)
+                    .map_err(|_| BackupArchiveError::Changed)?;
+                parent.sync().map_err(|_| BackupArchiveError::Write)?;
+            }
+            continue;
+        }
+        let (parent, name) = retained_parent(&roots, entry.volume, entry.path.as_str())?;
+        let mut file = parent
+            .create_new_file(name, 0o600)
+            .map_err(|_| BackupArchiveError::Changed)?;
+        let mut digest = Sha256::new();
+        let mut remaining = entry.size;
+        while remaining != 0 {
+            let count = usize::try_from(remaining.min(buffer.len() as u64))
+                .map_err(|_| BackupArchiveError::Resource)?;
+            frames.read_exact_plaintext(&mut buffer[..count])?;
+            digest.update(&buffer[..count]);
+            file.write_all(&buffer[..count])
+                .map_err(|_| BackupArchiveError::Write)?;
+            remaining -= count as u64;
+        }
+        if digest.finalize() != entry.digest {
+            return Err(BackupArchiveError::Authentication);
+        }
+        file.sync().map_err(|_| BackupArchiveError::Write)?;
+        file.set_owner_mode(entry.uid, entry.gid, u32::from(entry.mode))
+            .map_err(|_| BackupArchiveError::Metadata)?;
+        file.sync().map_err(|_| BackupArchiveError::Write)?;
+        drop(file);
+        parent.sync().map_err(|_| BackupArchiveError::Write)?;
+    }
+    frames.finish()?;
+
+    for entry in inventory.entries.iter().rev() {
+        if entry.kind != BackupInventoryFileKind::Directory {
+            continue;
+        }
+        let directory = if entry.path.as_str() == "." {
+            roots[entry.volume as usize - 1]
+                .try_clone()
+                .map_err(|_| BackupArchiveError::Open)?
+        } else {
+            roots[entry.volume as usize - 1]
+                .open_directory(entry.path.as_str())
+                .map_err(|_| BackupArchiveError::Changed)?
+        };
+        directory
+            .set_owner_mode(entry.uid, entry.gid, u32::from(entry.mode))
+            .map_err(|_| BackupArchiveError::Metadata)?;
+        directory.sync().map_err(|_| BackupArchiveError::Write)?;
+        if entry.path.as_str() != "." {
+            let (parent, _) = retained_parent(&roots, entry.volume, entry.path.as_str())?;
+            parent.sync().map_err(|_| BackupArchiveError::Write)?;
+        }
+    }
+
+    let mut restored = mrml_runtime::Vector::new();
+    for (volume, path) in mrml_git::BackupVolume::ALL.into_iter().zip(target_roots) {
+        let entries =
+            crate::collect_backup_volume(path, volume).map_err(|_| BackupArchiveError::Changed)?;
+        restored
+            .try_reserve(entries.len())
+            .map_err(|_| BackupArchiveError::Resource)?;
+        restored.extend(entries);
+    }
+    if restored != inventory.entries {
+        return Err(BackupArchiveError::Changed);
+    }
+    Ok(inventory)
+}
+
+fn open_empty_target_roots(
+    paths: [&str; 10],
+) -> Result<Vec<DirectoryCapability>, BackupArchiveError> {
+    let roots = open_roots(paths)?;
+    for root in &roots {
+        if !root
+            .read_directory_bounded(1)
+            .map_err(|_| BackupArchiveError::Open)?
+            .is_empty()
+        {
+            return Err(BackupArchiveError::TargetNotEmpty);
+        }
+    }
+    Ok(roots)
+}
+
+fn retained_parent<'a>(
+    roots: &[DirectoryCapability],
+    volume: mrml_git::BackupVolume,
+    path: &'a str,
+) -> Result<(DirectoryCapability, &'a str), BackupArchiveError> {
+    let root = roots
+        .get(volume as usize - 1)
+        .ok_or(BackupArchiveError::Inventory)?;
+    match path.rsplit_once('/') {
+        Some((parent, name)) => root
+            .open_directory(parent)
+            .map(|directory| (directory, name))
+            .map_err(|_| BackupArchiveError::Changed),
+        None => root
+            .try_clone()
+            .map(|directory| (directory, path))
+            .map_err(|_| BackupArchiveError::Changed),
+    }
 }
 
 /// Writes one archive as fixed authenticated frames. Plaintext is a canonical
@@ -136,12 +280,17 @@ pub fn write_backup_archive(
 
 fn open_roots(paths: [&str; 10]) -> Result<Vec<DirectoryCapability>, BackupArchiveError> {
     let mut roots = Vec::with_capacity(paths.len());
+    let mut identities = Vec::with_capacity(paths.len());
     for path in paths {
         let root = DirectoryCapability::open_root(path).map_err(|_| BackupArchiveError::Open)?;
         let metadata = root.metadata().map_err(|_| BackupArchiveError::Open)?;
         if metadata.mode & 0o170000 != 0o040000 || metadata.links < 2 {
             return Err(BackupArchiveError::Open);
         }
+        if identities.contains(&(metadata.device, metadata.inode)) {
+            return Err(BackupArchiveError::Open);
+        }
+        identities.push((metadata.device, metadata.inode));
         roots.push(root);
     }
     Ok(roots)
@@ -396,9 +545,9 @@ pub fn backup_payload_inventory_length(prefix: &[u8]) -> Result<usize, BackupArc
 mod tests {
     use super::*;
     use mrml_git::{
-        open_backup_frame, BackupInventoryEntry, BackupRepositoryGeneration, BackupVolume,
-        PackGeneration, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
-        TrustGeneration,
+        BackupInventoryEntry, BackupRepositoryGeneration, BackupVolume, PackGeneration,
+        RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
+        open_backup_frame,
     };
     use mrml_runtime::{Text, Vector};
     use std::fs;
@@ -520,16 +669,63 @@ mod tests {
             verify_backup_archive(&mut std::io::Cursor::new(&tampered), &key),
             Err(BackupArchiveError::Authentication)
         );
-        assert!(verify_backup_archive(
-            &mut std::io::Cursor::new(&archive[..archive.len() - 1]),
-            &key
-        )
-        .is_err());
+        assert!(
+            verify_backup_archive(
+                &mut std::io::Cursor::new(&archive[..archive.len() - 1]),
+                &key
+            )
+            .is_err()
+        );
         let mut trailing = archive.clone();
         trailing.push(0);
         assert_eq!(
             verify_backup_archive(&mut std::io::Cursor::new(&trailing), &key),
             Err(BackupArchiveError::Trailing)
+        );
+
+        let target_parent = root.join("targets");
+        let mut targets = Vec::new();
+        for index in 0..10 {
+            let path = target_parent.join(index.to_string());
+            fs::create_dir_all(&path).unwrap();
+            targets.push(path);
+        }
+        let target_refs: [&str; 10] =
+            core::array::from_fn(|index| targets[index].to_str().unwrap());
+        assert_eq!(
+            restore_backup_archive(&mut std::io::Cursor::new(&archive), &key, target_refs),
+            Ok(inventory.clone())
+        );
+        assert_eq!(fs::read(targets[0].join("objects.pack")).unwrap(), b"hello");
+        assert_eq!(
+            fs::metadata(targets[0].join("objects.pack"))
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            restore_backup_archive(&mut std::io::Cursor::new(&archive), &key, target_refs),
+            Err(BackupArchiveError::TargetNotEmpty)
+        );
+
+        let rejected_parent = root.join("rejected-targets");
+        let mut rejected = Vec::new();
+        for index in 0..10 {
+            let path = rejected_parent.join(index.to_string());
+            fs::create_dir_all(&path).unwrap();
+            rejected.push(path);
+        }
+        let rejected_refs: [&str; 10] =
+            core::array::from_fn(|index| rejected[index].to_str().unwrap());
+        assert!(
+            restore_backup_archive(&mut std::io::Cursor::new(&tampered), &key, rejected_refs)
+                .is_err()
+        );
+        assert!(
+            rejected
+                .iter()
+                .all(|path| fs::read_dir(path).unwrap().next().is_none())
         );
         fs::remove_dir_all(root).unwrap();
     }

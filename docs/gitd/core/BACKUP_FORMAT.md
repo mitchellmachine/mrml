@@ -110,6 +110,16 @@ width, and never converts the object back into an ambient path. The restore
 service must retain the narrow container capabilities required for these calls;
 ordinary Gitd and authority services remain capability-dropped.
 
+The implemented restore engine requires a seekable archive and ten distinct,
+empty retained target roots. It completes the read-only verifier before opening
+any target, rewinds, and authenticates the archive a second time while creating
+each descendant beneath its target capability. Regular files are created
+exclusively, streamed, hashed, synced, assigned exact owner/mode metadata, and
+synced again. Directories are finalized child-first, including the authenticated
+volume-root records. Parent directories are synced after namespace changes. A
+final canonical rescan must exactly equal the authenticated inventory. Any
+error leaves a disposable target set that is not authorized for activation.
+
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,
 and authenticated EOF in a conventional encrypted-record stream. It introduces
