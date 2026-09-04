@@ -18,6 +18,7 @@ mod listener;
 mod production_receive;
 mod startup;
 mod tls_identity;
+mod tcp_admission;
 
 pub use auth_store::{
     initialize_empty_token_store, issue_access_token, load_gitd_authentication,
@@ -74,4 +75,8 @@ pub use tls_identity::{
     build_certd_tls_server_config, build_certd_tls_server_config_with_route,
     refresh_certd_tls_config, GitdCertdSigningRoute, GitdCertdTlsSigningKey, GitdTlsConfigStore,
     GitdTlsRefreshError,
+};
+pub use tcp_admission::{
+    AdmittedTcpSocket, TcpAdmissionController, TcpAdmissionError, TcpAdmissionLimits,
+    TcpAdmissionMetrics, TcpConnectionPermit, TcpHandshakePermit, TcpSourceIdentity,
 };

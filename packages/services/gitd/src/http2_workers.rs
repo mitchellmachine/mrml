@@ -1,11 +1,14 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use mrml_http::Http2ServerConnection;
-use mrml_runtime::{JoinHandle, Sender, TcpStream, Vector, blocking_channel, spawn_joinable};
+use mrml_runtime::{blocking_channel, spawn_joinable, JoinHandle, Sender, Vector};
 use mrml_tls::TlsServerStream;
 
-use crate::{GitdComposedService, GitdTlsConfigStore, serve_gitd_http2_connection_with_drain};
+use crate::{
+    serve_gitd_http2_connection_with_drain, AdmittedTcpSocket, GitdComposedService,
+    GitdTlsConfigStore,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdHttp2WorkerError {
@@ -32,7 +35,7 @@ struct WorkerCounters {
 }
 
 pub struct GitdHttp2WorkerPool {
-    jobs: Option<Sender<TcpStream>>,
+    jobs: Option<Sender<AdmittedTcpSocket>>,
     workers: Vector<JoinHandle>,
     counters: Arc<WorkerCounters>,
     draining: Arc<AtomicBool>,
@@ -57,7 +60,7 @@ impl GitdHttp2WorkerPool {
             maximum_body_bytes,
             connection_timeout_millis,
         )?;
-        let (jobs, receiver) = blocking_channel(queue_capacity);
+        let (jobs, receiver) = blocking_channel::<AdmittedTcpSocket>(queue_capacity);
         let counters = Arc::new(WorkerCounters::default());
         let draining = Arc::new(AtomicBool::new(false));
         let mut workers =
@@ -76,10 +79,19 @@ impl GitdHttp2WorkerPool {
             let worker_counters = counters.clone();
             let worker_draining = draining.clone();
             let worker = match spawn_joinable(move || {
-                while let Ok(socket) = receiver.recv() {
+                while let Ok(admitted) = receiver.recv() {
                     if worker_draining.load(Ordering::Acquire) {
                         break;
                     }
+                    if admitted.is_expired() {
+                        admitted.record_expired();
+                        continue;
+                    }
+                    let (socket, connection_permit) = admitted.into_parts();
+                    let handshake_permit = match connection_permit.try_begin_handshake() {
+                        Ok(permit) => permit,
+                        Err(_) => continue,
+                    };
                     let (_, config) = match tls.snapshot() {
                         Ok(snapshot) => snapshot,
                         Err(_) => {
@@ -88,11 +100,13 @@ impl GitdHttp2WorkerPool {
                             continue;
                         }
                     };
-                    let tls_stream = match TlsServerStream::accept_with_timeout(
+                    let tls_stream = TlsServerStream::accept_with_timeout(
                         socket,
                         &config,
                         connection_timeout_millis,
-                    ) {
+                    );
+                    drop(handshake_permit);
+                    let tls_stream = match tls_stream {
                         Ok(stream) => stream,
                         Err(_) => {
                             increment(&worker_counters.tls_failures);
@@ -160,7 +174,7 @@ impl GitdHttp2WorkerPool {
         })
     }
 
-    pub fn submit(&self, socket: TcpStream) -> Result<(), GitdHttp2WorkerError> {
+    pub fn submit(&self, socket: AdmittedTcpSocket) -> Result<(), GitdHttp2WorkerError> {
         self.jobs
             .as_ref()
             .ok_or(GitdHttp2WorkerError::Closed)?

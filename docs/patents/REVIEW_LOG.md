@@ -12520,3 +12520,12 @@ getpeername socket operation through the existing bounded runtime abstraction
 so admission policy can bind an accepted stream to its kernel-reported IPv4
 peer. It adds no network protocol, address-classification heuristic,
 cryptographic mechanism, or adaptive policy.
+
+# 2026-09-04 — Bounded TCP/TLS admission
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional fixed
+connection and handshake ceilings, integer token-bucket rate limiting, bounded
+source accounting, queue deadlines, and scope-bound permit release before the
+existing TLS and HTTP/2 paths. It adds no transport or cryptographic protocol,
+congestion algorithm, adaptive classifier, content-selection mechanism, or
+other patent-sensitive mechanism.

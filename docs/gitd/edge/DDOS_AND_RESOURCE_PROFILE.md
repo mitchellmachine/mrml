@@ -21,7 +21,20 @@ and reject the next slot at 8,000 open connections, 1,000 lightweight requests,
 Zstandard jobs. Endpoint counters cover received packets/bytes, drops, new
 Initials, handshakes, established routes, and candidate paths.
 
-Distributed-source tests, sustained soak, the socket-independent encrypted
-reactor, and production CPU/RSS/latency measurements remain open gates. These
+The TCP/TLS path has a separate fail-closed admission controller ahead of its
+bounded HTTP/2 worker queue. The kernel-reported IPv4 peer selects a bounded,
+sorted source bucket with an integer token rate, at most 32 concurrent
+connections per source, and a global connection ceiling equal to the HTTP/2
+worker-plus-queue envelope. TLS handshakes have an independent ceiling equal to
+the worker count. A queued connection expires at the configured drain deadline
+before it can consume handshake work. RAII permits cover every success and
+failure path; internal metrics retain admissions, each rejection class, current
+connection/handshake counts, queue wait total/maximum, expiry, and inconsistent
+permit-release events. The type also defines IPv6 `/64` aggregation for the
+future dual-stack listener, but the current TCP listener and runtime address ABI
+remain IPv4-only.
+
+Distributed-source tests, sustained soak, TCP slow-client process tests, the
+socket-independent encrypted reactor, and production CPU/RSS/latency measurements remain open gates. These
 deterministic unit tests establish exact bounds, not DDoS resistance or host
 capacity.

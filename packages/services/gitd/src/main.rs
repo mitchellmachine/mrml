@@ -10,7 +10,8 @@ use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
 use mrml_gitd::{
     GitAuthorityChannelClient, GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute,
     GitdCompositionError, GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool,
-    GitdTlsConfigStore, RetainedAuthenticationStore, admit_catalog_repository,
+    GitdTlsConfigStore, RetainedAuthenticationStore, TcpAdmissionController, TcpAdmissionLimits,
+    admit_catalog_repository,
     build_certd_tls_server_config_with_route, compose_gitd_service, initialize_catalog_repository,
     initialize_empty_token_store, inspect_admitted_repository_recovery, issue_access_token,
     load_deployment_catalog, load_gitd_authentication, load_gitd_config, load_quic_retry_key,
@@ -550,6 +551,20 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
     if http2_queue == 0 {
         return Err(());
     }
+    let tcp_admission = TcpAdmissionController::new(TcpAdmissionLimits {
+        maximum_sources: http2_maximum.min(65_536),
+        maximum_connections: u32::try_from(http2_maximum).map_err(|_| ())?,
+        maximum_connections_per_source: u32::try_from(http2_maximum.min(32))
+            .map_err(|_| ())?,
+        maximum_handshakes: u32::try_from(http2_workers).map_err(|_| ())?,
+        rate_capacity: 64,
+        rate_refill_per_second: 8,
+        source_retention_seconds: 300,
+        maximum_queue_millis: u64::from(config.drain_seconds)
+            .checked_mul(1_000)
+            .ok_or(())?,
+    })
+    .map_err(|_| ())?;
 
     let mut http3_listener = None;
     let tcp = if enable_http3 {
@@ -658,6 +673,7 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
     let worker_fatal = fatal.clone();
     let worker_terminating = terminating.clone();
     let tcp_health = operational_health.clone();
+    let tcp_admission = tcp_admission.clone();
     let _tcp_worker = mrml_runtime::spawn_joinable(move || {
         loop {
             let socket = match tcp.accept() {
@@ -667,7 +683,14 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
             if worker_fatal.load(Ordering::Acquire) || worker_terminating.load(Ordering::Acquire) {
                 break;
             }
-            if http2.submit(socket).is_err() {
+            let admitted = match tcp_admission.admit(socket) {
+                Ok(admitted) => admitted,
+                Err(_) => {
+                    operational_event("tcp_admission_rejected");
+                    continue;
+                }
+            };
+            if http2.submit(admitted).is_err() {
                 break;
             }
         }
