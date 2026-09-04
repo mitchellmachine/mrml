@@ -9,7 +9,7 @@ const PROOF_DOMAIN: &[u8] = b"MRML-GITD-TLS-IDENTITY-PROOF-V1\0";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdIdentityValidationError {
     Generation,
-    Certificate,
+    Certificate(mrml_tls::CertificateError),
     Hostname,
     Validity,
     Spki,
@@ -45,14 +45,16 @@ pub fn validate_identity_snapshot(
         .map(Vec::as_slice)
         .collect();
     verify_server_chain(&snapshot.server_name, &chain)
-        .map_err(|_| GitdIdentityValidationError::Certificate)?;
+        .map_err(GitdIdentityValidationError::Certificate)?;
     let leaf = Certificate::parse(
         snapshot
             .certificate_chain
             .first()
-            .ok_or(GitdIdentityValidationError::Certificate)?,
+            .ok_or(GitdIdentityValidationError::Certificate(
+                mrml_tls::CertificateError::Malformed,
+            ))?,
     )
-    .map_err(|_| GitdIdentityValidationError::Certificate)?;
+    .map_err(GitdIdentityValidationError::Certificate)?;
     leaf.verify_hostname(&snapshot.server_name)
         .map_err(|_| GitdIdentityValidationError::Hostname)?;
     if leaf.not_before() != snapshot.not_before_unix_seconds
@@ -93,7 +95,7 @@ pub fn prove_identity_signing_route(
         )
         .map_err(|_| GitdIdentityValidationError::Signing)?;
     let leaf = Certificate::parse(&snapshot.certificate_chain[0])
-        .map_err(|_| GitdIdentityValidationError::Certificate)?;
+        .map_err(GitdIdentityValidationError::Certificate)?;
     leaf.verify_tls13_server_certificate_verify(
         &transcript_digest,
         ECDSA_SECP256R1_SHA256,
@@ -155,7 +157,7 @@ mod tests {
         ));
         assert!(matches!(
             validate_identity_snapshot(snapshot, Some(6)),
-            Err(GitdIdentityValidationError::Certificate)
+            Err(GitdIdentityValidationError::Certificate(_))
         ));
     }
 }

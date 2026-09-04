@@ -485,18 +485,32 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     .map_err(|_| ())?
     .with_request_id_limit(certd_request_id_limit)
     .map_err(|_| ())?;
-    authority.health().map_err(|_| ())?;
-    certd.health().map_err(|_| ())?;
+    authority.health().map_err(|error| {
+        eprintln!("component=mrml-gitd event=startup_authority_health_failed category={error:?}");
+    })?;
+    certd.health().map_err(|error| {
+        eprintln!("component=mrml-gitd event=startup_certd_health_failed category={error:?}");
+    })?;
     operational_event("startup_dependencies_authenticated");
     let identity = certd
         .get_identity_snapshot(&config.server_name)
-        .map_err(|_| ())?;
-    let identity = validate_identity_snapshot(identity, None).map_err(|_| ())?;
-    prove_identity_signing_route(&mut certd, &identity, 1).map_err(|_| ())?;
-    let signing_route = GitdCertdSigningRoute::new(certd, 2).map_err(|_| ())?;
+        .map_err(|error| {
+            eprintln!("component=mrml-gitd event=startup_identity_fetch_failed category={error:?}");
+        })?;
+    let identity = validate_identity_snapshot(identity, None).map_err(|error| {
+        eprintln!("component=mrml-gitd event=startup_identity_validation_failed category={error:?}");
+    })?;
+    prove_identity_signing_route(&mut certd, &identity, 1).map_err(|error| {
+        eprintln!("component=mrml-gitd event=startup_signing_probe_failed category={error:?}");
+    })?;
+    let signing_route = GitdCertdSigningRoute::new(certd, 2).map_err(|error| {
+        eprintln!("component=mrml-gitd event=startup_signing_route_failed category={error:?}");
+    })?;
     let identity_generation = identity.snapshot().identity_generation;
     let tls_config =
-        build_certd_tls_server_config_with_route(identity, &signing_route).map_err(|_| ())?;
+        build_certd_tls_server_config_with_route(identity, &signing_route).map_err(|error| {
+            eprintln!("component=mrml-gitd event=startup_tls_configuration_failed category={error:?}");
+        })?;
     let tls = Arc::new(GitdTlsConfigStore::new(identity_generation, tls_config).map_err(|_| ())?);
     operational_event("startup_identity_authenticated");
 
