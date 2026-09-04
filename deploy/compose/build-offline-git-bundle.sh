@@ -42,7 +42,10 @@ bundle_root=$(mktemp -d)
 trap 'rm -rf "$bundle_root"' EXIT HUP INT TERM
 payload=$bundle_root/mrml-git-$version
 install -d -m 0700 "$payload/images" "$payload/sbom" "$payload/signatures" "$payload/deploy" "$payload/evidence/streaming" "$payload/policy-source"
-for evidence in source.commit metadata configured-limits process.tsv docker-stats.jsonl summary SHA256SUMS; do
+for evidence in \
+  source.commit metadata configured-limits process.tsv docker-stats.jsonl \
+  client.out client.err content.sha256 summary SHA256SUMS
+do
   install -m 0444 "$GIT_STREAMING_EVIDENCE/$evidence" "$payload/evidence/streaming/$evidence"
 done
 
