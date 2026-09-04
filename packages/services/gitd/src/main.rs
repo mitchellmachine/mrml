@@ -1,6 +1,4 @@
-use std::fs::OpenOptions;
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -24,7 +22,6 @@ use mrml_http::{AccessScopes, RepositoryIdentity};
 use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
 use mrml_runtime::DirectoryCapability;
 
-const O_NOFOLLOW: i32 = 0x20_000;
 const REQUEST_ID_LEASE_SIZE: u64 = 1 << 32;
 
 fn main() {
@@ -810,19 +807,28 @@ fn read_request_id_high_watermark_file(
 }
 
 fn read_capability(path: &str, expected_owner: u32) -> Result<Vec<u8>, ()> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
+    let path = Path::new(path);
+    let parent = path.parent().ok_or(())?;
+    let name = path.file_name().and_then(|name| name.to_str()).ok_or(())?;
+    let directory = DirectoryCapability::open_root(parent.to_str().ok_or(())?).map_err(|_| ())?;
+    read_capability_from(&directory, name, expected_owner)
+}
+
+fn read_capability_from(
+    directory: &DirectoryCapability,
+    name: &str,
+    expected_owner: u32,
+) -> Result<Vec<u8>, ()> {
+    let mut file = directory
+        .open_regular(name)
         .map_err(|_| ())?;
     let metadata = file.metadata().map_err(|_| ())?;
-    let mode = metadata.mode() & 0o777;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.nlink() != 1
-        || metadata.uid() != expected_owner
+    let length = file.len().map_err(|_| ())?;
+    let mode = metadata.mode & 0o777;
+    if metadata.links != 1
+        || metadata.uid != expected_owner
         || !matches!(mode, 0o400 | 0o440 | 0o600)
-        || metadata.len() != 32
+        || length != 32
     {
         return Err(());
     }
@@ -837,25 +843,36 @@ fn read_public_file(
     minimum: usize,
     maximum: usize,
 ) -> Result<Vec<u8>, ()> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
+    let path = Path::new(path);
+    let parent = path.parent().ok_or(())?;
+    let name = path.file_name().and_then(|name| name.to_str()).ok_or(())?;
+    let directory = DirectoryCapability::open_root(parent.to_str().ok_or(())?).map_err(|_| ())?;
+    read_public_file_from(&directory, name, expected_owner, minimum, maximum)
+}
+
+fn read_public_file_from(
+    directory: &DirectoryCapability,
+    name: &str,
+    expected_owner: u32,
+    minimum: usize,
+    maximum: usize,
+) -> Result<Vec<u8>, ()> {
+    let mut file = directory
+        .open_regular(name)
         .map_err(|_| ())?;
     let metadata = file.metadata().map_err(|_| ())?;
+    let length = file.len().map_err(|_| ())?;
     if minimum == 0
         || minimum > maximum
-        || !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.nlink() != 1
-        || metadata.uid() != expected_owner
-        || metadata.mode() & 0o777 != 0o444
-        || metadata.len() < minimum as u64
-        || metadata.len() > maximum as u64
+        || metadata.links != 1
+        || metadata.uid != expected_owner
+        || metadata.mode & 0o777 != 0o444
+        || length < minimum as u64
+        || length > maximum as u64
     {
         return Err(());
     }
-    let mut bytes = vec![0; metadata.len() as usize];
+    let mut bytes = vec![0; length as usize];
     file.read_exact(&mut bytes).map_err(|_| ())?;
     Ok(bytes)
 }
@@ -896,7 +913,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir(&root).unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let uid = std::fs::metadata(&root).unwrap().uid();
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&root).unwrap());
         (root, uid)
     }
 
@@ -977,7 +994,8 @@ mod tests {
         let capability = root.join("channel.cap");
         std::fs::write(&capability, [0x51u8; 32]).unwrap();
         std::fs::set_permissions(&capability, std::fs::Permissions::from_mode(0o400)).unwrap();
-        let gitd_uid = std::fs::metadata(&capability).unwrap().uid();
+        let gitd_uid =
+            std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&capability).unwrap());
         assert!(load_certd_capability(&capability, gitd_uid).is_ok());
         assert!(load_certd_capability(&capability, gitd_uid.saturating_add(1)).is_err());
         std::fs::remove_file(capability).unwrap();
@@ -993,7 +1011,7 @@ mod tests {
         let key = root.join("public.key");
         std::fs::write(&key, [7u8; 32]).unwrap();
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o444)).unwrap();
-        let uid = std::fs::metadata(&key).unwrap().uid();
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&key).unwrap());
         assert_eq!(
             read_public_file(key.to_str().unwrap(), uid, 32, 32).unwrap(),
             [7; 32]
@@ -1004,5 +1022,41 @@ mod tests {
         symlink(&key, &link).unwrap();
         assert!(read_public_file(link.to_str().unwrap(), uid, 1, 32).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bootstrap_files_remain_bound_to_retained_parent_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-gitd-bootstrap-retained-{}",
+            std::process::id()
+        ));
+        let displaced = root.with_extension("displaced");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&displaced);
+        std::fs::create_dir(&root).unwrap();
+        let capability = root.join("channel.cap");
+        let public = root.join("public.key");
+        std::fs::write(&capability, [0x71; 32]).unwrap();
+        std::fs::set_permissions(&capability, std::fs::Permissions::from_mode(0o400)).unwrap();
+        std::fs::write(&public, [0x72; 32]).unwrap();
+        std::fs::set_permissions(&public, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&capability).unwrap());
+        let retained = DirectoryCapability::open_root(root.to_str().unwrap()).unwrap();
+        std::fs::rename(&root, &displaced).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("channel.cap"), [0x81; 32]).unwrap();
+        std::fs::write(root.join("public.key"), [0x82; 32]).unwrap();
+
+        assert_eq!(
+            read_capability_from(&retained, "channel.cap", uid),
+            Ok(vec![0x71; 32])
+        );
+        assert_eq!(
+            read_public_file_from(&retained, "public.key", uid, 32, 32),
+            Ok(vec![0x72; 32])
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(displaced).unwrap();
     }
 }
