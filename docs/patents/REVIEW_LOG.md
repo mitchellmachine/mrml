@@ -12490,3 +12490,10 @@ HTTP/2 WINDOW_UPDATE mechanism at a fixed bounded consumption threshold and
 flushes residual credit at end-of-stream. It changes no wire protocol,
 congestion algorithm, compression, cryptographic mechanism, or adaptive
 selection policy.
+
+# 2026-09-04 — Bounded HTTP/2 response coalescing
+
+Patent review: **NOT_TRIGGERED**. This increment combines adjacent application
+response fragments into a fixed 16 KiB buffer before using the existing HTTP/2
+DATA-frame and TLS-record paths. It changes no wire protocol, compression,
+cryptographic mechanism, congestion algorithm, or adaptive selection policy.

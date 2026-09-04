@@ -7,6 +7,7 @@ use mrml_http::{
 };
 
 const HTTP2_INTERNAL_ERROR: u32 = 2;
+const HTTP2_RESPONSE_COALESCE_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdHttp2StreamError {
@@ -80,6 +81,21 @@ struct Http2Output<'a, T> {
     stream_id: u32,
     remaining: u64,
     draining: &'a AtomicBool,
+    pending: Vec<u8>,
+}
+
+impl<T: Http2BodyTransport> Http2Output<'_, T> {
+    fn flush_pending(&mut self) -> Result<(), BackendError> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        self.transport
+            .borrow_mut()
+            .write_data(self.stream_id, &self.pending)
+            .map_err(|_| BackendError::Storage)?;
+        self.pending.clear();
+        Ok(())
+    }
 }
 
 impl<T: Http2BodyTransport> BoundedWrite for Http2Output<'_, T> {
@@ -94,10 +110,27 @@ impl<T: Http2BodyTransport> BoundedWrite for Http2Output<'_, T> {
         if count > self.remaining {
             return Err(BackendError::ResourceLimit);
         }
-        self.transport
-            .borrow_mut()
-            .write_data(self.stream_id, input)
-            .map_err(|_| BackendError::Storage)?;
+        let mut at = 0;
+        while at < input.len() {
+            if self.pending.is_empty() && input.len() - at >= HTTP2_RESPONSE_COALESCE_BYTES {
+                self.transport
+                    .borrow_mut()
+                    .write_data(self.stream_id, &input[at..])
+                    .map_err(|_| BackendError::Storage)?;
+                at = input.len();
+                continue;
+            }
+            let copied = (input.len() - at)
+                .min(HTTP2_RESPONSE_COALESCE_BYTES - self.pending.len());
+            self.pending
+                .try_reserve(copied)
+                .map_err(|_| BackendError::ResourceLimit)?;
+            self.pending.extend_from_slice(&input[at..at + copied]);
+            at += copied;
+            if self.pending.len() == HTTP2_RESPONSE_COALESCE_BYTES {
+                self.flush_pending()?;
+            }
+        }
         self.remaining -= count;
         Ok(())
     }
@@ -160,15 +193,19 @@ fn serve_smart_git_http2_with_drain<B: GitdBackend>(
         stream_id,
         remaining: maximum_body_bytes,
         draining,
+        pending: Vec::new(),
     };
     match edge.execute_prepared_smart_git(prepared, &mut input, &mut output) {
-        Ok(_) => transport
-            .borrow_mut()
-            .finish(stream_id)
-            .map_err(|_| {
+        Ok(_) => {
+            output.flush_pending().map_err(|_| {
+                eprintln!("component=mrml-gitd event=http2_response_data_failed");
+                GitdHttp2StreamError::Transport
+            })?;
+            transport.borrow_mut().finish(stream_id).map_err(|_| {
                 eprintln!("component=mrml-gitd event=http2_response_finish_failed");
                 GitdHttp2StreamError::Transport
-            }),
+            })
+        }
         Err(error) => {
             eprintln!(
                 "component=mrml-gitd event={}",
@@ -349,6 +386,7 @@ mod tests {
         input: Vec<u8>,
         at: usize,
         output: Vec<u8>,
+        writes: Vec<usize>,
     }
     impl Http2BodyTransport for FakeTransport {
         fn read_data(&mut self, _stream_id: u32, output: &mut [u8]) -> Result<usize, ()> {
@@ -359,6 +397,7 @@ mod tests {
         }
         fn write_data(&mut self, _stream_id: u32, input: &[u8]) -> Result<(), ()> {
             self.output.extend_from_slice(input);
+            self.writes.push(input.len());
             Ok(())
         }
         fn finish(&mut self, _stream_id: u32) -> Result<(), ()> {
@@ -388,6 +427,7 @@ mod tests {
             stream_id: 1,
             remaining: 3,
             draining: &draining,
+            pending: Vec::new(),
         };
         let mut bytes = [0; 8];
         assert_eq!(input.read(&mut bytes).unwrap(), 4);
@@ -395,11 +435,34 @@ mod tests {
         assert_eq!(input.read(&mut bytes), Ok(0));
         output.write(b"abc").unwrap();
         assert_eq!(output.write(b"d"), Err(BackendError::ResourceLimit));
+        output.flush_pending().unwrap();
         draining.store(true, Ordering::Release);
         assert_eq!(output.write(b""), Err(BackendError::Storage));
         drop(input);
         drop(output);
         assert_eq!(&transport.borrow().output, b"abc");
+    }
+
+    #[test]
+    fn response_output_coalesces_small_backend_fragments() {
+        let mut fake = FakeTransport::default();
+        let transport = RefCell::new(&mut fake);
+        let draining = AtomicBool::new(false);
+        let mut output = Http2Output {
+            transport: &transport,
+            stream_id: 1,
+            remaining: u64::MAX,
+            draining: &draining,
+            pending: Vec::new(),
+        };
+        for _ in 0..HTTP2_RESPONSE_COALESCE_BYTES {
+            output.write(&[0x5a]).unwrap();
+        }
+        output.write(b"tail").unwrap();
+        output.flush_pending().unwrap();
+        drop(output);
+        assert_eq!(transport.borrow().writes, [HTTP2_RESPONSE_COALESCE_BYTES, 4]);
+        assert_eq!(transport.borrow().output.len(), HTTP2_RESPONSE_COALESCE_BYTES + 4);
     }
 
     #[test]
