@@ -4,7 +4,8 @@ use std::path::{Component, Path, PathBuf};
 
 use mrml_git::{
     AuditReceiptAuthority, AuthenticatedAuditReceiptDirectory, AuthenticatedReceiveStore,
-    AuthorizedHybridPair, FilesystemRepositoryView, FullRefName, LinuxDurableReceiveStore,
+    AuthorizedHybridPair, FilesystemRepositoryView, FullRefName, GitdCoreError,
+    LinuxDurableReceiveStore,
     LinuxDurableTrustPolicyStore, ObjectFormat, PolicyPairStatus, RecoveryAction,
     TrustPolicyCandidate, TrustPolicyState,
 };
@@ -54,6 +55,14 @@ pub enum RepositoryAdmissionError {
     Identity,
     Layout(StartupValidationError),
     Open,
+    Objects,
+    State,
+    Quarantine,
+    Cache,
+    Receipts,
+    Policy,
+    View,
+    Arrival(GitdCoreError),
     Generation,
 }
 
@@ -473,31 +482,36 @@ pub fn admit_catalog_repository(
             &relative,
             config.gitd_uid,
             config.gitd_gid,
-        )?,
+        )
+        .map_err(|_| RepositoryAdmissionError::Objects)?,
         state: open_repository_capability(
             &config.state_root,
             &relative,
             config.gitd_uid,
             config.gitd_gid,
-        )?,
+        )
+        .map_err(|_| RepositoryAdmissionError::State)?,
         quarantine: open_repository_capability(
             &config.quarantine_root,
             &relative,
             config.gitd_uid,
             config.gitd_gid,
-        )?,
+        )
+        .map_err(|_| RepositoryAdmissionError::Quarantine)?,
         cache: open_repository_capability(
             &config.cache_root,
             &relative,
             config.gitd_uid,
             config.gitd_gid,
-        )?,
+        )
+        .map_err(|_| RepositoryAdmissionError::Cache)?,
         receipts: open_repository_capability(
             &config.receipt_root,
             &relative,
             config.gitd_uid,
             config.gitd_gid,
-        )?,
+        )
+        .map_err(|_| RepositoryAdmissionError::Receipts)?,
         policy: config
             .policy_root
             .join(owner)
@@ -511,7 +525,8 @@ pub fn admit_catalog_repository(
                     config.gitd_gid,
                 )
             })
-            .transpose()?,
+            .transpose()
+            .map_err(|_| RepositoryAdmissionError::Policy)?,
     };
     validate_private_child_directory(&capabilities.quarantine, "quarantine")?;
     validate_private_child_directory(&capabilities.quarantine, "arrivals")?;
@@ -520,21 +535,21 @@ pub fn admit_catalog_repository(
         capabilities
             .objects
             .try_clone()
-            .map_err(|_| RepositoryAdmissionError::Open)?,
+            .map_err(|_| RepositoryAdmissionError::View)?,
         capabilities
             .state
             .try_clone()
-            .map_err(|_| RepositoryAdmissionError::Open)?,
+            .map_err(|_| RepositoryAdmissionError::View)?,
     )
-    .map_err(|_| RepositoryAdmissionError::Open)?;
+    .map_err(|_| RepositoryAdmissionError::View)?;
     view.retain_arrival_directory(
         capabilities
             .quarantine
             .open_directory("arrivals")
-            .map_err(|_| RepositoryAdmissionError::Open)?,
+            .map_err(|_| RepositoryAdmissionError::Arrival(GitdCoreError::Storage))?,
         receive_pack_limit(config.max_body_bytes),
     )
-    .map_err(|_| RepositoryAdmissionError::Open)?;
+    .map_err(RepositoryAdmissionError::Arrival)?;
     verify_repository_admission(entry, &view).map_err(|_| RepositoryAdmissionError::Generation)?;
     Ok(AdmittedRepository {
         paths,

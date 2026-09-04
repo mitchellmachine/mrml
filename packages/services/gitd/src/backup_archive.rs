@@ -4,10 +4,10 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 use mrml_crypto::Sha256;
 use mrml_git::{
-    BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES, BackupInventory, BackupInventoryFileKind,
-    BackupStreamHeader, MAX_BACKUP_INVENTORY_BYTES, encode_backup_inventory,
-    encode_backup_stream_header, open_backup_frame, parse_backup_inventory,
-    parse_backup_stream_header, seal_backup_frame,
+    BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES, BackupInventory, BackupInventoryError,
+    BackupInventoryFileKind, BackupStreamHeader, MAX_BACKUP_INVENTORY_BYTES,
+    encode_backup_inventory, encode_backup_stream_header, open_backup_frame,
+    parse_backup_inventory, parse_backup_stream_header, seal_backup_frame,
 };
 use mrml_runtime::DirectoryCapability;
 
@@ -17,7 +17,7 @@ const COPY_BUFFER_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackupArchiveError {
-    Inventory,
+    Inventory(BackupInventoryError),
     Header,
     Open,
     Changed,
@@ -50,9 +50,11 @@ pub fn verify_backup_archive(
     let mut encoded_inventory = vec![0; inventory_length];
     frames.read_exact_plaintext(&mut encoded_inventory)?;
     let inventory =
-        parse_backup_inventory(&encoded_inventory).map_err(|_| BackupArchiveError::Inventory)?;
+        parse_backup_inventory(&encoded_inventory).map_err(BackupArchiveError::Inventory)?;
     if inventory.backup_generation != header.generation {
-        return Err(BackupArchiveError::Inventory);
+        return Err(BackupArchiveError::Inventory(
+            BackupInventoryError::NonCanonical,
+        ));
     }
     let mut buffer = [0u8; COPY_BUFFER_BYTES];
     for entry in &inventory.entries {
@@ -98,7 +100,7 @@ pub fn restore_backup_archive<R: Read + Seek>(
     let mut encoded_inventory = vec![0; inventory_length];
     frames.read_exact_plaintext(&mut encoded_inventory)?;
     let inventory =
-        parse_backup_inventory(&encoded_inventory).map_err(|_| BackupArchiveError::Inventory)?;
+        parse_backup_inventory(&encoded_inventory).map_err(BackupArchiveError::Inventory)?;
     if inventory != verified {
         return Err(BackupArchiveError::Authentication);
     }
@@ -204,7 +206,9 @@ fn retained_parent<'a>(
 ) -> Result<(DirectoryCapability, &'a str), BackupArchiveError> {
     let root = roots
         .get(volume as usize - 1)
-        .ok_or(BackupArchiveError::Inventory)?;
+        .ok_or(BackupArchiveError::Inventory(
+            BackupInventoryError::NonCanonical,
+        ))?;
     match path.rsplit_once('/') {
         Some((parent, name)) => root
             .open_directory(parent)
@@ -231,7 +235,7 @@ pub fn write_backup_archive(
         return Err(BackupArchiveError::Header);
     }
     let encoded_inventory =
-        encode_backup_inventory(inventory).map_err(|_| BackupArchiveError::Inventory)?;
+        encode_backup_inventory(inventory).map_err(BackupArchiveError::Inventory)?;
     let inventory_length =
         u32::try_from(encoded_inventory.len()).map_err(|_| BackupArchiveError::Resource)?;
     let encoded_header =
@@ -249,7 +253,9 @@ pub fn write_backup_archive(
     for entry in &inventory.entries {
         let root = roots
             .get(entry.volume as usize - 1)
-            .ok_or(BackupArchiveError::Inventory)?;
+            .ok_or(BackupArchiveError::Inventory(
+                BackupInventoryError::NonCanonical,
+            ))?;
         match entry.kind {
             BackupInventoryFileKind::Directory => {
                 let metadata = if entry.path.as_str() == "." {
@@ -530,7 +536,9 @@ pub fn backup_payload_inventory_length(prefix: &[u8]) -> Result<usize, BackupArc
         || &prefix[..8] != PAYLOAD_MAGIC
         || prefix[12..] != [0; 4]
     {
-        return Err(BackupArchiveError::Inventory);
+        return Err(BackupArchiveError::Inventory(
+            BackupInventoryError::Malformed,
+        ));
     }
     let length = usize::try_from(u32::from_be_bytes(prefix[8..12].try_into().unwrap()))
         .map_err(|_| BackupArchiveError::Resource)?;

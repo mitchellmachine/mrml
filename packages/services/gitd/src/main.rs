@@ -139,7 +139,11 @@ fn run() -> Result<(), ()> {
             let mut reverify = 0u32;
             let mut uncertain = 0u32;
             for repository in &catalog.repositories {
-                let admitted = admit_catalog_repository(&config, repository).map_err(|_| ())?;
+                let admitted = admit_catalog_repository(&config, repository).map_err(|error| {
+                    eprintln!(
+                        "component=mrml-gitd event=recovery_admission_failed category={error:?}"
+                    );
+                })?;
                 let status = inspect_admitted_repository_recovery(&config, &admitted).map_err(
                     |error| {
                         eprintln!("component=mrml-gitd event=recovery_inspection_failed category={error:?}");
@@ -176,7 +180,11 @@ fn run() -> Result<(), ()> {
         load_gitd_authentication(&config, &catalog).map_err(|_| ())?;
         operational_event("validation_authentication_loaded");
         for repository in &catalog.repositories {
-            admit_catalog_repository(&config, repository).map_err(|_| ())?;
+            admit_catalog_repository(&config, repository).map_err(|error| {
+                eprintln!(
+                    "component=mrml-gitd event=validation_repository_admission_failed category={error:?}"
+                );
+            })?;
         }
         operational_event("validation_repositories_admitted");
         println!("valid");

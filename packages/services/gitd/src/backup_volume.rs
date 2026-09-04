@@ -176,6 +176,7 @@ pub fn collect_backup_volume(
         },
     )?;
     collect_directory(&root, "", volume, 0, &mut output)?;
+    output.sort_by(|left, right| left.path.as_bytes().cmp(right.path.as_bytes()));
     Ok(output)
 }
 
@@ -322,6 +323,7 @@ mod tests {
         fs::write(root.join("z"), b"last").unwrap();
         fs::create_dir(root.join("a")).unwrap();
         fs::write(root.join("a/first"), b"content").unwrap();
+        fs::write(root.join("a.file"), b"sibling").unwrap();
         let entries =
             collect_backup_volume(root.to_str().unwrap(), BackupVolume::GitdRepositories).unwrap();
         assert_eq!(
@@ -329,12 +331,12 @@ mod tests {
                 .iter()
                 .map(|entry| entry.path.as_str())
                 .collect::<Vec<_>>(),
-            [".", "a", "a/first", "z"]
+            [".", "a", "a.file", "a/first", "z"]
         );
-        assert_eq!(entries[2].size, 7);
-        assert_eq!(entries[2].digest, Sha256::digest(b"content"));
+        assert_eq!(entries[3].size, 7);
+        assert_eq!(entries[3].digest, Sha256::digest(b"content"));
         assert_eq!(
-            entries[2].uid,
+            entries[3].uid,
             fs::metadata(root.join("a/first")).unwrap().uid()
         );
         fs::remove_dir_all(root).unwrap();
