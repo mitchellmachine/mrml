@@ -175,6 +175,17 @@ impl DirectoryCapability {
             .ok_or(FileError::RemoveFailed)
     }
 
+    pub fn remove_directory(&self, name: &str) -> Result<(), FileError> {
+        validate_capability_child_name(name)?;
+        let encoded = encode_unix_path(name).ok_or(FileError::InvalidPath)?;
+        let name =
+            core::ffi::CStr::from_bytes_with_nul(&encoded).map_err(|_| FileError::InvalidPath)?;
+        self.inner
+            .remove_directory(name)
+            .then_some(())
+            .ok_or(FileError::RemoveFailed)
+    }
+
     pub fn read_directory(&self) -> Result<Vector<DirectoryEntry>, FileError> {
         let mut directory = self.inner.try_clone().ok_or(FileError::DirectoryFailed)?;
         let mut entries = Vector::new();
@@ -1201,7 +1212,12 @@ mod tests {
             assert!(root_capability.create_new_file(invalid, 0o600).is_err());
             assert!(root_capability.create_directory(invalid, 0o700).is_err());
             assert!(root_capability.remove_file(invalid).is_err());
+            assert!(root_capability.remove_directory(invalid).is_err());
         }
+        let empty = root_capability.create_directory("empty", 0o700).unwrap();
+        drop(empty);
+        root_capability.remove_directory("empty").unwrap();
+        assert!(root_capability.open_directory("empty").is_err());
         let quarantine = root_capability
             .create_directory("quarantine", 0o700)
             .unwrap();

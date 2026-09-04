@@ -1532,6 +1532,17 @@ impl NativeDirectory {
         directory >= 0 && unsafe { unlinkat(directory, name.as_ptr(), 0) } == 0
     }
 
+    pub fn remove_directory(&self, name: &CStr) -> bool {
+        const AT_REMOVEDIR: c_int = 0x200;
+        if !safe_child_name(name) {
+            return false;
+        }
+        let directory = unsafe { dirfd(self.0) };
+        // SAFETY: `name` is one validated child and `AT_REMOVEDIR` restricts
+        // removal to an empty directory beneath the retained parent.
+        directory >= 0 && unsafe { unlinkat(directory, name.as_ptr(), AT_REMOVEDIR) } == 0
+    }
+
     fn from_descriptor(descriptor: c_int) -> Option<Self> {
         if descriptor < 0 {
             return None;
