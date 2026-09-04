@@ -188,7 +188,7 @@ fn add_round_key(state: &mut [u8; 16], key: &[u8]) {
     }
 }
 
-fn ghash_mul(x: u128, y: u128) -> u128 {
+fn ghash_mul_software(x: u128, y: u128) -> u128 {
     let mut z = 0u128;
     let mut v = y;
     for bit in 0..128 {
@@ -197,6 +197,69 @@ fn ghash_mul(x: u128, y: u128) -> u128 {
         v = (v >> 1) ^ (0xe1000000000000000000000000000000u128 & 0u128.wrapping_sub(low));
     }
     z
+}
+
+#[cfg(target_arch = "x86_64")]
+fn pclmulqdq_available() -> bool {
+    static AVAILABLE: AtomicU8 = AtomicU8::new(0);
+    match AVAILABLE.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let available = core::arch::x86_64::__cpuid(1).ecx & (1 << 1) != 0;
+            AVAILABLE.store(if available { 2 } else { 1 }, Ordering::Relaxed);
+            available
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "pclmulqdq")]
+unsafe fn ghash_mul_instructions(x: u128, y: u128) -> u128 {
+    use core::arch::x86_64::{
+        __m128i, _mm_clmulepi64_si128, _mm_loadu_si128, _mm_storeu_si128, _mm_xor_si128,
+    };
+
+    let x = x.reverse_bits().to_le_bytes();
+    let y = y.reverse_bits().to_le_bytes();
+    // SAFETY: both arrays contain exactly 16 readable bytes and the intrinsic
+    // explicitly permits unaligned loads.
+    let left = unsafe { _mm_loadu_si128(x.as_ptr().cast::<__m128i>()) };
+    // SAFETY: same fixed-width bound as the preceding load.
+    let right = unsafe { _mm_loadu_si128(y.as_ptr().cast::<__m128i>()) };
+    let low = _mm_clmulepi64_si128(left, right, 0x00);
+    let high = _mm_clmulepi64_si128(left, right, 0x11);
+    let cross = _mm_xor_si128(
+        _mm_clmulepi64_si128(left, right, 0x01),
+        _mm_clmulepi64_si128(left, right, 0x10),
+    );
+    let mut low_bytes = [0u8; 16];
+    let mut high_bytes = [0u8; 16];
+    let mut cross_bytes = [0u8; 16];
+    // SAFETY: each destination contains exactly 16 writable bytes and the
+    // stores explicitly permit unaligned destinations.
+    unsafe {
+        _mm_storeu_si128(low_bytes.as_mut_ptr().cast::<__m128i>(), low);
+        _mm_storeu_si128(high_bytes.as_mut_ptr().cast::<__m128i>(), high);
+        _mm_storeu_si128(cross_bytes.as_mut_ptr().cast::<__m128i>(), cross);
+    }
+    let cross = u128::from_le_bytes(cross_bytes);
+    let mut low = u128::from_le_bytes(low_bytes) ^ (cross << 64);
+    let high = u128::from_le_bytes(high_bytes) ^ (cross >> 64);
+    low ^= high ^ (high << 1) ^ (high << 2) ^ (high << 7);
+    let overflow = (high >> 127) ^ (high >> 126) ^ (high >> 121);
+    low ^= overflow ^ (overflow << 1) ^ (overflow << 2) ^ (overflow << 7);
+    low.reverse_bits()
+}
+
+fn ghash_mul(x: u128, y: u128) -> u128 {
+    #[cfg(target_arch = "x86_64")]
+    if pclmulqdq_available() {
+        // SAFETY: CPUID above proves PCLMULQDQ support. All intrinsic operands
+        // and destinations are fixed-width in-bounds arrays.
+        return unsafe { ghash_mul_instructions(x, y) };
+    }
+    ghash_mul_software(x, y)
 }
 
 fn ghash(h: u128, aad: &[u8], data: &[u8]) -> u128 {
@@ -301,6 +364,30 @@ mod tests {
         let accelerated = unsafe { aes128_encrypt_instructions(&keys, &input) };
         assert_eq!(accelerated, software);
         assert_eq!(accelerated, hex("69c4e0d86a7b0430d8cdb78070b4c55a"));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn pclmulqdq_ghash_matches_constant_time_software_fallback() {
+        if !pclmulqdq_available() {
+            return;
+        }
+        let mut left = 0x66e9_4bd4_ef8a_2c3b_884c_fa59_ca34_2b2eu128;
+        let mut right = 0x0388_dace_60b6_a392_f328_c2b9_71b2_fe78u128;
+        for _ in 0..256 {
+            // SAFETY: the availability check above proves the required CPU
+            // feature; the operation accepts two by-value fixed-width words.
+            let accelerated = unsafe { ghash_mul_instructions(left, right) };
+            assert_eq!(accelerated, ghash_mul_software(left, right));
+            left = left
+                .wrapping_mul(0xda94_2042_e4dd_58b5_9e37_79b9_7f4a_7c15)
+                .rotate_left(29)
+                ^ right;
+            right = right
+                .wrapping_add(0x9e37_79b9_7f4a_7c15_6a09_e667_f3bc_c909)
+                .rotate_right(17)
+                ^ left;
+        }
     }
     #[test]
     fn nist_empty_and_single_block_vectors() {

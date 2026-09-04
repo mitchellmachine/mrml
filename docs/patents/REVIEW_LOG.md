@@ -12474,3 +12474,11 @@ with conventional fixed-size bounded read-ahead while retaining the existing
 per-byte CRC, work accounting, decompression limits, object hashing, pack
 format, and authentication checks. It introduces no compression, indexing,
 cryptographic, storage-selection, or other patent-sensitive mechanism.
+
+# 2026-09-04 — Runtime-gated PCLMULQDQ GHASH acceleration
+
+Patent review: **NOT_TRIGGERED**. This increment does not change AES-128-GCM,
+GHASH's standardized field or polynomial, keys, nonces, tags, records, or the
+constant-time software fallback. It uses the standardized x86-64 carry-less
+multiplication instruction after an explicit CPUID check to implement the
+existing GHASH operation, not a new cryptographic mechanism.
