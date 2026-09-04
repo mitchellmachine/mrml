@@ -214,9 +214,8 @@ impl LinuxDurableReceiveStore {
         Ok(actions)
     }
 
-    /// Recovers only the post-activation receipt. Any pre-activation state
-    /// still requires full history/policy re-verification; divergent state is
-    /// never guessed. Existing byte-exact receipts make this idempotent.
+    /// Recovers only the post-activation receipt. Existing byte-exact receipts
+    /// make this idempotent; divergent state is never guessed.
     pub fn recover_audit_receipt(
         &self,
         journal: &ReceiveJournalRecord,
@@ -250,6 +249,35 @@ impl LinuxDurableReceiveStore {
         ) {
             return Err(DurableFailure::VerifierCrash);
         }
+        self.journals.remove_exact(journal)
+    }
+
+    /// Discards a journal and its exact pre-activation transaction directory
+    /// only while live refs prove that activation did not occur.
+    pub fn discard_recovered_before_activation(
+        &self,
+        journal: &ReceiveJournalRecord,
+    ) -> Result<(), DurableFailure> {
+        let reread = self
+            .journals
+            .load(journal.transaction)
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        if &reread != journal
+            || classify_receive_recovery(journal, &self.recovery_snapshot(journal)?)
+                != RecoveryAction::DiscardBeforeActivation
+        {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        let selected = self
+            .refs
+            .load_selected_pack_set(receive_pack_set_limits())
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        let installed_is_unselected = !selected
+            .entries()
+            .iter()
+            .any(|entry| entry.transaction() == journal.transaction);
+        self.arrivals
+            .discard_pre_activation(journal.transaction, installed_is_unselected)?;
         self.journals.remove_exact(journal)
     }
 
@@ -420,7 +448,9 @@ impl DurableReceiveStore for LinuxDurableReceiveStore {
 mod tests {
     #[cfg(target_os = "linux")]
     use mrml_runtime::Command;
-    use mrml_runtime::{Text, Vector, join_path, path_exists, read_file_bounded, write_file};
+    use mrml_runtime::{
+        Text, Vector, join_path, path_exists, read_directory, read_file_bounded, write_file,
+    };
 
     use super::*;
     use crate::{
@@ -619,6 +649,47 @@ mod tests {
         pause("journal-receipt");
         store.mark_complete_and_fsync(transaction.id()).unwrap();
         pause("journal-complete");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn preactivation_discard_is_exact_for_quarantined_and_installed_pack() {
+        for install_before_discard in [false, true] {
+            let root = join_path(
+                &mrml_runtime::temporary_directory(),
+                &mrml_runtime::mrml_format!(
+                    "mrml-receive-discard-{}-{install_before_discard}",
+                    mrml_runtime::process_id()
+                ),
+            );
+            let _ = mrml_runtime::remove_dir_all(&root);
+            mrml_runtime::create_dir_all(&root).unwrap();
+            let (mut transaction, verified, mut store) = crash_fixture(&root);
+            transaction.ref_updates_prepared().unwrap();
+            store
+                .persist_journal_and_fsync(&transaction, &verified)
+                .unwrap();
+            if install_before_discard {
+                store
+                    .install_arrival_pack_and_fsync(transaction.id())
+                    .unwrap();
+            }
+            let (journal, action) = store.recovery_actions().unwrap().pop().unwrap();
+            assert_eq!(action, RecoveryAction::DiscardBeforeActivation);
+            store.discard_recovered_before_activation(&journal).unwrap();
+            assert!(store.recovery_actions().unwrap().is_empty());
+            assert!(
+                read_directory(&path(&root, "packs/quarantine"))
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                read_directory(&path(&root, "packs/arrivals"))
+                    .unwrap()
+                    .is_empty()
+            );
+            mrml_runtime::remove_dir_all(&root).unwrap();
+        }
     }
 
     #[test]

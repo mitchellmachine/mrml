@@ -3,7 +3,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 use mrml_runtime::{
     File, OrderedMap, SpinMutex, Text, Vector, canonical_path, create_dir_all, join_path,
-    path_exists, path_is_directory, rename_file,
+    path_exists, path_is_directory, read_directory, remove_dir_all, remove_file, rename_file,
 };
 
 use crate::pack_file::validate_pack_file_with_bases_from_opener;
@@ -23,6 +23,43 @@ enum ArrivalDirectory {
 }
 
 impl ArrivalDirectory {
+    fn entries(
+        &self,
+        max_entries: usize,
+    ) -> Result<Vector<mrml_runtime::DirectoryEntry>, DurableFailure> {
+        match self {
+            Self::Ambient(path) => {
+                let entries = read_directory(path).map_err(|_| DurableFailure::VerifierCrash)?;
+                if entries.len() > max_entries {
+                    return Err(DurableFailure::VerifierCrash);
+                }
+                Ok(entries)
+            }
+            #[cfg(target_os = "linux")]
+            Self::Retained(directory) => directory
+                .read_directory_bounded(max_entries)
+                .map_err(|_| DurableFailure::VerifierCrash),
+        }
+    }
+
+    fn remove_file(&self, name: &str) -> Result<(), DurableFailure> {
+        match self {
+            Self::Ambient(path) => remove_file(&join_path(path, name)),
+            #[cfg(target_os = "linux")]
+            Self::Retained(directory) => directory.remove_file(name),
+        }
+        .map_err(|_| DurableFailure::VerifierCrash)
+    }
+
+    fn remove_directory(&self, name: &str) -> Result<(), DurableFailure> {
+        match self {
+            Self::Ambient(path) => remove_dir_all(&join_path(path, name)),
+            #[cfg(target_os = "linux")]
+            Self::Retained(directory) => directory.remove_directory(name),
+        }
+        .map_err(|_| DurableFailure::VerifierCrash)
+    }
+
     fn open_child(&self, name: &str) -> Result<Self, DurableFailure> {
         match self {
             Self::Ambient(path) => {
@@ -649,6 +686,85 @@ impl ArrivalPackStore {
             .map(|_| ())
     }
 
+    /// Removes only the documented pre-activation quarantine layout. Unknown
+    /// children, links, and non-regular entries fail closed so recovery never
+    /// turns a transaction identifier into ambient recursive-delete authority.
+    pub fn discard_pre_activation(
+        &self,
+        transaction: QuarantineTransactionId,
+        allow_installed: bool,
+    ) -> Result<(), DurableFailure> {
+        let quarantine = self.quarantine_directory(transaction).ok();
+        let arrival = self.arrival_directory(transaction).ok();
+        let (directory, parent) = match (quarantine, arrival, allow_installed) {
+            (Some(directory), None, _) => (directory, false),
+            (None, Some(directory), true) => (directory, true),
+            (None, None, _) => return Ok(()),
+            _ => return Err(DurableFailure::VerifierCrash),
+        };
+        let entries = directory.entries(4)?;
+        let mut object_entries = Vector::new();
+        for entry in &entries {
+            if entry.is_symlink {
+                return Err(DurableFailure::VerifierCrash);
+            }
+            match entry.name.as_str() {
+                "incoming.pack" | "objects.pack" | "objects.idx" if !entry.is_directory => {
+                    directory.open_regular(entry.name.as_str())?;
+                }
+                "objects" if entry.is_directory => {
+                    let objects = directory.open_child("objects")?;
+                    object_entries =
+                        objects.entries(crate::DEFAULT_MAX_OBJECTS_PER_PUSH as usize)?;
+                    for object in &object_entries {
+                        if object.is_directory
+                            || object.is_symlink
+                            || ObjectId::parse_for(self.format, object.name.as_str()).is_none()
+                        {
+                            return Err(DurableFailure::VerifierCrash);
+                        }
+                        objects.open_regular(object.name.as_str())?;
+                    }
+                }
+                _ => return Err(DurableFailure::VerifierCrash),
+            }
+        }
+        for entry in &entries {
+            if entry.name.as_str() == "objects" {
+                let objects = directory.open_child("objects")?;
+                for object in &object_entries {
+                    objects.remove_file(object.name.as_str())?;
+                }
+                objects.sync()?;
+                directory.remove_directory("objects")?;
+            } else {
+                directory.remove_file(entry.name.as_str())?;
+            }
+        }
+        directory.sync()?;
+        let name = transaction_name(transaction);
+        match (&self.retained, parent) {
+            (Some(retained), false) => {
+                retained.quarantine.remove_directory(&name)?;
+                retained.quarantine.sync()
+            }
+            (Some(retained), true) => {
+                retained.arrivals.remove_directory(&name)?;
+                retained.arrivals.sync()
+            }
+            (None, false) => {
+                let parent = ArrivalDirectory::Ambient(self.quarantine.clone());
+                parent.remove_directory(&name)?;
+                parent.sync()
+            }
+            (None, true) => {
+                let parent = ArrivalDirectory::Ambient(self.arrivals.clone());
+                parent.remove_directory(&name)?;
+                parent.sync()
+            }
+        }
+    }
+
     pub(crate) fn authenticated_installed_summary(
         &self,
         transaction: QuarantineTransactionId,
@@ -1213,6 +1329,22 @@ mod tests {
             store.receive_pack_body(&mut transaction, &mut reader),
             Err(GitdCoreError::Resource | GitdCoreError::Storage)
         ));
+        let unexpected = join_path(&store.arrival_path(transaction.id()), "unexpected");
+        mrml_runtime::write_file(&unexpected, b"do not delete around me").unwrap();
+        assert!(
+            store
+                .discard_pre_activation(transaction.id(), true)
+                .is_err()
+        );
+        assert!(path_exists(&join_path(
+            &store.arrival_path(transaction.id()),
+            "objects.pack"
+        )));
+        mrml_runtime::remove_file(&unexpected).unwrap();
+        store
+            .discard_pre_activation(transaction.id(), true)
+            .unwrap();
+        assert!(!path_exists(&store.arrival_path(transaction.id())));
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 
@@ -1285,6 +1417,13 @@ mod tests {
         )));
         assert!(!path_exists(&join_path(
             &join_path(&root, "arrivals"),
+            &transaction,
+        )));
+        store
+            .discard_pre_activation(QuarantineTransactionId([13u8; 16]), true)
+            .unwrap();
+        assert!(!path_exists(&join_path(
+            &join_path(&displaced, "arrivals"),
             &transaction,
         )));
         mrml_runtime::remove_dir_all(&root).unwrap();

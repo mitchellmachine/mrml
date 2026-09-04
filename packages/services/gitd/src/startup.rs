@@ -334,6 +334,7 @@ pub struct RepositoryRecoverySummary {
     pub authenticated_receipts_recovered: u32,
     pub plain_receipts_recovered: u32,
     pub completed_journals: u32,
+    pub discarded_journals: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -389,6 +390,19 @@ fn protected_recovery_progress(
         (RecoveryAction::MarkComplete, mrml_git::AuthorityCandidateStatus::Completed) => {
             Ok(ProtectedRecoveryProgress::CompleteAlreadyDone)
         }
+        _ => Err(RepositoryRecoveryError::AuthorityCandidate),
+    }
+}
+
+fn protected_discard_requires_abort(
+    status: mrml_git::AuthorityCandidateStatus,
+) -> Result<bool, RepositoryRecoveryError> {
+    match status {
+        mrml_git::AuthorityCandidateStatus::Receiving
+        | mrml_git::AuthorityCandidateStatus::ProofsSealed
+        | mrml_git::AuthorityCandidateStatus::Authorized
+        | mrml_git::AuthorityCandidateStatus::ActivationStarted => Ok(true),
+        mrml_git::AuthorityCandidateStatus::Aborted => Ok(false),
         _ => Err(RepositoryRecoveryError::AuthorityCandidate),
     }
 }
@@ -662,7 +676,16 @@ pub fn recover_admitted_repository(
                     .checked_add(1)
                     .ok_or(RepositoryRecoveryError::Count)?;
             }
-            RecoveryAction::DiscardBeforeActivation | RecoveryAction::ReverifyBeforeActivation => {
+            RecoveryAction::DiscardBeforeActivation => {
+                store
+                    .discard_recovered_before_activation(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
+                summary.discarded_journals = summary
+                    .discarded_journals
+                    .checked_add(1)
+                    .ok_or(RepositoryRecoveryError::Count)?;
+            }
+            RecoveryAction::ReverifyBeforeActivation => {
                 return Err(RepositoryRecoveryError::PreActivationReverificationRequired);
             }
             RecoveryAction::ManualUncertain => {
@@ -747,7 +770,25 @@ pub fn recover_admitted_protected_repository(
                     .checked_add(1)
                     .ok_or(RepositoryRecoveryError::Count)?;
             }
-            RecoveryAction::DiscardBeforeActivation | RecoveryAction::ReverifyBeforeActivation => {
+            RecoveryAction::DiscardBeforeActivation => {
+                let record = authority
+                    .query_candidate_by_id(&journal.repository, journal.transaction)
+                    .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+                validate_pre_activation_candidate(&journal, &record)?;
+                if protected_discard_requires_abort(record.status)? {
+                    authority
+                        .abort_candidate(&record.context)
+                        .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+                }
+                store
+                    .discard_recovered_before_activation(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
+                summary.discarded_journals = summary
+                    .discarded_journals
+                    .checked_add(1)
+                    .ok_or(RepositoryRecoveryError::Count)?;
+            }
+            RecoveryAction::ReverifyBeforeActivation => {
                 return Err(RepositoryRecoveryError::PreActivationReverificationRequired);
             }
             RecoveryAction::ManualUncertain => {
@@ -788,6 +829,29 @@ fn validate_recovery_candidate(
         || context.trust_generation != journal.trust_generation
         || context.revocation_generation != journal.revocation_generation
         || context.activation_digest != mrml_git::candidate_activation_digest(&transcript)
+    {
+        return Err(RepositoryRecoveryError::AuthorityCandidate);
+    }
+    Ok(())
+}
+
+fn validate_pre_activation_candidate(
+    journal: &mrml_git::ReceiveJournalRecord,
+    record: &mrml_git::AuthorityCandidateRecord,
+) -> Result<(), RepositoryRecoveryError> {
+    let next_generation = journal
+        .repository_generation
+        .0
+        .checked_add(1)
+        .map(mrml_git::RepositoryGeneration)
+        .ok_or(RepositoryRecoveryError::AuthorityCandidate)?;
+    let context = &record.context;
+    if context.id != journal.transaction
+        || context.repository != journal.repository
+        || context.current_generation != journal.repository_generation
+        || context.next_generation != next_generation
+        || context.trust_generation != journal.trust_generation
+        || context.revocation_generation != journal.revocation_generation
     {
         return Err(RepositoryRecoveryError::AuthorityCandidate);
     }
@@ -994,6 +1058,25 @@ mod tests {
             );
             assert_eq!(
                 protected_recovery_progress(RecoveryAction::MarkComplete, status),
+                Err(RepositoryRecoveryError::AuthorityCandidate)
+            );
+        }
+        for status in [
+            Status::Receiving,
+            Status::ProofsSealed,
+            Status::Authorized,
+            Status::ActivationStarted,
+        ] {
+            assert_eq!(protected_discard_requires_abort(status), Ok(true));
+        }
+        assert_eq!(protected_discard_requires_abort(Status::Aborted), Ok(false));
+        for status in [
+            Status::Activated,
+            Status::ReceiptPersisted,
+            Status::Completed,
+        ] {
+            assert_eq!(
+                protected_discard_requires_abort(status),
                 Err(RepositoryRecoveryError::AuthorityCandidate)
             );
         }

@@ -187,12 +187,25 @@ impl DirectoryCapability {
     }
 
     pub fn read_directory(&self) -> Result<Vector<DirectoryEntry>, FileError> {
+        self.read_directory_bounded(usize::MAX)
+    }
+
+    /// Enumerates at most `max_entries` descriptor-relative children. The
+    /// bound is checked before retaining another name so callers processing
+    /// hostile durable state cannot force an unbounded allocation.
+    pub fn read_directory_bounded(
+        &self,
+        max_entries: usize,
+    ) -> Result<Vector<DirectoryEntry>, FileError> {
         let mut directory = self.inner.try_clone().ok_or(FileError::DirectoryFailed)?;
         let mut entries = Vector::new();
         let mut name_buffer = [0u8; 256];
         while let Some((name, is_directory, is_symlink)) = directory.next(&mut name_buffer) {
             let name = core::str::from_utf8(name).map_err(|_| FileError::InvalidUtf8)?;
             if name != "." && name != ".." {
+                if entries.len() == max_entries {
+                    return Err(FileError::DirectoryFailed);
+                }
                 entries.push(DirectoryEntry {
                     name: name.into(),
                     is_directory,
@@ -1145,6 +1158,18 @@ mod tests {
         let first_entries = root_capability.read_directory().unwrap();
         let second_entries = root_capability.read_directory().unwrap();
         assert!(!first_entries.is_empty());
+        assert!(
+            root_capability
+                .read_directory_bounded(first_entries.len() - 1)
+                .is_err()
+        );
+        assert_eq!(
+            root_capability
+                .read_directory_bounded(first_entries.len())
+                .unwrap()
+                .len(),
+            first_entries.len()
+        );
         assert_eq!(first_entries.len(), second_entries.len());
         assert!(
             first_entries
