@@ -229,6 +229,12 @@ configuration volumes. `restore-git.sh` refuses any pre-existing target data
 volume, validates the archive before extraction, provisions fresh volumes, and
 extracts each subtree into only its exact volume before a final structural
 revalidation. Runtime socket volumes and the rebuildable cache are not restored.
+The disposable restore namespace uses the same persistent volume suffixes as a
+normal deployment, including `git-authority-secrets` and
+`git-authority-config`. After recovery and validation, the operator can select
+that exact namespace as `MRML_VOLUME_PREFIX`; no directory copying, volume
+renaming, or alternate Compose model is required. Runtime socket and signer
+volumes remain separately provisioned because they are not backup content.
 
 Image upgrade and rollback resolve the engine-reported mountpoint of the
 `mrml-gitd-state` volume, require its configured numeric Gitd owner and private

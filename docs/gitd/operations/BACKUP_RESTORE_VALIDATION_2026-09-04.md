@@ -85,6 +85,18 @@ an initialized repository without a live authority, signer, certd fixture, or
 HTTP/2 stack. That remaining transaction sequence must be performed before the
 broader destructive-restore acceptance item is complete.
 
+A later activation audit found that the restore model originally named its
+authority secret and configuration targets `NAMESPACE-authority-secrets` and
+`NAMESPACE-authority-config`, while production and subsequent backups resolve
+`NAMESPACE-git-authority-secrets` and
+`NAMESPACE-git-authority-config`. The archive content and logical restore roots
+were correct, but the namespace could not be activated or backed up again by
+selecting it as `MRML_VOLUME_PREFIX`. The restore script and Compose external
+volume names now use the canonical production suffixes. A profile-enabled
+Podman Compose render with distinct source and target prefixes resolved all
+eleven targets, including the corrected authority volumes. The full live
+transaction sequence remains required and will use the corrected names.
+
 Patent review: **NOT_TRIGGERED**. The changes use conventional container image
 layout, filesystem metadata validation, encrypted streaming backup, and cache
 directory reconstruction. See `docs/patents/REVIEW_LOG.md`.

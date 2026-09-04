@@ -16,7 +16,7 @@ restore_compose=${MRML_GIT_RESTORE_COMPOSE_FILE:-$directory/compose.git-restore.
 [ -f "$environment" ] && [ ! -L "$environment" ] && [ "$(stat -c %a "$environment")" = 600 ] || exit 1
 running=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" ps --status running -q gitd git-authority)
 [ -z "$running" ] || { echo "restore requires stopped Gitd and authority" >&2; exit 1; }
-suffixes='gitd-repos gitd-state gitd-quarantine gitd-cache gitd-receipts gitd-policies gitd-secrets gitd-config authority-state authority-secrets authority-config'
+suffixes='gitd-repos gitd-state gitd-quarantine gitd-cache gitd-receipts gitd-policies gitd-secrets gitd-config authority-state git-authority-secrets git-authority-config'
 for suffix in $suffixes; do
   volume=$namespace-$suffix
   if docker volume inspect "$volume" >/dev/null 2>&1; then
