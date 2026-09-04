@@ -8,7 +8,7 @@ use mrml_git::{
     ObjectFormat, PolicyPairStatus, RecoveryAction, TrustPolicyCandidate, TrustPolicyState,
 };
 use mrml_openpgp::PublicKeyV6;
-use mrml_runtime::Vector;
+use mrml_runtime::{DirectoryCapability, DirectoryMetadata, Vector};
 
 use crate::{
     production_receive::receive_pack_limit, verify_repository_admission, DeploymentRepository,
@@ -22,6 +22,7 @@ pub enum StartupValidationError {
     Type,
     Owner,
     Permissions,
+    LinkCount,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,8 +34,17 @@ pub struct RepositoryStoragePaths {
     pub receipts: PathBuf,
 }
 
+pub struct RepositoryStorageCapabilities {
+    pub objects: DirectoryCapability,
+    pub state: DirectoryCapability,
+    pub quarantine: DirectoryCapability,
+    pub cache: DirectoryCapability,
+    pub receipts: DirectoryCapability,
+}
+
 pub struct AdmittedRepository {
     pub paths: RepositoryStoragePaths,
+    pub capabilities: RepositoryStorageCapabilities,
     pub view: FilesystemRepositoryView,
 }
 
@@ -331,6 +341,7 @@ pub fn admit_catalog_repository(
         return Err(RepositoryAdmissionError::Identity);
     }
     let derive = |root: &Path| root.join(owner).join(repository);
+    let relative = format!("{owner}/{repository}");
     let paths = RepositoryStoragePaths {
         objects: derive(&config.repository_root),
         state: derive(&config.state_root),
@@ -338,16 +349,38 @@ pub fn admit_catalog_repository(
         cache: derive(&config.cache_root),
         receipts: derive(&config.receipt_root),
     };
-    for path in [
-        &paths.objects,
-        &paths.state,
-        &paths.quarantine,
-        &paths.cache,
-        &paths.receipts,
-    ] {
-        validate_directory(path, config.gitd_uid, config.gitd_gid, true)
-            .map_err(RepositoryAdmissionError::Layout)?;
-    }
+    let capabilities = RepositoryStorageCapabilities {
+        objects: open_repository_capability(
+            &config.repository_root,
+            &relative,
+            config.gitd_uid,
+            config.gitd_gid,
+        )?,
+        state: open_repository_capability(
+            &config.state_root,
+            &relative,
+            config.gitd_uid,
+            config.gitd_gid,
+        )?,
+        quarantine: open_repository_capability(
+            &config.quarantine_root,
+            &relative,
+            config.gitd_uid,
+            config.gitd_gid,
+        )?,
+        cache: open_repository_capability(
+            &config.cache_root,
+            &relative,
+            config.gitd_uid,
+            config.gitd_gid,
+        )?,
+        receipts: open_repository_capability(
+            &config.receipt_root,
+            &relative,
+            config.gitd_uid,
+            config.gitd_gid,
+        )?,
+    };
     let view = FilesystemRepositoryView::open_with_arrivals(
         entry.repository.clone(),
         paths
@@ -366,7 +399,54 @@ pub fn admit_catalog_repository(
     )
     .map_err(|_| RepositoryAdmissionError::Open)?;
     verify_repository_admission(entry, &view).map_err(|_| RepositoryAdmissionError::Generation)?;
-    Ok(AdmittedRepository { paths, view })
+    Ok(AdmittedRepository {
+        paths,
+        capabilities,
+        view,
+    })
+}
+
+fn open_repository_capability(
+    root: &Path,
+    relative: &str,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> Result<DirectoryCapability, RepositoryAdmissionError> {
+    let root = root.to_str().ok_or(RepositoryAdmissionError::Identity)?;
+    let root = DirectoryCapability::open_root(root).map_err(|_| RepositoryAdmissionError::Open)?;
+    let capability = root
+        .open_directory(relative)
+        .map_err(|_| RepositoryAdmissionError::Open)?;
+    validate_directory_metadata(
+        capability
+            .metadata()
+            .map_err(|_| RepositoryAdmissionError::Open)?,
+        expected_uid,
+        expected_gid,
+    )
+    .map_err(RepositoryAdmissionError::Layout)?;
+    Ok(capability)
+}
+
+fn validate_directory_metadata(
+    metadata: DirectoryMetadata,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> Result<(), StartupValidationError> {
+    if metadata.mode & 0o170000 != 0o040000 {
+        return Err(StartupValidationError::Type);
+    }
+    if metadata.uid != expected_uid || metadata.gid != expected_gid {
+        return Err(StartupValidationError::Owner);
+    }
+    let mode = metadata.mode & 0o777;
+    if mode & 0o027 != 0 || mode & 0o700 != 0o700 {
+        return Err(StartupValidationError::Permissions);
+    }
+    if metadata.links < 2 {
+        return Err(StartupValidationError::LinkCount);
+    }
+    Ok(())
 }
 
 pub fn recover_admitted_repository(

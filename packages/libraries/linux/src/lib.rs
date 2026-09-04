@@ -1216,6 +1216,12 @@ pub fn rename_file(existing: &CStr, replacement: &CStr) -> bool {
 #[cfg(unix)]
 pub struct NativeDirectory(*mut c_void);
 
+// SAFETY: Directory iteration requires `&mut self`; descriptor-relative opens,
+// metadata, and sync do not mutate Rust-visible state. libc directory streams
+// may therefore be transferred and shared under those method-level bounds.
+unsafe impl Send for NativeDirectory {}
+unsafe impl Sync for NativeDirectory {}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeFileMetadata {
     pub inode: u64,
@@ -1239,7 +1245,7 @@ impl NativeDirectory {
         NonNull::new(unsafe { opendir(path.as_ptr()) }).map(|directory| Self(directory.as_ptr()))
     }
 
-    /// Opens a configured root without following its final component.
+    /// Opens a configured absolute root without following any symlink component.
     pub fn open_root(path: &CStr) -> Option<Self> {
         const SYS_OPENAT2_X86_64: c_long = 437;
         const AT_FDCWD: c_int = -100;

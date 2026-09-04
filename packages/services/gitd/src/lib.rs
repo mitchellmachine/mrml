@@ -56,7 +56,8 @@ pub use startup::{
     inspect_admitted_repository_recovery, recover_admitted_repository, validate_storage_layout,
     AdmittedRepository, ProtectedPolicyInitializationError, RepositoryAdmissionError,
     RepositoryInitializationError, RepositoryRecoveryError, RepositoryRecoveryStatus,
-    RepositoryRecoverySummary, RepositoryStoragePaths, StartupValidationError,
+    RepositoryRecoverySummary, RepositoryStorageCapabilities, RepositoryStoragePaths,
+    StartupValidationError,
 };
 pub use tls_identity::{
     build_certd_tls_server_config, build_certd_tls_server_config_with_route,
