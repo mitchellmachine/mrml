@@ -170,6 +170,15 @@ daemon shutdown is therefore not claimed. A final generation-2 agent-backed
 clone also succeeded against the corrected read-only, capability-dropped Gitd
 container.
 
+Commit `594d242f` subsequently added bounded signal-driven shutdown. Its exact
+credential-agent image ID was
+`8411480206404686d2a60d0d65f1eb304f2a60c624d8a5633e829a8a794b3b83`.
+The replacement agent reached ready, emitted `shutdown_complete`, stopped in
+one whole-second timing interval under the ten-second deadline, restarted on
+the same named volumes, and completed another agent-backed clone into a fresh
+named volume. The earlier SIGKILL observation is retained above as superseded
+evidence rather than silently removed.
+
 Public port 443 remains unbound. Production owner keys, production certificate
 identity, a current production Cosign key, public DNS, real certd renewal, and
 external security/cryptographic review remain required before activation.

@@ -10,6 +10,8 @@ Source commits:
 - `3da7a4f4` — isolated image, named-volume Compose model, and offline bundle
   integration.
 - `66806028` — distinct daemon identity and exact clean-worktree image evidence.
+- `594d242f` — bounded SIGINT/SIGTERM shutdown and identity-checked socket
+  removal.
 
 ## Implemented boundary
 
@@ -107,7 +109,25 @@ Syft SBOM, signs its exported archive through the existing offline Cosign path,
 and locks its expected user and entrypoint. A fresh complete signed bundle has
 not yet been produced at these commits.
 
+## Graceful shutdown continuation
+
+The VPS lifecycle exposed that the initial daemon did not exit within its
+ten-second container stop deadline. Commit `594d242f` blocks SIGINT and SIGTERM
+before creating worker state, waits for either signal on a dedicated thread,
+wakes the blocking Unix accept loop, and removes the socket only if its type,
+owner, group, mode, device, and inode still match the socket it created.
+
+The exact clean-worktree image ID was
+`8411480206404686d2a60d0d65f1eb304f2a60c624d8a5633e829a8a794b3b83`.
+On the VPS it reached ready, stopped in one whole-second timing interval under
+a ten-second deadline, emitted `shutdown_complete`, restarted on the same named
+volumes, and served another successful agent-backed clone into a fresh named
+volume. The previous container was retained stopped for rollback. This was a
+hosted Linux/Podman controlled probe, not public-network or production-key
+evidence.
+
 Patent review: **NOT_TRIGGERED**. This is conventional scope attenuation,
 authenticated local IPC, peer-credential enforcement, bearer-token custody, and
-container confinement using existing primitives. See
+container confinement and conventional signal-driven daemon shutdown using
+existing primitives. See
 [`docs/patents/REVIEW_LOG.md`](../../patents/REVIEW_LOG.md).
