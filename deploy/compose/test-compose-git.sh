@@ -179,6 +179,8 @@ require 'construct-git-trust-policy.sh "$payload/deploy/construct-git-trust-poli
 require '--profile admin run --rm --no-deps git-trust-transition' deploy/compose/transition-git-trust.sh
 require 'git_volume git-authority-transition' deploy/compose/install-volume-inputs.sh
 require 'git_volume git-trust-construction' deploy/compose/install-volume-inputs.sh
+require 'install_destination=$2' deploy/compose/install-volume-inputs.sh
+reject 'source=$1 destination=$2' deploy/compose/install-volume-inputs.sh
 require 'previous-openpgp-public.asc' deploy/compose/install-volume-inputs.sh
 require 'previous-ml-dsa-public.bin' deploy/compose/install-volume-inputs.sh
 require '/run/mrml-transition/previous-openpgp-public.asc /run/mrml-transition/previous-ml-dsa-public.bin' deploy/compose/transition-git-trust.sh

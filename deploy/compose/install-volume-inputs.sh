@@ -28,21 +28,26 @@ volume_path() {
 }
 
 install_file() {
-  source=$1 destination=$2 uid=$3 gid=$4 mode=$5 maximum=$6
-  case $source in /*) ;; *) echo "input path must be absolute: $source" >&2; exit 1 ;; esac
-  [ -f "$source" ] && [ ! -L "$source" ] || { echo "input must be a regular non-symlink file" >&2; exit 1; }
-  size=$(stat -c %s "$source")
-  [ "$size" -gt 0 ] && [ "$size" -le "$maximum" ] || { echo "input size rejected" >&2; exit 1; }
-  [ ! -e "$destination" ] && [ ! -L "$destination" ] || { echo "destination already exists: $destination" >&2; exit 1; }
-  temporary=$destination.new.$$
-  trap 'rm -f "$temporary"' EXIT HUP INT TERM
+  install_source=$1
+  install_destination=$2
+  install_uid=$3
+  install_gid=$4
+  install_mode=$5
+  install_maximum=$6
+  case $install_source in /*) ;; *) echo "input path must be absolute: $install_source" >&2; exit 1 ;; esac
+  [ -f "$install_source" ] && [ ! -L "$install_source" ] || { echo "input must be a regular non-symlink file" >&2; exit 1; }
+  install_size=$(stat -c %s "$install_source")
+  [ "$install_size" -gt 0 ] && [ "$install_size" -le "$install_maximum" ] || { echo "input size rejected" >&2; exit 1; }
+  [ ! -e "$install_destination" ] && [ ! -L "$install_destination" ] || { echo "destination already exists: $install_destination" >&2; exit 1; }
+  install_temporary=$install_destination.new.$$
+  trap 'rm -f "$install_temporary"' EXIT HUP INT TERM
   umask 077
-  cp "$source" "$temporary"
-  chown "$uid:$gid" "$temporary"
-  chmod "$mode" "$temporary"
-  sync -f "$temporary"
-  mv "$temporary" "$destination"
-  sync -f "$(dirname "$destination")"
+  cp "$install_source" "$install_temporary"
+  chown "$install_uid:$install_gid" "$install_temporary"
+  chmod "$install_mode" "$install_temporary"
+  sync -f "$install_temporary"
+  mv "$install_temporary" "$install_destination"
+  sync -f "$(dirname "$install_destination")"
   trap - EXIT HUP INT TERM
 }
 
