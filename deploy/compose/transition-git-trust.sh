@@ -5,6 +5,7 @@ directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 environment=${MRML_ENV_FILE:-$directory/.env.production}
 git_compose=${MRML_GIT_COMPOSE_FILE:-$directory/compose.git.yaml}
 acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
+signer_compose=${MRML_SIGNER_COMPOSE_FILE:-$directory/compose.signer.yaml}
 volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
 [ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
@@ -28,9 +29,9 @@ esac
 [ "${#4}" -eq 128 ] || { echo "expected policy digest must contain 128 lowercase hexadecimal digits" >&2; exit 64; }
 selected_repository=$(sed -n 's/^MRML_PROTECTED_REPOSITORY=//p' "$environment")
 [ "$selected_repository" = "$1" ] || { echo "repository does not match MRML_PROTECTED_REPOSITORY" >&2; exit 1; }
-for service in gitd git-authority; do
-  [ -z "$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" ps --status running -q "$service")" ] || {
-    echo "trust transition requires stopped Gitd and authority" >&2
+for service in gitd git-authority git-protected-signer; do
+  [ -z "$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service")" ] || {
+    echo "trust transition requires stopped Gitd, authority, and signer" >&2
     exit 1
   }
 done
@@ -45,10 +46,27 @@ docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
   /run/mrml-transition/next-openpgp.sig /run/mrml-transition/next-ml-dsa.sig \
   "$2" "$3" "$4" 21002
 
+docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" \
+  --profile admin run --rm --no-deps git-signer-trust-advance \
+  advance-trust 21006 21001 21002 "$1" \
+  /var/lib/mrml/git-protected-signer/state/generation.state \
+  /run/mrml-transition/previous-policy.bin \
+  "/var/lib/mrml/git-policies/$1/trust-policy.current" \
+  /var/lib/mrml/git-protected-signer/keys/openpgp.seed \
+  "${MRML_OPENPGP_CREATED_AT:?set MRML_OPENPGP_CREATED_AT}" \
+  /var/lib/mrml/git-protected-signer/keys/ml-dsa-public.bin \
+  /var/lib/mrml/git-protected-signer/keys/ml-dsa-secret.bin \
+  /run/mrml-transition/previous-openpgp.sig \
+  /run/mrml-transition/previous-ml-dsa.sig \
+  /run/mrml-transition/next-openpgp-public.asc \
+  /run/mrml-transition/next-ml-dsa-public.bin \
+  /run/mrml-transition/next-openpgp.sig \
+  /run/mrml-transition/next-ml-dsa.sig
+
 transition_volume=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-authority-transition")
 case $transition_volume in /*/_data) ;; *) echo "unsafe transition volume mountpoint" >&2; exit 1 ;; esac
 [ -d "$transition_volume" ] && [ ! -L "$transition_volume" ] || exit 1
-for input in next-policy.bin next-openpgp-public.asc next-ml-dsa-public.bin previous-openpgp.sig previous-ml-dsa.sig next-openpgp.sig next-ml-dsa.sig; do
+for input in previous-policy.bin next-policy.bin next-openpgp-public.asc next-ml-dsa-public.bin previous-openpgp.sig previous-ml-dsa.sig next-openpgp.sig next-ml-dsa.sig; do
   [ -f "$transition_volume/$input" ] && [ ! -L "$transition_volume/$input" ] || exit 1
   rm -- "$transition_volume/$input"
 done

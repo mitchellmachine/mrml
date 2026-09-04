@@ -166,7 +166,7 @@ require 'initialize-protected-policy /etc/mrml/gitd.conf' deploy/compose/initial
 require '$volume_prefix-gitd-policies:/mnt/mrml/gitd/policies:rw' deploy/compose/initialize-git-protected-policy.sh
 require '$volume_prefix-git-authority-config:/run/mrml-bootstrap:ro' deploy/compose/initialize-git-protected-policy.sh
 reject '$deployment_root/gitd/policies' deploy/compose/initialize-git-protected-policy.sh
-require 'trust transition requires stopped Gitd and authority' deploy/compose/transition-git-trust.sh
+require 'trust transition requires stopped Gitd, authority, and signer' deploy/compose/transition-git-trust.sh
 require '--profile admin run --rm --no-deps git-trust-transition' deploy/compose/transition-git-trust.sh
 require 'git_volume git-authority-transition' deploy/compose/install-volume-inputs.sh
 require 'authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC' deploy/compose/install-volume-inputs.sh

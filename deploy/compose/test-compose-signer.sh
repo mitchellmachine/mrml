@@ -22,6 +22,10 @@ reject() {
 require 'USER 21006:21006' "$dockerfile"
 require 'ENTRYPOINT ["/usr/bin/mrml-git-protected-signer"]' "$dockerfile"
 require 'user: "21006:21006"' "$compose"
+require 'git-signer-trust-advance:' "$compose"
+require 'profiles: [admin]' "$compose"
+require '"mrml-gitd-policies:/var/lib/mrml/git-policies:ro"' "$compose"
+require '"mrml-git-authority-transition:/run/mrml-transition:ro"' "$compose"
 require 'group_add: ["21906"]' "$compose"
 require 'network_mode: none' "$compose"
 require 'read_only: true' "$compose"
@@ -65,5 +69,9 @@ require 'volume_spec=$signer_volume:/keys:nocopy' deploy/compose/generate-git-si
 require 'volume_spec=type=volume,source=$signer_volume,target=/keys,volume-nocopy' deploy/compose/generate-git-signer-keys.sh
 require '"21006:21006 400 32 1"' deploy/compose/generate-git-signer-keys.sh
 require '"21006:21006 400 4032 1"' deploy/compose/generate-git-signer-keys.sh
+require 'previous-policy.bin' deploy/compose/install-volume-inputs.sh
+require 'trust transition requires stopped Gitd, authority, and signer' deploy/compose/transition-git-trust.sh
+require '--profile admin run --rm --no-deps git-signer-trust-advance' deploy/compose/transition-git-trust.sh
+require 'advance-trust 21006 21001 21002 "$1"' deploy/compose/transition-git-trust.sh
 
 echo "protected signer Compose and image isolation policy PASS"

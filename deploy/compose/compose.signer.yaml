@@ -1,4 +1,35 @@
 services:
+  git-signer-trust-advance:
+    profiles: [admin]
+    image: "mrml/git-protected-signer:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21006:21006"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 16
+    mem_limit: 256m
+    cpus: 1.0
+    restart: "no"
+    ulimits:
+      nofile: {soft: 256, hard: 256}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=21006,gid=21006,mode=0700
+    volumes:
+      - type: volume
+        source: mrml-git-signer-state
+        target: /var/lib/mrml/git-protected-signer/state
+        volume: {nocopy: true}
+      - type: volume
+        source: mrml-git-signer-keys
+        target: /var/lib/mrml/git-protected-signer/keys
+        read_only: true
+        volume: {nocopy: true}
+      - "mrml-gitd-policies:/var/lib/mrml/git-policies:ro"
+      - "mrml-git-authority-transition:/run/mrml-transition:ro"
+
   git-protected-signer:
     image: "mrml/git-protected-signer:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
     platform: linux/amd64
@@ -66,3 +97,9 @@ volumes:
     name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-channel"
   mrml-runtime-git-signer:
     name: "${MRML_VOLUME_PREFIX:-mrml}-runtime-git-signer"
+  mrml-gitd-policies:
+    name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-policies"
+    external: true
+  mrml-git-authority-transition:
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-authority-transition"
+    external: true
