@@ -15,16 +15,14 @@ use mrml_openpgp::{
     MAX_OPENPGP_PUBLIC_KEY_BYTES, MAX_OPENPGP_SIGNATURE_BYTES, parse_public_key_v6_ascii,
 };
 use mrml_runtime::DirectoryCapability;
-use std::fs::{self, OpenOptions};
-use std::io::Read;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::fs;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 const EX_USAGE: i32 = 64;
 const EX_CONFIG: i32 = 78;
-const O_NOFOLLOW: i32 = 0x20_000;
 const STATUS_OK: u16 = 0;
 const STATUS_UNAVAILABLE: u16 = 1;
 const MAX_AUTHORITY_CATALOG_BYTES: usize = 8 * 1024 * 1024;
@@ -948,25 +946,40 @@ fn read_regular(
     expected_owner: u32,
     secret: bool,
 ) -> Result<Vec<u8>, ()> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return Err(());
+    }
+    let parent = path.parent().ok_or(())?;
+    let name = path.file_name().and_then(|name| name.to_str()).ok_or(())?;
+    let directory = DirectoryCapability::open_root(parent.to_str().ok_or(())?).map_err(|_| ())?;
+    read_regular_from(&directory, name, minimum, maximum, expected_owner, secret)
+}
+
+fn read_regular_from(
+    directory: &DirectoryCapability,
+    name: &str,
+    minimum: usize,
+    maximum: usize,
+    expected_owner: u32,
+    secret: bool,
+) -> Result<Vec<u8>, ()> {
+    let mut file = directory
+        .open_regular(name)
         .map_err(|_| ())?;
     let metadata = file.metadata().map_err(|_| ())?;
-    let mode = metadata.mode() & 0o777;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.nlink() != 1
-        || metadata.uid() != expected_owner
+    let length = file.len().map_err(|_| ())?;
+    let mode = metadata.mode & 0o777;
+    if metadata.links != 1
+        || metadata.uid != expected_owner
         || (secret && !matches!(mode, 0o400 | 0o440 | 0o600))
         || (!secret && mode & 0o022 != 0)
-        || metadata.len() < minimum as u64
-        || metadata.len() > maximum as u64
+        || length < minimum as u64
+        || length > maximum as u64
     {
         return Err(());
     }
-    let mut bytes = vec![0u8; metadata.len() as usize];
+    let mut bytes = vec![0u8; length as usize];
     file.read_exact(&mut bytes).map_err(|_| ())?;
     Ok(bytes)
 }
@@ -1010,6 +1023,34 @@ mod tests {
         ] {
             assert!(parse_authority_repository_catalog(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn bootstrap_read_remains_bound_to_retained_parent_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-authority-bootstrap-retained-{}",
+            std::process::id()
+        ));
+        let displaced = root.with_extension("displaced");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&displaced);
+        std::fs::create_dir(&root).unwrap();
+        let key = root.join("receipt.key");
+        std::fs::write(&key, [0x31; 32]).unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&key).unwrap());
+        let retained = DirectoryCapability::open_root(root.to_str().unwrap()).unwrap();
+        std::fs::rename(&root, &displaced).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("receipt.key"), [0x41; 32]).unwrap();
+
+        assert_eq!(
+            read_regular_from(&retained, "receipt.key", 32, 32, uid, true),
+            Ok(vec![0x31; 32])
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(displaced).unwrap();
     }
 
     #[test]
