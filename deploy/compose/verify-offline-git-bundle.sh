@@ -30,6 +30,10 @@ for image in git-authority gitd git-protected-signer git-backup; do
     --bundle "signatures/$image.cosign.bundle" --insecure-ignore-tlog \
     "images/$image.tar"
 done
-deploy/test-compose-git.sh deploy/compose.git.yaml
-deploy/test-compose-signer.sh deploy/compose.signer.yaml
+[ -d policy-source/deploy/compose ] && [ -f policy-source/tools/containers/measure-git-streaming.sh ] || exit 1
+(
+  cd policy-source
+  ../deploy/test-compose-git.sh deploy/compose/compose.git.yaml
+  ../deploy/test-compose-signer.sh deploy/compose/compose.signer.yaml
+)
 echo "offline Git bundle checksums, SBOM presence, and signatures PASS"

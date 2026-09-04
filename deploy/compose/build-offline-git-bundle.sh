@@ -41,10 +41,16 @@ streaming_bytes=$(sed -n 's/^source_bytes=//p' "$GIT_STREAMING_EVIDENCE/metadata
 bundle_root=$(mktemp -d)
 trap 'rm -rf "$bundle_root"' EXIT HUP INT TERM
 payload=$bundle_root/mrml-git-$version
-install -d -m 0700 "$payload/images" "$payload/sbom" "$payload/signatures" "$payload/deploy" "$payload/evidence/streaming"
+install -d -m 0700 "$payload/images" "$payload/sbom" "$payload/signatures" "$payload/deploy" "$payload/evidence/streaming" "$payload/policy-source"
 for evidence in source.commit metadata configured-limits process.tsv docker-stats.jsonl summary SHA256SUMS; do
   install -m 0444 "$GIT_STREAMING_EVIDENCE/$evidence" "$payload/evidence/streaming/$evidence"
 done
+
+# Preserve the exact tracked policy inputs needed by the offline verifier.
+# `git archive` deliberately excludes ignored or untracked deployment inputs,
+# including any operator-created production environment or secret files.
+git archive --format=tar HEAD deploy/compose tools/containers/measure-git-streaming.sh |
+  tar -C "$payload/policy-source" -xf -
 
 # Cosign v3 uses an explicit service configuration. The offline blob profile
 # deliberately contains no Fulcio, OIDC, Rekor, or timestamp service, so the

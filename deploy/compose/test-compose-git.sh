@@ -173,7 +173,9 @@ require 'recover-safe' deploy/compose/recovery-git.sh
 require 'GIT_STREAMING_EVIDENCE' deploy/compose/build-offline-git-bundle.sh
 require 'docker-archive:$payload/images/$image.tar' deploy/compose/build-offline-git-bundle.sh
 require 'offline-signing-config.json' deploy/compose/build-offline-git-bundle.sh
+require 'git archive --format=tar HEAD deploy/compose tools/containers/measure-git-streaming.sh' deploy/compose/build-offline-git-bundle.sh
 require '--insecure-ignore-tlog' deploy/compose/verify-offline-git-bundle.sh
 require 'evidence/streaming' deploy/compose/verify-offline-git-bundle.sh
+require 'policy-source/deploy/compose' deploy/compose/verify-offline-git-bundle.sh
 
 echo "Git Compose static invariants PASS"
