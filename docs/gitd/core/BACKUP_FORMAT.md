@@ -37,6 +37,13 @@ reordered sequences, unknown flags, nonzero reserved fields, oversized frames,
 noncanonical final frames, tag changes, and truncation. Authentication failure
 clears the affected plaintext output.
 
+Decrypted plaintext begins with the fixed `MRGBPL01` payload magic, a big-endian
+32-bit canonical-inventory length, and four zero reserved bytes. The inventory
+immediately follows. After it, the exact contents of every regular file appear
+in inventory order; directory entries contribute no bytes. File boundaries are
+therefore derived only from authenticated inventory sizes and cannot be moved
+by unauthenticated archive data.
+
 The canonical inventory declares the complete fixed mask of ten authoritative
 logical volumes; cache is deliberately absent. It binds a nonzero backup
 generation, ordered unique repository identities, repository/pack/trust/
@@ -73,6 +80,14 @@ mode-0600, single-link authority record beneath the retained generation root,
 parsed against the repository identity. Conventional entries record authority
 generation zero. Operator- or environment-supplied generation values are not
 accepted.
+
+The implemented emitter writes the stream header and then bounded frames while
+holding retained capabilities for all ten source roots. It reopens every
+declared descendant beneath its corresponding root, exact-matches type, mode,
+UID, GID, link count, and size, hashes bytes as they stream, rejects short reads
+or growth, and requires the second-pass digest to equal the inventory. Repository
+contents are never accumulated in memory. Archive-file atomic creation and the
+reader/restore path remain service-layer acceptance gates.
 
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,

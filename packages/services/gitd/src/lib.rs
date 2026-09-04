@@ -1,4 +1,5 @@
 mod auth_store;
+mod backup_archive;
 mod authority_rpc;
 mod backend;
 mod backup_volume;
@@ -22,6 +23,9 @@ pub use auth_store::{
     initialize_empty_token_store, issue_access_token, load_gitd_authentication,
     reload_gitd_authentication, revoke_access_token, AuthenticationStoreError,
     RetainedAuthenticationStore,
+};
+pub use backup_archive::{
+    BackupArchiveError, backup_payload_inventory_length, write_backup_archive,
 };
 pub use authority_rpc::{GitAuthorityChannelClient, GitAuthorityChannelError};
 pub use backend::{GitdRepositorySet, SharedGitdRepositorySet};

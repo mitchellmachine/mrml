@@ -1,0 +1,339 @@
+//! Streaming emission of authenticated Git backup archives.
+
+use std::io::Write;
+
+use mrml_crypto::Sha256;
+use mrml_git::{
+    encode_backup_inventory, encode_backup_stream_header, seal_backup_frame, BackupInventory,
+    BackupInventoryFileKind, BackupStreamHeader, BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES,
+    MAX_BACKUP_INVENTORY_BYTES,
+};
+use mrml_runtime::DirectoryCapability;
+
+const PAYLOAD_MAGIC: &[u8; 8] = b"MRGBPL01";
+const PAYLOAD_PREFIX_BYTES: usize = 16;
+const COPY_BUFFER_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackupArchiveError {
+    Inventory,
+    Header,
+    Open,
+    Changed,
+    Read,
+    Encrypt,
+    Write,
+    Resource,
+}
+
+/// Writes one archive as fixed authenticated frames. Plaintext is a canonical
+/// payload prefix, the canonical inventory, then each regular file's exact
+/// bytes in inventory order. Directories carry no payload bytes.
+pub fn write_backup_archive(
+    writer: &mut dyn Write,
+    backup_key: &[u8; 32],
+    header: BackupStreamHeader,
+    inventory: &BackupInventory,
+    volume_roots: [&str; 10],
+) -> Result<(), BackupArchiveError> {
+    if inventory.backup_generation != header.generation {
+        return Err(BackupArchiveError::Header);
+    }
+    let encoded_inventory =
+        encode_backup_inventory(inventory).map_err(|_| BackupArchiveError::Inventory)?;
+    let inventory_length =
+        u32::try_from(encoded_inventory.len()).map_err(|_| BackupArchiveError::Resource)?;
+    let encoded_header =
+        encode_backup_stream_header(header).map_err(|_| BackupArchiveError::Header)?;
+    writer
+        .write_all(&encoded_header)
+        .map_err(|_| BackupArchiveError::Write)?;
+    let roots = open_roots(volume_roots)?;
+    let mut frames = FrameWriter::new(writer, backup_key, encoded_header, header.chunk_bytes)?;
+    let mut prefix = [0u8; PAYLOAD_PREFIX_BYTES];
+    prefix[..8].copy_from_slice(PAYLOAD_MAGIC);
+    prefix[8..12].copy_from_slice(&inventory_length.to_be_bytes());
+    frames.write_plaintext(&prefix)?;
+    frames.write_plaintext(&encoded_inventory)?;
+    for entry in &inventory.entries {
+        let root = roots
+            .get(entry.volume as usize - 1)
+            .ok_or(BackupArchiveError::Inventory)?;
+        match entry.kind {
+            BackupInventoryFileKind::Directory => {
+                let directory = root
+                    .open_directory(entry.path.as_str())
+                    .map_err(|_| BackupArchiveError::Changed)?;
+                let metadata = directory
+                    .metadata()
+                    .map_err(|_| BackupArchiveError::Changed)?;
+                if metadata.mode & 0o170000 != 0o040000
+                    || metadata.mode & 0o7777 != u32::from(entry.mode)
+                    || metadata.uid != entry.uid
+                    || metadata.gid != entry.gid
+                    || metadata.links < 2
+                    || entry.size != 0
+                    || entry.digest != [0; 32]
+                {
+                    return Err(BackupArchiveError::Changed);
+                }
+            }
+            BackupInventoryFileKind::Regular => {
+                stream_regular(root, entry, &mut frames)?;
+            }
+        }
+    }
+    frames.finish()
+}
+
+fn open_roots(paths: [&str; 10]) -> Result<Vec<DirectoryCapability>, BackupArchiveError> {
+    let mut roots = Vec::with_capacity(paths.len());
+    for path in paths {
+        let root = DirectoryCapability::open_root(path).map_err(|_| BackupArchiveError::Open)?;
+        let metadata = root.metadata().map_err(|_| BackupArchiveError::Open)?;
+        if metadata.mode & 0o170000 != 0o040000 || metadata.links < 2 {
+            return Err(BackupArchiveError::Open);
+        }
+        roots.push(root);
+    }
+    Ok(roots)
+}
+
+fn stream_regular(
+    root: &DirectoryCapability,
+    entry: &mrml_git::BackupInventoryEntry,
+    frames: &mut FrameWriter<'_>,
+) -> Result<(), BackupArchiveError> {
+    let mut file = root
+        .open_regular(entry.path.as_str())
+        .map_err(|_| BackupArchiveError::Changed)?;
+    let metadata = file.metadata().map_err(|_| BackupArchiveError::Changed)?;
+    let size = file.len().map_err(|_| BackupArchiveError::Changed)?;
+    if metadata.mode & 0o170000 != 0o100000
+        || metadata.mode & 0o7777 != u32::from(entry.mode)
+        || metadata.uid != entry.uid
+        || metadata.gid != entry.gid
+        || metadata.links != 1
+        || size != entry.size
+    {
+        return Err(BackupArchiveError::Changed);
+    }
+    let mut buffer = [0u8; COPY_BUFFER_BYTES];
+    let mut digest = Sha256::new();
+    let mut consumed = 0u64;
+    while consumed < size {
+        let wanted = usize::try_from((size - consumed).min(buffer.len() as u64))
+            .map_err(|_| BackupArchiveError::Resource)?;
+        let count = file
+            .read(&mut buffer[..wanted])
+            .map_err(|_| BackupArchiveError::Read)?;
+        if count == 0 {
+            return Err(BackupArchiveError::Changed);
+        }
+        digest.update(&buffer[..count]);
+        frames.write_plaintext(&buffer[..count])?;
+        consumed = consumed
+            .checked_add(count as u64)
+            .ok_or(BackupArchiveError::Resource)?;
+    }
+    if file
+        .read(&mut buffer[..1])
+        .map_err(|_| BackupArchiveError::Read)?
+        != 0
+        || digest.finalize() != entry.digest
+    {
+        return Err(BackupArchiveError::Changed);
+    }
+    Ok(())
+}
+
+struct FrameWriter<'a> {
+    writer: &'a mut dyn Write,
+    backup_key: &'a [u8; 32],
+    header: [u8; BACKUP_STREAM_HEADER_BYTES],
+    buffer: Vec<u8>,
+    used: usize,
+    sequence: u64,
+}
+
+impl<'a> FrameWriter<'a> {
+    fn new(
+        writer: &'a mut dyn Write,
+        backup_key: &'a [u8; 32],
+        header: [u8; BACKUP_STREAM_HEADER_BYTES],
+        chunk_bytes: u32,
+    ) -> Result<Self, BackupArchiveError> {
+        let length = usize::try_from(chunk_bytes).map_err(|_| BackupArchiveError::Resource)?;
+        Ok(Self {
+            writer,
+            backup_key,
+            header,
+            buffer: vec![0; length],
+            used: 0,
+            sequence: 0,
+        })
+    }
+
+    fn write_plaintext(&mut self, mut input: &[u8]) -> Result<(), BackupArchiveError> {
+        while !input.is_empty() {
+            let count = input.len().min(self.buffer.len() - self.used);
+            self.buffer[self.used..self.used + count].copy_from_slice(&input[..count]);
+            self.used += count;
+            input = &input[count..];
+            if self.used == self.buffer.len() {
+                self.emit(false)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit(&mut self, final_frame: bool) -> Result<(), BackupArchiveError> {
+        let plaintext = if final_frame {
+            &[][..]
+        } else {
+            &self.buffer[..self.used]
+        };
+        let mut sealed = vec![0; plaintext.len() + BACKUP_FRAME_OVERHEAD];
+        let length = seal_backup_frame(
+            self.backup_key,
+            &self.header,
+            self.sequence,
+            final_frame,
+            plaintext,
+            &mut sealed,
+        )
+        .map_err(|_| BackupArchiveError::Encrypt)?;
+        self.writer
+            .write_all(&sealed[..length])
+            .map_err(|_| BackupArchiveError::Write)?;
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or(BackupArchiveError::Resource)?;
+        self.used = 0;
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<(), BackupArchiveError> {
+        if self.used != 0 {
+            self.emit(false)?;
+        }
+        self.emit(true)
+    }
+}
+
+pub fn backup_payload_inventory_length(prefix: &[u8]) -> Result<usize, BackupArchiveError> {
+    if prefix.len() != PAYLOAD_PREFIX_BYTES
+        || &prefix[..8] != PAYLOAD_MAGIC
+        || prefix[12..] != [0; 4]
+    {
+        return Err(BackupArchiveError::Inventory);
+    }
+    let length = usize::try_from(u32::from_be_bytes(prefix[8..12].try_into().unwrap()))
+        .map_err(|_| BackupArchiveError::Resource)?;
+    if length == 0 || length > MAX_BACKUP_INVENTORY_BYTES {
+        return Err(BackupArchiveError::Resource);
+    }
+    Ok(length)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mrml_git::{
+        open_backup_frame, BackupInventoryEntry, BackupRepositoryGeneration, BackupVolume,
+        PackGeneration, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
+        TrustGeneration,
+    };
+    use mrml_runtime::{Text, Vector};
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    #[test]
+    fn archive_streams_canonical_inventory_and_file_bytes() {
+        let root = std::env::temp_dir().join(format!("mrml-backup-archive-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mut paths = Vec::new();
+        for index in 0..10 {
+            let path = root.join(index.to_string());
+            fs::create_dir_all(&path).unwrap();
+            paths.push(path);
+        }
+        let file_path = paths[0].join("objects.pack");
+        fs::write(&file_path, b"hello").unwrap();
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let metadata = fs::metadata(&file_path).unwrap();
+        let inventory = BackupInventory {
+            backup_generation: 9,
+            repositories: Vector::from([BackupRepositoryGeneration {
+                repository: RepositoryIdentity::parse("owner/repository").unwrap(),
+                repository_generation: RepositoryGeneration(1),
+                pack_generation: PackGeneration(1),
+                trust_generation: TrustGeneration(1),
+                revocation_generation: RevocationGeneration(1),
+                authority_generation: 0,
+            }]),
+            entries: Vector::from([BackupInventoryEntry {
+                volume: BackupVolume::GitdRepositories,
+                path: Text::from("objects.pack"),
+                kind: BackupInventoryFileKind::Regular,
+                mode: 0o600,
+                uid: metadata.uid(),
+                gid: metadata.gid(),
+                size: 5,
+                digest: Sha256::digest(b"hello"),
+            }]),
+        };
+        let path_refs: [&str; 10] = core::array::from_fn(|index| paths[index].to_str().unwrap());
+        let header = BackupStreamHeader {
+            generation: 9,
+            chunk_bytes: 7,
+            salt: [0x31; 16],
+            nonce_prefix: [0x42; 4],
+        };
+        let key = [0x73; 32];
+        let mut archive = Vec::new();
+        write_backup_archive(&mut archive, &key, header, &inventory, path_refs).unwrap();
+
+        let encoded_header: [u8; BACKUP_STREAM_HEADER_BYTES] =
+            archive[..BACKUP_STREAM_HEADER_BYTES].try_into().unwrap();
+        let mut cursor = BACKUP_STREAM_HEADER_BYTES;
+        let mut sequence = 0;
+        let mut plaintext = Vec::new();
+        loop {
+            let length =
+                u32::from_be_bytes(archive[cursor + 8..cursor + 12].try_into().unwrap()) as usize;
+            let end = cursor + BACKUP_FRAME_OVERHEAD + length;
+            let mut opened = vec![0; header.chunk_bytes as usize];
+            let (count, final_frame) = open_backup_frame(
+                &key,
+                &encoded_header,
+                sequence,
+                &archive[cursor..end],
+                &mut opened,
+            )
+            .unwrap();
+            plaintext.extend_from_slice(&opened[..count]);
+            cursor = end;
+            sequence += 1;
+            if final_frame {
+                break;
+            }
+        }
+        assert_eq!(cursor, archive.len());
+        let encoded_inventory = encode_backup_inventory(&inventory).unwrap();
+        assert_eq!(
+            backup_payload_inventory_length(&plaintext[..PAYLOAD_PREFIX_BYTES]),
+            Ok(encoded_inventory.len())
+        );
+        assert_eq!(
+            &plaintext[PAYLOAD_PREFIX_BYTES..PAYLOAD_PREFIX_BYTES + encoded_inventory.len()],
+            &encoded_inventory[..]
+        );
+        assert_eq!(
+            &plaintext[PAYLOAD_PREFIX_BYTES + encoded_inventory.len()..],
+            b"hello"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+}
