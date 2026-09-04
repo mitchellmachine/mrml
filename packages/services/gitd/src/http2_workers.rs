@@ -110,10 +110,10 @@ impl GitdHttp2WorkerPool {
                     drop(handshake_permit);
                     let tls_stream = match tls_stream {
                         Ok(stream) => stream,
-                        Err(_) => {
+                        Err(error) => {
                             increment(&worker_counters.tls_failures);
                             eprintln!(
-                                "component=mrml-gitd event=http2_tls_failed category=handshake"
+                                "component=mrml-gitd event=http2_tls_failed category=handshake error={error:?}"
                             );
                             continue;
                         }
