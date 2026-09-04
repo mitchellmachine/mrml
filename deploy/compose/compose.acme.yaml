@@ -85,7 +85,7 @@ volumes:
   mrml-acmed-challenges:
     name: mrml-acmed-challenges
   mrml-runtime-certd-gitd:
-    name: mrml-runtime-certd-gitd
+    name: "${MRML_VOLUME_PREFIX:-mrml}-runtime-certd-gitd"
   mrml-runtime-certd-acmed:
     name: mrml-runtime-certd-acmed
   mrml-certd-secrets:

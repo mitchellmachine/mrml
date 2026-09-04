@@ -8,6 +8,10 @@ usage() {
 
 [ "$(id -u)" -eq 0 ] || { echo "volume input installation must run as root" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
+volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
+case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
+git_volume() { printf '%s-%s\n' "$volume_prefix" "$1"; }
 
 volume_path() {
   volume=$1
@@ -43,19 +47,19 @@ install_file() {
 case ${1:-} in
   gitd)
     [ "$#" -eq 2 ] || usage
-    destination=$(volume_path mrml-gitd-config)
+    destination=$(volume_path "$(git_volume gitd-config)")
     install_file "$2" "$destination/gitd.conf" 0 0 0444 65536
     ;;
   authority)
     [ "$#" -eq 4 ] || usage
-    destination=$(volume_path mrml-git-authority-config)
+    destination=$(volume_path "$(git_volume git-authority-config)")
     install_file "$2" "$destination/repositories.v1" 21002 21002 0444 8388608
     install_file "$3" "$destination/openpgp-public.asc" 21002 21002 0444 1048576
     install_file "$4" "$destination/ml-dsa-public.bin" 21002 21002 0444 1048576
     ;;
   signer)
     [ "$#" -eq 5 ] || usage
-    destination=$(volume_path mrml-git-signer-keys)
+    destination=$(volume_path "$(git_volume git-signer-keys)")
     install_file "$2" "$destination/openpgp.seed" 21006 21006 0400 32
     install_file "$3" "$destination/ml-dsa-public.bin" 21006 21006 0444 1952
     install_file "$4" "$destination/ml-dsa-secret.bin" 21006 21006 0400 4032
@@ -63,7 +67,7 @@ case ${1:-} in
     ;;
   authority-transition)
     [ "$#" -eq 8 ] || usage
-    destination=$(volume_path mrml-git-authority-transition)
+    destination=$(volume_path "$(git_volume git-authority-transition)")
     install_file "$2" "$destination/next-policy.bin" 21002 21002 0444 524288
     install_file "$3" "$destination/next-openpgp-public.asc" 21002 21002 0444 1048576
     install_file "$4" "$destination/next-ml-dsa-public.bin" 21002 21002 0444 1048576

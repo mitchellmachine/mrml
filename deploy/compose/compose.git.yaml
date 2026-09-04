@@ -133,30 +133,30 @@ networks:
 
 volumes:
   mrml-authority-state:
-    name: mrml-authority-state
+    name: "${MRML_VOLUME_PREFIX:-mrml}-authority-state"
   mrml-gitd-repos:
-    name: mrml-gitd-repos
+    name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-repos"
   mrml-gitd-state:
-    name: mrml-gitd-state
+    name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-state"
   mrml-gitd-quarantine:
-    name: mrml-gitd-quarantine
+    name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-quarantine"
   mrml-gitd-cache:
-    name: mrml-gitd-cache
+    name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-cache"
   mrml-gitd-receipts:
-    name: mrml-gitd-receipts
+    name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-receipts"
   mrml-gitd-policies:
-    name: mrml-gitd-policies
+    name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-policies"
   mrml-runtime-git-authority:
-    name: mrml-runtime-git-authority
+    name: "${MRML_VOLUME_PREFIX:-mrml}-runtime-git-authority"
   mrml-runtime-certd-gitd:
-    name: mrml-runtime-certd-gitd
+    name: "${MRML_VOLUME_PREFIX:-mrml}-runtime-certd-gitd"
   mrml-git-authority-secrets:
-    name: mrml-git-authority-secrets
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-authority-secrets"
   mrml-git-authority-config:
-    name: mrml-git-authority-config
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-authority-config"
   mrml-git-authority-transition:
-    name: mrml-git-authority-transition
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-authority-transition"
   mrml-gitd-secrets:
-    name: mrml-gitd-secrets
+    name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-secrets"
   mrml-gitd-config:
-    name: mrml-gitd-config
+    name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-config"

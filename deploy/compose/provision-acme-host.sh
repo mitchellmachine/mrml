@@ -3,6 +3,10 @@ set -eu
 
 root=${MRML_DEPLOY_ROOT:-/mnt/mrml}
 minimum_kib=${MRML_MINIMUM_FREE_KIB:-1048576}
+volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
+
+case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
 
 case "$root" in
   /mnt/*) ;;
@@ -93,13 +97,13 @@ make_volume mrml-certd-state 21003 21003 0700
 make_volume mrml-certd-publications 21003 21003 0750
 make_volume mrml-acmed-state 21004 21004 0700
 make_volume mrml-acmed-challenges 21004 21004 0700
-make_volume mrml-runtime-certd-gitd 21003 21902 2770
+make_volume "$volume_prefix-runtime-certd-gitd" 21003 21902 2770
 make_volume mrml-runtime-certd-acmed 21003 21903 2770
 make_volume mrml-certd-secrets 21003 21003 0700
 make_volume mrml-certd-config 0 0 0755
 make_volume mrml-acmed-secrets 21004 21004 0700
 make_volume mrml-acmed-config 0 0 0755
-make_volume mrml-gitd-secrets 21001 21001 0700
+make_volume "$volume_prefix-gitd-secrets" 21001 21001 0700
 
 certd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-certd-secrets)
 acmed_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-acmed-secrets)
@@ -154,7 +158,7 @@ create_channel_pair() {
   certd_copy=$certd_secrets/$name.cap
   case $4 in
     gitd)
-      gitd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-gitd-secrets)
+      gitd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-gitd-secrets")
       peer_copy=$gitd_secrets/certd-gitd-channel
       ;;
     acmed) peer_copy=$acmed_secrets/certd-acmed.cap ;;

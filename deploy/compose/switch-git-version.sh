@@ -10,10 +10,13 @@ directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 environment=${MRML_ENV_FILE:-$directory/.env.production}
 git_compose=${MRML_GIT_COMPOSE_FILE:-$directory/compose.git.yaml}
 acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
+volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 gitd_uid=${MRML_GITD_UID:-21001}
 gitd_gid=${MRML_GITD_GID:-21001}
 case $gitd_uid in ''|0|*[!0-9]*) echo "invalid Gitd UID" >&2; exit 1 ;; esac
 case $gitd_gid in ''|0|*[!0-9]*) echo "invalid Gitd GID" >&2; exit 1 ;; esac
+case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
 
 [ -f "$environment" ] && [ ! -L "$environment" ] && [ "$(stat -c %a "$environment")" = 600 ] || {
   echo "missing or unsafe mode-0600 production environment file: $environment" >&2
@@ -23,8 +26,8 @@ case $gitd_gid in ''|0|*[!0-9]*) echo "invalid Gitd GID" >&2; exit 1 ;; esac
   echo "image switching must run as root" >&2
   exit 1
 }
-state_mount=$(docker volume inspect --format '{{.Mountpoint}}' mrml-gitd-state) || {
-  echo "provisioned mrml-gitd-state volume is required" >&2
+state_mount=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-gitd-state") || {
+  echo "provisioned $volume_prefix-gitd-state volume is required" >&2
   exit 1
 }
 case $state_mount in /*/_data) ;; *) echo "unsafe Gitd state volume mountpoint" >&2; exit 1 ;; esac

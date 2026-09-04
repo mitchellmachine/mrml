@@ -5,6 +5,9 @@ directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 environment=${MRML_ENV_FILE:-$directory/.env.production}
 git_compose=${MRML_GIT_COMPOSE_FILE:-$directory/compose.git.yaml}
 acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
+volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
+case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
 
 [ "$#" -eq 3 ] || {
   echo "usage: $0 OWNER/REPOSITORY VALID_FROM VALID_UNTIL" >&2
@@ -35,8 +38,8 @@ done
 
 docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
   run --rm --no-deps \
-  -v "mrml-gitd-policies:/mnt/mrml/gitd/policies:rw" \
-  -v "mrml-git-authority-config:/run/mrml-bootstrap:ro" \
+  -v "$volume_prefix-gitd-policies:/mnt/mrml/gitd/policies:rw" \
+  -v "$volume_prefix-git-authority-config:/run/mrml-bootstrap:ro" \
   --entrypoint /usr/bin/mrml-gitd gitd \
   initialize-protected-policy /etc/mrml/gitd.conf "$1" \
   /run/mrml-bootstrap/openpgp-public.asc /run/mrml-bootstrap/ml-dsa-public.bin "$2" "$3"

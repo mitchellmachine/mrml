@@ -7,12 +7,17 @@ client_gid=$2
 signer_uid=21006
 signer_gid=21006
 socket_gid=21906
+volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 
 case $client_uid in ''|*[!0-9]*|0) echo "client UID must be nonzero decimal" >&2; exit 2 ;; esac
 case $client_gid in ''|*[!0-9]*|0) echo "client GID must be nonzero decimal" >&2; exit 2 ;; esac
 [ "$client_uid" != "$signer_uid" ] || { echo "client and signer UID must differ" >&2; exit 2; }
 [ "$(id -u)" -eq 0 ] || { echo "signer provisioning must run as root" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
+case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
+
+volume_name() { printf '%s-%s\n' "$volume_prefix" "$1"; }
 
 ensure_volume() {
   name=$1 uid=$2 gid=$3 mode=$4
@@ -34,14 +39,14 @@ ensure_volume() {
   [ "$(stat -c '%u:%g %a' "$path")" = "$uid:$gid $mode" ]
 }
 
-ensure_volume mrml-git-signer-state "$signer_uid" "$signer_gid" 700
-ensure_volume mrml-git-signer-keys "$signer_uid" "$signer_gid" 700
-ensure_volume mrml-git-signer-channel "$signer_uid" "$signer_gid" 700
-ensure_volume mrml-git-client-signer-channel "$client_uid" "$client_gid" 700
-ensure_volume mrml-runtime-git-signer "$signer_uid" "$socket_gid" 2770
+ensure_volume "$(volume_name git-signer-state)" "$signer_uid" "$signer_gid" 700
+ensure_volume "$(volume_name git-signer-keys)" "$signer_uid" "$signer_gid" 700
+ensure_volume "$(volume_name git-signer-channel)" "$signer_uid" "$signer_gid" 700
+ensure_volume "$(volume_name git-client-signer-channel)" "$client_uid" "$client_gid" 700
+ensure_volume "$(volume_name runtime-git-signer)" "$signer_uid" "$socket_gid" 2770
 
-signer_channel=$(docker volume inspect --format '{{.Mountpoint}}' mrml-git-signer-channel)/signer-channel
-client_channel=$(docker volume inspect --format '{{.Mountpoint}}' mrml-git-client-signer-channel)/signer-channel
+signer_channel=$(docker volume inspect --format '{{.Mountpoint}}' "$(volume_name git-signer-channel)")/signer-channel
+client_channel=$(docker volume inspect --format '{{.Mountpoint}}' "$(volume_name git-client-signer-channel)")/signer-channel
 if { [ -e "$signer_channel" ] && [ ! -e "$client_channel" ]; } ||
    { [ ! -e "$signer_channel" ] && [ -e "$client_channel" ]; }; then
   echo "incomplete signer channel pair" >&2

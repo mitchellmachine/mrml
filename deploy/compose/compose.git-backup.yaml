@@ -33,15 +33,15 @@ services:
       - "mrml-git-authority-config:/source/authority-config:ro"
 
 volumes:
-  mrml-git-backups: {external: true, name: mrml-git-backups}
-  mrml-git-backup-key: {external: true, name: mrml-git-backup-key}
-  mrml-gitd-repos: {external: true, name: mrml-gitd-repos}
-  mrml-gitd-state: {external: true, name: mrml-gitd-state}
-  mrml-gitd-quarantine: {external: true, name: mrml-gitd-quarantine}
-  mrml-gitd-receipts: {external: true, name: mrml-gitd-receipts}
-  mrml-gitd-policies: {external: true, name: mrml-gitd-policies}
-  mrml-gitd-secrets: {external: true, name: mrml-gitd-secrets}
-  mrml-gitd-config: {external: true, name: mrml-gitd-config}
-  mrml-authority-state: {external: true, name: mrml-authority-state}
-  mrml-git-authority-secrets: {external: true, name: mrml-git-authority-secrets}
-  mrml-git-authority-config: {external: true, name: mrml-git-authority-config}
+  mrml-git-backups: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-git-backups"}
+  mrml-git-backup-key: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-git-backup-key"}
+  mrml-gitd-repos: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-repos"}
+  mrml-gitd-state: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-state"}
+  mrml-gitd-quarantine: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-quarantine"}
+  mrml-gitd-receipts: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-receipts"}
+  mrml-gitd-policies: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-policies"}
+  mrml-gitd-secrets: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-secrets"}
+  mrml-gitd-config: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-config"}
+  mrml-authority-state: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-authority-state"}
+  mrml-git-authority-secrets: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-git-authority-secrets"}
+  mrml-git-authority-config: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-git-authority-config"}

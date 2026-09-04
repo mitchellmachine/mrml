@@ -42,7 +42,8 @@ require '443:8443/udp' "$compose"
 require 'mrml-runtime-certd-gitd:/run/mrml/certd-gitd:ro' "$compose"
 require 'mrml-gitd-policies:/var/lib/mrml/git-policies:ro' "$compose"
 require 'mrml-gitd-repos:/mnt/mrml/gitd/repos:rw' "$compose"
-require 'name: mrml-gitd-repos' "$compose"
+require 'name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-repos"' "$compose"
+require 'name: "${MRML_VOLUME_PREFIX:-mrml}-runtime-certd-gitd"' "$compose"
 require 'serve-catalog' "$compose"
 require '/etc/mrml/authority/repositories.v1' "$compose"
 reject 'MRML_PROTECTED_REPOSITORY' "$compose"
@@ -89,8 +90,8 @@ require 'COPY --from=verify /payload/rootfs/ /' "$gitd_dockerfile"
 require '/payload/dirs/authority /var/lib/mrml/authority' "$authority_dockerfile"
 require 'docker volume create --label org.mrml.managed=true' deploy/compose/provision-git-host.sh
 require 'wrong owner on Docker volume' deploy/compose/provision-git-host.sh
-require 'mrml-runtime-certd-gitd' deploy/compose/provision-git-host.sh
-require 'mrml-git-authority-transition' deploy/compose/provision-git-host.sh
+require 'volume_name runtime-certd-gitd' deploy/compose/provision-git-host.sh
+require 'volume_name git-authority-transition' deploy/compose/provision-git-host.sh
 require 'gitd-token-pepper' deploy/compose/provision-git-host.sh
 reject '$deployment_root/secrets/channels' deploy/compose/provision-git-host.sh
 
@@ -102,10 +103,10 @@ for operator in deploy/compose/initialize-git.sh deploy/compose/initialize-git-r
 done
 
 require 'docker volume inspect --format' deploy/compose/switch-git-version.sh
-require 'mrml-gitd-state' deploy/compose/switch-git-version.sh
+require '"$volume_prefix-gitd-state"' deploy/compose/switch-git-version.sh
 reject '$deploy_root/gitd/state' deploy/compose/switch-git-version.sh
-require 'volume_mount mrml-gitd-config' tools/containers/measure-git-streaming.sh
-require 'volume_mount mrml-gitd-repos' tools/containers/measure-git-streaming.sh
+require 'volume_mount "$volume_prefix-gitd-config"' tools/containers/measure-git-streaming.sh
+require 'volume_mount "$volume_prefix-gitd-repos"' tools/containers/measure-git-streaming.sh
 reject '$deploy_root/gitd/' tools/containers/measure-git-streaming.sh
 require '--no-build --pull never git-authority gitd' deploy/compose/switch-git-version.sh
 require 'repository data was not rolled back' deploy/compose/switch-git-version.sh
@@ -121,11 +122,14 @@ require 'restore requires absent Docker volume' deploy/compose/restore-git.sh
 require 'org.mrml.restore-disposable=true' deploy/compose/restore-git.sh
 require 'services remain disabled' deploy/compose/restore-git.sh
 require 'image: "mrml/git-backup:' "$backup_compose"
+require 'name: "${MRML_VOLUME_PREFIX:-mrml}-git-backups"' "$backup_compose"
+require 'name: "${MRML_VOLUME_PREFIX:-mrml}-git-backup-key"' "$backup_compose"
 require 'cap_add: [DAC_READ_SEARCH]' "$backup_compose"
 require 'mrml-git-backups:/backup:rw' "$backup_compose"
 require 'mrml-git-backup-key:/backup-key:rw' "$backup_compose"
 require 'mrml-gitd-repos:/source/gitd-repos:ro' "$backup_compose"
 require 'image: "mrml/git-backup:' "$restore_compose"
+require 'name: "${MRML_VOLUME_PREFIX:-mrml}-git-backups"' "$restore_compose"
 require 'cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]' "$restore_compose"
 require 'mrml-git-backups:/backup:ro' "$restore_compose"
 require 'mrml-git-backup-key:/backup-key:ro' "$restore_compose"
@@ -138,20 +142,20 @@ reject 'privileged:' "$backup_compose"
 reject 'privileged:' "$restore_compose"
 reject 'network_mode: host' "$backup_compose"
 reject 'network_mode: host' "$restore_compose"
-require 'ensure_volume mrml-git-backups 0 0 700' deploy/compose/provision-git-host.sh
-require 'ensure_volume mrml-git-backup-key 0 0 700' deploy/compose/provision-git-host.sh
+require 'volume_name git-backups' deploy/compose/provision-git-host.sh
+require 'volume_name git-backup-key' deploy/compose/provision-git-host.sh
 require 'run --rm --no-deps' deploy/compose/initialize-git.sh
 require 'initialize-token-store' deploy/compose/initialize-git.sh
 require 'repository initialization requires stopped Gitd' deploy/compose/initialize-git-repository.sh
 require 'initialize-repository /etc/mrml/gitd.conf' deploy/compose/initialize-git-repository.sh
 require 'protected policy initialization requires stopped Gitd and authority' deploy/compose/initialize-git-protected-policy.sh
 require 'initialize-protected-policy /etc/mrml/gitd.conf' deploy/compose/initialize-git-protected-policy.sh
-require 'mrml-gitd-policies:/mnt/mrml/gitd/policies:rw' deploy/compose/initialize-git-protected-policy.sh
-require 'mrml-git-authority-config:/run/mrml-bootstrap:ro' deploy/compose/initialize-git-protected-policy.sh
+require '$volume_prefix-gitd-policies:/mnt/mrml/gitd/policies:rw' deploy/compose/initialize-git-protected-policy.sh
+require '$volume_prefix-git-authority-config:/run/mrml-bootstrap:ro' deploy/compose/initialize-git-protected-policy.sh
 reject '$deployment_root/gitd/policies' deploy/compose/initialize-git-protected-policy.sh
 require 'trust transition requires stopped Gitd and authority' deploy/compose/transition-git-trust.sh
 require '--profile admin run --rm --no-deps git-trust-transition' deploy/compose/transition-git-trust.sh
-require 'mrml-git-authority-transition' deploy/compose/install-volume-inputs.sh
+require 'git_volume git-authority-transition' deploy/compose/install-volume-inputs.sh
 require 'authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC' deploy/compose/install-volume-inputs.sh
 require 'repositories.v1' deploy/compose/install-volume-inputs.sh
 reject '$deployment_root/gitd/policies' deploy/compose/transition-git-trust.sh

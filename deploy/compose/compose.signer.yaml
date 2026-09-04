@@ -45,10 +45,10 @@ services:
 
 volumes:
   mrml-git-signer-state:
-    name: mrml-git-signer-state
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-state"
   mrml-git-signer-keys:
-    name: mrml-git-signer-keys
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-keys"
   mrml-git-signer-channel:
-    name: mrml-git-signer-channel
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-channel"
   mrml-runtime-git-signer:
-    name: mrml-runtime-git-signer
+    name: "${MRML_VOLUME_PREFIX:-mrml}-runtime-git-signer"

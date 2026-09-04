@@ -34,8 +34,8 @@ services:
       - "restore-authority-config:/restore/authority-config:rw"
 
 volumes:
-  mrml-git-backups: {external: true, name: mrml-git-backups}
-  mrml-git-backup-key: {external: true, name: mrml-git-backup-key}
+  mrml-git-backups: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-git-backups"}
+  mrml-git-backup-key: {external: true, name: "${MRML_VOLUME_PREFIX:-mrml}-git-backup-key"}
   restore-gitd-repos: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-repos"}
   restore-gitd-state: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-state"}
   restore-gitd-quarantine: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-quarantine"}

@@ -12,6 +12,7 @@ certd_uid=${MRML_CERTD_UID:-21003}
 admin_uid=${MRML_ADMIN_UID:-21005}
 admin_gid=${MRML_ADMIN_GID:-21005}
 minimum_free_kib=${MRML_MINIMUM_FREE_KIB:-1048576}
+volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 
 fail() {
     printf '%s\n' "provision-git-host: $1" >&2
@@ -35,6 +36,17 @@ require_number MRML_CERTD_UID "$certd_uid"
 require_number MRML_ADMIN_UID "$admin_uid"
 require_number MRML_ADMIN_GID "$admin_gid"
 require_number MRML_MINIMUM_FREE_KIB "$minimum_free_kib"
+case $volume_prefix in
+    [a-z0-9]*[a-z0-9]) ;;
+    [a-z0-9]) ;;
+    *) fail "MRML_VOLUME_PREFIX must contain only lowercase ASCII letters, digits, and internal hyphens" ;;
+esac
+case $volume_prefix in *[!a-z0-9-]*|*--*) fail "invalid MRML_VOLUME_PREFIX" ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || fail "MRML_VOLUME_PREFIX is too long"
+
+volume_name() {
+    printf '%s-%s\n' "$volume_prefix" "$1"
+}
 
 case $deployment_root in
     /mnt/*) ;;
@@ -117,24 +129,24 @@ ensure_volume() {
     [ "$(stat -c '%a' "$mountpoint")" = "$mode" ] || fail "wrong mode on Docker volume $name"
 }
 
-ensure_volume mrml-gitd-repos "$gitd_uid" "$gitd_gid" 700
-ensure_volume mrml-gitd-state "$gitd_uid" "$gitd_gid" 700
-ensure_volume mrml-gitd-quarantine "$gitd_uid" "$gitd_gid" 700
-ensure_volume mrml-gitd-cache "$gitd_uid" "$gitd_gid" 700
-ensure_volume mrml-gitd-receipts "$gitd_uid" "$gitd_gid" 700
-ensure_volume mrml-gitd-policies "$gitd_uid" "$gitd_gid" 755
-ensure_volume mrml-authority-state "$authority_uid" "$authority_gid" 700
-ensure_volume mrml-runtime-git-authority "$authority_uid" "$authority_socket_gid" 2770
-ensure_volume mrml-runtime-certd-gitd "$certd_uid" "$certd_socket_gid" 2770
-ensure_volume mrml-git-authority-secrets "$authority_uid" "$authority_gid" 700
-ensure_volume mrml-git-authority-config 0 0 755
-ensure_volume mrml-git-authority-transition "$authority_uid" "$authority_gid" 755
-ensure_volume mrml-gitd-secrets "$gitd_uid" "$gitd_gid" 700
-ensure_volume mrml-gitd-config 0 0 755
-ensure_volume mrml-git-backups 0 0 700
-ensure_volume mrml-git-backup-key 0 0 700
+ensure_volume "$(volume_name gitd-repos)" "$gitd_uid" "$gitd_gid" 700
+ensure_volume "$(volume_name gitd-state)" "$gitd_uid" "$gitd_gid" 700
+ensure_volume "$(volume_name gitd-quarantine)" "$gitd_uid" "$gitd_gid" 700
+ensure_volume "$(volume_name gitd-cache)" "$gitd_uid" "$gitd_gid" 700
+ensure_volume "$(volume_name gitd-receipts)" "$gitd_uid" "$gitd_gid" 700
+ensure_volume "$(volume_name gitd-policies)" "$gitd_uid" "$gitd_gid" 755
+ensure_volume "$(volume_name authority-state)" "$authority_uid" "$authority_gid" 700
+ensure_volume "$(volume_name runtime-git-authority)" "$authority_uid" "$authority_socket_gid" 2770
+ensure_volume "$(volume_name runtime-certd-gitd)" "$certd_uid" "$certd_socket_gid" 2770
+ensure_volume "$(volume_name git-authority-secrets)" "$authority_uid" "$authority_gid" 700
+ensure_volume "$(volume_name git-authority-config)" 0 0 755
+ensure_volume "$(volume_name git-authority-transition)" "$authority_uid" "$authority_gid" 755
+ensure_volume "$(volume_name gitd-secrets)" "$gitd_uid" "$gitd_gid" 700
+ensure_volume "$(volume_name gitd-config)" 0 0 755
+ensure_volume "$(volume_name git-backups)" 0 0 700
+ensure_volume "$(volume_name git-backup-key)" 0 0 700
 
-authority_mount=$(docker volume inspect --format '{{.Mountpoint}}' mrml-authority-state) ||
+authority_mount=$(docker volume inspect --format '{{.Mountpoint}}' "$(volume_name authority-state)") ||
     fail "cannot inspect authority state volume"
 ensure_dir "$authority_mount/policies" "$authority_uid" "$authority_gid" 700
 ensure_dir "$authority_mount/proofs" "$authority_uid" "$authority_gid" 700
@@ -161,8 +173,8 @@ ensure_secret() {
 }
 
 create_channel_pair() {
-    authority_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-git-authority-secrets)
-    gitd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-gitd-secrets)
+    authority_secrets=$(docker volume inspect --format '{{.Mountpoint}}' "$(volume_name git-authority-secrets)")
+    gitd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' "$(volume_name gitd-secrets)")
     authority_copy=$authority_secrets/git-authority-channel
     gitd_copy=$gitd_secrets/git-authority-channel
     if { [ -e "$authority_copy" ] && [ ! -e "$gitd_copy" ]; } ||
@@ -187,8 +199,8 @@ create_channel_pair() {
 }
 
 create_channel_pair
-authority_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-git-authority-secrets)
-gitd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-gitd-secrets)
+authority_secrets=$(docker volume inspect --format '{{.Mountpoint}}' "$(volume_name git-authority-secrets)")
+gitd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' "$(volume_name gitd-secrets)")
 ensure_secret "$authority_secrets/receipt.key" "$authority_uid" "$authority_gid" 32
 ensure_secret "$gitd_secrets/gitd-token-pepper" "$gitd_uid" "$gitd_gid" 32
 ensure_secret "$gitd_secrets/gitd-quic-retry-key" "$gitd_uid" "$gitd_gid" 16

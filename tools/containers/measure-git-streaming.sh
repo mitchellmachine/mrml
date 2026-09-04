@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
+case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
+
 [ "$#" -ge 3 ] || {
   echo "usage: $0 /absolute/evidence-directory SOURCE_BYTES COMMAND [ARG ...]" >&2
   exit 64
@@ -42,10 +46,10 @@ volume_mount() {
   printf '%s\n' "$measured_mount"
 }
 
-config_mount=$(volume_mount mrml-gitd-config)
-repos_mount=$(volume_mount mrml-gitd-repos)
-quarantine_mount=$(volume_mount mrml-gitd-quarantine)
-cache_mount=$(volume_mount mrml-gitd-cache)
+config_mount=$(volume_mount "$volume_prefix-gitd-config")
+repos_mount=$(volume_mount "$volume_prefix-gitd-repos")
+quarantine_mount=$(volume_mount "$volume_prefix-gitd-quarantine")
+cache_mount=$(volume_mount "$volume_prefix-gitd-cache")
 config_file=$config_mount/gitd.conf
 [ -f "$config_file" ] && [ ! -L "$config_file" ] || {
   echo "Gitd configuration volume does not contain a safe gitd.conf" >&2

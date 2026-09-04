@@ -5,6 +5,9 @@ directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 environment=${MRML_ENV_FILE:-$directory/.env.production}
 git_compose=${MRML_GIT_COMPOSE_FILE:-$directory/compose.git.yaml}
 acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
+volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
+case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
 
 [ "$#" -eq 4 ] || {
   echo "usage: $0 OWNER/REPOSITORY VALIDATION_TIME EXPECTED_GENERATION EXPECTED_POLICY_DIGEST" >&2
@@ -42,7 +45,7 @@ docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
   /run/mrml-transition/next-openpgp.sig /run/mrml-transition/next-ml-dsa.sig \
   "$2" "$3" "$4" 21002
 
-transition_volume=$(docker volume inspect --format '{{.Mountpoint}}' mrml-git-authority-transition)
+transition_volume=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-git-authority-transition")
 case $transition_volume in /*/_data) ;; *) echo "unsafe transition volume mountpoint" >&2; exit 1 ;; esac
 [ -d "$transition_volume" ] && [ ! -L "$transition_volume" ] || exit 1
 for input in next-policy.bin next-openpgp-public.asc next-ml-dsa-public.bin previous-openpgp.sig previous-ml-dsa.sig next-openpgp.sig next-ml-dsa.sig; do

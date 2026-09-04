@@ -60,7 +60,8 @@ require '/payload/dirs/state /var/lib/mrml/certd' "$certd_dockerfile"
 require '/payload/dirs/state /var/lib/mrml/acmed' "$acmed_dockerfile"
 require 'docker volume create --label org.mrml.managed=true' deploy/compose/provision-acme-host.sh
 require 'unsafe Docker volume mountpoint' deploy/compose/provision-acme-host.sh
-require 'mrml-runtime-certd-gitd' deploy/compose/provision-acme-host.sh
+require '$volume_prefix-runtime-certd-gitd' deploy/compose/provision-acme-host.sh
+require '$volume_prefix-gitd-secrets' deploy/compose/provision-acme-host.sh
 
 echo "ACME Compose static invariants PASS"
 
