@@ -104,8 +104,27 @@ group/world writable. The production signer runs as `21006:21006`; its socket
 directory is `21006:21906` mode `2770`, and the socket is `21006:21906` mode
 `0660`. The ordinary Git client receives only membership in group `21906` for
 socket traversal and a separately owned copy of the channel capability. It
-cannot read signer keys or durable signer state. Start the daemon as the
-key-owning non-root user:
+cannot read signer keys or durable signer state.
+
+Fresh deployments generate the hybrid keypair directly inside the already
+provisioned signer-key named volume. The one-shot signer image has no network,
+read-only root, no capabilities, `no-new-privileges`, bounded resources, and no
+writable mount other than that volume:
+
+```text
+sudo MRML_CONTAINER_RUNTIME=docker MRML_VOLUME_PREFIX=mrml \
+  ./generate-git-signer-keys.sh VERSION OPENPGP_CREATED_AT
+```
+
+Select `podman` explicitly when the deployment uses a Podman image and volume
+store. The operation exclusively creates `openpgp.seed`,
+`openpgp-public.asc`, `ml-dsa-public.bin`, and `ml-dsa-secret.bin`, applies
+exact signer ownership and `0400`/`0444` modes, synchronizes the volume, and
+fails closed rather than replacing any existing output. It never prints or
+exports either private key. Copy only the two public files into the separately
+owned authority and client policy inputs.
+
+Start the daemon as the key-owning non-root user:
 
 ```text
 mrml-git-protected-signer serve SOCKET CAPABILITY CLIENT_UID CLIENT_GID OWNER_UID SOCKET_GID REPOSITORY REPOSITORY_GENERATION TRUST_GENERATION REVOCATION_GENERATION STATE_FILE AUTHORITY_RECEIPT_PUBLIC OPENPGP_SEED OPENPGP_CREATED_AT ML_DSA_PUBLIC ML_DSA_SECRET
