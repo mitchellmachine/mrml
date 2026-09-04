@@ -75,7 +75,9 @@ The protected signer image authorizes the reviewed `next-policy.bin` twice via
 the current trust generation and once through the separately selected inactive
 key volume at the successor generation. `MRML_GIT_SIGNER_KEYS_VOLUME` and
 `MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME` must name the two distinct provisioned
-slots; selection swaps their roles without overwriting either volume. Both one-shot
+slots. Additional slots use the prefix-scoped
+`mrml-git-signer-key-slot-NAME` form and must carry the MRML-managed volume
+label. Selection swaps the configured roles without overwriting any volume. Both one-shot
 services are read-only, networkless, and mount only their own private-key
 volume, the public construction volume, and the signer-owned public signature
 output volume. The policy input may be owned by UID 21001 while keys and

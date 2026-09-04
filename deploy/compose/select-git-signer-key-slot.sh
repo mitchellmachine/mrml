@@ -22,9 +22,11 @@ volume_prefix=$(read_environment_value MRML_VOLUME_PREFIX)
 }
 case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
 case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
+configured_selected=$(read_environment_value MRML_GIT_SIGNER_KEYS_VOLUME)
+configured_candidate=$(read_environment_value MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME)
 case $1 in
   current) selected_volume=$volume_prefix-git-signer-keys; candidate_volume=$volume_prefix-git-signer-next-keys ;;
-  next) selected_volume=$volume_prefix-git-signer-next-keys; candidate_volume=$volume_prefix-git-signer-keys ;;
+  next) selected_volume=$configured_candidate; candidate_volume=$configured_selected ;;
   *) exit 64 ;;
 esac
 case $2:$3:$4 in *[!0-9:]*|:*|*:) exit 64 ;; esac
@@ -40,7 +42,19 @@ else
     [ -z "$running" ] || { echo "signer key selection requires stopped Gitd, authority, and signer" >&2; exit 1; }
   done
 fi
-"$runtime" volume inspect "$selected_volume" >/dev/null
+for volume in "$selected_volume" "$candidate_volume"; do
+  case $volume in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid signer key volume name" >&2; exit 1 ;; esac
+  [ "$(printf %s "$volume" | wc -c)" -le 127 ] || { echo "signer key volume name is too long" >&2; exit 1; }
+  case $volume in
+    "$volume_prefix-git-signer-keys"|"$volume_prefix-git-signer-next-keys"|"$volume_prefix-git-signer-key-slot-"[a-z0-9]* ) ;;
+    *) echo "signer key volume is outside the managed key slots" >&2; exit 1 ;;
+  esac
+  [ "$("$runtime" volume inspect --format '{{index .Labels "org.mrml.managed"}}' "$volume")" = true ] || {
+    echo "signer key volume is not MRML-managed" >&2
+    exit 1
+  }
+done
+[ "$selected_volume" != "$candidate_volume" ] || { echo "selected and candidate signer key volumes must differ" >&2; exit 1; }
 
 for name in MRML_GIT_SIGNER_KEYS_VOLUME MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME MRML_OPENPGP_CREATED_AT MRML_TRUST_GENERATION MRML_REVOCATION_GENERATION; do
   [ "$(grep -c "^$name=" "$environment")" -eq 1 ] || { echo "environment must contain exactly one $name assignment" >&2; exit 1; }

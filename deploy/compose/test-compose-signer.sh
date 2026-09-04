@@ -120,8 +120,10 @@ require 'signer key selection requires stopped Gitd, authority, and signer' depl
 require 'MRML_GIT_SIGNER_KEYS_VOLUME' deploy/compose/select-git-signer-key-slot.sh
 require 'MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME' deploy/compose/select-git-signer-key-slot.sh
 require 'selected and candidate signer key volumes must differ' deploy/compose/stage-git-trust-transition.sh
+require 'git-signer-key-slot-' deploy/compose/stage-git-trust-transition.sh
+require 'org.mrml.managed' deploy/compose/select-git-signer-key-slot.sh
 require 'sync -f "$temporary"' deploy/compose/select-git-signer-key-slot.sh
-require 'selected signer key volume is outside the managed key slots' deploy/compose/stage-git-trust-transition.sh
+require 'signer key volume is outside the managed key slots' deploy/compose/stage-git-trust-transition.sh
 require 'install-volume-inputs.sh" authority-transition' deploy/compose/stage-git-trust-transition.sh
 require 'git-trust-signatures' deploy/compose/stage-git-trust-transition.sh
 

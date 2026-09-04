@@ -20,14 +20,20 @@ case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PRE
 case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
 selected_volume=$(read_environment_value MRML_GIT_SIGNER_KEYS_VOLUME)
 candidate_volume=$(read_environment_value MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME)
-case $selected_volume in
-  "$volume_prefix-git-signer-keys"|"$volume_prefix-git-signer-next-keys") ;;
-  *) echo "selected signer key volume is outside the managed key slots" >&2; exit 1 ;;
-esac
-case $candidate_volume in
-  "$volume_prefix-git-signer-keys"|"$volume_prefix-git-signer-next-keys") ;;
-  *) echo "candidate signer key volume is outside the managed key slots" >&2; exit 1 ;;
-esac
+validate_key_volume() {
+  case $1 in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid signer key volume name" >&2; exit 1 ;; esac
+  [ "$(printf %s "$1" | wc -c)" -le 127 ] || { echo "signer key volume name is too long" >&2; exit 1; }
+  case $1 in
+    "$volume_prefix-git-signer-keys"|"$volume_prefix-git-signer-next-keys"|"$volume_prefix-git-signer-key-slot-"[a-z0-9]* ) ;;
+    *) echo "signer key volume is outside the managed key slots" >&2; exit 1 ;;
+  esac
+  [ "$("$runtime" volume inspect --format '{{index .Labels "org.mrml.managed"}}' "$1")" = true ] || {
+    echo "signer key volume is not MRML-managed" >&2
+    exit 1
+  }
+}
+validate_key_volume "$selected_volume"
+validate_key_volume "$candidate_volume"
 [ "$candidate_volume" != "$selected_volume" ] || { echo "selected and candidate signer key volumes must differ" >&2; exit 1; }
 
 volume_path() {
