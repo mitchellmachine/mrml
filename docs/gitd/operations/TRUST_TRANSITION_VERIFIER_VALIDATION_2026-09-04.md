@@ -59,6 +59,18 @@ to match the supplied private material. The authenticated dual-signature trust
 advance is the only v1-to-v2 migration path and persists the successor pair's
 identity atomically with the generations.
 
+Signed commits `91404cb9` and `9dd6ee54` preserve bounded authority startup
+failure categories and correct authenticated health so the Gitd-owned split
+capability is opened as UID 21001, not as the authority UID. Signed commits
+`862f09da`, `dbbfdd22`, and `cba45d4f` add classified Gitd admission failures,
+an atomic named-volume catalog updater, and the authenticated startup handoff.
+The handoff admits a catalog that is behind only in trust or revocation
+generation, queries the authority through its split capability, requires the
+exact repository generation and catalog-selected trust tuple, and advances the
+durable ref state monotonically before reopening it. Repository refs and pack
+identity remain unchanged; a catalog or local state ahead of authenticated
+authority state fails closed.
+
 ## Verification
 
 ```text
@@ -68,12 +80,16 @@ git diff --check                                          PASS
 ./target/debug/mrml test org.mrml.service.git-authority \
   --target linux                                          PASS
   authority library: 13 passed
-  authority binary:   8 passed
+  authority binary:   9 passed
 ./target/debug/mrml test org.mrml.tool.git --target linux PASS
-  Git library:        274 passed
+  Git library:        276 passed
   Git CLI:            5 passed
   protected signer:   9 passed
   credential agent:   2 passed
+./target/debug/mrml test org.mrml.service.gitd --target linux PASS
+  Gitd library:       53 passed
+  Gitd binary:        7 passed
+  Gitd backup:        1 passed
 ```
 
 The binary test uses two independent real OpenPGP/ML-DSA pairs and real hybrid
@@ -138,12 +154,55 @@ health exchange. Starting the previous generation-3 key against the same v2
 state failed closed with exit 78. The valid generation-4 signer was then
 restored and passed authenticated health again.
 
-An authority restart with trusted time after generation 4 failed closed before
-creating its socket. The same retained state also failed the non-listening
-`check-catalog` path. Retained trust-2, trust-3, and trust-4 verifier files were
-present with UID/GID `21001:21001`, mode `0444`, one link, and exact expected
-OpenPGP and ML-DSA sizes. The cause remains unresolved, so authority restart and
-post-retirement protected-push evidence are explicitly not claimed.
+The first authority restart with trusted time after generation 4 failed closed
+before creating its socket. Classified diagnostics identified
+`proof_directory`; the imported test volume had a legacy extra `state/`
+component. The source volume was preserved. Its contents were copied into the
+current layout in the new named volume
+`mrml-podman140f-fresh-authority-state-layout-v2`, and `check-catalog` passed.
+Authority image `localhost/mrml/git-authority:trust-9dd6ee54` had image ID
+`6654e1ba55b188174ae28965e2c22e54d4fbe63996303a1162eb57db6057af8e`;
+its OCI archive SHA-256 was
+`73bc324b327c5692d7bd08337c7c87f79485f6532ad0c0ac13853af735fa2276`.
+It restarted, bound its listener, and passed an authenticated Gitd-side health
+request. This corrects the earlier unresolved observation without erasing it.
+
+The repository catalog was then atomically advanced from trust generation 1 to
+4 with digest
+`cf545335a68aeebb57621fd2314d85f9daef5350693964c7ce821dfc4077fab2`.
+Gitd image `localhost/mrml/gitd:trust-cba45d4f` had image ID
+`4f85e070666a3b25e9a0445054c308a07512391435e2b291c06bcb2379fbed30`;
+its OCI archive SHA-256 was
+`400a2ee44a9cbd518f499f42bbc90e23c9a2b87b857b3ebbc05123d7eabcc5a0`.
+The exact archive checksum matched after SSH transfer. Gitd authenticated both
+dependencies, advanced the durable trust tuple, completed recovery, bound only
+server loopback `127.0.0.1:28443`, and reached `ready`.
+
+A validation-only client was built from the same clean signed commit. Image
+`localhost/mrml/git-client:trust-cba45d4f` had image ID
+`109f3694273ebc901737adf82ee9ea6db442c0e857f22ac7c85f61b01a68810f`;
+its OCI archive SHA-256 was
+`76b906f78fb4c081155288a8a3dbfce80b54b00faea3a66a4f79a3408aabae96`.
+It is test apparatus, not a production client image. The retained client first
+failed closed because it still held generation-1 public trust inputs. After the
+selected generation-4 policy and generation-4 public verification pair were
+copied exactly between named volumes, the client completed protected push
+`d8532f795f18` to `a0317a551b96`. Gitd active-ref and signer-state hashes both
+changed. Gitd then shut down cleanly, restarted on the same named volumes, and
+again passed all six startup gates. A fresh authenticated fetch advertised the
+pushed objects and left local `main` and `origin/main` at zero ahead and zero
+behind.
+
+All client, Gitd, authority, signer, certificate, policy, key, state, and
+runtime container mounts in this exercise were named volumes. Older Podman
+rejected its `subpath=socket` option, so the signer runtime named volume was
+mounted at its root and the non-secret socket path included the `socket/`
+component. No bind-directory fallback was used. Several repository-scoped
+one-hour test tokens were issued while diagnosing a missing Podman stdin flag
+and the stale client policy. Their plaintext was never printed or stored, they
+cannot be individually recovered for revocation, and they expire at Unix time
+`1788550023`; this fixture limitation is not production token-lifecycle
+evidence.
 
 Older Podman copy-up changed the runtime volume root group on first mount. The
 test restored the provisioned `21006:21906` owner/group and mode `2770` before
@@ -152,11 +211,13 @@ the authenticated client probe; the socket subdirectory and socket were
 of a compatibility gap, not evidence that Compose automatically preserves
 those invariants on that older provider.
 
-Remaining Phase 24 gates include a protected push during overlap and after
-retirement with Gitd and authority restarted together, explicit stale-policy
-rollback rejection across daemon restarts, process-kill injection around every
-transition phase, and a supported old-Podman startup path that does not require
-manual runtime-volume metadata repair.
+Remaining Phase 24 gates include a protected push during the overlap interval,
+explicit stale-policy rollback rejection across daemon restarts, process-kill
+injection around every transition phase, and a supported old-Podman startup
+path that does not require manual runtime-volume metadata repair. This exercise
+used a controlled certificate fixture, loopback publication, and test keys; it
+does not establish public-service, real-certificate-renewal, production-key, or
+physical-hardware evidence.
 
 Patent review: **NOT_TRIGGERED**. This uses conventional immutable public-key
 files, exact metadata/content validation, directory capabilities, and ordered
