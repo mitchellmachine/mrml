@@ -35,6 +35,8 @@ done
 
 require "USER 21001:21001" "$gitd"
 require 'ENTRYPOINT ["/usr/bin/mrml-gitd"]' "$gitd"
+require 'install -d -o 21001 -g 21001 -m 0700' "$gitd"
+require 'COPY --from=verify /payload/rootfs/ /' "$gitd"
 reject "mrml-git-authority" "$gitd"
 reject "receipt.key" "$gitd"
 reject "certd-unlock" "$gitd"

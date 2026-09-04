@@ -119,6 +119,10 @@ synced again. Directories are finalized child-first, including the authenticated
 volume-root records. Parent directories are synced after namespace changes. A
 final canonical rescan must exactly equal the authenticated inventory. Any
 error leaves a disposable target set that is not authorized for activation.
+An eleventh empty cache volume is required. After archive authentication, the
+administrator derives only its owner/repository directory skeleton from the
+authenticated inventory, applies the Gitd owner and private mode, and syncs it;
+cache bytes remain excluded from backup and restore.
 
 The `mrml-git-backup` hosted administrator binary implements `create`, `verify`,
 and `restore` for a canonical nonzero decimal generation. It uses fixed

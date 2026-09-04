@@ -72,7 +72,6 @@ impl RetainedAuthenticationStore {
         if metadata.uid != gitd_uid
             || metadata.gid != gitd_gid
             || metadata.mode & 0o777 != 0o700
-            || metadata.links < 2
         {
             return Err(AuthenticationStoreError::Permissions);
         }
@@ -180,7 +179,7 @@ impl TokenStoreLocation {
         let metadata = directory
             .metadata()
             .map_err(|_| AuthenticationStoreError::Metadata)?;
-        if metadata.uid != gitd_uid || metadata.mode & 0o777 != 0o700 || metadata.links < 2 {
+        if metadata.uid != gitd_uid || metadata.mode & 0o777 != 0o700 {
             return Err(AuthenticationStoreError::Permissions);
         }
         Ok(Self {

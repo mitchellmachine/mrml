@@ -2,22 +2,17 @@
 FROM docker.io/library/debian@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867 AS verify
 COPY target/mrml-native/linux/release/mrml-gitd /payload/mrml-gitd
 RUN test -x /payload/mrml-gitd && ! ldd /payload/mrml-gitd | grep -q 'not found' && \
+    install -d -o 21001 -g 21001 -m 0755 /payload/rootfs/usr/bin && \
+    install -o 21001 -g 21001 -m 0755 /payload/mrml-gitd /payload/rootfs/usr/bin/mrml-gitd && \
     install -d -o 21001 -g 21001 -m 0700 \
-      /payload/dirs/repos /payload/dirs/state /payload/dirs/quarantine \
-      /payload/dirs/cache /payload/dirs/receipts && \
-    install -d -o 21001 -g 21001 -m 0755 /payload/dirs/policies && \
-    install -d -o 21002 -g 21901 -m 2770 /payload/dirs/git-authority && \
-    install -d -o 21003 -g 21902 -m 2770 /payload/dirs/certd-gitd
+      /payload/rootfs/mnt/mrml/gitd/repos /payload/rootfs/mnt/mrml/gitd/state \
+      /payload/rootfs/mnt/mrml/gitd/quarantine /payload/rootfs/mnt/mrml/gitd/cache \
+      /payload/rootfs/mnt/mrml/gitd/receipts && \
+    install -d -o 21001 -g 21001 -m 0755 /payload/rootfs/mnt/mrml/gitd/policies && \
+    install -d -o 21002 -g 21901 -m 2770 /payload/rootfs/run/mrml/git-authority && \
+    install -d -o 21003 -g 21902 -m 2770 /payload/rootfs/run/mrml/certd-gitd
 
 FROM gcr.io/distroless/cc-debian12@sha256:777e96cf322c46bc32aca926c263624c4dc8d7cf37e2fa65ba2c7e697318ebbb
-COPY --from=verify --chown=21001:21001 /payload/mrml-gitd /usr/bin/mrml-gitd
-COPY --from=verify --chown=21001:21001 /payload/dirs/repos /mnt/mrml/gitd/repos
-COPY --from=verify --chown=21001:21001 /payload/dirs/state /mnt/mrml/gitd/state
-COPY --from=verify --chown=21001:21001 /payload/dirs/quarantine /mnt/mrml/gitd/quarantine
-COPY --from=verify --chown=21001:21001 /payload/dirs/cache /mnt/mrml/gitd/cache
-COPY --from=verify --chown=21001:21001 /payload/dirs/receipts /mnt/mrml/gitd/receipts
-COPY --from=verify --chown=21001:21001 /payload/dirs/policies /mnt/mrml/gitd/policies
-COPY --from=verify --chown=21002:21901 /payload/dirs/git-authority /run/mrml/git-authority
-COPY --from=verify --chown=21003:21902 /payload/dirs/certd-gitd /run/mrml/certd-gitd
+COPY --from=verify /payload/rootfs/ /
 USER 21001:21001
 ENTRYPOINT ["/usr/bin/mrml-gitd"]

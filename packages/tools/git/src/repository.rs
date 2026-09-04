@@ -1,11 +1,11 @@
 use core::{cell::RefCell, fmt};
+#[cfg(target_os = "linux")]
+use mrml_runtime::{DirectoryCapability, Shared};
 use mrml_runtime::{
     File, FileError, Text, Vector, canonical_path, create_dir_all, join_path, parent_path,
     path_exists, path_is_directory, path_is_file, read_directory, read_file_bounded,
     read_file_text_bounded, remove_file, rename_file, sync_directory, write_file,
 };
-#[cfg(target_os = "linux")]
-use mrml_runtime::{DirectoryCapability, Shared};
 use mrml_ssh::{RsaPrivateKey, RsaPublicKey, sign_sshsig, verify_sshsig};
 
 use crate::{
@@ -339,13 +339,11 @@ impl Repository {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn open_sha256_capability(
-        worktree: DirectoryCapability,
-    ) -> Result<Self, RepositoryError> {
+    pub fn open_sha256_capability(worktree: DirectoryCapability) -> Result<Self, RepositoryError> {
         let git = worktree.open_directory(".git")?;
         let config = read_capability_file(&git, "config", 1024 * 1024)?;
-        let config = core::str::from_utf8(&config)
-            .map_err(|_| RepositoryError::UnsupportedObjectFormat)?;
+        let config =
+            core::str::from_utf8(&config).map_err(|_| RepositoryError::UnsupportedObjectFormat)?;
         let format = parse_repository_object_format(config)?;
         if format != ObjectFormat::Sha256 {
             return Err(RepositoryError::UnsupportedObjectFormat);
@@ -363,7 +361,6 @@ impl Repository {
         if metadata.mode & 0o170000 != 0o040000
             || metadata.mode & 0o022 != 0
             || metadata.mode & 0o700 != 0o700
-            || metadata.links < 2
         {
             return Err(RepositoryError::UnsupportedLayout);
         }
@@ -582,10 +579,8 @@ impl Repository {
                 if inspected > 4096 {
                     return Err(RepositoryError::TooManyFiles);
                 }
-                let bytes = read_open_file_bounded(
-                    pack_root.open_regular(&entry.name)?,
-                    MAX_PACK_BYTES,
-                )?;
+                let bytes =
+                    read_open_file_bounded(pack_root.open_regular(&entry.name)?, MAX_PACK_BYTES)?;
                 let parsed = parse_pack_with_format(&bytes, self.object_format)?;
                 let found = parsed.iter().find(|object| object.id == id).cloned();
                 let mut cache = self.pack_cache.borrow_mut();
@@ -4194,7 +4189,9 @@ mod tests {
         mrml_runtime::rename_file(&path, &displaced).unwrap();
         create_dir_all(&path).unwrap();
 
-        let id = repository.write_object(ObjectKind::Blob, b"retained\n").unwrap();
+        let id = repository
+            .write_object(ObjectKind::Blob, b"retained\n")
+            .unwrap();
         assert_eq!(
             repository.read_object(id).unwrap().contents,
             &b"retained\n"[..]
@@ -5401,17 +5398,15 @@ mod tests {
         let repository = Repository::init(&path).unwrap();
         let file = join_path(&path, "tracked");
         write_file(&file, b"clone contents").unwrap();
-        repository.stage(&Vector::from([Text::from("tracked")])).unwrap();
+        repository
+            .stage(&Vector::from([Text::from("tracked")]))
+            .unwrap();
         let tip = repository
             .commit("initial", "MRML", "mrml@example.invalid", 1)
             .unwrap();
         mrml_runtime::remove_file(&file).unwrap();
         mrml_runtime::remove_file(&join_path(&repository.git_dir, "index")).unwrap();
-        mrml_runtime::remove_file(&join_path(
-            &repository.git_dir,
-            "refs/heads/main",
-        ))
-        .unwrap();
+        mrml_runtime::remove_file(&join_path(&repository.git_dir, "refs/heads/main")).unwrap();
 
         assert_eq!(repository.checkout_branch_at("main", tip).unwrap(), tip);
         assert_eq!(&*read_file_bounded(&file, 32).unwrap(), b"clone contents");

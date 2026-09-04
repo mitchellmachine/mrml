@@ -124,7 +124,7 @@ impl LinuxDurableTrustPolicyStore {
     ) -> Result<Self, TrustPolicyFileError> {
         let metadata = root.metadata().map_err(|_| TrustPolicyFileError::Io)?;
         let mode = metadata.mode & 0o777;
-        if mode & 0o022 != 0 || mode & 0o500 != 0o500 || mode & 0o200 == 0 || metadata.links < 2 {
+        if mode & 0o022 != 0 || mode & 0o500 != 0o500 || mode & 0o200 == 0 {
             return Err(TrustPolicyFileError::Io);
         }
         Ok(Self {

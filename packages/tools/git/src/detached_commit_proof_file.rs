@@ -53,8 +53,10 @@ impl DurableDetachedCommitProofDirectory {
     pub fn open_capability(
         root: mrml_runtime::DirectoryCapability,
     ) -> Result<Self, DetachedCommitProofFileError> {
-        let metadata = root.metadata().map_err(|_| DetachedCommitProofFileError::Io)?;
-        if metadata.mode & 0o777 != 0o700 || metadata.links < 2 {
+        let metadata = root
+            .metadata()
+            .map_err(|_| DetachedCommitProofFileError::Io)?;
+        if metadata.mode & 0o777 != 0o700 {
             return Err(DetachedCommitProofFileError::Io);
         }
         Ok(Self {
@@ -199,7 +201,9 @@ impl DurableDetachedCommitProofDirectory {
         }
         .map_err(|_| DetachedCommitProofFileError::Integrity)?;
         if self.retained.is_some() {
-            let metadata = file.metadata().map_err(|_| DetachedCommitProofFileError::Integrity)?;
+            let metadata = file
+                .metadata()
+                .map_err(|_| DetachedCommitProofFileError::Integrity)?;
             if metadata.mode & 0o777 != 0o600 || metadata.links != 1 {
                 return Err(DetachedCommitProofFileError::Integrity);
             }
@@ -209,7 +213,9 @@ impl DurableDetachedCommitProofDirectory {
 
     fn sync(&self) -> Result<(), DetachedCommitProofFileError> {
         match &self.retained {
-            Some(root) => root.sync().map_err(|_| DetachedCommitProofFileError::Durability),
+            Some(root) => root
+                .sync()
+                .map_err(|_| DetachedCommitProofFileError::Durability),
             None => sync_proof_directory(&self.root),
         }
     }
@@ -555,7 +561,10 @@ mod tests {
         let exact = context(&repository, 3);
         let proof = record(5);
         directory.insert(exact, &proof).unwrap();
-        assert_eq!(directory.lookup(exact, proof.commit()).unwrap(), Some(proof.clone()));
+        assert_eq!(
+            directory.lookup(exact, proof.commit()).unwrap(),
+            Some(proof.clone())
+        );
         let name = directory.name(exact, proof.commit()).unwrap();
         assert!(mrml_runtime::path_exists(&join_path(&displaced, &name)));
         assert!(!mrml_runtime::path_exists(&join_path(&root, &name)));

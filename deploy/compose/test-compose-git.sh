@@ -84,7 +84,8 @@ for dockerfile in "$gitd_dockerfile" "$authority_dockerfile"; do
   reject 'wget' "$dockerfile"
   reject 'COPY . ' "$dockerfile"
 done
-require '/payload/dirs/repos /mnt/mrml/gitd/repos' "$gitd_dockerfile"
+require '/payload/rootfs/mnt/mrml/gitd/repos' "$gitd_dockerfile"
+require 'COPY --from=verify /payload/rootfs/ /' "$gitd_dockerfile"
 require '/payload/dirs/authority /var/lib/mrml/authority' "$authority_dockerfile"
 require 'docker volume create --label org.mrml.managed=true' deploy/compose/provision-git-host.sh
 require 'wrong owner on Docker volume' deploy/compose/provision-git-host.sh
@@ -129,6 +130,8 @@ require 'cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]' "$restore_compose"
 require 'mrml-git-backups:/backup:ro' "$restore_compose"
 require 'mrml-git-backup-key:/backup-key:ro' "$restore_compose"
 require 'MRML_GIT_RESTORE_NAMESPACE' "$restore_compose"
+require 'restore-gitd-cache:/restore/gitd-cache:rw' "$restore_compose"
+require 'MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-cache' "$restore_compose"
 reject '/var/run/docker.sock' "$backup_compose"
 reject '/var/run/docker.sock' "$restore_compose"
 reject 'privileged:' "$backup_compose"

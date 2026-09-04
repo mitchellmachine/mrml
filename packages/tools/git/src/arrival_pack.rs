@@ -83,7 +83,6 @@ impl ArrivalDirectory {
                 if metadata.uid != parent.uid
                     || metadata.gid != parent.gid
                     || metadata.mode & 0o777 != 0o700
-                    || metadata.links < 2
                 {
                     return Err(DurableFailure::VerifierCrash);
                 }
@@ -116,7 +115,6 @@ impl ArrivalDirectory {
                 if metadata.uid != parent.uid
                     || metadata.gid != parent.gid
                     || metadata.mode & 0o777 != 0o700
-                    || metadata.links < 2
                 {
                     return Err(DurableFailure::VerifierCrash);
                 }

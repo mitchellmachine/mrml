@@ -23,7 +23,6 @@ pub enum StartupValidationError {
     Type,
     Owner,
     Permissions,
-    LinkCount,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -95,8 +94,12 @@ pub fn initialize_catalog_protected_policy(
     if valid_from == 0 || valid_from >= valid_until {
         return Err(ProtectedPolicyInitializationError::Validity);
     }
-    let admitted = admit_catalog_repository(config, entry)
-        .map_err(|_| ProtectedPolicyInitializationError::Admission)?;
+    let admitted = admit_catalog_repository(config, entry).map_err(|error| {
+        eprintln!(
+            "component=mrml-gitd event=policy_initialization_admission_failed category={error:?}"
+        );
+        ProtectedPolicyInitializationError::Admission
+    })?;
     let tip = admitted
         .view
         .resolve_ref(&entry.repository, "refs/heads/main")
@@ -211,7 +214,6 @@ fn validate_policy_capability(
     if metadata.uid != expected_uid
         || metadata.gid != expected_gid
         || metadata.mode & 0o777 != 0o755
-        || metadata.links < 2
     {
         return Err(ProtectedPolicyInitializationError::Layout);
     }
@@ -562,7 +564,6 @@ fn open_policy_repository_capability(
         || mode & 0o022 != 0
         || mode & 0o500 != 0o500
         || mode & 0o200 == 0
-        || metadata.links < 2
     {
         return Err(RepositoryAdmissionError::Layout(
             StartupValidationError::Permissions,
@@ -607,9 +608,6 @@ fn validate_directory_metadata(
     let mode = metadata.mode & 0o777;
     if mode & 0o027 != 0 || mode & 0o700 != 0o700 {
         return Err(StartupValidationError::Permissions);
-    }
-    if metadata.links < 2 {
-        return Err(StartupValidationError::LinkCount);
     }
     Ok(())
 }
@@ -924,7 +922,6 @@ fn validate_private_child_directory(
     if metadata.uid != parent_metadata.uid
         || metadata.gid != parent_metadata.gid
         || metadata.mode & 0o777 != 0o700
-        || metadata.links < 2
     {
         return Err(RepositoryAdmissionError::Open);
     }
@@ -950,7 +947,6 @@ fn open_or_create_private_directory(
     if metadata.uid != parent_metadata.uid
         || metadata.gid != parent_metadata.gid
         || metadata.mode & 0o777 != 0o700
-        || metadata.links < 2
     {
         return Err(RepositoryRecoveryError::Open);
     }

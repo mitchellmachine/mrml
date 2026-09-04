@@ -177,7 +177,7 @@ impl AuditReceiptDirectory {
         root: mrml_runtime::DirectoryCapability,
     ) -> Result<Self, DurableFailure> {
         let metadata = root.metadata().map_err(|_| DurableFailure::AuditReceipt)?;
-        if metadata.mode & 0o777 != 0o700 || metadata.links < 2 {
+        if metadata.mode & 0o777 != 0o700 {
             return Err(DurableFailure::AuditReceipt);
         }
         Ok(Self {

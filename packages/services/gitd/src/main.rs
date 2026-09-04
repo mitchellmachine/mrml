@@ -1,26 +1,25 @@
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mrml_certificate::{CertdChannelCapability, CertdPeerIdentity};
 use mrml_crypto::erase_secret_bytes;
 use mrml_git::RemoteProtectedReceiveAuthority;
 use mrml_git_authority::{AuthorityCapability, AuthorityPeer};
 use mrml_gitd::{
-    admit_catalog_repository, build_certd_tls_server_config_with_route, compose_gitd_service,
-    initialize_catalog_repository, initialize_empty_token_store,
-    inspect_admitted_repository_recovery, issue_access_token, load_deployment_catalog,
-    load_gitd_authentication, load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
-    recover_admitted_protected_repository, recover_admitted_repository, refresh_certd_tls_config,
-    revoke_access_token,
-    validate_identity_snapshot, validate_storage_layout, GitAuthorityChannelClient,
-    GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute, GitdCompositionError,
-    GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
-    RetainedAuthenticationStore,
+    GitAuthorityChannelClient, GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute,
+    GitdCompositionError, GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool,
+    GitdTlsConfigStore, RetainedAuthenticationStore, admit_catalog_repository,
+    build_certd_tls_server_config_with_route, compose_gitd_service, initialize_catalog_repository,
+    initialize_empty_token_store, inspect_admitted_repository_recovery, issue_access_token,
+    load_deployment_catalog, load_gitd_authentication, load_gitd_config, load_quic_retry_key,
+    prove_identity_signing_route, recover_admitted_protected_repository,
+    recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
+    validate_identity_snapshot, validate_storage_layout,
 };
 use mrml_http::{AccessScopes, RepositoryIdentity};
-use mrml_openpgp::{parse_public_key_v6_ascii, MAX_OPENPGP_PUBLIC_KEY_BYTES};
+use mrml_openpgp::{MAX_OPENPGP_PUBLIC_KEY_BYTES, parse_public_key_v6_ascii};
 use mrml_runtime::DirectoryCapability;
 
 const REQUEST_ID_LEASE_SIZE: u64 = 1 << 32;
@@ -34,14 +33,30 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
-    if let [_, command, config_path, repository, openpgp_path, ml_dsa_path, valid_from, valid_until] =
-        arguments.as_slice()
+    if let [
+        _,
+        command,
+        config_path,
+        repository,
+        openpgp_path,
+        ml_dsa_path,
+        valid_from,
+        valid_until,
+    ] = arguments.as_slice()
     {
         if command != "initialize-protected-policy" {
             return Err(());
         }
-        let config = load_gitd_config(Path::new(config_path)).map_err(|_| ())?;
-        let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
+        let config = load_gitd_config(Path::new(config_path)).map_err(|error| {
+            eprintln!(
+                "component=mrml-gitd event=policy_initialization_failed category=config_{error:?}"
+            );
+        })?;
+        let catalog = load_deployment_catalog(&config).map_err(|error| {
+            eprintln!(
+                "component=mrml-gitd event=policy_initialization_failed category=catalog_{error:?}"
+            );
+        })?;
         let entry = catalog
             .repositories
             .iter()
@@ -52,15 +67,29 @@ fn run() -> Result<(), ()> {
             config.authority_uid,
             1,
             MAX_OPENPGP_PUBLIC_KEY_BYTES,
-        )?;
+        )
+        .map_err(|_| {
+            eprintln!(
+                "component=mrml-gitd event=policy_initialization_failed category=openpgp_input"
+            );
+        })?;
         let mut scratch = vec![0; MAX_OPENPGP_PUBLIC_KEY_BYTES];
-        let openpgp = parse_public_key_v6_ascii(&openpgp_bytes, &mut scratch).map_err(|_| ())?;
+        let openpgp = parse_public_key_v6_ascii(&openpgp_bytes, &mut scratch).map_err(|_| {
+            eprintln!(
+                "component=mrml-gitd event=policy_initialization_failed category=openpgp_encoding"
+            );
+        })?;
         let ml_dsa_bytes = read_public_file(
             ml_dsa_path,
             config.authority_uid,
             mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
             mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES,
-        )?;
+        )
+        .map_err(|_| {
+            eprintln!(
+                "component=mrml-gitd event=policy_initialization_failed category=ml_dsa_input"
+            );
+        })?;
         let mut ml_dsa = [0; mrml_crypto::ML_DSA_65_PUBLIC_KEY_BYTES];
         ml_dsa.copy_from_slice(&ml_dsa_bytes);
         let tip = mrml_gitd::initialize_catalog_protected_policy(
@@ -71,7 +100,9 @@ fn run() -> Result<(), ()> {
             valid_from.parse().map_err(|_| ())?,
             valid_until.parse().map_err(|_| ())?,
         )
-        .map_err(|_| ())?;
+        .map_err(|error| {
+            eprintln!("component=mrml-gitd event=policy_initialization_failed category={error:?}");
+        })?;
         println!(
             "repository={} protected_tip={} trust_generation={} revocation_generation={}",
             entry.repository.as_str(),
@@ -133,7 +164,9 @@ fn run() -> Result<(), ()> {
             return Err(());
         }
         let config = load_gitd_config(Path::new(config)).map_err(|error| {
-            eprintln!("component=mrml-gitd event=validation_configuration_failed category={error:?}");
+            eprintln!(
+                "component=mrml-gitd event=validation_configuration_failed category={error:?}"
+            );
         })?;
         operational_event("validation_configuration_loaded");
         validate_storage_layout(&config).map_err(|_| ())?;
@@ -187,8 +220,19 @@ fn run() -> Result<(), ()> {
         }
         return Err(());
     }
-    if let [_, command, token_store, pepper, expected_uid, repository, scopes, valid_from, expires_at, revocation_generation, label] =
-        arguments.as_slice()
+    if let [
+        _,
+        command,
+        token_store,
+        pepper,
+        expected_uid,
+        repository,
+        scopes,
+        valid_from,
+        expires_at,
+        revocation_generation,
+        label,
+    ] = arguments.as_slice()
     {
         if command != "issue-token" {
             return Err(());
@@ -210,14 +254,22 @@ fn run() -> Result<(), ()> {
     }
     if let [_, command, config_path, signer_identity] = arguments.as_slice() {
         if command == "initialize-repository" {
-            let config = load_gitd_config(Path::new(config_path)).map_err(|_| ())?;
-            let catalog = load_deployment_catalog(&config).map_err(|_| ())?;
+            let config = load_gitd_config(Path::new(config_path)).map_err(|error| {
+                eprintln!("component=mrml-gitd event=repository_initialization_failed category=config_{error:?}");
+            })?;
+            let catalog = load_deployment_catalog(&config).map_err(|error| {
+                eprintln!("component=mrml-gitd event=repository_initialization_failed category=catalog_{error:?}");
+            })?;
             let entry = catalog
                 .repositories
                 .iter()
                 .find(|entry| entry.repository.as_str() == signer_identity)
                 .ok_or(())?;
-            let tip = initialize_catalog_repository(&config, entry).map_err(|_| ())?;
+            let tip = initialize_catalog_repository(&config, entry).map_err(|error| {
+                eprintln!(
+                    "component=mrml-gitd event=repository_initialization_failed category={error:?}"
+                );
+            })?;
             println!(
                 "repository={} initial_tip={} repository_generation={} trust_generation={} revocation_generation={}",
                 entry.repository.as_str(),
@@ -319,8 +371,18 @@ fn run() -> Result<(), ()> {
         );
         return Ok(());
     }
-    let [_, command, socket, capability_path, own_uid, own_gid, authority_uid, authority_gid, signer_identity, request_id] =
-        arguments.as_slice()
+    let [
+        _,
+        command,
+        socket,
+        capability_path,
+        own_uid,
+        own_gid,
+        authority_uid,
+        authority_gid,
+        signer_identity,
+        request_id,
+    ] = arguments.as_slice()
     else {
         eprintln!(
             "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | recovery-status CONFIG | initialize-repository CONFIG REPOSITORY | initialize-protected-policy CONFIG REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC VALID_FROM VALID_UNTIL | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | recover-safe CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
@@ -588,10 +650,7 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             let rotation_result = rotation_worker.join();
             let authentication_result = authentication_worker.join();
             let tcp_result = _tcp_worker.join();
-            return if quic_result.is_ok()
-                && rotation_result
-                && authentication_result
-                && tcp_result
+            return if quic_result.is_ok() && rotation_result && authentication_result && tcp_result
             {
                 operational_event("shutdown_complete");
                 Ok(())
@@ -721,7 +780,7 @@ fn reserve_request_id_leases_capability(
     certd_floor: u64,
 ) -> Result<((u64, u64), (u64, u64)), ()> {
     let metadata = directory.metadata().map_err(|_| ())?;
-    if metadata.uid != expected_owner || metadata.mode & 0o077 != 0 || metadata.links < 2 {
+    if metadata.uid != expected_owner || metadata.mode & 0o077 != 0 {
         return Err(());
     }
     // The directory lock serializes every cooperating Gitd process while both
@@ -829,9 +888,7 @@ fn read_capability_from(
     name: &str,
     expected_owner: u32,
 ) -> Result<Vec<u8>, ()> {
-    let mut file = directory
-        .open_regular(name)
-        .map_err(|_| ())?;
+    let mut file = directory.open_regular(name).map_err(|_| ())?;
     let metadata = file.metadata().map_err(|_| ())?;
     let length = file.len().map_err(|_| ())?;
     let mode = metadata.mode & 0o777;
@@ -867,9 +924,7 @@ fn read_public_file_from(
     minimum: usize,
     maximum: usize,
 ) -> Result<Vec<u8>, ()> {
-    let mut file = directory
-        .open_regular(name)
-        .map_err(|_| ())?;
+    let mut file = directory.open_regular(name).map_err(|_| ())?;
     let metadata = file.metadata().map_err(|_| ())?;
     let length = file.len().map_err(|_| ())?;
     if minimum == 0
@@ -913,7 +968,7 @@ fn load_certd_capability(path: &Path, expected_owner: u32) -> Result<CertdChanne
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     fn request_sequence_root(label: &str) -> (std::path::PathBuf, u32) {
         let root = std::env::temp_dir().join(format!(

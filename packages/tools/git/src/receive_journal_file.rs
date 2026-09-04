@@ -196,7 +196,7 @@ impl ReceiveJournalDirectory {
 #[cfg(target_os = "linux")]
 fn validate_directory(root: &mrml_runtime::DirectoryCapability) -> Result<(), DurableFailure> {
     let metadata = root.metadata().map_err(|_| DurableFailure::VerifierCrash)?;
-    if metadata.mode & 0o777 != 0o700 || metadata.links < 2 {
+    if metadata.mode & 0o777 != 0o700 {
         return Err(DurableFailure::VerifierCrash);
     }
     Ok(())

@@ -164,7 +164,6 @@ impl ActiveRefFile {
         if metadata.mode & 0o022 != 0
             || metadata.mode & 0o500 != 0o500
             || metadata.mode & 0o200 == 0
-            || metadata.links < 2
         {
             return Err(ActiveRefStateError::Malformed);
         }
@@ -878,12 +877,9 @@ mod tests {
         .unwrap();
         state.pack_set_digest = manifest.digest().unwrap();
 
-        let store = ActiveRefFile::initialize_with_pack_set_capability(
-            capability,
-            &state,
-            &manifest,
-        )
-        .unwrap();
+        let store =
+            ActiveRefFile::initialize_with_pack_set_capability(capability, &state, &manifest)
+                .unwrap();
         assert_eq!(store.load().unwrap(), state);
         assert_eq!(store.load_selected_pack_set(limits).unwrap(), manifest);
         assert!(path_exists(&join_path(&displaced, "active.refs")));

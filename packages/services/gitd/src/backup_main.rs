@@ -2,7 +2,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use mrml_crypto::erase_secret_bytes;
-use mrml_git::BackupStreamHeader;
+use mrml_git::{BackupInventory, BackupStreamHeader, BackupVolume};
 use mrml_gitd::{
     collect_backup_inventory, load_gitd_config, restore_backup_archive, verify_backup_archive,
     write_backup_archive,
@@ -14,6 +14,7 @@ const BACKUP_ROOT: &str = "/backup";
 const KEY_ROOT: &str = "/backup-key";
 const KEY_NAME: &str = "git-backup.key";
 const AUTHORITY_GENERATIONS: &str = "/source/authority-state/generations";
+const RESTORE_CACHE: &str = "/restore/gitd-cache";
 const CHUNK_BYTES: u32 = 1024 * 1024;
 const SOURCE_ROOTS: [&str; 10] = [
     "/source/gitd-repos",
@@ -162,9 +163,54 @@ fn restore(generation: u64, key: &[u8; 32]) -> Result<(), ()> {
     let mut archive = RuntimeFile(&mut file);
     let inventory = restore_backup_archive(&mut archive, key, RESTORE_ROOTS)
         .map_err(|error| reject("restore", error))?;
-    (inventory.backup_generation == generation)
-        .then_some(())
-        .ok_or(())
+    if inventory.backup_generation != generation {
+        return Err(());
+    }
+    initialize_restore_cache(&inventory)
+}
+
+fn initialize_restore_cache(inventory: &BackupInventory) -> Result<(), ()> {
+    let root = DirectoryCapability::open_root(RESTORE_CACHE).map_err(|_| ())?;
+    let metadata = root.metadata().map_err(|_| ())?;
+    if metadata.mode & 0o170000 != 0o040000
+        || root
+            .read_directory()
+            .map_err(|_| ())?
+            .iter()
+            .next()
+            .is_some()
+    {
+        return Err(());
+    }
+    let repository_root = inventory
+        .entries
+        .iter()
+        .find(|entry| entry.volume == BackupVolume::GitdRepositories && entry.path.as_str() == ".")
+        .ok_or(())?;
+    root.set_owner_mode(repository_root.uid, repository_root.gid, 0o700)
+        .map_err(|_| ())?;
+    let mut previous_owner = "";
+    let mut owner_directory = None;
+    for repository in &inventory.repositories {
+        let (owner, name) = repository.repository.as_str().split_once('/').ok_or(())?;
+        if owner != previous_owner {
+            let directory = root.create_directory(owner, 0o700).map_err(|_| ())?;
+            directory
+                .set_owner_mode(repository_root.uid, repository_root.gid, 0o700)
+                .map_err(|_| ())?;
+            directory.sync().map_err(|_| ())?;
+            previous_owner = owner;
+            owner_directory = Some(directory);
+        }
+        let directory = owner_directory.as_ref().ok_or(())?;
+        let repository_directory = directory.create_directory(name, 0o700).map_err(|_| ())?;
+        repository_directory
+            .set_owner_mode(repository_root.uid, repository_root.gid, 0o700)
+            .and_then(|()| repository_directory.sync())
+            .and_then(|()| directory.sync())
+            .map_err(|_| ())?;
+    }
+    root.sync().map_err(|_| ())
 }
 
 fn source_config() -> Result<mrml_gitd::GitdConfig, ()> {

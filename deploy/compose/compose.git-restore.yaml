@@ -24,6 +24,7 @@ services:
       - "restore-gitd-repos:/restore/gitd-repos:rw"
       - "restore-gitd-state:/restore/gitd-state:rw"
       - "restore-gitd-quarantine:/restore/gitd-quarantine:rw"
+      - "restore-gitd-cache:/restore/gitd-cache:rw"
       - "restore-gitd-receipts:/restore/gitd-receipts:rw"
       - "restore-gitd-policies:/restore/gitd-policies:rw"
       - "restore-gitd-secrets:/restore/gitd-secrets:rw"
@@ -38,6 +39,7 @@ volumes:
   restore-gitd-repos: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-repos"}
   restore-gitd-state: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-state"}
   restore-gitd-quarantine: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-quarantine"}
+  restore-gitd-cache: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-cache"}
   restore-gitd-receipts: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-receipts"}
   restore-gitd-policies: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-policies"}
   restore-gitd-secrets: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-secrets"}
