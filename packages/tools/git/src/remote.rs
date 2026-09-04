@@ -96,6 +96,13 @@ fn fetch_https_with_provider(
             default_branch: advertisement.default_branch,
         });
     }
+    if remote_refs_are_current(repository, remote_name, &branches)? {
+        return Ok(FetchResult {
+            objects: Vector::new(),
+            branches,
+            default_branch: advertisement.default_branch,
+        });
+    }
     let limits =
         FetchPackLimits::production(maximum_pack_bytes).map_err(|_| FetchError::TooLarge)?;
     let haves = previous_fetch_haves(repository, remote_name)?;
@@ -158,6 +165,23 @@ fn fetch_https_with_provider(
         let _ = mrml_runtime::remove_dir_all(&candidate);
     }
     result
+}
+
+fn remote_refs_are_current(
+    repository: &Repository,
+    remote_name: &str,
+    advertised: &[(Text, ObjectId)],
+) -> Result<bool, FetchError> {
+    let Some(previous) = repository
+        .active_remote_refs(remote_name)
+        .map_err(|_| FetchError::Repository)?
+    else {
+        return Ok(false);
+    };
+    Ok(previous == advertised
+        && previous
+            .iter()
+            .all(|(_, id)| repository.read_object(*id).is_ok()))
 }
 
 fn previous_fetch_haves(
@@ -883,6 +907,22 @@ mod tests {
             previous_fetch_haves(&repository, "origin").unwrap(),
             &[first, second][..]
         );
+        assert!(remote_refs_are_current(
+            &repository,
+            "origin",
+            &[
+                (Text::from("first"), first),
+                (Text::from("same"), duplicate),
+                (Text::from("second"), second),
+            ]
+        )
+        .unwrap());
+        assert!(!remote_refs_are_current(
+            &repository,
+            "origin",
+            &[(Text::from("first"), first)]
+        )
+        .unwrap());
         assert!(previous_fetch_haves(&repository, "new").unwrap().is_empty());
         mrml_runtime::remove_dir_all(&path).unwrap();
     }
