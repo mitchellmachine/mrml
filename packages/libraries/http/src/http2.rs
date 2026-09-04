@@ -866,8 +866,8 @@ impl ResponseBodySink for LimitedBody {
 }
 impl Http2ClientConnection {
     pub fn connect(host: &str, port: u16) -> Result<Self, HttpError> {
-        let mut stream = TlsClientStream::connect_with_alpn(host, port, &["h2"])
-            .map_err(map_tls_read_error)?;
+        let mut stream =
+            TlsClientStream::connect_with_alpn(host, port, &["h2"]).map_err(map_tls_read_error)?;
         if stream.negotiated_protocol() != Some("h2") {
             return Err(HttpError::Tls);
         }
@@ -1303,7 +1303,8 @@ impl Http2ServerConnection {
                     }
                     let request = self.protocol.request(&frame)?;
                     let expected_content_length = request_content_length(&request.headers)?;
-                    if frame.flags & 1 != 0 && expected_content_length.is_some_and(|length| length != 0)
+                    if frame.flags & 1 != 0
+                        && expected_content_length.is_some_and(|length| length != 0)
                     {
                         return Err(HttpError::InvalidResponse);
                     }
@@ -1706,7 +1707,10 @@ impl Http2ServerConnection {
 
 fn request_content_length(headers: &[Header]) -> Result<Option<u64>, HttpError> {
     let mut length = None;
-    for header in headers.iter().filter(|header| header.name == "content-length") {
+    for header in headers
+        .iter()
+        .filter(|header| header.name == "content-length")
+    {
         if length.is_some()
             || header.value.is_empty()
             || !header.value.bytes().all(|byte| byte.is_ascii_digit())
@@ -2075,7 +2079,10 @@ mod tests {
             stream_id: 1,
             payload: Vector::new(),
         };
-        let final_head = Http2Frame { flags: 5, ..nonfinal.clone() };
+        let final_head = Http2Frame {
+            flags: 5,
+            ..nonfinal.clone()
+        };
         assert!(!response_frame_ends_upload(&nonfinal));
         assert!(response_frame_ends_upload(&final_head));
     }
@@ -2090,6 +2097,184 @@ mod tests {
             .request("GET", &host, "/", &[("user-agent", "mrml-http/1")])
             .unwrap();
         assert!((100..=599).contains(&response.status));
+    }
+
+    fn hostile_loopback_config() -> TlsServerConfig {
+        let certificate = mrml_runtime::environment_variable("MRML_HTTP2_HOSTILE_CERT").unwrap();
+        let issuer = mrml_runtime::environment_variable("MRML_HTTP2_HOSTILE_ISSUER").unwrap();
+        let key = mrml_runtime::environment_variable("MRML_HTTP2_HOSTILE_KEY").unwrap();
+        let mut chain = mrml_runtime::read_file(&certificate).unwrap();
+        chain
+            .try_extend_from_slice(&mrml_runtime::read_file(&issuer).unwrap())
+            .unwrap();
+        TlsServerConfig::from_pem(&chain, &mrml_runtime::read_file(&key).unwrap())
+            .unwrap()
+            .with_protocols(&["h2"])
+            .unwrap()
+    }
+
+    fn hostile_request(stream_id: u32, end_stream: bool) -> Http2Frame {
+        Http2Frame {
+            kind: Http2FrameKind::Headers,
+            flags: 4 | u8::from(end_stream),
+            stream_id,
+            payload: block(&[
+                (":method", "POST"),
+                (":scheme", "https"),
+                (":authority", "localhost"),
+                (":path", "/hostile"),
+            ])
+            .unwrap(),
+        }
+    }
+
+    fn run_hostile_listener_case(wire: &[u8], action: u8) {
+        let config = hostile_loopback_config();
+        let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
+        let port = listener.local_port().unwrap();
+        let Ok(worker) = mrml_runtime::spawn_joinable(move || {
+            let socket = listener.accept().unwrap();
+            let tls = TlsServerStream::accept(socket, &config).unwrap();
+            let mut server = Http2ServerConnection::accept(tls).unwrap();
+            server
+                .stream
+                .set_application_io_timeout_millis(1_000)
+                .unwrap();
+            match action {
+                0 => assert_eq!(server.next_request(), Err(HttpError::InvalidResponse)),
+                1 => {
+                    server.next_request().unwrap();
+                    assert_eq!(server.next_request(), Err(HttpError::InvalidResponse));
+                }
+                2 => {
+                    let (stream_id, _) = server.next_request().unwrap();
+                    assert_eq!(
+                        server.read_request_data(stream_id, &mut [0; 1]),
+                        Err(HttpError::Io)
+                    );
+                }
+                3 => assert_eq!(server.next_request(), Err(HttpError::Tls)),
+                _ => panic!("invalid hostile-listener action"),
+            }
+        }) else {
+            panic!("failed to start hostile HTTP/2 listener");
+        };
+        let mut client =
+            TlsClientStream::connect_resolved_with_alpn("localhost", [127, 0, 0, 1], port, &["h2"])
+                .unwrap();
+        client.set_application_io_timeout_millis(2_000).unwrap();
+        client
+            .write_all(&Http2Client::new().connection_bytes().unwrap())
+            .unwrap();
+        assert_eq!(
+            read_client_frame(&mut client).unwrap().kind,
+            Http2FrameKind::Settings
+        );
+        let acknowledgement = read_client_frame(&mut client).unwrap();
+        assert_eq!(acknowledgement.kind, Http2FrameKind::Settings);
+        assert_eq!(acknowledgement.flags, 1);
+        client.write_all(wire).unwrap();
+        drop(client);
+        assert!(worker.join(), "hostile HTTP/2 listener case failed");
+    }
+
+    #[test]
+    fn hostile_sequences_reach_the_real_tls_listener_when_configured() {
+        if mrml_runtime::environment_variable("MRML_HTTP2_HOSTILE_CERT").is_none() {
+            return;
+        }
+        let encoded = |frames: &[Http2Frame]| {
+            let mut wire = Vector::new();
+            for frame in frames {
+                wire.try_extend_from_slice(&frame.encode().unwrap())
+                    .unwrap();
+            }
+            wire
+        };
+        let cases = [
+            encoded(&[Http2Frame {
+                kind: Http2FrameKind::Continuation,
+                flags: 4,
+                stream_id: 1,
+                payload: Vector::new(),
+            }]),
+            encoded(&[
+                Http2Frame {
+                    kind: Http2FrameKind::Headers,
+                    flags: 0,
+                    stream_id: 1,
+                    payload: Vector::new(),
+                },
+                Http2Frame {
+                    kind: Http2FrameKind::Continuation,
+                    flags: 4,
+                    stream_id: 3,
+                    payload: Vector::new(),
+                },
+            ]),
+            encoded(&[
+                Http2Frame {
+                    kind: Http2FrameKind::Headers,
+                    flags: 0,
+                    stream_id: 1,
+                    payload: Vector::new(),
+                },
+                hostile_request(3, true),
+            ]),
+            encoded(&[Http2Frame {
+                kind: Http2FrameKind::WindowUpdate,
+                flags: 0,
+                stream_id: 0,
+                payload: [0, 0, 0, 0].into(),
+            }]),
+            encoded(&[Http2Frame {
+                kind: Http2FrameKind::WindowUpdate,
+                flags: 0,
+                stream_id: 0,
+                payload: 0x7fff_ffff_u32.to_be_bytes().into(),
+            }]),
+        ];
+        for wire in cases {
+            run_hostile_listener_case(&wire, 0);
+        }
+
+        for frames in [
+            [hostile_request(3, true), hostile_request(1, true)],
+            [hostile_request(1, true), hostile_request(1, true)],
+            [
+                hostile_request(1, true),
+                Http2Frame {
+                    kind: Http2FrameKind::Data,
+                    flags: 1,
+                    stream_id: 1,
+                    payload: Vector::new(),
+                },
+            ],
+            [hostile_request(1, false), hostile_request(3, true)],
+        ] {
+            run_hostile_listener_case(&encoded(&frames), 1);
+        }
+
+        for terminal in [
+            Http2Frame {
+                kind: Http2FrameKind::RstStream,
+                flags: 0,
+                stream_id: 1,
+                payload: [0; 4].into(),
+            },
+            Http2Frame {
+                kind: Http2FrameKind::GoAway,
+                flags: 0,
+                stream_id: 0,
+                payload: [0; 8].into(),
+            },
+        ] {
+            run_hostile_listener_case(&encoded(&[hostile_request(1, false), terminal]), 2);
+        }
+
+        let mut partial = hostile_request(1, true).encode().unwrap();
+        partial[2] = partial[2].saturating_add(8);
+        run_hostile_listener_case(&partial, 3);
     }
 
     #[test]
