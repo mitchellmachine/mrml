@@ -77,20 +77,28 @@ pub fn collect_backup_inventory(
                 .map_err(|_| BackupVolumeError::Generation)?,
         )
         .map_err(|_| BackupVolumeError::Generation)?;
-        verify_repository_admission(entry, &view).map_err(|_| BackupVolumeError::Generation)?;
-        if state.repository != entry.repository
-            || state.repository_generation != entry.repository_generation
-            || state.trust_generation != entry.trust_generation
-            || state.revocation_generation != entry.revocation_generation
-        {
-            return Err(BackupVolumeError::Generation);
-        }
         let authority_generation = if entry.profile.class == DeploymentRepositoryProfile::Protected
         {
             read_authority_generation(&authority_root, config.authority_uid, &entry.repository)?
         } else {
             0
         };
+        if state.repository != entry.repository
+            || !backup_generations_match(
+                entry,
+                (
+                    state.repository_generation,
+                    state.trust_generation,
+                    state.revocation_generation,
+                ),
+                authority_generation,
+            )
+        {
+            return Err(BackupVolumeError::Generation);
+        }
+        if entry.profile.class != DeploymentRepositoryProfile::Protected {
+            verify_repository_admission(entry, &view).map_err(|_| BackupVolumeError::Generation)?;
+        }
         repositories.push(BackupRepositoryGeneration {
             repository: entry.repository.clone(),
             repository_generation: state.repository_generation,
@@ -121,6 +129,28 @@ pub fn collect_backup_inventory(
         repositories,
         entries,
     })
+}
+
+fn backup_generations_match(
+    entry: &crate::DeploymentRepository,
+    live: (
+        mrml_git::RepositoryGeneration,
+        mrml_git::TrustGeneration,
+        mrml_git::RevocationGeneration,
+    ),
+    authority_generation: u64,
+) -> bool {
+    if entry.profile.class == DeploymentRepositoryProfile::Protected {
+        live.0.0 >= entry.repository_generation.0
+            && live.1 == entry.trust_generation
+            && live.2 == entry.revocation_generation
+            && authority_generation == live.0.0
+    } else {
+        authority_generation == 0
+            && live.0 == entry.repository_generation
+            && live.1 == entry.trust_generation
+            && live.2 == entry.revocation_generation
+    }
 }
 
 fn read_authority_generation(
@@ -306,7 +336,11 @@ fn push_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mrml_git::{RepositoryGeneration, RepositoryIdentity, encode_authority_generation_record};
+    use crate::DeploymentProfile;
+    use mrml_git::{
+        RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
+        encode_authority_generation_record,
+    };
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
@@ -388,5 +422,71 @@ mod tests {
             Err(BackupVolumeError::Generation)
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn protected_backup_accepts_only_authority_confirmed_progress_from_catalog_floor() {
+        let repository = RepositoryIdentity::parse("owner/protected").unwrap();
+        let entry = crate::DeploymentRepository {
+            repository,
+            profile: DeploymentProfile {
+                name: "protected".into(),
+                class: DeploymentRepositoryProfile::Protected,
+                max_object_bytes: 1024,
+            },
+            repository_generation: RepositoryGeneration(3),
+            trust_generation: TrustGeneration(5),
+            revocation_generation: RevocationGeneration(2),
+        };
+        let live = (
+            RepositoryGeneration(7),
+            TrustGeneration(5),
+            RevocationGeneration(2),
+        );
+        assert!(backup_generations_match(&entry, live, 7));
+        assert!(!backup_generations_match(&entry, live, 6));
+        assert!(!backup_generations_match(
+            &entry,
+            (RepositoryGeneration(2), live.1, live.2),
+            2
+        ));
+        assert!(!backup_generations_match(
+            &entry,
+            (live.0, TrustGeneration(6), live.2),
+            7
+        ));
+        assert!(!backup_generations_match(
+            &entry,
+            (live.0, live.1, RevocationGeneration(3)),
+            7
+        ));
+    }
+
+    #[test]
+    fn conventional_backup_keeps_exact_catalog_generation_admission() {
+        let repository = RepositoryIdentity::parse("owner/private").unwrap();
+        let entry = crate::DeploymentRepository {
+            repository,
+            profile: DeploymentProfile {
+                name: "private".into(),
+                class: DeploymentRepositoryProfile::Private,
+                max_object_bytes: 1024,
+            },
+            repository_generation: RepositoryGeneration(3),
+            trust_generation: TrustGeneration(5),
+            revocation_generation: RevocationGeneration(2),
+        };
+        let exact = (
+            RepositoryGeneration(3),
+            TrustGeneration(5),
+            RevocationGeneration(2),
+        );
+        assert!(backup_generations_match(&entry, exact, 0));
+        assert!(!backup_generations_match(
+            &entry,
+            (RepositoryGeneration(4), exact.1, exact.2),
+            0
+        ));
+        assert!(!backup_generations_match(&entry, exact, 3));
     }
 }

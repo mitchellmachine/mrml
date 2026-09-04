@@ -79,11 +79,13 @@ regular files, invalid directory metadata, overlong paths, short reads, growth
 during hashing, and descriptor-relative replacement races.
 
 Inventory assembly authenticates the configured Gitd catalog, then reads every
-repository's `active.refs` beneath retained repository/state roots. Catalog and
-live repository, trust, and revocation generations must exact-match; the live
-pack generation is recorded. Protected entries additionally require the exact
-mode-0600, single-link authority record beneath the retained generation root,
-parsed against the repository identity. Conventional entries record authority
+repository's `active.refs` beneath retained repository/state roots. Conventional
+catalog and live repository, trust, and revocation generations must exact-match.
+For a protected repository, the immutable catalog repository generation is a
+floor, while trust and revocation remain exact; forward repository progress is
+accepted only when the exact mode-0600, single-link authority record beneath the
+retained generation root authenticates the same live repository generation.
+The live pack generation is recorded. Conventional entries record authority
 generation zero. Operator- or environment-supplied generation values are not
 accepted.
 

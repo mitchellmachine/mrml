@@ -108,6 +108,21 @@ depend on ACME Compose rendering. Every one-shot invocation explicitly enables
 the `admin` profile, which is required by Podman Compose even when the service
 is named directly.
 
+The real Podman cold-backup continuation then exposed two further fail-closed
+portability and coherence defects before any archive was accepted. Podman does
+not accept redundant `uid=0,gid=0` options on the root-run administrator
+tmpfs; backup and restore now rely on the root default while preserving
+`rw,noexec,nosuid,nodev,size=8m,mode=0700`, and static tests forbid the rejected
+form. After that correction, generation collection rejected protected forward
+progress because it still applied conventional exact catalog admission. It now
+matches the already implemented protected startup rule: the catalog repository
+generation is a floor, trust and revocation generations remain exact, and the
+repository generation must exact-match the authenticated authority record.
+Focused tests accept only authority-confirmed forward progress, reject a stale
+authority record, catalog rollback, and trust/revocation drift, and preserve
+exact conventional admission. The live encrypted archive and destructive
+restore sequence remain pending after this correction.
+
 Patent review: **NOT_TRIGGERED**. The changes use conventional container image
 layout, filesystem metadata validation, encrypted streaming backup, and cache
 directory reconstruction. See `docs/patents/REVIEW_LOG.md`.
