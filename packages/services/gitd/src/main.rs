@@ -640,6 +640,9 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
                 enable_http3,
             ) {
                 Ok(changed) => {
+                    if consecutive_failures != 0 {
+                        operational_event("certificate_refresh_recovered");
+                    }
                     consecutive_failures = 0;
                     rotation_health.recover_dependency(GitdHealthDependency::Certificate);
                     if changed {

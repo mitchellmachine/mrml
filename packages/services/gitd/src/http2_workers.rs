@@ -96,7 +96,9 @@ impl GitdHttp2WorkerPool {
                         Ok(snapshot) => snapshot,
                         Err(_) => {
                             increment(&worker_counters.tls_failures);
-                            eprintln!("component=mrml-gitd event=http2_tls_failed");
+                            eprintln!(
+                                "component=mrml-gitd event=http2_tls_failed category=certificate_unavailable"
+                            );
                             continue;
                         }
                     };
@@ -110,6 +112,9 @@ impl GitdHttp2WorkerPool {
                         Ok(stream) => stream,
                         Err(_) => {
                             increment(&worker_counters.tls_failures);
+                            eprintln!(
+                                "component=mrml-gitd event=http2_tls_failed category=handshake"
+                            );
                             continue;
                         }
                     };
