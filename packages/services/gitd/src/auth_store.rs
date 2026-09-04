@@ -1,7 +1,6 @@
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 use mrml_crypto::erase_secret_bytes;
@@ -14,12 +13,6 @@ use mrml_runtime::{DirectoryCapability, Text, Vector};
 use crate::{DeploymentCatalog, DeploymentRepositoryProfile, GitdConfig};
 
 const O_NOFOLLOW: i32 = 0x20_000;
-const LOCK_EXCLUSIVE: i32 = 2;
-
-unsafe extern "C" {
-    fn flock(fd: i32, operation: i32) -> i32;
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthenticationStoreError {
     Open,
@@ -74,10 +67,9 @@ impl RetainedAuthenticationStore {
         {
             return Err(AuthenticationStoreError::Open);
         }
-        let directory = DirectoryCapability::open_root(
-            parent.to_str().ok_or(AuthenticationStoreError::Open)?,
-        )
-        .map_err(|_| AuthenticationStoreError::Open)?;
+        let directory =
+            DirectoryCapability::open_root(parent.to_str().ok_or(AuthenticationStoreError::Open)?)
+                .map_err(|_| AuthenticationStoreError::Open)?;
         let metadata = directory
             .metadata()
             .map_err(|_| AuthenticationStoreError::Metadata)?;
@@ -133,8 +125,8 @@ impl RetainedAuthenticationStore {
         ),
         AuthenticationStoreError,
     > {
-        let authority = TokenAuthority::new(self.pepper)
-            .map_err(|_| AuthenticationStoreError::Decode)?;
+        let authority =
+            TokenAuthority::new(self.pepper).map_err(|_| AuthenticationStoreError::Decode)?;
         let bytes = self.read_snapshot()?;
         authentication_material(authority, &bytes, catalog)
     }
@@ -147,9 +139,7 @@ impl RetainedAuthenticationStore {
         let metadata = file
             .metadata()
             .map_err(|_| AuthenticationStoreError::Metadata)?;
-        let file_length = file
-            .len()
-            .map_err(|_| AuthenticationStoreError::Metadata)?;
+        let file_length = file.len().map_err(|_| AuthenticationStoreError::Metadata)?;
         if metadata.links != 1
             || (metadata.uid != 0 && metadata.uid != self.gitd_uid)
             || metadata.mode & 0o077 != 0
@@ -172,23 +162,81 @@ impl Drop for RetainedAuthenticationStore {
     }
 }
 
+struct TokenStoreLocation {
+    directory: DirectoryCapability,
+    name: String,
+}
+
+impl TokenStoreLocation {
+    fn open(path: &Path, gitd_uid: u32) -> Result<Self, AuthenticationStoreError> {
+        if !path.is_absolute() {
+            return Err(AuthenticationStoreError::Open);
+        }
+        let parent = path.parent().ok_or(AuthenticationStoreError::Open)?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && !name.contains('/'))
+            .ok_or(AuthenticationStoreError::Open)?;
+        let directory =
+            DirectoryCapability::open_root(parent.to_str().ok_or(AuthenticationStoreError::Open)?)
+                .map_err(|_| AuthenticationStoreError::Open)?;
+        let metadata = directory
+            .metadata()
+            .map_err(|_| AuthenticationStoreError::Metadata)?;
+        if metadata.uid != gitd_uid || metadata.mode & 0o777 != 0o700 || metadata.links < 2 {
+            return Err(AuthenticationStoreError::Permissions);
+        }
+        Ok(Self {
+            directory,
+            name: name.into(),
+        })
+    }
+
+    fn entry_exists(&self, name: &str) -> Result<bool, AuthenticationStoreError> {
+        Ok(self
+            .directory
+            .read_directory()
+            .map_err(|_| AuthenticationStoreError::Read)?
+            .iter()
+            .any(|entry| entry.name.as_str() == name))
+    }
+
+    fn open_secure(
+        &self,
+        name: &str,
+        gitd_uid: u32,
+        minimum: u64,
+        maximum: u64,
+    ) -> Result<mrml_runtime::File, AuthenticationStoreError> {
+        let file = self
+            .directory
+            .open_regular(name)
+            .map_err(|_| AuthenticationStoreError::Open)?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| AuthenticationStoreError::Metadata)?;
+        let length = file.len().map_err(|_| AuthenticationStoreError::Metadata)?;
+        if metadata.links != 1
+            || (metadata.uid != 0 && metadata.uid != gitd_uid)
+            || metadata.mode & 0o077 != 0
+            || metadata.mode & 0o400 == 0
+            || !(minimum..=maximum).contains(&length)
+        {
+            return Err(AuthenticationStoreError::Permissions);
+        }
+        Ok(file)
+    }
+}
+
 pub fn initialize_empty_token_store(
     path: &Path,
     pepper_path: &Path,
     gitd_uid: u32,
 ) -> Result<(), AuthenticationStoreError> {
-    if !path.is_absolute() || path.exists() || path.file_name().is_none() {
+    let location = TokenStoreLocation::open(path, gitd_uid)?;
+    if location.entry_exists(&location.name)? {
         return Err(AuthenticationStoreError::Open);
-    }
-    let parent = path.parent().ok_or(AuthenticationStoreError::Open)?;
-    let parent_metadata =
-        std::fs::symlink_metadata(parent).map_err(|_| AuthenticationStoreError::Metadata)?;
-    if !parent_metadata.is_dir()
-        || parent_metadata.file_type().is_symlink()
-        || parent_metadata.uid() != gitd_uid
-        || parent_metadata.permissions().mode() & 0o077 != 0
-    {
-        return Err(AuthenticationStoreError::Permissions);
     }
     let mut pepper = read_pepper(pepper_path, gitd_uid)?;
     let authority = TokenAuthority::new(pepper).map_err(|_| AuthenticationStoreError::Decode);
@@ -196,26 +244,30 @@ pub fn initialize_empty_token_store(
     let bytes = authority?
         .encode_record_snapshot(1, &[])
         .map_err(|_| AuthenticationStoreError::Decode)?;
-    let temporary = parent.join(format!(".tokens.v2.initialize.{}", std::process::id()));
+    let temporary = format!(".tokens.v2.initialize.{}", std::process::id());
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(O_NOFOLLOW)
-            .open(&temporary)
+        let mut file = location
+            .directory
+            .create_new_file(&temporary, 0o600)
             .map_err(|_| AuthenticationStoreError::Open)?;
         file.write_all(&bytes)
-            .and_then(|()| file.sync_all())
+            .and_then(|()| file.sync())
             .map_err(|_| AuthenticationStoreError::Read)?;
-        std::fs::hard_link(&temporary, path).map_err(|_| AuthenticationStoreError::Open)?;
-        std::fs::remove_file(&temporary).map_err(|_| AuthenticationStoreError::Open)?;
-        std::fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
+        location
+            .directory
+            .hard_link_child(&temporary, &location.name)
+            .map_err(|_| AuthenticationStoreError::Open)?;
+        location
+            .directory
+            .remove_file(&temporary)
+            .map_err(|_| AuthenticationStoreError::Open)?;
+        location
+            .directory
+            .sync()
             .map_err(|_| AuthenticationStoreError::Read)
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        let _ = location.directory.remove_file(&temporary);
     }
     result
 }
@@ -231,8 +283,10 @@ pub fn issue_access_token(
     revocation_generation: u64,
     label: &str,
 ) -> Result<OneTimeAccessToken, AuthenticationStoreError> {
-    let _lock = lock_token_administration(path, gitd_uid)?;
-    let (authority, generation, mut records) = load_token_authority(path, pepper_path, gitd_uid)?;
+    let location = TokenStoreLocation::open(path, gitd_uid)?;
+    let _lock = lock_token_administration(&location, gitd_uid)?;
+    let (authority, generation, mut records) =
+        load_token_authority(&location, pepper_path, gitd_uid)?;
     let (token, record) = authority
         .issue(
             repository,
@@ -245,10 +299,12 @@ pub fn issue_access_token(
         .map_err(|_| AuthenticationStoreError::Decode)?;
     records.push(record);
     replace_token_store(
-        path,
+        &location,
         gitd_uid,
         &authority,
-        generation.checked_add(1).ok_or(AuthenticationStoreError::Decode)?,
+        generation
+            .checked_add(1)
+            .ok_or(AuthenticationStoreError::Decode)?,
         &records,
     )?;
     Ok(token)
@@ -260,17 +316,21 @@ pub fn revoke_access_token(
     gitd_uid: u32,
     encoded_token: &str,
 ) -> Result<bool, AuthenticationStoreError> {
-    let _lock = lock_token_administration(path, gitd_uid)?;
-    let (authority, generation, mut records) = load_token_authority(path, pepper_path, gitd_uid)?;
+    let location = TokenStoreLocation::open(path, gitd_uid)?;
+    let _lock = lock_token_administration(&location, gitd_uid)?;
+    let (authority, generation, mut records) =
+        load_token_authority(&location, pepper_path, gitd_uid)?;
     let removed = authority
         .revoke_encoded_token(&mut records, encoded_token)
         .map_err(|_| AuthenticationStoreError::Decode)?;
     if removed {
         replace_token_store(
-            path,
+            &location,
             gitd_uid,
             &authority,
-            generation.checked_add(1).ok_or(AuthenticationStoreError::Decode)?,
+            generation
+                .checked_add(1)
+                .ok_or(AuthenticationStoreError::Decode)?,
             &records,
         )?;
     }
@@ -278,7 +338,7 @@ pub fn revoke_access_token(
 }
 
 fn load_token_authority(
-    path: &Path,
+    location: &TokenStoreLocation,
     pepper_path: &Path,
     gitd_uid: u32,
 ) -> Result<(TokenAuthority, u64, Vector<TokenRecord>), AuthenticationStoreError> {
@@ -286,49 +346,57 @@ fn load_token_authority(
     let authority = TokenAuthority::new(pepper).map_err(|_| AuthenticationStoreError::Decode);
     erase_secret_bytes(&mut pepper);
     let authority = authority?;
+    let mut file =
+        location.open_secure(&location.name, gitd_uid, 52, MAX_TOKEN_STORE_BYTES as u64)?;
+    let length = usize::try_from(file.len().map_err(|_| AuthenticationStoreError::Metadata)?)
+        .map_err(|_| AuthenticationStoreError::Size)?;
+    let mut bytes = vec![0; length];
+    file.read_exact(&mut bytes)
+        .map_err(|_| AuthenticationStoreError::Read)?;
     let (generation, records) = authority
-        .decode_record_snapshot(&read_token_store(path, gitd_uid)?)
+        .decode_record_snapshot(&bytes)
         .map_err(|_| AuthenticationStoreError::Decode)?;
     Ok((authority, generation, records))
 }
 
 fn replace_token_store(
-    path: &Path,
+    location: &TokenStoreLocation,
     gitd_uid: u32,
     authority: &TokenAuthority,
     generation: u64,
     records: &[TokenRecord],
 ) -> Result<(), AuthenticationStoreError> {
-    let _existing = secure_file(path, gitd_uid, 52, MAX_TOKEN_STORE_BYTES as u64)?;
-    let parent = path.parent().ok_or(AuthenticationStoreError::Open)?;
+    let _existing =
+        location.open_secure(&location.name, gitd_uid, 52, MAX_TOKEN_STORE_BYTES as u64)?;
     let bytes = authority
         .encode_record_snapshot(generation, records)
         .map_err(|_| AuthenticationStoreError::Decode)?;
-    let temporary = parent.join(format!(".tokens.v2.replace.{}", std::process::id()));
+    let temporary = format!(".tokens.v2.replace.{}", std::process::id());
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(O_NOFOLLOW)
-            .open(&temporary)
+        let mut file = location
+            .directory
+            .create_new_file(&temporary, 0o600)
             .map_err(|_| AuthenticationStoreError::Open)?;
         test_process_exit_at_boundary(1);
         file.write_all(&bytes)
             .map_err(|_| AuthenticationStoreError::Read)?;
         test_process_exit_at_boundary(2);
-        file.sync_all().map_err(|_| AuthenticationStoreError::Read)?;
+        file.sync().map_err(|_| AuthenticationStoreError::Read)?;
         test_process_exit_at_boundary(3);
-        std::fs::rename(&temporary, path).map_err(|_| AuthenticationStoreError::Open)?;
+        location
+            .directory
+            .rename_child(&temporary, &location.name)
+            .map_err(|_| AuthenticationStoreError::Open)?;
         test_process_exit_at_boundary(4);
-        std::fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
+        location
+            .directory
+            .sync()
             .map_err(|_| AuthenticationStoreError::Read)?;
         test_process_exit_at_boundary(5);
         Ok(())
     })();
     if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        let _ = location.directory.remove_file(&temporary);
     }
     result
 }
@@ -348,37 +416,34 @@ fn test_process_exit_at_boundary(boundary: u8) {
 }
 
 fn lock_token_administration(
-    path: &Path,
+    location: &TokenStoreLocation,
     gitd_uid: u32,
-) -> Result<std::fs::File, AuthenticationStoreError> {
-    if !path.is_absolute() || path.file_name().is_none() {
-        return Err(AuthenticationStoreError::Lock);
-    }
-    let parent = path.parent().ok_or(AuthenticationStoreError::Lock)?;
-    let lock_path = parent.join(".tokens.v2.admin.lock");
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(O_NOFOLLOW)
-        .open(lock_path)
-        .map_err(|_| AuthenticationStoreError::Lock)?;
+) -> Result<mrml_runtime::File, AuthenticationStoreError> {
+    let name = ".tokens.v2.admin.lock";
+    let lock = match location.directory.open_regular(name) {
+        Ok(lock) => lock,
+        Err(_) if !location.entry_exists(name)? => {
+            match location.directory.create_new_file(name, 0o600) {
+                Ok(lock) => lock,
+                Err(_) => location
+                    .directory
+                    .open_regular(name)
+                    .map_err(|_| AuthenticationStoreError::Lock)?,
+            }
+        }
+        Err(_) => return Err(AuthenticationStoreError::Lock),
+    };
     let metadata = lock
         .metadata()
         .map_err(|_| AuthenticationStoreError::Lock)?;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.nlink() != 1
-        || (metadata.uid() != 0 && metadata.uid() != gitd_uid)
-        || metadata.mode() & 0o777 != 0o600
+    if metadata.links != 1
+        || (metadata.uid != 0 && metadata.uid != gitd_uid)
+        || metadata.mode & 0o777 != 0o600
     {
         return Err(AuthenticationStoreError::Lock);
     }
-    // SAFETY: `lock` owns this live descriptor for the returned guard's lifetime.
-    if unsafe { flock(lock.as_raw_fd(), LOCK_EXCLUSIVE) } != 0 {
-        return Err(AuthenticationStoreError::Lock);
-    }
+    lock.lock_exclusive()
+        .map_err(|_| AuthenticationStoreError::Lock)?;
     Ok(lock)
 }
 
@@ -386,13 +451,12 @@ pub fn load_gitd_authentication(
     config: &GitdConfig,
     catalog: &DeploymentCatalog,
 ) -> Result<GitdAuthentication, AuthenticationStoreError> {
-    let (generation, authority, policies, records) =
-        load_gitd_authentication_material(
-            &config.token_records,
-            &config.token_pepper,
-            config.gitd_uid,
-            catalog,
-        )?;
+    let (generation, authority, policies, records) = load_gitd_authentication_material(
+        &config.token_records,
+        &config.token_pepper,
+        config.gitd_uid,
+        catalog,
+    )?;
     GitdAuthentication::new_with_generation(generation, authority, policies, records)
         .map_err(|_| AuthenticationStoreError::Catalog)
 }
@@ -647,11 +711,58 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_issuers_serialize_without_lost_updates() {
+    fn token_update_remains_bound_to_retained_parent_directory() {
         let root = std::env::temp_dir().join(format!(
-            "mrml-gitd-auth-concurrent-{}",
+            "mrml-gitd-auth-retained-update-{}",
             std::process::id()
         ));
+        let displaced = root.with_extension("displaced");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&displaced);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = fs::metadata(&root).unwrap().uid();
+        let pepper_path = root.join("pepper");
+        let store_path = root.join("tokens.v1");
+        fs::write(&pepper_path, [0x62; 32]).unwrap();
+        fs::set_permissions(&pepper_path, fs::Permissions::from_mode(0o400)).unwrap();
+        initialize_empty_token_store(&store_path, &pepper_path, uid).unwrap();
+
+        let location = TokenStoreLocation::open(&store_path, uid).unwrap();
+        let _lock = lock_token_administration(&location, uid).unwrap();
+        let (authority, generation, mut records) =
+            load_token_authority(&location, &pepper_path, uid).unwrap();
+        let (_token, record) = authority
+            .issue(
+                RepositoryIdentity::parse("owner/retained").unwrap(),
+                AccessScopes::READ,
+                10,
+                20,
+                1,
+                "retained-update",
+            )
+            .unwrap();
+        records.push(record);
+        fs::rename(&root, &displaced).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+
+        replace_token_store(&location, uid, &authority, generation + 1, &records).unwrap();
+        let (persisted_generation, persisted_records) = authority
+            .decode_record_snapshot(&fs::read(displaced.join("tokens.v1")).unwrap())
+            .unwrap();
+        assert_eq!(persisted_generation, 2);
+        assert_eq!(persisted_records.len(), 1);
+        assert!(!root.join("tokens.v1").exists());
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(displaced).unwrap();
+    }
+
+    #[test]
+    fn concurrent_issuers_serialize_without_lost_updates() {
+        let root =
+            std::env::temp_dir().join(format!("mrml-gitd-auth-concurrent-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -696,10 +807,8 @@ mod tests {
 
     #[test]
     fn live_reload_revokes_without_restart_and_rejects_store_rollback() {
-        let root = std::env::temp_dir().join(format!(
-            "mrml-gitd-auth-live-reload-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("mrml-gitd-auth-live-reload-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -964,7 +1073,10 @@ mod tests {
             }));
         }
         barrier.wait();
-        let mut results = [workers.remove(0).join().unwrap(), workers.remove(0).join().unwrap()];
+        let mut results = [
+            workers.remove(0).join().unwrap(),
+            workers.remove(0).join().unwrap(),
+        ];
         results.sort_unstable_by_key(|result| match result {
             Ok(value) => *value as u8,
             Err(_) => 2,
