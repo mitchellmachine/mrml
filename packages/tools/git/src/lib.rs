@@ -9,6 +9,7 @@ mod audit_receipt;
 mod authority_candidate;
 mod authority_client;
 mod authority_wire;
+mod backup_stream;
 mod cache_pack;
 mod cache_pack_file;
 mod compaction;
@@ -92,6 +93,10 @@ pub use authority_wire::{
     parse_authority_candidate_status_result,
     parse_authority_proof_install, parse_authority_receipt, parse_authority_receive,
     parse_authority_ref_transaction,
+};
+pub use backup_stream::{
+    BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES, BackupStreamError, BackupStreamHeader,
+    encode_backup_stream_header, open_backup_frame, parse_backup_stream_header, seal_backup_frame,
 };
 pub use cache_pack::{
     ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES, MAX_PACK_CACHE_KEY_BYTES,
