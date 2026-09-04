@@ -73,5 +73,7 @@ require 'previous-policy.bin' deploy/compose/install-volume-inputs.sh
 require 'trust transition requires stopped Gitd, authority, and signer' deploy/compose/transition-git-trust.sh
 require '--profile admin run --rm --no-deps git-signer-trust-advance' deploy/compose/transition-git-trust.sh
 require 'advance-trust 21006 21001 21002 "$1"' deploy/compose/transition-git-trust.sh
+require 'if [ "${1:-}" = --resume-signer ]' deploy/compose/transition-git-trust.sh
+require 'if [ "$phase" = select-and-advance ]' deploy/compose/transition-git-trust.sh
 
 echo "protected signer Compose and image isolation policy PASS"

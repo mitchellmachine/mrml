@@ -10,8 +10,13 @@ volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
 [ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
 
+phase=select-and-advance
+if [ "${1:-}" = --resume-signer ]; then
+  phase=resume-signer
+  shift
+fi
 [ "$#" -eq 4 ] || {
-  echo "usage: $0 OWNER/REPOSITORY VALIDATION_TIME EXPECTED_GENERATION EXPECTED_POLICY_DIGEST" >&2
+  echo "usage: $0 [--resume-signer] OWNER/REPOSITORY VALIDATION_TIME EXPECTED_GENERATION EXPECTED_POLICY_DIGEST" >&2
   exit 64
 }
 [ "$(id -u)" -eq 0 ] || { echo "trust transition must run as root" >&2; exit 1; }
@@ -36,15 +41,17 @@ for service in gitd git-authority git-protected-signer; do
   }
 done
 
-docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
-  --profile admin run --rm --no-deps git-trust-transition \
-  transition-policy /var/lib/mrml/git-policies "$1" \
-  /run/mrml-transition/next-policy.bin \
-  /etc/mrml/authority/openpgp-public.asc /etc/mrml/authority/ml-dsa-public.bin \
-  /run/mrml-transition/previous-openpgp.sig /run/mrml-transition/previous-ml-dsa.sig \
-  /run/mrml-transition/next-openpgp-public.asc /run/mrml-transition/next-ml-dsa-public.bin \
-  /run/mrml-transition/next-openpgp.sig /run/mrml-transition/next-ml-dsa.sig \
-  "$2" "$3" "$4" 21002
+if [ "$phase" = select-and-advance ]; then
+  docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
+    --profile admin run --rm --no-deps git-trust-transition \
+    transition-policy /var/lib/mrml/git-policies "$1" \
+    /run/mrml-transition/next-policy.bin \
+    /etc/mrml/authority/openpgp-public.asc /etc/mrml/authority/ml-dsa-public.bin \
+    /run/mrml-transition/previous-openpgp.sig /run/mrml-transition/previous-ml-dsa.sig \
+    /run/mrml-transition/next-openpgp-public.asc /run/mrml-transition/next-ml-dsa-public.bin \
+    /run/mrml-transition/next-openpgp.sig /run/mrml-transition/next-ml-dsa.sig \
+    "$2" "$3" "$4" 21002
+fi
 
 docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" \
   --profile admin run --rm --no-deps git-signer-trust-advance \
