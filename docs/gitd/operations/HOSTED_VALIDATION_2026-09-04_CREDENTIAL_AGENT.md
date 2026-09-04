@@ -104,10 +104,12 @@ cap_drop=all security_opt=no-new-privileges
 
 The exact inspection container was removed afterward. The archive and generated
 SBOM are disposable `/tmp` evidence, not signed release artifacts. The offline
-builder now includes this fifth image in `mrml-images-git-v5`, generates its
-Syft SBOM, signs its exported archive through the existing offline Cosign path,
-and locks its expected user and entrypoint. A fresh complete signed bundle has
-not yet been produced at these commits.
+builder includes this fifth image in `mrml-images-git-v5`, generates its Syft
+SBOM, signs its exported archive through the existing offline Cosign path, and
+locks its expected user and entrypoint. A fresh complete test-signed bundle was
+subsequently built and independently verified at functional commit `594d242f`;
+see
+[`OFFLINE_RELEASE_VALIDATION_2026-09-04_594D242F.md`](OFFLINE_RELEASE_VALIDATION_2026-09-04_594D242F.md).
 
 ## Graceful shutdown continuation
 
