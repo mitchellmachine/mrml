@@ -108,6 +108,68 @@ it proves the confined server containers, named-volume persistence, real TLS/H2
 listener, authentication, pack transfer, and native checkout, but does not prove
 Podman inter-container DNS or a byte-for-byte podman-compose production start.
 
+## Exact `66806028` upgrade and credential-agent lifecycle
+
+A subsequent controlled increment built the five-image `mrml-images-git-v5`
+offline bundle at exact functional commit `66806028` from a clean detached
+worktree. Its archive SHA-256 was
+`e80d58cad1952a1a1bea3c7e105344104b9cda669576bb6c716e4d448f925633`.
+The complete builder reran the authority, Gitd, and Git client suites, generated
+five Syft SPDX JSON SBOMs, and signed all five image archives with a newly
+generated non-production offline Cosign key. Independent extraction verified
+every bundle checksum, image lock, SBOM presence check, signature, and retained
+Compose policy. This is test-key evidence, not production release signing.
+
+The already verified image archives were streamed over authenticated SSH
+directly into the VPS Podman image store. No bundle staging directory or
+container bind mount was used. Their exact image IDs were:
+
+```text
+57b17819b295d97c6e9b79f12726cb3b10d5a40801bff025125ca52e05e1987a  git-authority
+26f2f1c02bf104c3e86bc2c9eae6a78bbe02c931f8d4f42040515f8895f0ac61  gitd
+0316bcf7c33c88e7eb3c6a4dda162efa9deeb6d1596ce96b6533be6f99d998e9  git-protected-signer
+1c5850c755d7b166990a8b8ae99da92d761976a3dae74a87f1eeefe6fffd3b49  git-credential-agent
+e3b17d9f1dd9d3fdcb696d9bf20e5b94940964129b374997b42c04427c076f7b  git-backup
+```
+
+The retained Gitd container was stopped but preserved for rollback. An initial
+Podman clone preserved its named volumes and loopback port, but final inspection
+found that it had also inherited `readonly=false`, an empty capability-drop
+set, and no no-new-privileges option. That candidate was rejected and stopped.
+A separately created exact `66806028` replacement used the same named volumes
+while enforcing a read-only root, all capabilities dropped,
+no-new-privileges, a 2 GiB memory limit, two CPUs, 192 PIDs, and a bounded
+in-memory `/tmp`. It passed all six ordered startup gates and an authenticated
+HTTP/2 clone into a fresh named volume. The only published endpoint remained
+`127.0.0.1:18445`.
+
+The credential-agent token, split channel-capability copies, Unix socket, and
+all client checkouts used new `mrml-podman668-*` named volumes. The read-only
+token was issued directly from Gitd into its owner-only volume; the random
+channel was generated in the agent volume and copied into a separately owned
+client volume. Neither secret was printed, placed in an environment variable,
+argument, host directory, or repository. The daemon ran as `21009:21009`, with
+socket group `21909`, `network=none`, a read-only root, all capabilities
+dropped, no-new-privileges, 64 MiB memory, half a CPU, 16 PIDs, and no ports.
+
+Podman direct CLI adjusted the root metadata of a previously helper-mounted
+runtime volume despite the `nocopy` option. The controlled probe therefore
+mounted an owner/group/mode-verified `socket` subdirectory of that same named
+volume with Podman's volume `subpath` facility. The daemon then reported ready.
+This is direct-Podman evidence and does not replace the checked-in Compose
+static gate.
+
+An exact `66806028` client cloned successfully using `unix-v1` without token
+stdin. Gitd then revoked the held bearer token while both services stayed up;
+a fresh clone failed closed. Rotation stopped the agent, replaced the token in
+its named volume, and advanced the independent credential-agent generation to
+2. The Gitd policy revocation generation correctly remained 1. After restart,
+a fresh generation-2 agent-backed clone succeeded. Podman required SIGKILL
+after the daemon did not exit within its ten-second stop deadline; graceful
+daemon shutdown is therefore not claimed. A final generation-2 agent-backed
+clone also succeeded against the corrected read-only, capability-dropped Gitd
+container.
+
 Public port 443 remains unbound. Production owner keys, production certificate
 identity, a current production Cosign key, public DNS, real certd renewal, and
 external security/cryptographic review remain required before activation.
