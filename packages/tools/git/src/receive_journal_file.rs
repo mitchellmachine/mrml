@@ -13,6 +13,7 @@ use crate::{
 
 pub struct ReceiveJournalDirectory {
     root: Text,
+    retained: Option<mrml_runtime::DirectoryCapability>,
 }
 
 impl ReceiveJournalDirectory {
@@ -25,7 +26,21 @@ impl ReceiveJournalDirectory {
         if !path_is_directory(&root) {
             return Err(DurableFailure::Rename);
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            retained: None,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn open_capability(
+        root: mrml_runtime::DirectoryCapability,
+    ) -> Result<Self, DurableFailure> {
+        validate_directory(&root)?;
+        Ok(Self {
+            root: Text::new(),
+            retained: Some(root),
+        })
     }
 
     pub fn persist(
@@ -35,19 +50,20 @@ impl ReceiveJournalDirectory {
     ) -> Result<(), DurableFailure> {
         let encoded = encode_receive_journal(transaction, verified)
             .map_err(|_| DurableFailure::VerifierCrash)?;
-        let final_path = self.record_path(transaction.id());
-        let temporary_path = self.temporary_path(transaction.id());
+        let final_name = record_name(transaction.id());
+        let mut temporary_name = final_name.clone();
+        temporary_name.push_str(".new");
         // Exclusive creation makes a stale/tampered temporary record a
         // recovery event, never something silently truncated or followed.
-        let mut file = File::create_new(&temporary_path).map_err(|_| DurableFailure::StaleLock)?;
+        let mut file = self.create_file(&temporary_name)?;
         if let Err(error) = file.write_all(&encoded) {
             drop(file);
             return Err(map_write(error));
         }
         file.sync().map_err(|_| DurableFailure::Fsync)?;
         drop(file);
-        rename_file(&temporary_path, &final_path).map_err(|_| DurableFailure::Rename)?;
-        sync_journal_directory(&self.root)?;
+        self.rename(&temporary_name, &final_name)?;
+        self.sync()?;
         Ok(())
     }
 
@@ -55,8 +71,7 @@ impl ReceiveJournalDirectory {
         &self,
         transaction: QuarantineTransactionId,
     ) -> Result<ReceiveJournalRecord, ReceiveJournalError> {
-        let mut file = File::open_regular(&self.record_path(transaction))
-            .map_err(|_| ReceiveJournalError::Malformed)?;
+        let mut file = self.open_file(&record_name(transaction))?;
         let length = usize::try_from(file.len().map_err(|_| ReceiveJournalError::Malformed)?)
             .map_err(|_| ReceiveJournalError::Resource)?;
         if length > MAX_RECEIVE_JOURNAL_BYTES {
@@ -80,7 +95,7 @@ impl ReceiveJournalDirectory {
     /// records and unrelated entries are rejected so recovery cannot silently
     /// skip ambiguous state.
     pub fn load_all(&self) -> Result<Vector<ReceiveJournalRecord>, ReceiveJournalError> {
-        let entries = read_directory(&self.root).map_err(|_| ReceiveJournalError::Malformed)?;
+        let entries = self.entries()?;
         let mut records = Vector::new();
         for entry in entries {
             if entry.is_symlink || entry.is_directory || entry.name.ends_with(".new") {
@@ -102,19 +117,114 @@ impl ReceiveJournalDirectory {
         if &reread != expected {
             return Err(DurableFailure::VerifierCrash);
         }
-        remove_file(&self.record_path(expected.transaction)).map_err(|_| DurableFailure::Rename)?;
-        sync_journal_directory(&self.root)
+        self.remove(&record_name(expected.transaction))?;
+        self.sync()
     }
 
-    fn record_path(&self, transaction: QuarantineTransactionId) -> Text {
-        join_path(&self.root, &record_name(transaction))
-    }
-
+    #[cfg(test)]
     fn temporary_path(&self, transaction: QuarantineTransactionId) -> Text {
         let mut name = record_name(transaction);
         name.push_str(".new");
         join_path(&self.root, &name)
     }
+
+    fn create_file(&self, name: &str) -> Result<File, DurableFailure> {
+        match &self.retained {
+            Some(root) => {
+                let file = root
+                    .create_new_file(name, 0o600)
+                    .map_err(|_| DurableFailure::StaleLock)?;
+                validate_file(root, &file)?;
+                Ok(file)
+            }
+            None => File::create_new(&join_path(&self.root, name))
+                .map_err(|_| DurableFailure::StaleLock),
+        }
+    }
+
+    fn open_file(&self, name: &str) -> Result<File, ReceiveJournalError> {
+        match &self.retained {
+            Some(root) => {
+                let file = root
+                    .open_regular(name)
+                    .map_err(|_| ReceiveJournalError::Malformed)?;
+                validate_journal_file(root, &file)?;
+                Ok(file)
+            }
+            None => File::open_regular(&join_path(&self.root, name))
+                .map_err(|_| ReceiveJournalError::Malformed),
+        }
+    }
+
+    fn rename(&self, existing: &str, replacement: &str) -> Result<(), DurableFailure> {
+        match &self.retained {
+            Some(root) => root
+                .rename_child(existing, replacement)
+                .map_err(|_| DurableFailure::Rename),
+            None => rename_file(
+                &join_path(&self.root, existing),
+                &join_path(&self.root, replacement),
+            )
+            .map_err(|_| DurableFailure::Rename),
+        }
+    }
+
+    fn remove(&self, name: &str) -> Result<(), DurableFailure> {
+        match &self.retained {
+            Some(root) => root.remove_file(name).map_err(|_| DurableFailure::Rename),
+            None => remove_file(&join_path(&self.root, name)).map_err(|_| DurableFailure::Rename),
+        }
+    }
+
+    fn entries(&self) -> Result<Vector<mrml_runtime::DirectoryEntry>, ReceiveJournalError> {
+        match &self.retained {
+            Some(root) => root
+                .read_directory()
+                .map_err(|_| ReceiveJournalError::Malformed),
+            None => read_directory(&self.root).map_err(|_| ReceiveJournalError::Malformed),
+        }
+    }
+
+    fn sync(&self) -> Result<(), DurableFailure> {
+        match &self.retained {
+            Some(root) => root.sync().map_err(|_| DurableFailure::Fsync),
+            None => sync_journal_directory(&self.root),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn validate_directory(root: &mrml_runtime::DirectoryCapability) -> Result<(), DurableFailure> {
+    let metadata = root.metadata().map_err(|_| DurableFailure::VerifierCrash)?;
+    if metadata.mode & 0o777 != 0o700 || metadata.links < 2 {
+        return Err(DurableFailure::VerifierCrash);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_file(
+    root: &mrml_runtime::DirectoryCapability,
+    file: &File,
+) -> Result<(), DurableFailure> {
+    let parent = root.metadata().map_err(|_| DurableFailure::VerifierCrash)?;
+    let metadata = file.metadata().map_err(|_| DurableFailure::VerifierCrash)?;
+    if metadata.uid != parent.uid
+        || metadata.gid != parent.gid
+        || metadata.mode & 0o777 != 0o600
+        || metadata.links != 1
+    {
+        return Err(DurableFailure::VerifierCrash);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_journal_file(
+    root: &mrml_runtime::DirectoryCapability,
+    file: &File,
+) -> Result<(), ReceiveJournalError> {
+    validate_file(root, file).map_err(|_| ReceiveJournalError::Malformed)
 }
 
 fn record_name(transaction: QuarantineTransactionId) -> Text {
@@ -172,6 +282,7 @@ fn sync_journal_directory(_: &str) -> Result<(), DurableFailure> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    extern crate std;
     use crate::{
         CandidateRefTransaction, CandidateRefUpdate, FullRefName, HistoryVerificationLimits,
         ObjectId, PushStorageForecast, QuarantineLimits, QuarantinePhase, RepositoryGeneration,
@@ -287,5 +398,42 @@ mod tests {
         );
         assert!(directory.load_all().is_err());
         mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn retained_journal_root_survives_ambient_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-git-journal-retained-{}", mrml_runtime::process_id()),
+        );
+        let displaced = mrml_runtime::mrml_format!("{root}-displaced");
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let _ = mrml_runtime::remove_dir_all(&displaced);
+        mrml_runtime::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(root.as_str(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let capability = mrml_runtime::DirectoryCapability::open_root(&root).unwrap();
+        let directory = ReceiveJournalDirectory::open_capability(capability).unwrap();
+        mrml_runtime::rename_file(&root, &displaced).unwrap();
+        mrml_runtime::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(root.as_str(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let (transaction, verified) = fixture();
+        directory.persist(&transaction, &verified).unwrap();
+        let record = directory.load(transaction.id()).unwrap();
+        assert_eq!(directory.load_all().unwrap(), &[record.clone()][..]);
+        assert!(mrml_runtime::path_exists(&join_path(
+            &displaced,
+            &record_name(transaction.id()),
+        )));
+        assert!(!mrml_runtime::path_exists(&join_path(
+            &root,
+            &record_name(transaction.id()),
+        )));
+        directory.remove_exact(&record).unwrap();
+        assert!(directory.load_all().unwrap().is_empty());
+        mrml_runtime::remove_dir_all(&root).unwrap();
+        mrml_runtime::remove_dir_all(&displaced).unwrap();
     }
 }

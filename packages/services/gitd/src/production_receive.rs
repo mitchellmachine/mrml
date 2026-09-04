@@ -17,7 +17,7 @@ use crate::{AdmittedRepository, DeploymentRepository, DeploymentRepositoryProfil
 pub struct ProductionReceiveRepository {
     profile: DeploymentRepositoryProfile,
     policy: Option<PathBuf>,
-    journals: PathBuf,
+    journals: DirectoryCapability,
     quarantine: PathBuf,
     plain_receipts: PathBuf,
     authenticated_receipts: PathBuf,
@@ -101,7 +101,11 @@ impl ProductionReceiveRepository {
         Ok(Self {
             profile: entry.profile.class,
             policy,
-            journals: admitted.paths.state.join("receive-journals"),
+            journals: admitted
+                .capabilities
+                .state
+                .open_directory("receive-journals")
+                .map_err(|_| BackendError::Storage)?,
             quarantine: admitted.paths.quarantine.clone(),
             plain_receipts: admitted.paths.receipts.join("plain"),
             authenticated_receipts: admitted.paths.receipts.join("authenticated"),
@@ -134,7 +138,9 @@ impl ProductionReceiveRepository {
             return Err(BackendError::Unsupported);
         }
         let mut store = LinuxDurableReceiveStore::open_with_capabilities(
-            path(&self.journals)?,
+            self.journals
+                .try_clone()
+                .map_err(|_| BackendError::Storage)?,
             self.arrivals
                 .try_clone()
                 .map_err(|_| BackendError::Storage)?,
