@@ -19,7 +19,7 @@ use mrml_gitd::{
     recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
     validate_identity_snapshot, validate_storage_layout,
 };
-use mrml_http::{AccessScopes, RepositoryIdentity};
+use mrml_http::{AccessScopes, GitdHealthDependency, RepositoryIdentity};
 use mrml_openpgp::{MAX_OPENPGP_PUBLIC_KEY_BYTES, parse_public_key_v6_ascii};
 use mrml_runtime::{DirectoryCapability, TcpListener};
 
@@ -623,25 +623,41 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
     let terminating = Arc::new(AtomicBool::new(false));
     let rotation_stop = Arc::new(AtomicBool::new(false));
     let authentication_stop = Arc::new(AtomicBool::new(false));
-    let rotation_fatal = fatal.clone();
     let rotation_health = operational_health.clone();
     let worker_rotation_stop = rotation_stop.clone();
     let rotation_tls = tls.clone();
     let rotation_route = signing_route.clone();
     let rotation_server_name = config.server_name.clone();
     let rotation_worker = mrml_runtime::spawn_joinable(move || {
+        let mut consecutive_failures = 0u32;
         while !worker_rotation_stop.load(Ordering::Acquire) {
-            if refresh_certd_tls_config(
+            match refresh_certd_tls_config(
                 &rotation_server_name,
                 &rotation_route,
                 &rotation_tls,
                 1_000,
-            )
-            .is_err()
-            {
-                rotation_health.fail();
-                rotation_fatal.store(true, Ordering::Release);
-                break;
+            ) {
+                Ok(changed) => {
+                    consecutive_failures = 0;
+                    rotation_health.recover_dependency(GitdHealthDependency::Certificate);
+                    if changed {
+                        operational_event("certificate_generation_activated");
+                    }
+                }
+                Err(error) => {
+                    let _ = rotation_tls.block_new_handshakes();
+                    rotation_health.degrade_dependency(GitdHealthDependency::Certificate);
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    let hard_failure = !matches!(error, mrml_gitd::GitdTlsRefreshError::Channel);
+                    let delay = certd_retry_delay_millis(consecutive_failures, hard_failure);
+                    eprintln!(
+                        "component=mrml-gitd event=certificate_refresh_retry category={} consecutive_failures={} backoff_millis={}",
+                        if hard_failure { "invalid_identity" } else { "channel" },
+                        consecutive_failures,
+                        delay
+                    );
+                    sleep_interruptibly(&worker_rotation_stop, delay);
+                }
             }
         }
     })
@@ -657,13 +673,13 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
             }
             match authentication_store.reload(&authentication, &reload_catalog) {
                 Ok(changed) => {
-                    reload_health.recover_readiness();
+                    reload_health.recover_dependency(GitdHealthDependency::Authentication);
                     if changed {
                         operational_event("authentication_generation_activated");
                     }
                 }
                 Err(_) => {
-                    reload_health.degrade();
+                    reload_health.degrade_dependency(GitdHealthDependency::Authentication);
                     operational_event("authentication_reload_failed");
                 }
             }
@@ -760,6 +776,42 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
             let _ = authentication_worker.join();
             return Err(());
         }
+    }
+}
+
+fn certd_retry_delay_millis(consecutive_failures: u32, hard_failure: bool) -> u64 {
+    let mut random = [0u8; 2];
+    let _ = mrml_runtime::fill_random(&mut random);
+    certd_retry_delay_with_jitter(
+        consecutive_failures,
+        hard_failure,
+        u16::from_le_bytes(random),
+    )
+}
+
+fn certd_retry_delay_with_jitter(
+    consecutive_failures: u32,
+    hard_failure: bool,
+    jitter: u16,
+) -> u64 {
+    const MAXIMUM_MILLIS: u64 = 30_000;
+    let initial = if hard_failure { 5_000u64 } else { 250u64 };
+    let shift = consecutive_failures.saturating_sub(1).min(16);
+    let base = initial
+        .checked_shl(shift)
+        .unwrap_or(MAXIMUM_MILLIS)
+        .min(MAXIMUM_MILLIS);
+    let jitter_range = base / 4 + 1;
+    base.saturating_add(u64::from(jitter) % jitter_range)
+        .min(MAXIMUM_MILLIS)
+}
+
+fn sleep_interruptibly(stop: &AtomicBool, milliseconds: u64) {
+    let mut remaining = milliseconds;
+    while remaining != 0 && !stop.load(Ordering::Acquire) {
+        let interval = remaining.min(100);
+        std::thread::sleep(std::time::Duration::from_millis(interval));
+        remaining -= interval;
     }
 }
 
@@ -1045,6 +1097,16 @@ fn load_certd_capability(path: &Path, expected_owner: u32) -> Result<CertdChanne
 mod tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    #[test]
+    fn certd_retry_backoff_is_jittered_bounded_and_hard_failures_are_slower() {
+        assert_eq!(certd_retry_delay_with_jitter(1, false, 0), 250);
+        assert_eq!(certd_retry_delay_with_jitter(2, false, 0), 500);
+        assert!(certd_retry_delay_with_jitter(2, false, u16::MAX) >= 500);
+        assert_eq!(certd_retry_delay_with_jitter(1, true, 0), 5_000);
+        assert_eq!(certd_retry_delay_with_jitter(32, false, u16::MAX), 30_000);
+        assert_eq!(certd_retry_delay_with_jitter(32, true, u16::MAX), 30_000);
+    }
 
     fn request_sequence_root(label: &str) -> (std::path::PathBuf, u32) {
         let root = std::env::temp_dir().join(format!(

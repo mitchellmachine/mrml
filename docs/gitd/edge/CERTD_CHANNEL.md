@@ -52,10 +52,25 @@ reports an unchanged generation as a timeout or a strictly greater generation
 as a change. Zero, rollback, inconsistent state, and trailing bytes fail closed;
 the notification itself does not publish identity material.
 
-The current certd executable does not yet dispatch identity snapshot,
-CertificateVerify, or generation-wait requests. Gitd therefore remains
-non-ready and does not bind public listeners. There is no PEM, embedded-key,
-self-signed, plaintext, or development-identity fallback.
+The production rotation worker no longer terminates Gitd after one transient
+certd failure. Any channel or identity-refresh failure independently degrades
+the certificate dependency, blocks acquisition of new TLS configuration
+snapshots, and leaves already validated connections available to drain. The
+worker retries channel failures with interruptible jittered exponential backoff
+starting at 250 ms and hard identity/generation/TLS failures starting at five
+seconds; both cap at 30 seconds. A successful authenticated generation wait
+re-enables the current validated identity, while a strictly newer validated
+identity is installed atomically and re-enables handshakes. Authentication and
+certificate degradation use separate readiness bits, so recovery of one cannot
+hide continued failure of the other. Diagnostics expose only the failure class,
+bounded consecutive count, and delay. Refresh metrics count attempts, genuine
+wait timeouts, activations, channel failures, and validation failures without
+containing identity or key material.
+
+There is no PEM, embedded-key, self-signed, plaintext, or development-identity
+fallback. Production-process outage/recovery testing with the deployed certd
+remains required; focused tests establish the state, readiness independence,
+handshake blocking, metric initialization, and deterministic backoff bounds.
 
 The daemon's native dependency check composes certd health with authority
 health only after configuration and storage validation. Authority and certd use

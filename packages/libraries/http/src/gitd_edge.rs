@@ -22,16 +22,26 @@ const HEALTH_STARTING: u8 = 0;
 const HEALTH_READY: u8 = 1;
 const HEALTH_DRAINING: u8 = 2;
 const HEALTH_FAILED: u8 = 3;
-const HEALTH_DEGRADED: u8 = 4;
+const HEALTH_DEGRADED_GENERIC: u32 = 1 << 0;
+const HEALTH_DEGRADED_AUTHENTICATION: u32 = 1 << 1;
+const HEALTH_DEGRADED_CERTIFICATE: u32 = 1 << 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitdHealthDependency {
+    Authentication,
+    Certificate,
+}
 
 pub struct GitdOperationalHealth {
     state: AtomicU8,
+    degraded_dependencies: AtomicU32,
 }
 
 impl GitdOperationalHealth {
     pub const fn starting() -> Self {
         Self {
             state: AtomicU8::new(HEALTH_STARTING),
+            degraded_dependencies: AtomicU32::new(0),
         }
     }
 
@@ -55,25 +65,37 @@ impl GitdOperationalHealth {
     }
 
     pub fn degrade(&self) {
-        let _ = self.state.compare_exchange(
-            HEALTH_READY,
-            HEALTH_DEGRADED,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        self.degraded_dependencies
+            .fetch_or(HEALTH_DEGRADED_GENERIC, Ordering::AcqRel);
     }
 
     pub fn recover_readiness(&self) {
-        let _ = self.state.compare_exchange(
-            HEALTH_DEGRADED,
-            HEALTH_READY,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
+        self.degraded_dependencies
+            .fetch_and(!HEALTH_DEGRADED_GENERIC, Ordering::AcqRel);
+    }
+
+    pub fn degrade_dependency(&self, dependency: GitdHealthDependency) {
+        self.degraded_dependencies
+            .fetch_or(dependency.health_bit(), Ordering::AcqRel);
+    }
+
+    pub fn recover_dependency(&self, dependency: GitdHealthDependency) {
+        self.degraded_dependencies
+            .fetch_and(!dependency.health_bit(), Ordering::AcqRel);
     }
 
     pub fn is_ready(&self) -> bool {
         self.state.load(Ordering::Acquire) == HEALTH_READY
+            && self.degraded_dependencies.load(Ordering::Acquire) == 0
+    }
+}
+
+impl GitdHealthDependency {
+    const fn health_bit(self) -> u32 {
+        match self {
+            Self::Authentication => HEALTH_DEGRADED_AUTHENTICATION,
+            Self::Certificate => HEALTH_DEGRADED_CERTIFICATE,
+        }
     }
 }
 const HIGHLIGHTER_VERSION: &str = "language-labels-v1";
@@ -2760,37 +2782,58 @@ mod tests {
         .unwrap();
         let health = Shared::new(GitdOperationalHealth::starting());
         server.configure_operational_health(health.clone());
-        assert_eq!(server.handle(&request("GET", "/health/live", false)).status, 200);
         assert_eq!(
-            server.handle(&request("GET", "/health/ready", false)).status,
+            server.handle(&request("GET", "/health/live", false)).status,
+            200
+        );
+        assert_eq!(
+            server
+                .handle(&request("GET", "/health/ready", false))
+                .status,
             503
         );
         health.mark_ready();
         let ready = server.handle(&request("GET", "/health/ready", false));
         assert_eq!(ready.status, 200);
-        assert!(ready
-            .headers
-            .iter()
-            .any(|header| header.name == "cache-control" && header.value == "no-store"));
+        assert!(
+            ready
+                .headers
+                .iter()
+                .any(|header| header.name == "cache-control" && header.value == "no-store")
+        );
         health.degrade();
         assert_eq!(
-            server.handle(&request("GET", "/health/ready", false)).status,
+            server
+                .handle(&request("GET", "/health/ready", false))
+                .status,
             503
         );
         health.recover_readiness();
         assert_eq!(
-            server.handle(&request("GET", "/health/ready", false)).status,
+            server
+                .handle(&request("GET", "/health/ready", false))
+                .status,
             200
         );
+        health.degrade_dependency(GitdHealthDependency::Authentication);
+        health.degrade_dependency(GitdHealthDependency::Certificate);
+        health.recover_dependency(GitdHealthDependency::Authentication);
+        assert!(!health.is_ready());
+        health.recover_dependency(GitdHealthDependency::Certificate);
+        assert!(health.is_ready());
         health.begin_drain();
         assert_eq!(
-            server.handle(&request("GET", "/health/ready", false)).status,
+            server
+                .handle(&request("GET", "/health/ready", false))
+                .status,
             503
         );
         health.fail();
         health.mark_ready();
         assert_eq!(
-            server.handle(&request("GET", "/health/ready", false)).status,
+            server
+                .handle(&request("GET", "/health/ready", false))
+                .status,
             503
         );
     }

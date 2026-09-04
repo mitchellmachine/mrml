@@ -19,6 +19,15 @@ pub enum GitdTlsRefreshError {
     Tls,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GitdTlsRefreshMetrics {
+    pub attempts: u64,
+    pub timeouts: u64,
+    pub activations: u64,
+    pub channel_failures: u64,
+    pub validation_failures: u64,
+}
+
 pub struct GitdCertdTlsSigningKey {
     route: GitdCertdSigningRoute,
     identity_generation: u64,
@@ -34,10 +43,16 @@ pub struct GitdCertdSigningRoute {
 struct GitdTlsConfigState {
     generation: u64,
     config: Arc<TlsServerConfig>,
+    accepting_handshakes: bool,
 }
 
 pub struct GitdTlsConfigStore {
     state: RwLock<GitdTlsConfigState>,
+    refresh_attempts: AtomicU64,
+    refresh_timeouts: AtomicU64,
+    refresh_activations: AtomicU64,
+    refresh_channel_failures: AtomicU64,
+    refresh_validation_failures: AtomicU64,
 }
 
 impl GitdTlsConfigStore {
@@ -49,7 +64,13 @@ impl GitdTlsConfigStore {
             state: RwLock::new(GitdTlsConfigState {
                 generation,
                 config: Arc::new(config),
+                accepting_handshakes: true,
             }),
+            refresh_attempts: AtomicU64::new(0),
+            refresh_timeouts: AtomicU64::new(0),
+            refresh_activations: AtomicU64::new(0),
+            refresh_channel_failures: AtomicU64::new(0),
+            refresh_validation_failures: AtomicU64::new(0),
         })
     }
 
@@ -58,7 +79,43 @@ impl GitdTlsConfigStore {
             .state
             .read()
             .map_err(|_| TlsError::AuthenticationFailed)?;
+        if !state.accepting_handshakes {
+            return Err(TlsError::Certificate);
+        }
         Ok((state.generation, state.config.clone()))
+    }
+
+    pub fn block_new_handshakes(&self) -> Result<(), TlsError> {
+        self.state
+            .write()
+            .map_err(|_| TlsError::AuthenticationFailed)?
+            .accepting_handshakes = false;
+        Ok(())
+    }
+
+    pub fn refresh_metrics(&self) -> GitdTlsRefreshMetrics {
+        GitdTlsRefreshMetrics {
+            attempts: self.refresh_attempts.load(Ordering::Acquire),
+            timeouts: self.refresh_timeouts.load(Ordering::Acquire),
+            activations: self.refresh_activations.load(Ordering::Acquire),
+            channel_failures: self.refresh_channel_failures.load(Ordering::Acquire),
+            validation_failures: self.refresh_validation_failures.load(Ordering::Acquire),
+        }
+    }
+
+    fn current_generation(&self) -> Result<u64, TlsError> {
+        self.state
+            .read()
+            .map(|state| state.generation)
+            .map_err(|_| TlsError::AuthenticationFailed)
+    }
+
+    fn allow_current_handshakes(&self) -> Result<(), TlsError> {
+        self.state
+            .write()
+            .map_err(|_| TlsError::AuthenticationFailed)?
+            .accepting_handshakes = true;
+        Ok(())
     }
 
     pub fn install(&self, generation: u64, config: TlsServerConfig) -> Result<(), TlsError> {
@@ -72,6 +129,7 @@ impl GitdTlsConfigStore {
         *state = GitdTlsConfigState {
             generation,
             config: Arc::new(config),
+            accepting_handshakes: true,
         };
         Ok(())
     }
@@ -186,7 +244,33 @@ pub fn refresh_certd_tls_config(
     store: &GitdTlsConfigStore,
     timeout_milliseconds: u32,
 ) -> Result<bool, GitdTlsRefreshError> {
-    let current_generation = store.snapshot().map_err(|_| GitdTlsRefreshError::Tls)?.0;
+    saturating_increment(&store.refresh_attempts);
+    let result = refresh_certd_tls_config_inner(
+        server_name,
+        route,
+        store,
+        timeout_milliseconds,
+    );
+    match result {
+        Ok(true) => saturating_increment(&store.refresh_activations),
+        Ok(false) => saturating_increment(&store.refresh_timeouts),
+        Err(GitdTlsRefreshError::Channel) => {
+            saturating_increment(&store.refresh_channel_failures)
+        }
+        Err(_) => saturating_increment(&store.refresh_validation_failures),
+    }
+    result
+}
+
+fn refresh_certd_tls_config_inner(
+    server_name: &str,
+    route: &GitdCertdSigningRoute,
+    store: &GitdTlsConfigStore,
+    timeout_milliseconds: u32,
+) -> Result<bool, GitdTlsRefreshError> {
+    let current_generation = store
+        .current_generation()
+        .map_err(|_| GitdTlsRefreshError::Tls)?;
     let mut certd = route
         .refresh_certd
         .lock()
@@ -195,6 +279,9 @@ pub fn refresh_certd_tls_config(
         .wait_for_identity_generation(current_generation, timeout_milliseconds)
         .map_err(|_| GitdTlsRefreshError::Channel)?
     else {
+        store
+            .allow_current_handshakes()
+            .map_err(|_| GitdTlsRefreshError::Tls)?;
         return Ok(false);
     };
     let identity = certd
@@ -219,6 +306,12 @@ pub fn refresh_certd_tls_config(
     Ok(true)
 }
 
+fn saturating_increment(counter: &AtomicU64) {
+    let _ = counter.try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+        Some(value.saturating_add(1))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,8 +323,12 @@ mod tests {
         let config = TlsServerConfig::from_der_chain(&[b"certificate"]).unwrap();
         let store = GitdTlsConfigStore::new(7, config).unwrap();
         assert_eq!(store.snapshot().unwrap().0, 7);
+        assert_eq!(store.refresh_metrics(), GitdTlsRefreshMetrics::default());
+        store.block_new_handshakes().unwrap();
+        assert!(store.snapshot().is_err());
         let rollback = TlsServerConfig::from_der_chain(&[b"certificate"]).unwrap();
         assert!(store.install(7, rollback).is_err());
+        assert!(store.snapshot().is_err());
         let replacement = TlsServerConfig::from_der_chain(&[b"certificate"]).unwrap();
         store.install(8, replacement).unwrap();
         assert_eq!(store.snapshot().unwrap().0, 8);

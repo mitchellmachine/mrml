@@ -74,7 +74,7 @@ pub use startup::{
 pub use tls_identity::{
     build_certd_tls_server_config, build_certd_tls_server_config_with_route,
     refresh_certd_tls_config, GitdCertdSigningRoute, GitdCertdTlsSigningKey, GitdTlsConfigStore,
-    GitdTlsRefreshError,
+    GitdTlsRefreshError, GitdTlsRefreshMetrics,
 };
 pub use tcp_admission::{
     AdmittedTcpSocket, TcpAdmissionController, TcpAdmissionError, TcpAdmissionLimits,

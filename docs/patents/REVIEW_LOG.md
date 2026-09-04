@@ -12537,3 +12537,12 @@ frame sequencing, stream lifecycle, fixed header limits, flow-control checks,
 and exact Content-Length accounting on the existing HTTP/2 implementation. It
 adds no header-compression scheme, transport or cryptographic protocol,
 congestion algorithm, adaptive policy, or patent-sensitive mechanism.
+
+# 2026-09-04 — Bounded certd outage recovery
+
+Patent review: **NOT_TRIGGERED**. This increment uses conventional dependency
+readiness bits, fail-closed handshake admission, immutable configuration
+replacement, bounded counters, and jittered capped exponential retry after
+certificate-service failures. It adds no cryptographic primitive, certificate
+protocol, congestion algorithm, adaptive identity policy, or patent-sensitive
+mechanism.
