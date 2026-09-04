@@ -1,0 +1,128 @@
+# Clean-commit Gitd streaming performance — 2026-09-04
+
+This record extends, and does not replace, the earlier dated Git/Gitd evidence.
+The branch was local `main`; no repository push was performed. Unrelated
+unstaged HTTP/QUIC and Gitd work and the untracked `Archive.zip` were preserved
+and excluded. Release binaries and images were built from the clean detached
+worktree `/tmp/mrml-pack-buffer-clean` at each exact signed commit.
+
+## Fixture and claim boundary
+
+The controlled hosted fixture used Podman 5.4.2 through its Docker-compatible
+CLI on Linux. All persistent and runtime container data used named volumes. The
+only published service endpoint was host loopback TCP; no public port was bound.
+Gitd, the client, the authority, and the explicitly labeled certd test fixture
+were containers. This is hosted controlled-probe evidence, not physical-server,
+production-certificate, Windows, bare-metal, TPM, Secure Boot, IOMMU, or H3
+evidence.
+
+The repository's selected immutable pack was exactly 268,456,731 bytes and
+contained four incompressible 64 MiB files. The clean baseline and final runs
+used the same repository, policy, authority, certificate, CA, and storage bytes.
+A fresh named client volume was used for every run. Client credentials were
+issued by a one-shot unprivileged Gitd container and piped directly to the
+client's `standard-input` provider; token plaintext was neither printed nor
+stored.
+
+## Defects and bounded corrections
+
+The exact `e1cc9e06` baseline exposed three independent costs:
+
+1. authenticated pack validation performed one `read(2)` call per compressed
+   byte;
+2. HTTP/2 returned flow-control credit in tiny increments, producing tiny TLS
+   control records and a credit lockstep;
+3. TLS left Nagle aggregation enabled while HTTP/2 control traffic encountered
+   delayed acknowledgements.
+
+Signed commit `5222997f` adds a fixed 64 KiB pack-file read-ahead buffer while
+retaining per-byte CRC, work accounting, bounds, and authentication. Offline
+validation of the same repository fell to 4.51 seconds. Signed commit
+`32925a39` includes runtime-gated PCLMULQDQ GHASH with its software fallback and
+coalesces HTTP/2 WINDOW_UPDATE credit at a fixed 32 KiB threshold. Signed commit
+`37100b95` coalesces adjacent backend response fragments into a fixed 16 KiB
+buffer before the existing DATA-frame path. Signed commit `bdb056a7` enables
+TCP_NODELAY on both accepted and connected TLS TCP streams on Linux and Windows.
+
+Before TCP_NODELAY, `ss -tin` reported approximately 13 ms smoothed RTT and a
+40 ms delayed-ack timer on loopback despite a 0.003 ms minimum RTT. During the
+final run the client-side smoothed RTT was approximately 0.014 ms, both socket
+queues were empty, and 134,763,291 response bytes had already arrived at the
+first live sample.
+
+## Exact final artifacts
+
+| Artifact | Identity |
+| --- | --- |
+| signed source commit | `bdb056a7` |
+| `mrml-gitd` binary SHA-256 | `a209a668b1c195d8e7831addf03c5b3277a597df11db3d8cb4820765f9739461` |
+| `mrml-git` binary SHA-256 | `bf0fbb0f6959a2d320dd981b75488c472118bcb49bce47cc134eaeae4d51a458` |
+| Gitd image ID | `0f38aed6dfe0a1c50e03d9b014aaa388df04b9d2d10723c6a25f4c21fe739691` |
+| Gitd image digest | `34e7caeeeea9ad6bf4b8a8a5579de7d08c9ed3543f1f5529b54b22d5de147579` |
+| client image ID | `be0db8f54d480b42042ca14418b1cd09563eb15e6245957b687a3a1cba83c3e9` |
+| client image digest | `0dba306ca7314a84a15d6f7ede366e26774977ba30115317da0b3a4e6ca491aa` |
+
+The Gitd container ran as `21001:21001`, with supplemental socket groups 21901
+and 21902, a read-only root, all capabilities dropped, no-new-privileges, a
+2 GiB memory limit, two-CPU limit, 192-PID limit, and loopback mapping
+`127.0.0.1:24443 -> 8443/tcp`. The client ran as `21007:21007` with a read-only
+root, all capabilities dropped, no-new-privileges, a 1 GiB memory limit,
+two-CPU limit, and 96-PID limit. Gitd reached all six ordered startup gates
+through `ready` before the client ran.
+
+## Results
+
+| Run | Exact image state | Result | Elapsed | Effective pack rate |
+| --- | --- | --- | ---: | ---: |
+| baseline | `e1cc9e06` server and client | PASS | 1,615.63 s | 0.158 MiB/s |
+| final | `bdb056a7` server and client | PASS | 23.18 s | 11.045 MiB/s |
+| independent repeat | `bdb056a7` server and client | PASS | 23.61 s | 10.844 MiB/s |
+| VmHWM sampling repeat | `bdb056a7` server and client | PASS | 22.57 s | 11.343 MiB/s |
+
+The primary final run is 69.70 times faster than the clean baseline and exceeds
+the 10 MiB/s gate. Gitd's kernel-maintained `VmHWM` was 135,704 KiB. A client
+live `VmHWM` sample reached 398,372 KiB; the exact client cgroup lifetime peak,
+which conservatively includes charged page cache and other cgroup memory rather
+than RSS alone, was 673,320,960 bytes. Both remained below their configured
+limits. The exact client RSS maximum was not sampled at process exit and is not
+claimed.
+
+The completed clone contained these source-matching SHA-256 values:
+
+```text
+74a2500349e10eb91073623d93d6b0d960073d407acf18434ad1f8b97d81c54b  stream-01.bin
+db6bd32d084e1b5fdf37c1af286370aea8d6b80a2882e7c5cba0ed381f85a57b  stream-02.bin
+eb60a02c65f43d67197d08aad6eaf368060b6728de9f04a59a254d8a07691b94  stream-03.bin
+c10c3224d17e4f39d5d20605bc614777c363ae886fbd5356979dd69dfe177f4f  stream-04.bin
+```
+
+## Verification performed in this increment
+
+```text
+git fsck --full --no-reflogs --no-dangling                    PASS
+target/debug/mrml manifest check                              PASS (71 packages, 214 dependencies)
+target/debug/mrml manifest lock --check                       PASS (71 packages, 5 interfaces)
+deploy/compose/test-compose-git.sh                            PASS
+target/debug/mrml test org.mrml.tool.git --target linux          PASS (268 library, 4 CLI, 7 signer)
+target/debug/mrml test org.mrml.library.crypto --target linux    PASS (56)
+target/debug/mrml test org.mrml.library.tls --target linux       PASS (34)
+target/debug/mrml test org.mrml.library.http --target linux      PASS (79; socket tests outside restricted sandbox)
+target/debug/mrml test org.mrml.service.gitd --target linux      PASS (48 library, 6 binary, 1 backup; socket tests outside restricted sandbox)
+target/debug/mrml test org.mrml.library.runtime --target linux   PASS (50; socket tests outside restricted sandbox)
+cargo fmt --all -- --check                                      PASS
+cargo clippy --all-targets -- -D warnings                       PASS
+git diff --check                                                 PASS
+target/debug/mrml assurance check                               FAIL (pre-existing unadmitted unsafe boundary: docs/compiler/probes/pinned_std_thread_tls_execution.rs)
+target/debug/mrml build org.mrml.library.tls --target windows    NOT RUN: cross_host_rust_target unavailable
+```
+
+The interrupted comparison clones were deliberately stopped after collecting
+diagnostic evidence and are not counted as successful runs. Their named volumes
+were retained. The final and repeat clones exited zero and printed their normal
+completion line.
+
+Patent review: **NOT_TRIGGERED** for each increment. These are bounded
+read-ahead, standardized GHASH instruction acceleration, conventional HTTP/2
+credit/coalescing, and a conventional TCP socket option; they add no new wire
+protocol, compression method, cryptographic construction, congestion algorithm,
+or adaptive selection policy. See `docs/patents/REVIEW_LOG.md`.
