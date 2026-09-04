@@ -103,7 +103,12 @@ environment file so the ordinary signer and the “current” rotation job resol
 the logical signer-key volume to the candidate named volume and the retired slot
 becomes the next inactive candidate. Selection is
 limited to the two provisioned managed slots and is refused while a consumer is
-running. Restart and validate a protected push with the candidate signer before
+running. The requested trust generation must advance monotonically and the
+revocation generation cannot decrease. Repeating the exact selected
+creation-time/trust-generation/revocation-generation tuple is an idempotent
+success and does not swap the slots again; this makes recovery safe when the
+environment-file rename completed but its result was not observed. Restart and
+validate a protected push with the candidate signer before
 constructing retirement. For retirement, stage the old public pair as the
 construction input, construct the monotonic retirement successor, authorize it
 with the now-current key for both required generations, stage it, and execute

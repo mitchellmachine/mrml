@@ -131,6 +131,9 @@ require 'selected and candidate signer key volumes must differ' deploy/compose/s
 require 'git-signer-key-slot-' deploy/compose/stage-git-trust-transition.sh
 require 'org.mrml.managed' deploy/compose/select-git-signer-key-slot.sh
 require 'sync -f "$temporary"' deploy/compose/select-git-signer-key-slot.sh
+require 'protected signer key selection already matches trust generation' deploy/compose/select-git-signer-key-slot.sh
+require 'signer trust generation must advance monotonically' deploy/compose/select-git-signer-key-slot.sh
+require 'signer revocation generation must not roll back' deploy/compose/select-git-signer-key-slot.sh
 require 'signer key volume is outside the managed key slots' deploy/compose/stage-git-trust-transition.sh
 require 'case $mode in overlap|retirement)' deploy/compose/stage-git-trust-transition.sh
 require 'if [ "$mode" = retirement ]' deploy/compose/stage-git-trust-transition.sh
@@ -140,5 +143,6 @@ require 'git-trust-signatures' deploy/compose/stage-git-trust-transition.sh
 deploy/compose/test-transition-git-trust-resume.sh
 deploy/compose/test-construct-git-trust-policy-resume.sh
 deploy/compose/test-sign-git-trust-policy-modes.sh
+deploy/compose/test-select-git-signer-key-slot-resume.sh
 
 echo "protected signer Compose and image isolation policy PASS"

@@ -363,13 +363,17 @@ retained first output and durably completes the pair. Replacing that partial
 output with conflicting bytes makes the restart fail before it creates a next
 policy. Together with the transition process-kill matrix, this covers candidate
 policy write, authority selection invocation, signer advance, and post-advance
-cleanup recovery at the operator boundary. It does not simulate storage media
+cleanup recovery at the operator boundary. A separate signer-slot test kills
+the operator immediately after the atomic environment replacement. The exact
+retry recognizes the already-selected generation instead of swapping back to
+the retired slot; stale trust generations and revocation rollback both fail
+without changing the environment. It does not simulate storage media
 lying about synchronization or termination inside individual cryptographic
 verification instructions.
 
 Remaining Phase 24 work is process-kill injection around signature-verification
-completion, authority trust-snapshot publication, and the exact old-key
-retirement boundary, plus the broader release gates listed in earlier records.
+completion and authority trust-snapshot publication, plus the broader release
+gates listed in earlier records.
 This controlled hosted-Linux
 exercise used test keys, a loopback listener, and a certificate fixture; it is
 not public-service, real-certificate-renewal, production-key, malicious-storage,

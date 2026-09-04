@@ -24,6 +24,9 @@ case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PRE
 case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
 configured_selected=$(read_environment_value MRML_GIT_SIGNER_KEYS_VOLUME)
 configured_candidate=$(read_environment_value MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME)
+configured_created_at=$(read_environment_value MRML_OPENPGP_CREATED_AT)
+configured_trust_generation=$(read_environment_value MRML_TRUST_GENERATION)
+configured_revocation_generation=$(read_environment_value MRML_REVOCATION_GENERATION)
 case $1 in
   current) selected_volume=$volume_prefix-git-signer-keys; candidate_volume=$volume_prefix-git-signer-next-keys ;;
   next) selected_volume=$configured_candidate; candidate_volume=$configured_selected ;;
@@ -56,9 +59,25 @@ for volume in "$selected_volume" "$candidate_volume"; do
 done
 [ "$selected_volume" != "$candidate_volume" ] || { echo "selected and candidate signer key volumes must differ" >&2; exit 1; }
 
-for name in MRML_GIT_SIGNER_KEYS_VOLUME MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME MRML_OPENPGP_CREATED_AT MRML_TRUST_GENERATION MRML_REVOCATION_GENERATION; do
-  [ "$(grep -c "^$name=" "$environment")" -eq 1 ] || { echo "environment must contain exactly one $name assignment" >&2; exit 1; }
-done
+case $configured_created_at:$configured_trust_generation:$configured_revocation_generation in
+  *[!0-9:]*|:*|*:) echo "configured signer generations must be decimal integers" >&2; exit 1 ;;
+esac
+[ "$configured_created_at" -gt 0 ] && [ "$configured_trust_generation" -gt 0 ] \
+  && [ "$configured_revocation_generation" -gt 0 ] || exit 1
+if [ "$configured_created_at" = "$2" ] \
+  && [ "$configured_trust_generation" = "$3" ] \
+  && [ "$configured_revocation_generation" = "$4" ]; then
+  echo "protected signer key selection already matches trust generation $3"
+  exit 0
+fi
+[ "$3" -gt "$configured_trust_generation" ] || {
+  echo "signer trust generation must advance monotonically" >&2
+  exit 1
+}
+[ "$4" -ge "$configured_revocation_generation" ] || {
+  echo "signer revocation generation must not roll back" >&2
+  exit 1
+}
 temporary=$(mktemp "$environment.new.XXXXXX")
 trap 'rm -f "$temporary"' EXIT HUP INT TERM
 sed \
