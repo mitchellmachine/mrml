@@ -37,6 +37,7 @@ pub struct LinuxDurableTrustPolicyStore {
     active: Text,
     temporary: Text,
     lock: Text,
+    retained: Option<mrml_runtime::DirectoryCapability>,
 }
 
 impl LinuxDurableTrustPolicyStore {
@@ -67,9 +68,28 @@ impl LinuxDurableTrustPolicyStore {
         Ok(store)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn open_capability(
+        root: mrml_runtime::DirectoryCapability,
+    ) -> Result<Self, TrustPolicyFileError> {
+        let metadata = root.metadata().map_err(|_| TrustPolicyFileError::Io)?;
+        let mode = metadata.mode & 0o777;
+        if mode & 0o022 != 0 || mode & 0o500 != 0o500 || mode & 0o200 == 0 || metadata.links < 2 {
+            return Err(TrustPolicyFileError::Io);
+        }
+        let store = Self {
+            root: Text::new(),
+            active: Text::from("trust-policy.current"),
+            temporary: Text::from("trust-policy.next"),
+            lock: Text::from("trust-policy.lock"),
+            retained: Some(root),
+        };
+        store.load()?;
+        Ok(store)
+    }
+
     pub fn load(&self) -> Result<TrustPolicyState, TrustPolicyFileError> {
-        let mut file =
-            File::open_regular(&self.active).map_err(|_| TrustPolicyFileError::Integrity)?;
+        let mut file = self.open_file(&self.active)?;
         let length = usize::try_from(file.len().map_err(|_| TrustPolicyFileError::Integrity)?)
             .map_err(|_| TrustPolicyFileError::Resource)?;
         if length == 0 || length > MAX_POLICY_FILE_BYTES {
@@ -96,10 +116,10 @@ impl LinuxDurableTrustPolicyStore {
         previous_authorization: &crate::VerifiedHybridSignature,
         new_authorization: &crate::VerifiedHybridSignature,
     ) -> Result<TrustPolicyState, TrustPolicyFileError> {
-        let lock = File::create_new(&self.lock).map_err(|_| TrustPolicyFileError::StaleLock)?;
+        let lock = self.create_file(&self.lock, TrustPolicyFileError::StaleLock)?;
         lock.sync().map_err(|_| TrustPolicyFileError::Durability)?;
         drop(lock);
-        sync_policy_directory(&self.root)?;
+        self.sync()?;
 
         let result = self.transition_while_locked(
             expected_generation,
@@ -110,8 +130,9 @@ impl LinuxDurableTrustPolicyStore {
         );
         match result {
             Ok(next) => {
-                remove_file(&self.lock).map_err(|_| TrustPolicyFileError::UncertainCommit)?;
-                sync_policy_directory(&self.root)
+                self.remove(&self.lock)
+                    .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+                self.sync()
                     .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
                 Ok(next)
             }
@@ -120,8 +141,8 @@ impl LinuxDurableTrustPolicyStore {
                     error,
                     TrustPolicyFileError::StaleGeneration | TrustPolicyFileError::Policy(_)
                 ) {
-                    let _ = remove_file(&self.lock);
-                    let _ = sync_policy_directory(&self.root);
+                    let _ = self.remove(&self.lock);
+                    let _ = self.sync();
                 }
                 Err(error)
             }
@@ -141,11 +162,15 @@ impl LinuxDurableTrustPolicyStore {
             return Err(TrustPolicyFileError::StaleGeneration);
         }
         let next = current
-            .transition(candidate.as_candidate(), previous_authorization, new_authorization)
+            .transition(
+                candidate.as_candidate(),
+                previous_authorization,
+                new_authorization,
+            )
             .map_err(TrustPolicyFileError::Policy)?;
         let bytes = encode_file(&next)?;
         let mut temporary =
-            File::create_new(&self.temporary).map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+            self.create_file(&self.temporary, TrustPolicyFileError::UncertainCommit)?;
         temporary
             .write_all(&bytes)
             .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
@@ -153,9 +178,10 @@ impl LinuxDurableTrustPolicyStore {
             .sync()
             .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
         drop(temporary);
-        rename_file(&self.temporary, &self.active)
+        self.rename(&self.temporary, &self.active)
             .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
-        sync_policy_directory(&self.root).map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+        self.sync()
+            .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
         let reopened = self
             .load()
             .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
@@ -178,10 +204,10 @@ impl LinuxDurableTrustPolicyStore {
         authorization: EmergencyRecoveryAuthorization,
         candidate: TrustPolicyCandidate,
     ) -> Result<TrustPolicyState, TrustPolicyFileError> {
-        let lock = File::create_new(&self.lock).map_err(|_| TrustPolicyFileError::StaleLock)?;
+        let lock = self.create_file(&self.lock, TrustPolicyFileError::StaleLock)?;
         lock.sync().map_err(|_| TrustPolicyFileError::Durability)?;
         drop(lock);
-        sync_policy_directory(&self.root)?;
+        self.sync()?;
 
         let result = self.emergency_transition_while_locked(
             expected_generation,
@@ -193,8 +219,9 @@ impl LinuxDurableTrustPolicyStore {
         );
         match result {
             Ok(next) => {
-                remove_file(&self.lock).map_err(|_| TrustPolicyFileError::UncertainCommit)?;
-                sync_policy_directory(&self.root)
+                self.remove(&self.lock)
+                    .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+                self.sync()
                     .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
                 Ok(next)
             }
@@ -203,8 +230,8 @@ impl LinuxDurableTrustPolicyStore {
                     error,
                     TrustPolicyFileError::StaleGeneration | TrustPolicyFileError::Policy(_)
                 ) {
-                    let _ = remove_file(&self.lock);
-                    let _ = sync_policy_directory(&self.root);
+                    let _ = self.remove(&self.lock);
+                    let _ = self.sync();
                 }
                 Err(error)
             }
@@ -229,7 +256,7 @@ impl LinuxDurableTrustPolicyStore {
             .map_err(TrustPolicyFileError::Policy)?;
         let bytes = encode_file(&next)?;
         let mut temporary =
-            File::create_new(&self.temporary).map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+            self.create_file(&self.temporary, TrustPolicyFileError::UncertainCommit)?;
         temporary
             .write_all(&bytes)
             .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
@@ -237,9 +264,10 @@ impl LinuxDurableTrustPolicyStore {
             .sync()
             .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
         drop(temporary);
-        rename_file(&self.temporary, &self.active)
+        self.rename(&self.temporary, &self.active)
             .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
-        sync_policy_directory(&self.root).map_err(|_| TrustPolicyFileError::UncertainCommit)?;
+        self.sync()
+            .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
         let reopened = self
             .load()
             .map_err(|_| TrustPolicyFileError::UncertainCommit)?;
@@ -247,6 +275,78 @@ impl LinuxDurableTrustPolicyStore {
             return Err(TrustPolicyFileError::UncertainCommit);
         }
         Ok(next)
+    }
+
+    fn open_file(&self, name: &str) -> Result<File, TrustPolicyFileError> {
+        match &self.retained {
+            Some(root) => {
+                let file = root
+                    .open_regular(name)
+                    .map_err(|_| TrustPolicyFileError::Integrity)?;
+                self.validate_file(&file, 0o644)?;
+                Ok(file)
+            }
+            None => File::open_regular(name).map_err(|_| TrustPolicyFileError::Integrity),
+        }
+    }
+
+    fn create_file(
+        &self,
+        name: &str,
+        error: TrustPolicyFileError,
+    ) -> Result<File, TrustPolicyFileError> {
+        match &self.retained {
+            Some(root) => {
+                let mode = if self.lock == name { 0o600 } else { 0o644 };
+                let file = root.create_new_file(name, mode).map_err(|_| error)?;
+                self.validate_file(&file, mode).map_err(|_| error)?;
+                Ok(file)
+            }
+            None => File::create_new(name).map_err(|_| error),
+        }
+    }
+
+    fn validate_file(&self, file: &File, expected_mode: u32) -> Result<(), TrustPolicyFileError> {
+        let Some(root) = &self.retained else {
+            return Ok(());
+        };
+        let parent = root
+            .metadata()
+            .map_err(|_| TrustPolicyFileError::Integrity)?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| TrustPolicyFileError::Integrity)?;
+        if metadata.uid != parent.uid
+            || metadata.gid != parent.gid
+            || metadata.mode & 0o777 != expected_mode
+            || metadata.links != 1
+        {
+            return Err(TrustPolicyFileError::Integrity);
+        }
+        Ok(())
+    }
+
+    fn rename(&self, existing: &str, replacement: &str) -> Result<(), TrustPolicyFileError> {
+        match &self.retained {
+            Some(root) => root
+                .rename_child(existing, replacement)
+                .map_err(|_| TrustPolicyFileError::Io),
+            None => rename_file(existing, replacement).map_err(|_| TrustPolicyFileError::Io),
+        }
+    }
+
+    fn remove(&self, name: &str) -> Result<(), TrustPolicyFileError> {
+        match &self.retained {
+            Some(root) => root.remove_file(name).map_err(|_| TrustPolicyFileError::Io),
+            None => remove_file(name).map_err(|_| TrustPolicyFileError::Io),
+        }
+    }
+
+    fn sync(&self) -> Result<(), TrustPolicyFileError> {
+        match &self.retained {
+            Some(root) => root.sync().map_err(|_| TrustPolicyFileError::Durability),
+            None => sync_policy_directory(&self.root),
+        }
     }
 
     fn paths(path: &str) -> Result<Self, TrustPolicyFileError> {
@@ -259,6 +359,7 @@ impl LinuxDurableTrustPolicyStore {
             temporary: join_path(&root, "trust-policy.next"),
             lock: join_path(&root, "trust-policy.lock"),
             root,
+            retained: None,
         })
     }
 }
@@ -512,6 +613,28 @@ mod tests {
         assert!(LinuxDurableTrustPolicyStore::open(&root).is_err());
         drop(file);
         remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn retained_policy_root_survives_ambient_replacement() {
+        let (root, _ambient, state, _, _, _) = fixture();
+        let displaced = mrml_runtime::mrml_format!("{root}-displaced");
+        let _ = remove_dir_all(&displaced);
+        let capability = mrml_runtime::DirectoryCapability::open_root(&root).unwrap();
+        let store = LinuxDurableTrustPolicyStore::open_capability(capability).unwrap();
+        mrml_runtime::rename_file(&root, &displaced).unwrap();
+        mrml_runtime::create_dir_all(&root).unwrap();
+        assert_eq!(store.load().unwrap(), state);
+        assert!(mrml_runtime::path_exists(&join_path(
+            &displaced,
+            "trust-policy.current",
+        )));
+        assert!(!mrml_runtime::path_exists(&join_path(
+            &root,
+            "trust-policy.current",
+        )));
+        remove_dir_all(&root).unwrap();
+        remove_dir_all(&displaced).unwrap();
     }
 
     #[test]

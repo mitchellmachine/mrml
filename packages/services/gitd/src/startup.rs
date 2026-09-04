@@ -11,8 +11,8 @@ use mrml_openpgp::PublicKeyV6;
 use mrml_runtime::{DirectoryCapability, DirectoryMetadata, Vector};
 
 use crate::{
-    production_receive::receive_pack_limit, verify_repository_admission, DeploymentRepository,
-    DeploymentRepositoryProfile, GitdConfig,
+    DeploymentRepository, DeploymentRepositoryProfile, GitdConfig,
+    production_receive::receive_pack_limit, verify_repository_admission,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +40,7 @@ pub struct RepositoryStorageCapabilities {
     pub quarantine: DirectoryCapability,
     pub cache: DirectoryCapability,
     pub receipts: DirectoryCapability,
+    pub policy: Option<DirectoryCapability>,
 }
 
 pub struct AdmittedRepository {
@@ -380,6 +381,20 @@ pub fn admit_catalog_repository(
             config.gitd_uid,
             config.gitd_gid,
         )?,
+        policy: config
+            .policy_root
+            .join(owner)
+            .join(repository)
+            .exists()
+            .then(|| {
+                open_policy_repository_capability(
+                    &config.policy_root,
+                    &relative,
+                    config.gitd_uid,
+                    config.gitd_gid,
+                )
+            })
+            .transpose()?,
     };
     let mut view = FilesystemRepositoryView::open_with_arrivals(
         entry.repository.clone(),
@@ -411,6 +426,36 @@ pub fn admit_catalog_repository(
         capabilities,
         view,
     })
+}
+
+fn open_policy_repository_capability(
+    root: &Path,
+    relative: &str,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> Result<DirectoryCapability, RepositoryAdmissionError> {
+    let root = root.to_str().ok_or(RepositoryAdmissionError::Identity)?;
+    let root = DirectoryCapability::open_root(root).map_err(|_| RepositoryAdmissionError::Open)?;
+    let capability = root
+        .open_directory(relative)
+        .map_err(|_| RepositoryAdmissionError::Open)?;
+    let metadata = capability
+        .metadata()
+        .map_err(|_| RepositoryAdmissionError::Open)?;
+    let mode = metadata.mode & 0o777;
+    if metadata.mode & 0o170000 != 0o040000
+        || metadata.uid != expected_uid
+        || metadata.gid != expected_gid
+        || mode & 0o022 != 0
+        || mode & 0o500 != 0o500
+        || mode & 0o200 == 0
+        || metadata.links < 2
+    {
+        return Err(RepositoryAdmissionError::Layout(
+            StartupValidationError::Permissions,
+        ));
+    }
+    Ok(capability)
 }
 
 fn open_repository_capability(
@@ -624,7 +669,7 @@ mod tests {
     };
     use mrml_http::GitdBackend;
     use mrml_openpgp::SigningKeyV6;
-    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
     struct TestReceiptAuthority;
 

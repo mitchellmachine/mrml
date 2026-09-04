@@ -16,7 +16,7 @@ use crate::{AdmittedRepository, DeploymentRepository, DeploymentRepositoryProfil
 
 pub struct ProductionReceiveRepository {
     profile: DeploymentRepositoryProfile,
-    policy: Option<PathBuf>,
+    policy: Option<DirectoryCapability>,
     journals: DirectoryCapability,
     quarantine: PathBuf,
     plain_receipts: DirectoryCapability,
@@ -80,23 +80,21 @@ impl ProductionReceiveRepository {
         entry: &DeploymentRepository,
         admitted: &AdmittedRepository,
     ) -> Result<Self, BackendError> {
-        let (owner, repository) = entry
+        let (_owner, _repository) = entry
             .repository
             .as_str()
             .split_once('/')
             .ok_or(BackendError::MalformedIdentifier)?;
         let policy = if entry.profile.class == DeploymentRepositoryProfile::Protected {
-            let policy = config.policy_root.join(owner).join(repository);
-            if !policy.is_dir()
-                || policy
-                    .symlink_metadata()
-                    .map_err(|_| BackendError::Storage)?
-                    .file_type()
-                    .is_symlink()
-            {
-                return Err(BackendError::Storage);
-            }
-            Some(policy)
+            Some(
+                admitted
+                    .capabilities
+                    .policy
+                    .as_ref()
+                    .ok_or(BackendError::Storage)?
+                    .try_clone()
+                    .map_err(|_| BackendError::Storage)?,
+            )
         } else {
             None
         };
@@ -187,10 +185,14 @@ impl ProductionReceiveRepository {
         };
         let response = if self.profile == DeploymentRepositoryProfile::Protected {
             let authority = authority.ok_or(BackendError::Unsupported)?;
-            let policy_path = self.policy.as_ref().ok_or(BackendError::Private)?;
-            let policy = LinuxDurableTrustPolicyStore::open(path(policy_path)?)
-                .and_then(|store| store.load())
-                .map_err(|_| BackendError::Private)?;
+            let policy_directory = self.policy.as_ref().ok_or(BackendError::Private)?;
+            let policy = LinuxDurableTrustPolicyStore::open_capability(
+                policy_directory
+                    .try_clone()
+                    .map_err(|_| BackendError::Private)?,
+            )
+            .and_then(|store| store.load())
+            .map_err(|_| BackendError::Private)?;
             let receipts = mrml_git::AuthenticatedAuditReceiptDirectory::open_capability(
                 self.authenticated_receipts
                     .try_clone()
@@ -264,10 +266,6 @@ impl mrml_git::BoundedWrite for WriteBridge<'_> {
             .write(input)
             .map_err(|_| mrml_git::GitdCoreError::Resource)
     }
-}
-
-fn path(path: &Path) -> Result<&str, BackendError> {
-    path.to_str().ok_or(BackendError::Storage)
 }
 
 fn map_core_error(error: mrml_git::GitdCoreError) -> BackendError {
