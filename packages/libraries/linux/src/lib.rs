@@ -1098,6 +1098,10 @@ impl NativeFile {
     pub fn raw_fd(&self) -> c_int {
         self.0
     }
+
+    pub fn metadata(&self) -> Option<NativeFileMetadata> {
+        metadata_for_descriptor(self.0)
+    }
 }
 
 #[cfg(unix)]
@@ -1328,6 +1332,50 @@ impl NativeDirectory {
         Self::from_descriptor(descriptor as c_int)
     }
 
+    /// Opens an existing regular file beneath this retained directory without
+    /// following links or crossing into a descendant mount.
+    pub fn open_regular_beneath(&self, path: &CStr) -> Option<NativeFile> {
+        const SYS_OPENAT2_X86_64: c_long = 437;
+        const O_RDONLY: u64 = 0;
+        const O_NOFOLLOW: u64 = 0x2_0000;
+        const O_CLOEXEC: u64 = 0x8_0000;
+        const RESOLVE_NO_XDEV: u64 = 0x01;
+        const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+        const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+        const RESOLVE_BENEATH: u64 = 0x08;
+        if path.to_bytes().is_empty() || path.to_bytes().first() == Some(&b'/') {
+            return None;
+        }
+        let how = OpenHow {
+            flags: O_RDONLY | O_NOFOLLOW | O_CLOEXEC,
+            mode: 0,
+            resolve: RESOLVE_NO_XDEV
+                | RESOLVE_NO_MAGICLINKS
+                | RESOLVE_NO_SYMLINKS
+                | RESOLVE_BENEATH,
+        };
+        let parent = unsafe { dirfd(self.0) };
+        if parent < 0 {
+            return None;
+        }
+        // SAFETY: identical to `open_beneath`; the returned descriptor is
+        // accepted only after descriptor-based regular-file validation.
+        let descriptor = unsafe {
+            syscall(
+                SYS_OPENAT2_X86_64,
+                parent,
+                path.as_ptr(),
+                &how as *const OpenHow,
+                core::mem::size_of::<OpenHow>(),
+            )
+        };
+        if descriptor < 0 || descriptor > c_int::MAX as c_long {
+            return None;
+        }
+        let file = NativeFile(descriptor as c_int);
+        file.is_regular().then_some(file)
+    }
+
     fn from_descriptor(descriptor: c_int) -> Option<Self> {
         if descriptor < 0 {
             return None;
@@ -1341,19 +1389,7 @@ impl NativeDirectory {
 
     pub fn metadata(&self) -> Option<NativeFileMetadata> {
         let descriptor = unsafe { dirfd(self.0) };
-        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
-        if descriptor < 0 || unsafe { fstat(descriptor, status.as_mut_ptr()) } != 0 {
-            return None;
-        }
-        let status = unsafe { status.assume_init() };
-        Some(NativeFileMetadata {
-            inode: status.inode,
-            mode: status.mode,
-            uid: status.uid,
-            gid: status.gid,
-            links: status.links,
-            device: status.device,
-        })
+        (descriptor >= 0).then(|| metadata_for_descriptor(descriptor))?
     }
 
     pub fn next<'a>(&mut self, name: &'a mut [u8; 256]) -> Option<(&'a [u8], bool, bool)> {
@@ -1371,6 +1407,23 @@ impl NativeDirectory {
         let descriptor = unsafe { dirfd(self.0) };
         descriptor >= 0 && (unsafe { fsync(descriptor) }) == 0
     }
+}
+
+#[cfg(unix)]
+fn metadata_for_descriptor(descriptor: c_int) -> Option<NativeFileMetadata> {
+    let mut status = core::mem::MaybeUninit::<Stat>::uninit();
+    if unsafe { fstat(descriptor, status.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let status = unsafe { status.assume_init() };
+    Some(NativeFileMetadata {
+        inode: status.inode,
+        mode: status.mode,
+        uid: status.uid,
+        gid: status.gid,
+        links: status.links,
+        device: status.device,
+    })
 }
 
 #[cfg(unix)]

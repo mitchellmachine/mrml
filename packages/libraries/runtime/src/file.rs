@@ -28,6 +28,17 @@ pub struct DirectoryMetadata {
     pub device: u64,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileMetadata {
+    pub inode: u64,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub links: u64,
+    pub device: u64,
+}
+
 /// A retained Linux directory authority. Descendants are resolved by the
 /// kernel beneath this descriptor and never converted back into ambient paths.
 #[cfg(target_os = "linux")]
@@ -58,6 +69,18 @@ impl DirectoryCapability {
             .open_beneath(relative)
             .ok_or(FileError::OpenFailed)?;
         Ok(Self { inner })
+    }
+
+    pub fn open_regular(&self, relative: &str) -> Result<File, FileError> {
+        validate_relative_capability_path(relative)?;
+        let encoded = encode_unix_path(relative).ok_or(FileError::InvalidPath)?;
+        let relative =
+            core::ffi::CStr::from_bytes_with_nul(&encoded).map_err(|_| FileError::InvalidPath)?;
+        let inner = self
+            .inner
+            .open_regular_beneath(relative)
+            .ok_or(FileError::OpenFailed)?;
+        Ok(File { inner, position: 0 })
     }
 
     pub fn metadata(&self) -> Result<DirectoryMetadata, FileError> {
@@ -726,6 +749,19 @@ impl File {
             .ok_or(FileError::WriteFailed)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn metadata(&self) -> Result<FileMetadata, FileError> {
+        let metadata = self.inner.metadata().ok_or(FileError::MetadataFailed)?;
+        Ok(FileMetadata {
+            inode: metadata.inode,
+            mode: metadata.mode,
+            uid: metadata.uid,
+            gid: metadata.gid,
+            links: metadata.links,
+            device: metadata.device,
+        })
+    }
+
     pub const fn position(&self) -> u64 {
         self.position
     }
@@ -944,8 +980,28 @@ mod tests {
         )
         .unwrap();
         symlink("/proc/self/fd", join_path(&root, "magic-link").as_str()).unwrap();
+        let regular = join_path(&root, "regular");
+        write_file(&regular, b"retained").unwrap();
+        symlink("regular", join_path(&root, "regular-link").as_str()).unwrap();
 
         let root_capability = DirectoryCapability::open_root(&root).unwrap();
+        let retained_file = root_capability.open_regular("regular").unwrap();
+        assert_eq!(retained_file.metadata().unwrap().links, 1);
+        assert!(root_capability.open_regular("regular-link").is_err());
+        std::fs::hard_link(
+            regular.as_str(),
+            join_path(&root, "regular-hard-link").as_str(),
+        )
+        .unwrap();
+        assert_eq!(
+            root_capability
+                .open_regular("regular")
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .links,
+            2
+        );
         let retained = root_capability.open_directory("owner/repository").unwrap();
         let retained_metadata = retained.metadata().unwrap();
         assert_eq!(retained_metadata.mode & 0o170000, 0o040000);
