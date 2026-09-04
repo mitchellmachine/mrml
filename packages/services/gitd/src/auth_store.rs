@@ -1,6 +1,3 @@
-use std::fs::OpenOptions;
-use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 use mrml_crypto::erase_secret_bytes;
@@ -12,7 +9,6 @@ use mrml_runtime::{DirectoryCapability, Text, Vector};
 
 use crate::{DeploymentCatalog, DeploymentRepositoryProfile, GitdConfig};
 
-const O_NOFOLLOW: i32 = 0x20_000;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthenticationStoreError {
     Open,
@@ -565,12 +561,8 @@ fn read_pepper(path: &Path, gitd_uid: u32) -> Result<[u8; 32], AuthenticationSto
 
 fn read_token_store(path: &Path, gitd_uid: u32) -> Result<Vec<u8>, AuthenticationStoreError> {
     let mut file = secure_file(path, gitd_uid, 52, MAX_TOKEN_STORE_BYTES as u64)?;
-    let length = usize::try_from(
-        file.metadata()
-            .map_err(|_| AuthenticationStoreError::Metadata)?
-            .len(),
-    )
-    .map_err(|_| AuthenticationStoreError::Size)?;
+    let length = usize::try_from(file.len().map_err(|_| AuthenticationStoreError::Metadata)?)
+        .map_err(|_| AuthenticationStoreError::Size)?;
     let mut bytes = vec![0u8; length];
     file.read_exact(&mut bytes)
         .map_err(|_| AuthenticationStoreError::Read)?;
@@ -582,26 +574,34 @@ fn secure_file(
     gitd_uid: u32,
     minimum: u64,
     maximum: u64,
-) -> Result<std::fs::File, AuthenticationStoreError> {
+) -> Result<mrml_runtime::File, AuthenticationStoreError> {
     if !path.is_absolute() {
         return Err(AuthenticationStoreError::Open);
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
+    let parent = path.parent().ok_or(AuthenticationStoreError::Open)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(AuthenticationStoreError::Open)?;
+    let directory = DirectoryCapability::open_root(
+        parent.to_str().ok_or(AuthenticationStoreError::Open)?,
+    )
+    .map_err(|_| AuthenticationStoreError::Open)?;
+    let file = directory
+        .open_regular(name)
         .map_err(|_| AuthenticationStoreError::Open)?;
     let metadata = file
         .metadata()
         .map_err(|_| AuthenticationStoreError::Metadata)?;
-    let mode = metadata.mode() & 0o777;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.nlink() != 1
-        || (metadata.uid() != 0 && metadata.uid() != gitd_uid)
+    let length = file
+        .len()
+        .map_err(|_| AuthenticationStoreError::Metadata)?;
+    let mode = metadata.mode & 0o777;
+    if metadata.links != 1
+        || (metadata.uid != 0 && metadata.uid != gitd_uid)
         || mode & 0o077 != 0
         || mode & 0o400 == 0
-        || !(minimum..=maximum).contains(&metadata.len())
+        || !(minimum..=maximum).contains(&length)
     {
         return Err(AuthenticationStoreError::Permissions);
     }
