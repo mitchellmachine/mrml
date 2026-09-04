@@ -91,7 +91,60 @@ track origin/main  0 ahead  0 behind
 clean — index matches working tree
 ```
 
-No source repository push occurred.
+No development-repository remote push occurred.
+
+## Incompressible 256 MiB transfer evidence
+
+Four independently generated 64 MiB incompressible files were committed as
+`a2255baa978e161e7b4f2ee12909862eb29fa5ef3eec4a55d422bece9a56e3d7`.
+Their SHA-256 digests were `63fc549d...9f8`, `229778c8...749d`,
+`6da2a5b2...096d`, and `a484bf1c...226e`. A protected push completed in 54
+seconds at 4,971,026 bytes/s. Peak RSS was 245,880 KiB for the client, 104,444
+KiB for Gitd, and 19,480 KiB for the authority. A fresh authenticated clone into
+the disposable named volume `mrml-release7306-large-clone` completed in 47
+seconds at 5,711,392 bytes/s and reproduced all four hashes. Peak RSS was
+389,064 KiB for the client, 146,616 KiB for Gitd, and 19,520 KiB for the
+authority. The clone evidence contains 42 samples; peak descriptor counts were
+5, 26, and 9 respectively.
+
+The first measured push failed closed because the client container lacked the
+protected-signer supplemental group `21906`; the server ref did not advance.
+The first clone-volume initializer lacked `CAP_CHOWN`; only the explicitly
+disposable empty volume was removed, then initialized by a helper granted only
+that capability. Runtime data, server state, and persistent inputs used named
+volumes throughout.
+
+## Signed aggregate offline bundle
+
+The first aggregate archive exposed a release-packaging defect: its nested
+streaming `SHA256SUMS` named `client.out`, `client.err`, and `content.sha256`,
+but the builder's evidence allowlist omitted them. Full verification failed.
+Commit `d0a0be7e` adds those three required files. The only non-documentation
+change from the measured `7306f18b` source is that allowlist correction. A clean
+rebuild produced the same five runtime image IDs listed above, so the measured
+runtime artifacts are byte-identical. The evidence source binding was advanced
+to the exact packaging commit.
+
+The corrected archive is `/tmp/mrml-git-d0a0be7e.tar.gz`, SHA-256
+`c1573273c8b5b779d80d366c7f6bc4da0975f07b62420fccbdc5649b9a2e18b2`.
+Its Docker-archive hashes are:
+
+| Image | Archive SHA-256 | SPDX-JSON SHA-256 |
+| --- | --- | --- |
+| `git-authority` | `b45c7ddffd5603a4ed8759f80569dac4fe37c9996ea50ceceec883964a472208` | `bc95d557b74b2a3aec759e6a1041acb62960ebdaee49ce6564e1d58631cabbc0` |
+| `gitd` | `c70e3a985ca469a30d23b5f04fce15e8a543cdf09c90498e2134b93e16d39629` | `6e7911479427059c82f660001cad1e194d6c9389264f35071a1d5667b63f33ce` |
+| `git-protected-signer` | `d344f0e777bf19830aab8c9a3651acdd20c416e7c1086ae6cdb270b1e5194a62` | `e5807268969258f2a4066513aa82675cb723d0de5b65377df2ef94dab8d0b694` |
+| `git-credential-agent` | `d807aa700f19997a2a295393af90f61201f7af7027221110eee5bbd522b2d308` | `ced5183a7b8c4c7574a71894ac7432fa36e19da1397166eaee8419c8f6375dd5` |
+| `git-backup` | `db03256920b6ce7d37dd762e727e9c4b818ebe41d7724e9964031d565942789b` | `fcbf8cb4c4831339d467a57ce7bcb156392a10088af61fba173202435ad2d38b` |
+
+`verify-offline-git-bundle.sh` passed strict top-level and nested checksums,
+complete streaming evidence, source binding, all five offline Cosign blob
+signatures, SBOM presence, Compose policy checks, and trust-transition and
+trust-policy construction process-kill recovery suites. Cosign transparency-log
+verification is intentionally unavailable for this offline key profile; the
+bundle contains the exact public key and signature bundles. This is hosted Linux
+and fixture-key evidence, not external key-custody or transparency-service
+evidence.
 
 Patent review: **NOT_TRIGGERED**. This exercise uses conventional offline image
 archives, hashes, SBOM enumeration, container hardening, and authenticated test
