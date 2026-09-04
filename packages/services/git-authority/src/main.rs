@@ -95,6 +95,17 @@ fn run() -> Result<(), ()> {
             output_owner_uid.parse().map_err(|_| ())?,
         );
     }
+    if let [_, command, policy_root, repository, expected_policy, expected_owner_uid] =
+        arguments.as_slice()
+        && command == "verify-selected-policy"
+    {
+        return verify_selected_policy(
+            policy_root,
+            repository,
+            expected_policy,
+            expected_owner_uid.parse().map_err(|_| ())?,
+        );
+    }
     match arguments.as_slice() {
         [_, command, _socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, generations, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
             if matches!(
@@ -242,11 +253,47 @@ fn run() -> Result<(), ()> {
         ),
         _ => {
             eprintln!(
-            "usage: mrml-git-authority construct-overlap-policy POLICY_ROOT REPOSITORY NEXT_OPENPGP NEXT_ML_DSA NEXT_OWNER_UID VALID_FROM VALID_UNTIL PREVIOUS_OUTPUT NEXT_OUTPUT OUTPUT_OWNER_UID\n       mrml-git-authority construct-retirement-policy POLICY_ROOT REPOSITORY RETIRING_OPENPGP RETIRING_ML_DSA RETIRING_OWNER_UID RETIRED_AT PREVIOUS_OUTPUT NEXT_OUTPUT OUTPUT_OWNER_UID\n       mrml-git-authority serve-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority check-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-receipt-verifier SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority transition-policy POLICY_ROOT REPOSITORY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP NEXT_ML_DSA NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE VALIDATION_TIME EXPECTED_GENERATION EXPECTED_DIGEST OWN_UID\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
+            "usage: mrml-git-authority construct-overlap-policy POLICY_ROOT REPOSITORY NEXT_OPENPGP NEXT_ML_DSA NEXT_OWNER_UID VALID_FROM VALID_UNTIL PREVIOUS_OUTPUT NEXT_OUTPUT OUTPUT_OWNER_UID\n       mrml-git-authority construct-retirement-policy POLICY_ROOT REPOSITORY RETIRING_OPENPGP RETIRING_ML_DSA RETIRING_OWNER_UID RETIRED_AT PREVIOUS_OUTPUT NEXT_OUTPUT OUTPUT_OWNER_UID\n       mrml-git-authority verify-selected-policy POLICY_ROOT REPOSITORY EXPECTED_POLICY EXPECTED_OWNER_UID\n       mrml-git-authority serve-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority check-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-receipt-verifier SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority transition-policy POLICY_ROOT REPOSITORY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP NEXT_ML_DSA NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE VALIDATION_TIME EXPECTED_GENERATION EXPECTED_DIGEST OWN_UID\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
             );
             std::process::exit(EX_USAGE);
         }
     }
+}
+
+fn verify_selected_policy(
+    policy_root: &str,
+    repository: &str,
+    expected_policy_path: &str,
+    expected_owner_uid: u32,
+) -> Result<(), ()> {
+    if expected_owner_uid == 0 {
+        return Err(());
+    }
+    let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
+    let store = LinuxDurableTrustPolicyStore::open(
+        policy_storage_path(policy_root, &repository)?
+            .to_str()
+            .ok_or(())?,
+    )
+    .map_err(|_| ())?;
+    let selected = store.load().map_err(|_| ())?;
+    let selected_bytes = encode_trust_policy(&selected).map_err(|_| ())?;
+    let expected = read_regular(
+        expected_policy_path,
+        1,
+        mrml_git::MAX_ENCODED_TRUST_POLICY_BYTES,
+        expected_owner_uid,
+        false,
+    )?;
+    if selected.repository() != &repository || selected_bytes[..] != expected[..] {
+        return Err(());
+    }
+    println!(
+        "generation={} digest={}",
+        selected.generation().0,
+        lower_hex(&selected.digest())
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1678,6 +1725,28 @@ mod tests {
                 .load()
                 .unwrap(),
             expected_next
+        );
+        assert!(
+            verify_selected_policy(
+                path(&policy_root),
+                repository.as_str(),
+                path(&next_policy_path),
+                uid,
+            )
+            .is_ok()
+        );
+        let substituted_policy_path = root.join("substituted-policy.bin");
+        let mut substituted_policy = next_policy.clone();
+        substituted_policy[0] ^= 1;
+        write_public(&substituted_policy_path, &substituted_policy);
+        assert!(
+            verify_selected_policy(
+                path(&policy_root),
+                repository.as_str(),
+                path(&substituted_policy_path),
+                uid,
+            )
+            .is_err()
         );
         let keyring = policy_directory.join("verification-keys");
         let retained_openpgp = keyring.join("trust-2.openpgp.asc");
