@@ -1422,6 +1422,86 @@ impl TrustPolicyState {
         Ok(())
     }
 
+    pub fn encode_overlap_successor(
+        &self,
+        next_pair: AuthorizedHybridPair,
+        valid_from: u64,
+        valid_until: u64,
+    ) -> Result<Vector<u8>, HybridPolicyError> {
+        if self.pair_statuses.iter().any(|status| status.pair == next_pair)
+            || self.active_pairs.len() >= MAX_POLICY_PAIRS
+        {
+            return Err(HybridPolicyError::InvalidPolicy);
+        }
+        let status = PolicyPairStatus::new(next_pair, valid_from, valid_until, None)?;
+        let mut candidate = self.as_candidate();
+        candidate.generation = TrustGeneration(
+            self.generation
+                .0
+                .checked_add(1)
+                .ok_or(HybridPolicyError::InvalidPolicy)?,
+        );
+        candidate.previous_policy_digest = self.digest();
+        let active_index = candidate
+            .active_pairs
+            .iter()
+            .position(|pair| pair_less(&next_pair, pair))
+            .unwrap_or(candidate.active_pairs.len());
+        candidate
+            .active_pairs
+            .try_insert(active_index, next_pair)
+            .map_err(|_| HybridPolicyError::InputTooLarge)?;
+        let status_index = candidate
+            .pair_statuses
+            .iter()
+            .position(|existing| pair_less(&next_pair, &existing.pair))
+            .unwrap_or(candidate.pair_statuses.len());
+        candidate
+            .pair_statuses
+            .try_insert(status_index, status)
+            .map_err(|_| HybridPolicyError::InputTooLarge)?;
+        encode_trust_policy_candidate(&candidate)
+    }
+
+    pub fn encode_retirement_successor(
+        &self,
+        retiring_pair: AuthorizedHybridPair,
+        retired_at: u64,
+    ) -> Result<Vector<u8>, HybridPolicyError> {
+        if self.active_pairs.len() < 2 || !self.active_pairs.contains(&retiring_pair) {
+            return Err(HybridPolicyError::InvalidPolicy);
+        }
+        let mut candidate = self.as_candidate();
+        candidate.generation = TrustGeneration(
+            self.generation
+                .0
+                .checked_add(1)
+                .ok_or(HybridPolicyError::InvalidPolicy)?,
+        );
+        candidate.previous_policy_digest = self.digest();
+        let active_index = candidate
+            .active_pairs
+            .iter()
+            .position(|pair| pair == &retiring_pair)
+            .ok_or(HybridPolicyError::InvalidPolicy)?;
+        candidate.active_pairs.remove(active_index);
+        let status = candidate
+            .pair_statuses
+            .iter_mut()
+            .find(|status| status.pair == retiring_pair)
+            .ok_or(HybridPolicyError::InvalidPolicy)?;
+        if retired_at < status.valid_from {
+            return Err(HybridPolicyError::InvalidPolicy);
+        }
+        *status = PolicyPairStatus::new(
+            retiring_pair,
+            status.valid_from,
+            status.valid_until,
+            Some(retired_at),
+        )?;
+        encode_trust_policy_candidate(&candidate)
+    }
+
     /// Applies one exact owner-pinned emergency transition. The authorization
     /// is consumed by value; persisted replay also fails because the old
     /// policy digest and generations cease to match after activation.
@@ -2697,6 +2777,37 @@ mod tests {
             parse_trust_policy(&wrong_magic),
             Err(HybridPolicyError::InvalidPolicy)
         );
+        let overlap = parse_trust_policy(
+            &initial
+                .encode_overlap_successor(new_pair, 200, 400)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(overlap.generation(), TrustGeneration(2));
+        assert_eq!(overlap.previous_policy_digest, initial.digest());
+        assert!(overlap.active_pairs().contains(&old_pair));
+        assert!(overlap.active_pairs().contains(&new_pair));
+        assert!(initial.encode_overlap_successor(old_pair, 200, 400).is_err());
+        assert!(initial.encode_overlap_successor(new_pair, 400, 200).is_err());
+        assert!(overlap.encode_retirement_successor(old_pair, 99).is_err());
+        let retired = parse_trust_policy(
+            &overlap
+                .encode_retirement_successor(old_pair, 200)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(retired.generation(), TrustGeneration(3));
+        assert_eq!(retired.previous_policy_digest, overlap.digest());
+        assert_eq!(retired.active_pairs(), &[new_pair]);
+        assert_eq!(
+            retired
+                .pair_statuses()
+                .iter()
+                .find(|status| status.pair() == old_pair)
+                .and_then(|status| status.retired_at()),
+            Some(200)
+        );
+        assert!(retired.encode_retirement_successor(new_pair, 200).is_err());
         let candidate = TrustPolicyCandidate {
             repository: repository.clone(),
             generation: TrustGeneration(2),

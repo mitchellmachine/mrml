@@ -2,7 +2,8 @@ use mrml_crypto::erase_secret_bytes;
 use mrml_git::{
     AuthorizedHybridPair, DurableDetachedCommitProofDirectory, GitObjectType,
     HybridVerificationRequest, LinuxDurableTrustPolicyStore, ObjectFormat, RepositoryIdentity,
-    SignaturePurpose, TrustGeneration, parse_trust_policy, verify_hybrid_signature,
+    SignaturePurpose, TrustGeneration, encode_trust_policy, parse_trust_policy,
+    verify_hybrid_signature,
 };
 use mrml_git_authority::{
     decode_frame, encode_frame, AuthorityCapability, AuthorityDispatchError, AuthorityFrame,
@@ -38,6 +39,62 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
+    if let [
+        _,
+        command,
+        policy_root,
+        repository,
+        next_openpgp,
+        next_ml_dsa,
+        next_owner_uid,
+        valid_from,
+        valid_until,
+        previous_output,
+        next_output,
+        output_owner_uid,
+    ] = arguments.as_slice()
+        && command == "construct-overlap-policy"
+    {
+        return construct_overlap_policy(
+            policy_root,
+            repository,
+            next_openpgp,
+            next_ml_dsa,
+            next_owner_uid.parse().map_err(|_| ())?,
+            valid_from.parse().map_err(|_| ())?,
+            valid_until.parse().map_err(|_| ())?,
+            Path::new(previous_output),
+            Path::new(next_output),
+            output_owner_uid.parse().map_err(|_| ())?,
+        );
+    }
+    if let [
+        _,
+        command,
+        policy_root,
+        repository,
+        retiring_openpgp,
+        retiring_ml_dsa,
+        retiring_owner_uid,
+        retired_at,
+        previous_output,
+        next_output,
+        output_owner_uid,
+    ] = arguments.as_slice()
+        && command == "construct-retirement-policy"
+    {
+        return construct_retirement_policy(
+            policy_root,
+            repository,
+            retiring_openpgp,
+            retiring_ml_dsa,
+            retiring_owner_uid.parse().map_err(|_| ())?,
+            retired_at.parse().map_err(|_| ())?,
+            Path::new(previous_output),
+            Path::new(next_output),
+            output_owner_uid.parse().map_err(|_| ())?,
+        );
+    }
     match arguments.as_slice() {
         [_, command, _socket, capability, peer_uid, peer_gid, own_uid, own_gid, policy, proofs, generations, repository, openpgp, ml_dsa, receipt_key, validation_time, repository_generation]
             if matches!(
@@ -185,7 +242,7 @@ fn run() -> Result<(), ()> {
         ),
         _ => {
             eprintln!(
-                "usage: mrml-git-authority serve-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority check-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-receipt-verifier SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority transition-policy POLICY_ROOT REPOSITORY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP NEXT_ML_DSA NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE VALIDATION_TIME EXPECTED_GENERATION EXPECTED_DIGEST OWN_UID\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
+            "usage: mrml-git-authority construct-overlap-policy POLICY_ROOT REPOSITORY NEXT_OPENPGP NEXT_ML_DSA NEXT_OWNER_UID VALID_FROM VALID_UNTIL PREVIOUS_OUTPUT NEXT_OUTPUT OUTPUT_OWNER_UID\n       mrml-git-authority construct-retirement-policy POLICY_ROOT REPOSITORY RETIRING_OPENPGP RETIRING_ML_DSA RETIRING_OWNER_UID RETIRED_AT PREVIOUS_OUTPUT NEXT_OUTPUT OUTPUT_OWNER_UID\n       mrml-git-authority serve-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority check-catalog SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME\n       mrml-git-authority serve SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority check-config SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-signer SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority describe-receipt-verifier SOCKET CAPABILITY PEER_UID PEER_GID OWN_UID OWN_GID POLICY_ROOT PROOF_ROOT GENERATION_ROOT REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC RECEIPT_KEY VALIDATION_TIME REPOSITORY_GENERATION\n       mrml-git-authority transition-policy POLICY_ROOT REPOSITORY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP NEXT_ML_DSA NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE VALIDATION_TIME EXPECTED_GENERATION EXPECTED_DIGEST OWN_UID\n       mrml-git-authority listener-health SOCKET OWN_UID SOCKET_GID\n       mrml-git-authority healthcheck SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID"
             );
             std::process::exit(EX_USAGE);
         }
@@ -193,6 +250,112 @@ fn run() -> Result<(), ()> {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn construct_overlap_policy(
+    policy_root: &str,
+    repository: &str,
+    next_openpgp_path: &str,
+    next_ml_dsa_path: &str,
+    next_owner_uid: u32,
+    valid_from: u64,
+    valid_until: u64,
+    previous_output: &Path,
+    next_output: &Path,
+    output_owner_uid: u32,
+) -> Result<(), ()> {
+    if next_owner_uid == 0 || output_owner_uid == 0 || valid_from >= valid_until {
+        return Err(());
+    }
+    let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
+    let store = LinuxDurableTrustPolicyStore::open(
+        policy_storage_path(policy_root, &repository)?
+            .to_str()
+            .ok_or(())?,
+    )
+    .map_err(|_| ())?;
+    let current = store.load().map_err(|_| ())?;
+    if current.repository() != &repository {
+        return Err(());
+    }
+    let (next_openpgp, next_ml_dsa) =
+        read_hybrid_public_pair(next_openpgp_path, next_ml_dsa_path, next_owner_uid)?;
+    let next_pair = AuthorizedHybridPair::bind(&next_openpgp, &next_ml_dsa);
+    let previous_bytes = encode_trust_policy(&current).map_err(|_| ())?;
+    let next_bytes = current
+        .encode_overlap_successor(next_pair, valid_from, valid_until)
+        .map_err(|_| ())?;
+    write_public_output(previous_output, &previous_bytes, output_owner_uid)?;
+    write_public_output(next_output, &next_bytes, output_owner_uid)?;
+    let next = parse_trust_policy(&next_bytes).map_err(|_| ())?;
+    println!(
+        "generation={} digest={}",
+        next.generation().0,
+        lower_hex(&next.digest())
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn construct_retirement_policy(
+    policy_root: &str,
+    repository: &str,
+    retiring_openpgp_path: &str,
+    retiring_ml_dsa_path: &str,
+    retiring_owner_uid: u32,
+    retired_at: u64,
+    previous_output: &Path,
+    next_output: &Path,
+    output_owner_uid: u32,
+) -> Result<(), ()> {
+    if retiring_owner_uid == 0 || output_owner_uid == 0 || retired_at == 0 {
+        return Err(());
+    }
+    let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
+    let store = LinuxDurableTrustPolicyStore::open(
+        policy_storage_path(policy_root, &repository)?
+            .to_str()
+            .ok_or(())?,
+    )
+    .map_err(|_| ())?;
+    let current = store.load().map_err(|_| ())?;
+    if current.repository() != &repository {
+        return Err(());
+    }
+    let (retiring_openpgp, retiring_ml_dsa) = read_hybrid_public_pair(
+        retiring_openpgp_path,
+        retiring_ml_dsa_path,
+        retiring_owner_uid,
+    )?;
+    let retiring_pair = AuthorizedHybridPair::bind(&retiring_openpgp, &retiring_ml_dsa);
+    let previous_bytes = encode_trust_policy(&current).map_err(|_| ())?;
+    let next_bytes = current
+        .encode_retirement_successor(retiring_pair, retired_at)
+        .map_err(|_| ())?;
+    write_public_output(previous_output, &previous_bytes, output_owner_uid)?;
+    write_public_output(next_output, &next_bytes, output_owner_uid)?;
+    let next = parse_trust_policy(&next_bytes).map_err(|_| ())?;
+    println!(
+        "generation={} digest={}",
+        next.generation().0,
+        lower_hex(&next.digest())
+    );
+    Ok(())
+}
+
+fn write_public_output(path: &Path, bytes: &[u8], expected_owner: u32) -> Result<(), ()> {
+    if !path.is_absolute() {
+        return Err(());
+    }
+    let parent_path = path.parent().and_then(Path::to_str).ok_or(())?;
+    let name = path.file_name().and_then(|name| name.to_str()).ok_or(())?;
+    let parent = DirectoryCapability::open_root(parent_path).map_err(|_| ())?;
+    let metadata = parent.metadata().map_err(|_| ())?;
+    if metadata.uid != expected_owner || metadata.mode & 0o022 != 0 {
+        return Err(());
+    }
+    install_or_verify_public(&parent, name, bytes, &metadata)?;
+    parent.sync().map_err(|_| ())
+}
+
 fn transition_policy(
     policy_root: &str,
     repository: &str,
@@ -1201,7 +1364,7 @@ mod tests {
     };
     use mrml_git::{
         FullRefName, PolicyPairStatus, RevocationGeneration, TrustPolicyCandidate,
-        TrustPolicyState, canonical_hybrid_transcript, encode_trust_policy_candidate,
+        TrustPolicyState, canonical_hybrid_transcript,
     };
     use mrml_openpgp::{
         DigestAlgorithm, SigningKeyV6, sign_detached_v6_ascii_with_salt,
@@ -1392,51 +1555,9 @@ mod tests {
             revoked_ml_dsa: Vector::new(),
         })
         .unwrap();
-        let (active_pairs, pair_statuses) = if old_pair.openpgp_fingerprint().as_bytes()
-            < next_pair.openpgp_fingerprint().as_bytes()
-        {
-            (
-                [old_pair, next_pair].into(),
-                [
-                    PolicyPairStatus::new(old_pair, 1_700_000_000, 1_800_000_000, None)
-                        .unwrap(),
-                    PolicyPairStatus::new(next_pair, 1_700_000_000, 1_800_000_000, None)
-                        .unwrap(),
-                ]
-                .into(),
-            )
-        } else {
-            (
-                [next_pair, old_pair].into(),
-                [
-                    PolicyPairStatus::new(next_pair, 1_700_000_000, 1_800_000_000, None)
-                        .unwrap(),
-                    PolicyPairStatus::new(old_pair, 1_700_000_000, 1_800_000_000, None)
-                        .unwrap(),
-                ]
-                .into(),
-            )
-        };
-        let candidate = TrustPolicyCandidate {
-            repository: repository.clone(),
-            generation: TrustGeneration(2),
-            previous_policy_digest: initial.digest(),
-            revocation_generation: RevocationGeneration(2),
-            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
-            allow_sha1: false,
-            allow_sha256: true,
-            hybrid_required: false,
-            legacy_checkpoint: None,
-            hybrid_cutover: None,
-            emergency_policy_digest: Some([11; 64]),
-            active_pairs,
-            pair_statuses,
-            legacy_v4_statuses: Vector::new(),
-            revoked_legacy_v4: Vector::new(),
-            revoked_openpgp: Vector::new(),
-            revoked_ml_dsa: Vector::new(),
-        };
-        let next_policy = encode_trust_policy_candidate(&candidate).unwrap();
+        let next_policy = initial
+            .encode_overlap_successor(next_pair, 1_700_000_000, 1_800_000_000)
+            .unwrap();
         let expected_next = parse_trust_policy(&next_policy).unwrap();
         let policy_root = root.join("policies");
         let policy_directory = policy_root.join(repository.as_str());
@@ -1573,55 +1694,9 @@ mod tests {
         }
 
         let retirement_time = 1_700_000_030;
-        let pair_statuses = if old_pair.openpgp_fingerprint().as_bytes()
-            < next_pair.openpgp_fingerprint().as_bytes()
-        {
-            [
-                PolicyPairStatus::new(
-                    old_pair,
-                    1_700_000_000,
-                    1_800_000_000,
-                    Some(retirement_time),
-                )
-                .unwrap(),
-                PolicyPairStatus::new(next_pair, 1_700_000_000, 1_800_000_000, None)
-                    .unwrap(),
-            ]
-            .into()
-        } else {
-            [
-                PolicyPairStatus::new(next_pair, 1_700_000_000, 1_800_000_000, None)
-                    .unwrap(),
-                PolicyPairStatus::new(
-                    old_pair,
-                    1_700_000_000,
-                    1_800_000_000,
-                    Some(retirement_time),
-                )
-                .unwrap(),
-            ]
-            .into()
-        };
-        let retirement_candidate = TrustPolicyCandidate {
-            repository: repository.clone(),
-            generation: TrustGeneration(3),
-            previous_policy_digest: expected_next.digest(),
-            revocation_generation: RevocationGeneration(2),
-            protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
-            allow_sha1: false,
-            allow_sha256: true,
-            hybrid_required: false,
-            legacy_checkpoint: None,
-            hybrid_cutover: None,
-            emergency_policy_digest: Some([11; 64]),
-            active_pairs: [next_pair].into(),
-            pair_statuses,
-            legacy_v4_statuses: Vector::new(),
-            revoked_legacy_v4: Vector::new(),
-            revoked_openpgp: Vector::new(),
-            revoked_ml_dsa: Vector::new(),
-        };
-        let retirement_policy = encode_trust_policy_candidate(&retirement_candidate).unwrap();
+        let retirement_policy = expected_next
+            .encode_retirement_successor(old_pair, retirement_time)
+            .unwrap();
         let old_retirement_transcript = canonical_hybrid_transcript(
             &repository,
             ObjectFormat::Sha256,
