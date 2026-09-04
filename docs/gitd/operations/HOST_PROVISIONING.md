@@ -47,7 +47,8 @@ For a normal trust transition, construct the canonical next policy and obtain
 detached OpenPGP-v6 and ML-DSA-65 signatures over its exact
 `MRML-GIT-HYBRID-V1` key-rotation transcript from both one currently active
 pair and one pair active in the next generation. Install the exact previous
-policy, next policy, next public keys, and four detached signatures with
+policy, next policy, previous public pair, next public pair, and four detached
+signatures with
 `install-volume-inputs.sh authority-transition ...`. This no-overwrite command
 places only public material in `mrml-git-authority-transition`; private signing
 keys never enter the VPS or a production container. Stop Gitd and the authority,
@@ -65,7 +66,10 @@ inactive policy data; activation cannot precede durable verifier installation.
 On authority restart, the configured bootstrap pair is used only while the
 current policy authorizes it. Otherwise the authority loads only the exact
 current trust generation's retained pair and revalidates that pair against the
-current policy. Stale, substituted, malformed, unauthorized, or uncertain
+current policy. Each later transition likewise reads its explicitly supplied
+previous pair from the transition volume; it does not silently reuse the
+bootstrap verifier after that pair has been retired. Stale, substituted,
+malformed, unauthorized, or uncertain
 transitions fail closed; a retained lock or temporary file requires operator
 inspection.
 With Gitd, authority, and the protected signer stopped, the same script next

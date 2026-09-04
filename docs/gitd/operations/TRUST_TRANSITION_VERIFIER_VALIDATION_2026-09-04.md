@@ -34,6 +34,14 @@ identity, and rechecks policy authorization. Missing, stale-generation,
 substituted, malformed, wrongly owned, writable, linked, or inactive keys fail
 closed.
 
+The deployment input contract carries the exact previous public pair for every
+transition. The networkless transition process does not substitute the
+authority bootstrap files for that pair. This is required for normal
+generation 2-to-3 retirement and every later rotation after the bootstrap pair
+ceases to be active. Both supplied pairs remain public, immutable,
+owner-checked transition inputs; neither grants authority without matching
+policy status and hybrid signatures.
+
 ## Verification
 
 ```text
