@@ -9,6 +9,7 @@ use crate::{ObjectFormat, ObjectId, ObjectKind, PackError, PackIndexEntry};
 
 const MAX_DELTA_DEPTH: u8 = 50;
 const MAX_DELTA_INSTRUCTIONS: u64 = 16 * 1024 * 1024;
+const PACK_FILE_READ_BUFFER_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PackFileScan {
@@ -55,6 +56,9 @@ struct FileCursor {
     data_end: u64,
     work_remaining: u64,
     crc: Option<u32>,
+    buffer: [u8; PACK_FILE_READ_BUFFER_BYTES],
+    buffer_at: usize,
+    buffer_len: usize,
 }
 
 impl FileCursor {
@@ -76,16 +80,31 @@ impl InflateByteReader for FileCursor {
         if self.position >= self.data_end || self.work_remaining == 0 {
             return Err(crate::inflate::InflateError::Truncated);
         }
-        let mut byte = [0u8; 1];
-        self.file
-            .read_exact(&mut byte)
-            .map_err(|_| crate::inflate::InflateError::Truncated)?;
+        if self.buffer_at == self.buffer_len {
+            let remaining = self
+                .data_end
+                .checked_sub(self.position)
+                .ok_or(crate::inflate::InflateError::Truncated)?;
+            let wanted = usize::try_from(remaining.min(PACK_FILE_READ_BUFFER_BYTES as u64))
+                .map_err(|_| crate::inflate::InflateError::Truncated)?;
+            let read = self
+                .file
+                .read(&mut self.buffer[..wanted])
+                .map_err(|_| crate::inflate::InflateError::Truncated)?;
+            if read == 0 || read > wanted {
+                return Err(crate::inflate::InflateError::Truncated);
+            }
+            self.buffer_at = 0;
+            self.buffer_len = read;
+        }
+        let byte = self.buffer[self.buffer_at];
+        self.buffer_at += 1;
         self.position += 1;
         self.work_remaining -= 1;
         if let Some(crc) = &mut self.crc {
-            *crc = crc32_update(*crc, byte[0]);
+            *crc = crc32_update(*crc, byte);
         }
-        Ok(byte[0])
+        Ok(byte)
     }
 
     fn consumed(&self) -> usize {
@@ -302,6 +321,9 @@ where
         data_end: scan.bytes - format.hash_len() as u64,
         work_remaining: max_work_units - scan.bytes - 12,
         crc: None,
+        buffer: [0; PACK_FILE_READ_BUFFER_BYTES],
+        buffer_at: 0,
+        buffer_len: 0,
     };
     let mut resolved = mrml_runtime::Vector::new();
     let mut pending = mrml_runtime::Vector::new();
@@ -623,6 +645,9 @@ where
         data_end,
         work_remaining: *work_remaining,
         crc: None,
+        buffer: [0; PACK_FILE_READ_BUFFER_BYTES],
+        buffer_at: 0,
+        buffer_len: 0,
     };
     cursor.file.seek(offset).map_err(|_| PackError::Truncated)?;
     let output = inflate_zlib_reader(

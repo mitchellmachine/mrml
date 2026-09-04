@@ -12466,3 +12466,11 @@ checksummed records, create-new reservation, ordered state transitions, atomic
 file replacement, and directory synchronization to exact protected-receive
 candidate context. It adds no cryptographic primitive, consensus protocol,
 compression or storage-selection method, or patent-sensitive mechanism.
+
+# 2026-09-04 — Buffered authenticated pack-file validation
+
+Patent review: **NOT_TRIGGERED**. This increment replaces one-byte file reads
+with conventional fixed-size bounded read-ahead while retaining the existing
+per-byte CRC, work accounting, decompression limits, object hashing, pack
+format, and authentication checks. It introduces no compression, indexing,
+cryptographic, storage-selection, or other patent-sensitive mechanism.
