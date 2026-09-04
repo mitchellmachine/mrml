@@ -120,6 +120,16 @@ volume-root records. Parent directories are synced after namespace changes. A
 final canonical rescan must exactly equal the authenticated inventory. Any
 error leaves a disposable target set that is not authorized for activation.
 
+The `mrml-git-backup` hosted administrator binary implements `create`, `verify`,
+and `restore` for a canonical nonzero decimal generation. It uses fixed
+container mount points only. The 32-byte nonzero backup key must be a
+single-link, root-owned regular file with no group/world permission beneath a
+non-writable root-owned key volume. Archives are exclusive mode-0600 files in a
+root-owned mode-0700 backup volume; create writes and syncs a `.new` file,
+renames and syncs the volume, then reopens and verifies the published archive.
+Per-archive salt and nonce prefix come from the operating-system random source.
+The binary never accepts source, target, key, or archive paths from arguments.
+
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,
 and authenticated EOF in a conventional encrypted-record stream. It introduces
