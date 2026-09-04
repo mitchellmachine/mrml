@@ -131,26 +131,14 @@ pub fn initialize_catalog_protected_policy(
         .as_str()
         .split_once('/')
         .ok_or(ProtectedPolicyInitializationError::Path)?;
-    let owner_path = config.policy_root.join(owner);
-    if owner_path.exists() {
-        validate_policy_directory(&owner_path, config.gitd_uid, config.gitd_gid, true)
-            .map_err(|_| ProtectedPolicyInitializationError::Layout)?;
-    } else {
-        fs::create_dir(&owner_path).map_err(|_| ProtectedPolicyInitializationError::Create)?;
-        fs::set_permissions(&owner_path, fs::Permissions::from_mode(0o755))
-            .map_err(|_| ProtectedPolicyInitializationError::Create)?;
-    }
-    let policy_path = owner_path.join(repository);
-    if policy_path.exists() || policy_path.symlink_metadata().is_ok() {
-        return Err(ProtectedPolicyInitializationError::Exists);
-    }
-    fs::create_dir(&policy_path).map_err(|_| ProtectedPolicyInitializationError::Create)?;
-    fs::set_permissions(&policy_path, fs::Permissions::from_mode(0o755))
-        .map_err(|_| ProtectedPolicyInitializationError::Create)?;
-    let policy_path = policy_path
-        .to_str()
-        .ok_or(ProtectedPolicyInitializationError::Path)?;
-    match LinuxDurableTrustPolicyStore::create(policy_path, &policy) {
+    let (owner_directory, policy_directory) = create_policy_directory(
+        &config.policy_root,
+        owner,
+        repository,
+        config.gitd_uid,
+        config.gitd_gid,
+    )?;
+    match LinuxDurableTrustPolicyStore::create_capability(policy_directory, &policy) {
         Ok(store) => {
             if store
                 .load()
@@ -162,10 +150,72 @@ pub fn initialize_catalog_protected_policy(
             Ok(tip)
         }
         Err(mrml_git::TrustPolicyFileError::AlreadyExists) => {
+            let _ = owner_directory.remove_directory(repository);
             Err(ProtectedPolicyInitializationError::Exists)
         }
-        Err(_) => Err(ProtectedPolicyInitializationError::Policy),
+        Err(_) => {
+            let _ = owner_directory.remove_directory(repository);
+            Err(ProtectedPolicyInitializationError::Policy)
+        }
     }
+}
+
+fn create_policy_directory(
+    root_path: &Path,
+    owner: &str,
+    repository: &str,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> Result<(DirectoryCapability, DirectoryCapability), ProtectedPolicyInitializationError> {
+    let root = DirectoryCapability::open_root(
+        root_path
+            .to_str()
+            .ok_or(ProtectedPolicyInitializationError::Path)?,
+    )
+    .map_err(|_| ProtectedPolicyInitializationError::Layout)?;
+    validate_policy_capability(&root, expected_uid, expected_gid)?;
+    let owner_directory = match root.open_directory(owner) {
+        Ok(directory) => directory,
+        Err(_) => root
+            .create_directory(owner, 0o755)
+            .map_err(|_| ProtectedPolicyInitializationError::Create)?,
+    };
+    validate_policy_capability(&owner_directory, expected_uid, expected_gid)?;
+    if owner_directory
+        .read_directory()
+        .map_err(|_| ProtectedPolicyInitializationError::Layout)?
+        .iter()
+        .any(|entry| entry.name.as_str() == repository)
+    {
+        return Err(ProtectedPolicyInitializationError::Exists);
+    }
+    let policy_directory = owner_directory
+        .create_directory(repository, 0o755)
+        .map_err(|_| ProtectedPolicyInitializationError::Create)?;
+    validate_policy_capability(&policy_directory, expected_uid, expected_gid)?;
+    owner_directory
+        .sync()
+        .and_then(|()| root.sync())
+        .map_err(|_| ProtectedPolicyInitializationError::Create)?;
+    Ok((owner_directory, policy_directory))
+}
+
+fn validate_policy_capability(
+    directory: &DirectoryCapability,
+    expected_uid: u32,
+    expected_gid: u32,
+) -> Result<(), ProtectedPolicyInitializationError> {
+    let metadata = directory
+        .metadata()
+        .map_err(|_| ProtectedPolicyInitializationError::Layout)?;
+    if metadata.uid != expected_uid
+        || metadata.gid != expected_gid
+        || metadata.mode & 0o777 != 0o755
+        || metadata.links < 2
+    {
+        return Err(ProtectedPolicyInitializationError::Layout);
+    }
+    Ok(())
 }
 
 /// Initializes one exact catalog entry and no other repository. All derived
