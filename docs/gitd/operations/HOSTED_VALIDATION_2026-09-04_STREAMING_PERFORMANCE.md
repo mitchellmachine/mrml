@@ -78,6 +78,7 @@ through `ready` before the client ran.
 | final | `bdb056a7` server and client | PASS | 23.18 s | 11.045 MiB/s |
 | independent repeat | `bdb056a7` server and client | PASS | 23.61 s | 10.844 MiB/s |
 | VmHWM sampling repeat | `bdb056a7` server and client | PASS | 22.57 s | 11.343 MiB/s |
+| current-tree regression | `66806028` server and client | PASS | 24.861 s | 10.297 MiB/s |
 
 The primary final run is 69.70 times faster than the clean baseline and exceeds
 the 10 MiB/s gate. Gitd's kernel-maintained `VmHWM` was 135,704 KiB. A client
@@ -86,6 +87,18 @@ which conservatively includes charged page cache and other cgroup memory rather
 than RSS alone, was 673,320,960 bytes. Both remained below their configured
 limits. The exact client RSS maximum was not sampled at process exit and is not
 claimed.
+
+The current-tree regression used exact clean-worktree images at commit
+`66806028`: Gitd image ID
+`26f2f1c02bf104c3e86bc2c9eae6a78bbe02c931f8d4f42040515f8895f0ac61`
+and client image ID
+`6ee3c3267c2f029866e9ee22ff0c02152fecd77a6224eea97af5fac2bd567de8`.
+Gitd passed all six ordered startup gates. The scoped token was piped directly
+from a one-shot issuer into the client and was not printed or stored. The
+listener remained loopback-only at `127.0.0.1:20443`; every persistent and
+runtime path remained a named volume. The completed clone reproduced all four
+hashes below. Shell timing measured the complete issuer-and-client pipeline;
+an exact process RSS maximum was not measured and is not claimed.
 
 The completed clone contained these source-matching SHA-256 values:
 

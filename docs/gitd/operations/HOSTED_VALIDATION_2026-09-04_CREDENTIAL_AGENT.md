@@ -9,6 +9,7 @@ Source commits:
 - `84f05aa6` — authenticated scope-bound client/daemon implementation.
 - `3da7a4f4` — isolated image, named-volume Compose model, and offline bundle
   integration.
+- `66806028` — distinct daemon identity and exact clean-worktree image evidence.
 
 ## Implemented boundary
 
@@ -72,23 +73,24 @@ framing, exact scope policy, and returned-token construction.
 
 ## Image and Compose evidence
 
-The image was built locally with networking disabled from the two digest-pinned
-bases:
+The image was built locally at exact commit `66806028` from the clean detached
+worktree `/tmp/mrml-release-66806028`, with networking disabled and the two
+digest-pinned bases:
 
 ```text
 podman build --network none --pull=never \
   -f deploy/compose/Dockerfile.git-credential-agent \
-  -t mrml/git-credential-agent:test .
+  -t mrml/git-credential-agent:66806028 .
 ```
 
 - Image ID:
-  `ff251ae0e1101a80b9910dc09be3e247c6b1d2b8b09d4dccf980181130594dce`.
+  `1c5850c755d7b166990a8b8ae99da92d761976a3dae74a87f1eeefe6fffd3b49`.
 - User: `21009:21009`.
 - Entrypoint: `/usr/bin/mrml-git-credential-agent`.
 - Exported test archive SHA-256:
-  `c570984f264bf19e3f3f74bad8cae7848ca5961c5de09a9993cf906d25086491`.
+  `d293d1e338ba1557866469fdeaca25cf94610abd9af51701ca2e5b98ed3203ef`.
 - Syft SPDX JSON SHA-256:
-  `5853360682df6d2195f964ab113b909f0c6a39a1d74993817c8d29e323830807`.
+  `657e45b58264ad0099019ae7100947cb81fc80519845cd6cc4aa55060e552bb8`.
 
 Podman Compose 1.5.0 accepted the complete model with non-secret test values.
 A disposable, non-running runtime container inspection reported:
