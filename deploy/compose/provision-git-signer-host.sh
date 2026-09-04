@@ -41,6 +41,8 @@ ensure_volume() {
 
 ensure_volume "$(volume_name git-signer-state)" "$signer_uid" "$signer_gid" 700
 ensure_volume "$(volume_name git-signer-keys)" "$signer_uid" "$signer_gid" 700
+ensure_volume "$(volume_name git-signer-next-keys)" "$signer_uid" "$signer_gid" 700
+ensure_volume "$(volume_name git-trust-signatures)" "$signer_uid" "$signer_gid" 700
 ensure_volume "$(volume_name git-signer-channel)" "$signer_uid" "$signer_gid" 700
 ensure_volume "$(volume_name git-client-signer-channel)" "$client_uid" "$client_gid" 700
 ensure_volume "$(volume_name runtime-git-signer)" "$signer_uid" "$socket_gid" 2770

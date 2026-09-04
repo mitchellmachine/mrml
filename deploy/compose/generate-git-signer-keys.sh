@@ -1,14 +1,16 @@
 #!/bin/sh
 set -eu
 
-[ "$#" -eq 2 ] || {
-  echo "usage: $0 VERSION OPENPGP_CREATED_AT" >&2
+[ "$#" -eq 2 ] || [ "$#" -eq 3 ] || {
+  echo "usage: $0 VERSION OPENPGP_CREATED_AT [current|next]" >&2
   exit 2
 }
 version=$1
 openpgp_created_at=$2
 volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
-signer_volume=${volume_prefix}-git-signer-keys
+slot=${3:-current}
+case $slot in current) suffix=git-signer-keys ;; next) suffix=git-signer-next-keys ;; *) echo "key slot must be current or next" >&2; exit 2 ;; esac
+signer_volume=${volume_prefix}-${suffix}
 runtime=${MRML_CONTAINER_RUNTIME:-docker}
 
 case $version in ''|*[!a-zA-Z0-9._-]*) echo "invalid image version" >&2; exit 2 ;; esac

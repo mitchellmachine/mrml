@@ -23,6 +23,11 @@ require 'USER 21006:21006' "$dockerfile"
 require 'ENTRYPOINT ["/usr/bin/mrml-git-protected-signer"]' "$dockerfile"
 require 'user: "21006:21006"' "$compose"
 require 'git-signer-trust-advance:' "$compose"
+require 'git-trust-sign-current:' "$compose"
+require 'git-trust-sign-next:' "$compose"
+require 'mrml-git-signer-next-keys:/keys:ro' "$compose"
+require 'mrml-git-trust-construction:/policies:ro' "$compose"
+require 'mrml-git-trust-signatures:/signatures:rw' "$compose"
 require 'profiles: [admin]' "$compose"
 require '"mrml-gitd-policies:/var/lib/mrml/git-policies:ro"' "$compose"
 require '"mrml-git-authority-transition:/run/mrml-transition:ro"' "$compose"
@@ -33,6 +38,8 @@ require 'cap_drop: [ALL]' "$compose"
 require 'security_opt: [no-new-privileges:true]' "$compose"
 require 'source: mrml-git-signer-state' "$compose"
 require 'source: mrml-git-signer-keys' "$compose"
+require 'name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-next-keys"' "$compose"
+require 'name: "${MRML_VOLUME_PREFIX:-mrml}-git-trust-signatures"' "$compose"
 require 'source: mrml-git-signer-channel' "$compose"
 require 'source: mrml-runtime-git-signer' "$compose"
 require 'volume: {nocopy: true}' "$compose"
@@ -52,12 +59,16 @@ for forbidden in mrml-gitd curl openssh gnupg cargo rustc apt-get; do
   reject "$forbidden" "$dockerfile"
 done
 require 'docker volume create --label org.mrml.managed=true' deploy/compose/provision-git-signer-host.sh
+require 'volume_name git-signer-next-keys' deploy/compose/provision-git-signer-host.sh
+require 'volume_name git-trust-signatures' deploy/compose/provision-git-signer-host.sh
 require '"$path/.mrml-volume"' deploy/compose/provision-git-signer-host.sh
 require 'client and signer UID must differ' deploy/compose/provision-git-signer-host.sh
 require 'signer channel copies differ' deploy/compose/provision-git-signer-host.sh
 require 'git_volume git-signer-keys' deploy/compose/install-volume-inputs.sh
 require 'authority-receipt-public.bin' deploy/compose/install-volume-inputs.sh
 require 'generate-key-material 21006 "$openpgp_created_at" /keys' deploy/compose/generate-git-signer-keys.sh
+require 'slot=${3:-current}' deploy/compose/generate-git-signer-keys.sh
+require 'next) suffix=git-signer-next-keys' deploy/compose/generate-git-signer-keys.sh
 require '--network none' deploy/compose/generate-git-signer-keys.sh
 require '--read-only' deploy/compose/generate-git-signer-keys.sh
 require '--cap-drop ALL' deploy/compose/generate-git-signer-keys.sh
@@ -77,5 +88,9 @@ require '--profile admin run --rm --no-deps git-signer-trust-advance' deploy/com
 require 'advance-trust 21006 21001 21002 "$1"' deploy/compose/transition-git-trust.sh
 require 'if [ "${1:-}" = --resume-signer ]' deploy/compose/transition-git-trust.sh
 require 'if [ "$phase" = select-and-advance ]' deploy/compose/transition-git-trust.sh
+require '--profile admin run --rm --no-deps git-trust-sign-current' deploy/compose/sign-git-trust-policy.sh
+require '--profile admin run --rm --no-deps git-trust-sign-next' deploy/compose/sign-git-trust-policy.sh
+require 'sign-key-rotation 21006 21001' deploy/compose/sign-git-trust-policy.sh
+require 'trust policy signing requires stopped Gitd, authority, and signer' deploy/compose/sign-git-trust-policy.sh
 
 echo "protected signer Compose and image isolation policy PASS"

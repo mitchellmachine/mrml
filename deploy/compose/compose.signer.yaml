@@ -1,4 +1,42 @@
 services:
+  git-trust-sign-current:
+    profiles: [admin]
+    image: "mrml/git-protected-signer:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21006:21006"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 16
+    mem_limit: 256m
+    cpus: 1.0
+    restart: "no"
+    volumes:
+      - "mrml-git-signer-keys:/keys:ro"
+      - "mrml-git-trust-construction:/policies:ro"
+      - "mrml-git-trust-signatures:/signatures:rw"
+
+  git-trust-sign-next:
+    profiles: [admin]
+    image: "mrml/git-protected-signer:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21006:21006"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 16
+    mem_limit: 256m
+    cpus: 1.0
+    restart: "no"
+    volumes:
+      - "mrml-git-signer-next-keys:/keys:ro"
+      - "mrml-git-trust-construction:/policies:ro"
+      - "mrml-git-trust-signatures:/signatures:rw"
+
   git-signer-trust-advance:
     profiles: [admin]
     image: "mrml/git-protected-signer:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
@@ -93,6 +131,13 @@ volumes:
     name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-state"
   mrml-git-signer-keys:
     name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-keys"
+  mrml-git-signer-next-keys:
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-next-keys"
+  mrml-git-trust-construction:
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-trust-construction"
+    external: true
+  mrml-git-trust-signatures:
+    name: "${MRML_VOLUME_PREFIX:-mrml}-git-trust-signatures"
   mrml-git-signer-channel:
     name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-channel"
   mrml-runtime-git-signer:
