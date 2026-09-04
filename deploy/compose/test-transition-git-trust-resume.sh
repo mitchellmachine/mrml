@@ -39,6 +39,16 @@ case ${1:-} in
   compose)
     [ -f "$TEST_TRANSITION_ROOT/next-policy.bin" ] || exit 55
     printf '%s\n' "$*" >> "$TEST_COMPOSE_LOG"
+    if [ -n "${TEST_KILL_COMPOSE_MATCH:-}" ] \
+      && [ ! -e "$TEST_COMPOSE_KILL_ONCE" ]; then
+      case $* in
+        *"$TEST_KILL_COMPOSE_MATCH"*)
+          : > "$TEST_COMPOSE_KILL_ONCE"
+          kill -KILL "$PPID"
+          exit 137
+          ;;
+      esac
+    fi
     ;;
   *) echo "unexpected podman operation: ${1:-}" >&2; exit 2 ;;
 esac
@@ -63,15 +73,18 @@ MRML_PROTECTED_REPOSITORY=owner/project
 EOF
 chmod 0600 "$environment"
 
-for input in previous-policy.bin next-policy.bin previous-openpgp-public.asc previous-ml-dsa-public.bin next-openpgp-public.asc next-ml-dsa-public.bin previous-openpgp.sig previous-ml-dsa.sig next-openpgp.sig next-ml-dsa.sig; do
-  : > "$temporary/transition/_data/$input"
-done
-for input in candidate-openpgp-public.asc candidate-ml-dsa-public.bin previous-policy.bin next-policy.bin; do
-  : > "$temporary/construction/_data/$input"
-done
-for input in previous-openpgp-public.asc previous-openpgp.sig previous-ml-dsa.sig next-openpgp-public.asc next-openpgp.sig next-ml-dsa.sig; do
-  : > "$temporary/signatures/_data/$input"
-done
+populate_inputs() {
+  for input in previous-policy.bin next-policy.bin previous-openpgp-public.asc previous-ml-dsa-public.bin next-openpgp-public.asc next-ml-dsa-public.bin previous-openpgp.sig previous-ml-dsa.sig next-openpgp.sig next-ml-dsa.sig; do
+    : > "$temporary/transition/_data/$input"
+  done
+  for input in candidate-openpgp-public.asc candidate-ml-dsa-public.bin previous-policy.bin next-policy.bin; do
+    : > "$temporary/construction/_data/$input"
+  done
+  for input in previous-openpgp-public.asc previous-openpgp.sig previous-ml-dsa.sig next-openpgp-public.asc next-openpgp.sig next-ml-dsa.sig; do
+    : > "$temporary/signatures/_data/$input"
+  done
+}
+populate_inputs
 
 export PATH="$temporary/bin:$PATH"
 export TEST_TRANSITION_ROOT=$temporary/transition/_data
@@ -79,6 +92,7 @@ export TEST_CONSTRUCTION_ROOT=$temporary/construction/_data
 export TEST_SIGNATURE_ROOT=$temporary/signatures/_data
 export TEST_COMPOSE_LOG=$temporary/compose.log
 export TEST_KILL_ONCE=$temporary/kill-once
+export TEST_COMPOSE_KILL_ONCE=$temporary/compose-kill-once
 export MRML_ENV_FILE=$environment
 export MRML_CONTAINER_RUNTIME=podman
 digest=$(printf '%0128d' 0)
@@ -106,4 +120,34 @@ status=$?
 set -e
 [ "$status" -ne 0 ] || { echo "tampered completion marker was accepted" >&2; exit 1; }
 
-echo "trust transition process-kill resume PASS"
+populate_inputs
+TEST_KILL_COMPOSE_MATCH=transition-policy
+export TEST_KILL_COMPOSE_MATCH
+rm -f -- "$TEST_COMPOSE_KILL_ONCE"
+selection_digest=$(printf '%0128d' 1)
+before=$(wc -l < "$TEST_COMPOSE_LOG")
+set +e
+"$directory/transition-git-trust.sh" owner/project 1700000200 3 "$selection_digest"
+status=$?
+set -e
+[ "$status" -gt 128 ] || { echo "authority selection boundary was not killed" >&2; exit 1; }
+"$directory/transition-git-trust.sh" --resume-signer owner/project 1700000200 3 "$selection_digest"
+after=$(wc -l < "$TEST_COMPOSE_LOG")
+[ "$((after - before))" -eq 3 ] || { echo "authority selection recovery ran the wrong operations" >&2; exit 1; }
+
+populate_inputs
+TEST_KILL_COMPOSE_MATCH=git-signer-trust-advance
+export TEST_KILL_COMPOSE_MATCH
+rm -f -- "$TEST_COMPOSE_KILL_ONCE"
+signer_digest=$(printf '%0128d' 2)
+before=$(wc -l < "$TEST_COMPOSE_LOG")
+set +e
+"$directory/transition-git-trust.sh" owner/project 1700000300 4 "$signer_digest"
+status=$?
+set -e
+[ "$status" -gt 128 ] || { echo "signer advance boundary was not killed" >&2; exit 1; }
+"$directory/transition-git-trust.sh" --resume-signer owner/project 1700000300 4 "$signer_digest"
+after=$(wc -l < "$TEST_COMPOSE_LOG")
+[ "$((after - before))" -eq 5 ] || { echo "signer advance recovery did not replay only verify and advance" >&2; exit 1; }
+
+echo "trust transition process-kill matrix PASS"
