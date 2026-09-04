@@ -124,6 +124,13 @@ unsafe extern "C" {
         new_directory: c_int,
         new_path: *const i8,
     ) -> c_int;
+    fn linkat(
+        old_directory: c_int,
+        old_path: *const i8,
+        new_directory: c_int,
+        new_path: *const i8,
+        flags: c_int,
+    ) -> c_int;
     fn unlinkat(directory: c_int, path: *const i8, flags: c_int) -> c_int;
     fn opendir(path: *const i8) -> *mut c_void;
     fn fdopendir(file: c_int) -> *mut c_void;
@@ -1108,6 +1115,11 @@ impl NativeFile {
         self.0
     }
 
+    pub fn lock_exclusive(&self) -> bool {
+        const LOCK_EXCLUSIVE: c_int = 2;
+        (unsafe { flock(self.0, LOCK_EXCLUSIVE) }) == 0
+    }
+
     pub fn metadata(&self) -> Option<NativeFileMetadata> {
         metadata_for_descriptor(self.0)
     }
@@ -1462,6 +1474,25 @@ impl NativeDirectory {
                     existing.as_ptr(),
                     directory,
                     replacement.as_ptr(),
+                )
+            } == 0
+    }
+
+    pub fn hard_link_child(&self, existing: &CStr, new_name: &CStr) -> bool {
+        if !safe_child_name(existing) || !safe_child_name(new_name) {
+            return false;
+        }
+        let directory = unsafe { dirfd(self.0) };
+        // SAFETY: both paths are validated single children of the same live
+        // retained directory. `linkat` fails when `new_name` already exists.
+        directory >= 0
+            && unsafe {
+                linkat(
+                    directory,
+                    existing.as_ptr(),
+                    directory,
+                    new_name.as_ptr(),
+                    0,
                 )
             } == 0
     }

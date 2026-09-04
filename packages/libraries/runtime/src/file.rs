@@ -127,6 +127,23 @@ impl DirectoryCapability {
             .ok_or(FileError::RenameFailed)
     }
 
+    /// Publishes another name for an existing child without replacing an
+    /// existing destination.
+    pub fn hard_link_child(&self, existing: &str, new_name: &str) -> Result<(), FileError> {
+        validate_capability_child_name(existing)?;
+        validate_capability_child_name(new_name)?;
+        let existing = encode_unix_path(existing).ok_or(FileError::InvalidPath)?;
+        let new_name = encode_unix_path(new_name).ok_or(FileError::InvalidPath)?;
+        let existing =
+            core::ffi::CStr::from_bytes_with_nul(&existing).map_err(|_| FileError::InvalidPath)?;
+        let new_name =
+            core::ffi::CStr::from_bytes_with_nul(&new_name).map_err(|_| FileError::InvalidPath)?;
+        self.inner
+            .hard_link_child(existing, new_name)
+            .then_some(())
+            .ok_or(FileError::RenameFailed)
+    }
+
     pub fn rename_child_to(
         &self,
         existing: &str,
@@ -870,6 +887,14 @@ impl File {
             .ok_or(FileError::WriteFailed)
     }
 
+    /// Holds an exclusive advisory lock until this file is dropped.
+    pub fn lock_exclusive(&self) -> Result<(), FileError> {
+        self.inner
+            .lock_exclusive()
+            .then_some(())
+            .ok_or(FileError::WriteFailed)
+    }
+
     #[cfg(target_os = "linux")]
     pub fn metadata(&self) -> Result<FileMetadata, FileError> {
         let metadata = self.inner.metadata().ok_or(FileError::MetadataFailed)?;
@@ -1141,6 +1166,25 @@ mod tests {
         temporary.write_all(b"generation").unwrap();
         temporary.sync().unwrap();
         assert_eq!(temporary.metadata().unwrap().mode & 0o777, 0o600);
+        drop(temporary);
+        root_capability
+            .hard_link_child("state.new", "state.initial")
+            .unwrap();
+        assert!(
+            root_capability
+                .hard_link_child("state.new", "state.initial")
+                .is_err()
+        );
+        root_capability.remove_file("state.new").unwrap();
+        let mut initial = root_capability.open_regular("state.initial").unwrap();
+        let mut initial_bytes = [0; 10];
+        initial.read_exact(&mut initial_bytes).unwrap();
+        assert_eq!(&initial_bytes, b"generation");
+        drop(initial);
+        root_capability.remove_file("state.initial").unwrap();
+        let mut temporary = root_capability.create_new_file("state.new", 0o600).unwrap();
+        temporary.write_all(b"generation").unwrap();
+        temporary.sync().unwrap();
         drop(temporary);
         root_capability
             .rename_child("state.new", "state.active")
