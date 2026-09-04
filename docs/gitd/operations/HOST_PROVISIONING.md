@@ -56,10 +56,18 @@ then run
 The networkless admin-profile container receives only the read-only current-key
 and transition-input volumes plus a writable policy volume. It reopens the exact
 expected generation, independently verifies both hybrid authorizations against
-the canonical next bytes, applies the monotonic policy rules, durably selects
-the next generation, reopens it, and only then removes the consumed public
-inputs. Stale, substituted, malformed, unauthorized, or uncertain transitions
-fail closed; a retained lock or temporary file requires operator inspection.
+the canonical next bytes, installs the next pair as immutable generation-named
+public verifier files beneath the capability-confined policy directory, syncs
+those files and their directory, applies the monotonic policy rules, durably
+selects the next generation, reopens it, and only then removes the consumed
+public upload inputs. Extra verifier files left by a crash before selection are
+inactive policy data; activation cannot precede durable verifier installation.
+On authority restart, the configured bootstrap pair is used only while the
+current policy authorizes it. Otherwise the authority loads only the exact
+current trust generation's retained pair and revalidates that pair against the
+current policy. Stale, substituted, malformed, unauthorized, or uncertain
+transitions fail closed; a retained lock or temporary file requires operator
+inspection.
 The candidate should retain the configured previous pair during a planned
 overlap so the authority remains startable while operators validate the new
 generation. Emergency transition is deliberately a separate residual operation
