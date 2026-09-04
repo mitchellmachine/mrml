@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: $0 gitd CONFIG | authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC | signer OPENPGP_SEED ML_DSA_PUBLIC ML_DSA_SECRET AUTHORITY_RECEIPT_PUBLIC | credential-agent TOKEN | authority-transition PREVIOUS_POLICY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA NEXT_OPENPGP NEXT_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE | certd CONFIG TRUST_ROOTS | acmed CONFIG | cloudflare-token TOKEN" >&2
+  echo "usage: $0 gitd CONFIG | authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC | signer OPENPGP_SEED ML_DSA_PUBLIC ML_DSA_SECRET AUTHORITY_RECEIPT_PUBLIC | credential-agent TOKEN | trust-construction PUBLIC_OPENPGP PUBLIC_ML_DSA | authority-transition PREVIOUS_POLICY NEXT_POLICY PREVIOUS_OPENPGP PREVIOUS_ML_DSA NEXT_OPENPGP NEXT_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE | certd CONFIG TRUST_ROOTS | acmed CONFIG | cloudflare-token TOKEN" >&2
   exit 2
 }
 
@@ -74,6 +74,12 @@ case ${1:-} in
     }
     destination=$(volume_path "$(git_volume git-credential-agent-token)")
     install_file "$2" "$destination/token" 21009 21009 0400 64
+    ;;
+  trust-construction)
+    [ "$#" -eq 3 ] || usage
+    destination=$(volume_path "$(git_volume git-trust-construction)")
+    install_file "$2" "$destination/candidate-openpgp-public.asc" 21001 21001 0444 1048576
+    install_file "$3" "$destination/candidate-ml-dsa-public.bin" 21001 21001 0444 1048576
     ;;
   authority-transition)
     [ "$#" -eq 11 ] || usage

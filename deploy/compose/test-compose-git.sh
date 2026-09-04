@@ -56,6 +56,9 @@ require 'source: mrml-runtime-git-authority' "$compose"
 require 'mrml-git-authority-transition:/run/mrml-transition:ro' "$compose"
 require '/var/lib/mrml/authority/generations' "$compose"
 require 'profiles: [admin]' "$compose"
+require 'git-trust-policy-construct:' "$compose"
+require 'mrml-git-trust-construction:/run/mrml-trust-construction:rw' "$compose"
+require 'name: "${MRML_VOLUME_PREFIX:-mrml}-git-trust-construction"' "$compose"
 require 'mrml-gitd-secrets:/run/secrets:ro' "$compose"
 require 'mrml-gitd-config:/etc/mrml:ro' "$compose"
 require 'stop_grace_period:' "$compose"
@@ -100,6 +103,7 @@ require 'missing Docker volume copy-up sentinel' deploy/compose/provision-git-ho
 reject 'install -o "$uid" -g "$gid" -m 0400 /dev/null' deploy/compose/provision-git-host.sh
 require 'volume_name runtime-certd-gitd' deploy/compose/provision-git-host.sh
 require 'volume_name git-authority-transition' deploy/compose/provision-git-host.sh
+require 'volume_name git-trust-construction' deploy/compose/provision-git-host.sh
 require 'gitd-token-pepper' deploy/compose/provision-git-host.sh
 reject '$deployment_root/secrets/channels' deploy/compose/provision-git-host.sh
 require 'mktemp "$path.new.XXXXXX"' deploy/compose/provision-git-host.sh
@@ -107,7 +111,7 @@ require 'mktemp "$authority_secrets/.git-authority.seed.XXXXXX"' deploy/compose/
 reject '.git-authority.seed.$$' deploy/compose/provision-git-host.sh
 reject 'temporary=$path.new.$$' deploy/compose/provision-git-host.sh
 
-for operator in deploy/compose/initialize-git.sh deploy/compose/initialize-git-repository.sh deploy/compose/initialize-git-protected-policy.sh deploy/compose/transition-git-trust.sh deploy/compose/token-git.sh deploy/compose/recovery-git.sh deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh deploy/compose/load-offline-git-images.sh; do
+for operator in deploy/compose/initialize-git.sh deploy/compose/initialize-git-repository.sh deploy/compose/initialize-git-protected-policy.sh deploy/compose/construct-git-trust-policy.sh deploy/compose/transition-git-trust.sh deploy/compose/token-git.sh deploy/compose/recovery-git.sh deploy/compose/switch-git-version.sh deploy/compose/upgrade-git.sh deploy/compose/rollback-git.sh deploy/compose/load-offline-git-images.sh; do
   [ -x "$operator" ] || {
     echo "missing executable Git deployment operator: $operator" >&2
     exit 1
@@ -167,8 +171,14 @@ require '$volume_prefix-gitd-policies:/mnt/mrml/gitd/policies:rw' deploy/compose
 require '$volume_prefix-git-authority-config:/run/mrml-bootstrap:ro' deploy/compose/initialize-git-protected-policy.sh
 reject '$deployment_root/gitd/policies' deploy/compose/initialize-git-protected-policy.sh
 require 'trust transition requires stopped Gitd, authority, and signer' deploy/compose/transition-git-trust.sh
+require 'trust policy construction requires stopped Gitd, authority, and signer' deploy/compose/construct-git-trust-policy.sh
+require '--profile admin run --rm --no-deps git-trust-policy-construct' deploy/compose/construct-git-trust-policy.sh
+require 'construct-overlap-policy' deploy/compose/construct-git-trust-policy.sh
+require 'construct-retirement-policy' deploy/compose/construct-git-trust-policy.sh
+require 'construct-git-trust-policy.sh "$payload/deploy/construct-git-trust-policy.sh"' deploy/compose/build-offline-git-bundle.sh
 require '--profile admin run --rm --no-deps git-trust-transition' deploy/compose/transition-git-trust.sh
 require 'git_volume git-authority-transition' deploy/compose/install-volume-inputs.sh
+require 'git_volume git-trust-construction' deploy/compose/install-volume-inputs.sh
 require 'previous-openpgp-public.asc' deploy/compose/install-volume-inputs.sh
 require 'previous-ml-dsa-public.bin' deploy/compose/install-volume-inputs.sh
 require '/run/mrml-transition/previous-openpgp-public.asc /run/mrml-transition/previous-ml-dsa-public.bin' deploy/compose/transition-git-trust.sh
