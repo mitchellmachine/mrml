@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1.7
+FROM docker.io/library/debian@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867 AS verify
+COPY target/mrml-native/linux/release/mrml-git-backup /payload/mrml-git-backup
+RUN test -x /payload/mrml-git-backup && ! ldd /payload/mrml-git-backup | grep -q 'not found' && \
+    install -d -o 0 -g 0 -m 0700 /payload/backup /payload/backup-key && \
+    install -d -o 0 -g 0 -m 0755 /payload/source /payload/restore
+
+FROM gcr.io/distroless/cc-debian12@sha256:777e96cf322c46bc32aca926c263624c4dc8d7cf37e2fa65ba2c7e697318ebbb
+COPY --from=verify --chown=0:0 /payload/mrml-git-backup /usr/bin/mrml-git-backup
+COPY --from=verify --chown=0:0 /payload/backup /backup
+COPY --from=verify --chown=0:0 /payload/backup-key /backup-key
+COPY --from=verify --chown=0:0 /payload/source /source
+COPY --from=verify --chown=0:0 /payload/restore /restore
+USER 0:0
+ENTRYPOINT ["/usr/bin/mrml-git-backup"]

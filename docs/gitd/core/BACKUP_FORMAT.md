@@ -130,6 +130,13 @@ renames and syncs the volume, then reopens and verifies the published archive.
 Per-archive salt and nonce prefix come from the operating-system random source.
 The binary never accepts source, target, key, or archive paths from arguments.
 
+`Dockerfile.git-backup` packages only that administrator in the same pinned
+two-stage Debian/distroless family as the production Git images. It runs as
+root solely so restore can apply authenticated ownership, has a fixed
+`/usr/bin/mrml-git-backup` entrypoint, and contains no shell, SSH, GnuPG, curl,
+or Gitd/authority daemon. Compose must still drop all capabilities for create
+and verify and add only the metadata capabilities required by restore.
+
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,
 and authenticated EOF in a conventional encrypted-record stream. It introduces
