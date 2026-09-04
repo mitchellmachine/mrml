@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo "usage: $0 gitd CONFIG | authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC | signer OPENPGP_SEED ML_DSA_PUBLIC ML_DSA_SECRET AUTHORITY_RECEIPT_PUBLIC | authority-transition NEXT_POLICY NEXT_OPENPGP NEXT_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE | certd CONFIG TRUST_ROOTS | acmed CONFIG | cloudflare-token TOKEN" >&2
+  echo "usage: $0 gitd CONFIG | authority REPOSITORY_CATALOG OPENPGP_PUBLIC ML_DSA_PUBLIC | signer OPENPGP_SEED ML_DSA_PUBLIC ML_DSA_SECRET AUTHORITY_RECEIPT_PUBLIC | credential-agent TOKEN | authority-transition NEXT_POLICY NEXT_OPENPGP NEXT_ML_DSA PREVIOUS_OPENPGP_SIGNATURE PREVIOUS_ML_DSA_SIGNATURE NEXT_OPENPGP_SIGNATURE NEXT_ML_DSA_SIGNATURE | certd CONFIG TRUST_ROOTS | acmed CONFIG | cloudflare-token TOKEN" >&2
   exit 2
 }
 
@@ -64,6 +64,16 @@ case ${1:-} in
     install_file "$3" "$destination/ml-dsa-public.bin" 21006 21006 0444 1952
     install_file "$4" "$destination/ml-dsa-secret.bin" 21006 21006 0400 4032
     install_file "$5" "$destination/authority-receipt-public.bin" 21006 21006 0444 32
+    ;;
+  credential-agent)
+    [ "$#" -eq 2 ] || usage
+    [ "$(stat -c %s "$2")" -eq 64 ] &&
+      [ "$(LC_ALL=C tr -d '0-9a-f' < "$2" | wc -c)" -eq 0 ] || {
+      echo "credential token must be exactly 64 lowercase hexadecimal bytes" >&2
+      exit 1
+    }
+    destination=$(volume_path "$(git_volume git-credential-agent-token)")
+    install_file "$2" "$destination/token" 21007 21007 0400 64
     ;;
   authority-transition)
     [ "$#" -eq 8 ] || usage

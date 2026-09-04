@@ -5,6 +5,7 @@ gitd=${1:-deploy/compose/Dockerfile.gitd}
 authority=${2:-deploy/compose/Dockerfile.git-authority}
 signer=${3:-deploy/compose/Dockerfile.git-protected-signer}
 backup=${4:-deploy/compose/Dockerfile.git-backup}
+credential=${5:-deploy/compose/Dockerfile.git-credential-agent}
 
 require() {
     grep -F "$1" "$2" >/dev/null || {
@@ -20,7 +21,7 @@ reject() {
     fi
 }
 
-for dockerfile in "$gitd" "$authority" "$signer" "$backup"; do
+for dockerfile in "$gitd" "$authority" "$signer" "$backup" "$credential"; do
     [ -f "$dockerfile" ] || exit 1
     [ "$(grep -c '^FROM .*@sha256:' "$dockerfile")" -eq 2 ] || {
         printf '%s\n' "every image stage must use a digest-pinned base: $dockerfile" >&2
@@ -55,6 +56,14 @@ reject "mrml-git-authority" "$signer"
 reject "curl" "$signer"
 reject "openssh" "$signer"
 reject "gnupg" "$signer"
+
+require "USER 21007:21007" "$credential"
+require 'ENTRYPOINT ["/usr/bin/mrml-git-credential-agent"]' "$credential"
+reject "mrml-gitd /" "$credential"
+reject "mrml-git-protected-signer" "$credential"
+reject "curl" "$credential"
+reject "openssh" "$credential"
+reject "gnupg" "$credential"
 
 require "USER 0:0" "$backup"
 require 'ENTRYPOINT ["/usr/bin/mrml-git-backup"]' "$backup"

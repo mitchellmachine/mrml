@@ -64,6 +64,7 @@ target/release/mrml manifest check
 deploy/compose/test-git-images.sh
 deploy/compose/test-compose-git.sh
 deploy/compose/test-compose-signer.sh
+deploy/compose/test-compose-credential-agent.sh
 target/release/mrml test org.mrml.service.git-authority --target linux
 target/release/mrml test org.mrml.service.gitd --target linux
 target/release/mrml test org.mrml.tool.git --target linux
@@ -76,6 +77,7 @@ sha256sum \
   target/mrml-native/linux/release/mrml-git-authority \
   target/mrml-native/linux/release/mrml-gitd \
   target/mrml-native/linux/release/mrml-git-protected-signer \
+  target/mrml-native/linux/release/mrml-git-credential-agent \
   target/mrml-native/linux/release/mrml-git-backup > "$payload/binaries.sha256"
 cat > "$payload/test-evidence.txt" <<'EOF'
 PASS target/release/mrml manifest lock --check
@@ -83,6 +85,7 @@ PASS target/release/mrml manifest check
 PASS deploy/compose/test-git-images.sh
 PASS deploy/compose/test-compose-git.sh
 PASS deploy/compose/test-compose-signer.sh
+PASS deploy/compose/test-compose-credential-agent.sh
 PASS target/release/mrml test org.mrml.service.git-authority --target linux
 PASS target/release/mrml test org.mrml.service.gitd --target linux
 PASS target/release/mrml test org.mrml.tool.git --target linux
@@ -95,9 +98,11 @@ docker buildx build --platform linux/amd64 --network=none --pull=false --load \
 docker buildx build --platform linux/amd64 --network=none --pull=false --load \
   -f deploy/compose/Dockerfile.git-protected-signer -t "mrml/git-protected-signer:$version" .
 docker buildx build --platform linux/amd64 --network=none --pull=false --load \
+  -f deploy/compose/Dockerfile.git-credential-agent -t "mrml/git-credential-agent:$version" .
+docker buildx build --platform linux/amd64 --network=none --pull=false --load \
   -f deploy/compose/Dockerfile.git-backup -t "mrml/git-backup:$version" .
 
-for image in git-authority gitd git-protected-signer git-backup; do
+for image in git-authority gitd git-protected-signer git-credential-agent git-backup; do
   docker image inspect --format '{{json .RepoDigests}} {{.Id}}' \
     "mrml/$image:$version" > "$payload/images/$image.identity"
   docker save -o "$payload/images/$image.tar" "mrml/$image:$version"
@@ -111,14 +116,15 @@ for image in git-authority gitd git-protected-signer git-backup; do
     --bundle "$payload/signatures/$image.cosign.bundle" "$payload/images/$image.tar"
 done
 {
-  printf '%s\n' 'format=mrml-images-git-v4' "version=$version" "platform=linux/amd64"
-  for image in git-authority gitd git-protected-signer git-backup; do
+  printf '%s\n' 'format=mrml-images-git-v5' "version=$version" "platform=linux/amd64"
+  for image in git-authority gitd git-protected-signer git-credential-agent git-backup; do
     archive_digest=$(sha256sum "$payload/images/$image.tar" | awk '{print $1}')
     producer_id=$(docker image inspect --format '{{.Id}}' "mrml/$image:$version")
     case $image in
       git-authority) user=21002:21002 entrypoint=/usr/bin/mrml-git-authority ;;
       gitd) user=21001:21001 entrypoint=/usr/bin/mrml-gitd ;;
       git-protected-signer) user=21006:21006 entrypoint=/usr/bin/mrml-git-protected-signer ;;
+      git-credential-agent) user=21007:21007 entrypoint=/usr/bin/mrml-git-credential-agent ;;
       git-backup) user=0:0 entrypoint=/usr/bin/mrml-git-backup ;;
       *) exit 1 ;;
     esac
@@ -130,6 +136,7 @@ install -m 0444 "$COSIGN_PUBLIC_KEY" "$payload/signatures/cosign.pub"
 
 install -m 0555 deploy/compose/provision-git-host.sh "$payload/deploy/provision-git-host.sh"
 install -m 0555 deploy/compose/provision-git-signer-host.sh "$payload/deploy/provision-git-signer-host.sh"
+install -m 0555 deploy/compose/provision-git-credential-agent-host.sh "$payload/deploy/provision-git-credential-agent-host.sh"
 install -m 0555 deploy/compose/start-git.sh "$payload/deploy/start-git.sh"
 install -m 0555 deploy/compose/initialize-git.sh "$payload/deploy/initialize-git.sh"
 install -m 0555 deploy/compose/initialize-git-repository.sh "$payload/deploy/initialize-git-repository.sh"
@@ -147,15 +154,18 @@ install -m 0555 deploy/compose/install-volume-inputs.sh "$payload/deploy/install
 install -m 0555 deploy/compose/validate-git.sh "$payload/deploy/validate-git.sh"
 install -m 0555 deploy/compose/test-compose-git.sh "$payload/deploy/test-compose-git.sh"
 install -m 0555 deploy/compose/test-compose-signer.sh "$payload/deploy/test-compose-signer.sh"
+install -m 0555 deploy/compose/test-compose-credential-agent.sh "$payload/deploy/test-compose-credential-agent.sh"
 install -m 0555 deploy/compose/verify-offline-git-bundle.sh "$payload/verify-offline-git-bundle.sh"
 install -m 0555 deploy/compose/load-offline-git-images.sh "$payload/load-offline-git-images.sh"
 install -m 0444 deploy/compose/gitd.example.conf "$payload/deploy/gitd.example.conf"
 install -m 0444 deploy/compose/compose.git.yaml "$payload/deploy/compose.git.yaml"
 install -m 0444 deploy/compose/compose.signer.yaml "$payload/deploy/compose.signer.yaml"
+install -m 0444 deploy/compose/compose.credential-agent.yaml "$payload/deploy/compose.credential-agent.yaml"
 install -m 0444 deploy/compose/compose.git-backup.yaml "$payload/deploy/compose.git-backup.yaml"
 install -m 0444 deploy/compose/compose.git-restore.yaml "$payload/deploy/compose.git-restore.yaml"
 install -m 0444 deploy/compose/.env.git.production.example "$payload/deploy/.env.production.example"
 install -m 0444 deploy/compose/.env.signer.production.example "$payload/deploy/.env.signer.production.example"
+install -m 0444 deploy/compose/.env.credential-agent.production.example "$payload/deploy/.env.credential-agent.production.example"
 
 (
   cd "$payload"

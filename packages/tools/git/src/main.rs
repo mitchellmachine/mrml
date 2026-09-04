@@ -2406,6 +2406,13 @@ mod tests {
             Some("standard-input")
         );
         repository
+            .set_config_value("http", "credentialProvider", "unix-v1")
+            .unwrap();
+        assert_eq!(
+            repository_https_provider(&repository).unwrap().as_deref(),
+            Some("unix-v1")
+        );
+        repository
             .set_config_value("http", "credentialProvider", "raw-token-file")
             .unwrap();
         let rendered = format!("{}", repository_https_provider(&repository).unwrap_err());

@@ -9,7 +9,7 @@ if find . -type l -print | grep . >/dev/null; then
   exit 1
 fi
 sha256sum -c --strict SHA256SUMS
-[ "$(sed -n '1p' images.git.lock)" = "format=mrml-images-git-v4" ] || exit 1
+[ "$(sed -n '1p' images.git.lock)" = "format=mrml-images-git-v5" ] || exit 1
 [ -s source.commit ] && [ "$(wc -l < source.commit)" -eq 1 ] || exit 1
 [ -s binaries.sha256 ] && [ -s test-evidence.txt ] || exit 1
 [ -s signatures/offline-signing-config.json ] || exit 1
@@ -18,7 +18,7 @@ sha256sum -c --strict SHA256SUMS
 streaming_bytes=$(sed -n 's/^source_bytes=//p' evidence/streaming/metadata)
 [ "${streaming_bytes:-0}" -ge 268435456 ] || exit 1
 [ -s evidence/streaming/summary ] && [ -s evidence/streaming/process.tsv ] || exit 1
-for image in git-authority gitd git-protected-signer git-backup; do
+for image in git-authority gitd git-protected-signer git-credential-agent git-backup; do
   [ -s "images/$image.identity" ]
   [ -s "images/$image.tar" ] && [ ! -L "images/$image.tar" ]
   [ -s "sbom/$image.spdx.json" ]
@@ -35,5 +35,6 @@ done
   cd policy-source
   ../deploy/test-compose-git.sh deploy/compose/compose.git.yaml
   ../deploy/test-compose-signer.sh deploy/compose/compose.signer.yaml
+  ../deploy/test-compose-credential-agent.sh deploy/compose/compose.credential-agent.yaml deploy/compose/Dockerfile.git-credential-agent
 )
 echo "offline Git bundle checksums, SBOM presence, and signatures PASS"
