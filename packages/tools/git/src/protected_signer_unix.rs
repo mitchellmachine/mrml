@@ -14,12 +14,14 @@ const VERSION: u16 = 2;
 const OP_SESSION_HELLO: u16 = 0;
 const OP_SIGN_COMMIT: u16 = 1;
 pub const OP_ADVANCE_GENERATION: u16 = 2;
+pub const OP_HEALTH: u16 = 3;
 const SESSION_ID_BYTES: usize = 32;
 const SESSION_HELLO_BYTES: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 32;
 const REQUEST_HEADER: usize =
     8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 2 + 8;
 const RESPONSE_HEADER: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + 2 + 2 + 2;
 const ADVANCE_REQUEST_HEADER: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + 4;
+const HEALTH_REQUEST_BYTES: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + TAG_BYTES;
 const TAG_BYTES: usize = 32;
 const MAX_REPOSITORY_BYTES: usize = 255;
 const MAX_FRAME_BYTES: usize = REQUEST_HEADER + MAX_REPOSITORY_BYTES + 16 * 1024 * 1024 + TAG_BYTES;
@@ -87,6 +89,14 @@ pub struct ProtectedSignerAdvanceRequest {
     pub sequence: u64,
     pub request_id: u64,
     pub authenticated_receipt: Vector<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProtectedSignerHealthRequest {
+    pub session_id: [u8; SESSION_ID_BYTES],
+    pub session_expires_at: u64,
+    pub sequence: u64,
+    pub request_id: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -331,6 +341,76 @@ pub fn encode_advance_request(
     Ok(output)
 }
 
+pub fn encode_health_request(
+    request_id: u64,
+    session: ProtectedSignerSession,
+    sequence: u64,
+    capability: &ProtectedSignerCapability,
+) -> Result<Vector<u8>, UnixProtectedSignerError> {
+    if request_id == 0
+        || session.id == [0; SESSION_ID_BYTES]
+        || session.expires_at == 0
+        || sequence == 0
+        || sequence > session.maximum_sequence
+    {
+        return Err(UnixProtectedSignerError::InvalidRequest);
+    }
+    let mut output = Vector::with_capacity(HEALTH_REQUEST_BYTES)
+        .map_err(|_| UnixProtectedSignerError::Resource)?;
+    for bytes in [
+        MAGIC.as_slice(),
+        &VERSION.to_be_bytes(),
+        &OP_HEALTH.to_be_bytes(),
+        &session.id,
+        &session.expires_at.to_be_bytes(),
+        &sequence.to_be_bytes(),
+        &request_id.to_be_bytes(),
+    ] {
+        output
+            .try_extend_from_slice(bytes)
+            .map_err(|_| UnixProtectedSignerError::Resource)?;
+    }
+    let tag = capability.tag(&[&output]);
+    output
+        .try_extend_from_slice(&tag)
+        .map_err(|_| UnixProtectedSignerError::Resource)?;
+    Ok(output)
+}
+
+pub fn decode_health_request(
+    input: &[u8],
+    capability: &ProtectedSignerCapability,
+) -> Result<ProtectedSignerHealthRequest, UnixProtectedSignerError> {
+    if input.len() != HEALTH_REQUEST_BYTES
+        || &input[..8] != MAGIC
+        || read_u16(input, 8)? != VERSION
+        || read_u16(input, 10)? != OP_HEALTH
+    {
+        return Err(UnixProtectedSignerError::Protocol);
+    }
+    let authenticated_end = input.len() - TAG_BYTES;
+    let expected = capability.tag(&[&input[..authenticated_end]]);
+    if !constant_time_equal(&expected, &input[authenticated_end..]) {
+        return Err(UnixProtectedSignerError::Protocol);
+    }
+    let mut session_id = [0; SESSION_ID_BYTES];
+    session_id.copy_from_slice(input.get(12..44).ok_or(UnixProtectedSignerError::Protocol)?);
+    let request = ProtectedSignerHealthRequest {
+        session_id,
+        session_expires_at: read_u64(input, 44)?,
+        sequence: read_u64(input, 52)?,
+        request_id: read_u64(input, 60)?,
+    };
+    if request.session_id == [0; SESSION_ID_BYTES]
+        || request.session_expires_at == 0
+        || request.sequence == 0
+        || request.request_id == 0
+    {
+        return Err(UnixProtectedSignerError::InvalidRequest);
+    }
+    Ok(request)
+}
+
 pub fn decode_advance_request(
     input: &[u8],
     capability: &ProtectedSignerCapability,
@@ -526,6 +606,7 @@ pub fn protected_signer_operation(input: &[u8]) -> Result<u16, UnixProtectedSign
     match read_u16(input, 10)? {
         OP_SIGN_COMMIT => Ok(OP_SIGN_COMMIT),
         OP_ADVANCE_GENERATION => Ok(OP_ADVANCE_GENERATION),
+        OP_HEALTH => Ok(OP_HEALTH),
         _ => Err(UnixProtectedSignerError::Protocol),
     }
 }
@@ -613,6 +694,84 @@ pub fn encode_advance_response(
         .try_extend_from_slice(&tag)
         .map_err(|_| UnixProtectedSignerError::Resource)?;
     Ok(output)
+}
+
+pub fn encode_health_response(
+    request_id: u64,
+    session: ProtectedSignerSession,
+    sequence: u64,
+    capability: &ProtectedSignerCapability,
+) -> Result<Vector<u8>, UnixProtectedSignerError> {
+    encode_empty_response(OP_HEALTH, request_id, session, sequence, capability)
+}
+
+fn encode_empty_response(
+    operation: u16,
+    request_id: u64,
+    session: ProtectedSignerSession,
+    sequence: u64,
+    capability: &ProtectedSignerCapability,
+) -> Result<Vector<u8>, UnixProtectedSignerError> {
+    if request_id == 0
+        || session.id == [0; SESSION_ID_BYTES]
+        || session.expires_at == 0
+        || sequence == 0
+        || sequence > session.maximum_sequence
+        || operation != OP_HEALTH
+    {
+        return Err(UnixProtectedSignerError::InvalidRequest);
+    }
+    let mut output = Vector::with_capacity(RESPONSE_HEADER + TAG_BYTES)
+        .map_err(|_| UnixProtectedSignerError::Resource)?;
+    for bytes in [
+        MAGIC.as_slice(),
+        &VERSION.to_be_bytes(),
+        &operation.to_be_bytes(),
+        &session.id,
+        &session.expires_at.to_be_bytes(),
+        &sequence.to_be_bytes(),
+        &request_id.to_be_bytes(),
+        &0u16.to_be_bytes(),
+        &0u16.to_be_bytes(),
+        &0u16.to_be_bytes(),
+    ] {
+        output
+            .try_extend_from_slice(bytes)
+            .map_err(|_| UnixProtectedSignerError::Resource)?;
+    }
+    let tag = capability.tag(&[&output]);
+    output
+        .try_extend_from_slice(&tag)
+        .map_err(|_| UnixProtectedSignerError::Resource)?;
+    Ok(output)
+}
+
+pub fn decode_health_response(
+    request_id: u64,
+    session: ProtectedSignerSession,
+    sequence: u64,
+    input: &[u8],
+    capability: &ProtectedSignerCapability,
+) -> Result<(), UnixProtectedSignerError> {
+    if input.len() != RESPONSE_HEADER + TAG_BYTES || &input[..8] != MAGIC {
+        return Err(UnixProtectedSignerError::Protocol);
+    }
+    let authenticated_end = input.len() - TAG_BYTES;
+    let expected = capability.tag(&[&input[..authenticated_end]]);
+    if !constant_time_equal(&expected, &input[authenticated_end..])
+        || read_u16(input, 8)? != VERSION
+        || read_u16(input, 10)? != OP_HEALTH
+        || input.get(12..44) != Some(session.id.as_slice())
+        || read_u64(input, 44)? != session.expires_at
+        || read_u64(input, 52)? != sequence
+        || read_u64(input, 60)? != request_id
+        || read_u16(input, 68)? != 0
+        || read_u16(input, 70)? != 0
+        || read_u16(input, 72)? != 0
+    {
+        return Err(UnixProtectedSignerError::Protocol);
+    }
+    Ok(())
 }
 
 fn decode_advance_response(
@@ -780,6 +939,35 @@ mod tests {
         ObjectId, ProtectedHistoryContext, RepositoryGeneration, RepositoryIdentity,
         RevocationGeneration, TrustGeneration,
     };
+
+    #[test]
+    fn health_frames_are_session_sequence_and_capability_bound() {
+        let capability = ProtectedSignerCapability::new([7; 32]).unwrap();
+        let wrong_capability = ProtectedSignerCapability::new([8; 32]).unwrap();
+        let session = ProtectedSignerSession {
+            id: [6; 32],
+            expires_at: 10,
+            maximum_sequence: 1,
+        };
+        let request = encode_health_request(5, session, 1, &capability).unwrap();
+        assert_eq!(protected_signer_operation(&request), Ok(OP_HEALTH));
+        let decoded = decode_health_request(&request, &capability).unwrap();
+        assert_eq!(decoded.session_id, session.id);
+        assert_eq!(decoded.session_expires_at, session.expires_at);
+        assert_eq!(decoded.sequence, 1);
+        assert_eq!(decoded.request_id, 5);
+        assert!(decode_health_request(&request, &wrong_capability).is_err());
+
+        let response = encode_health_response(5, session, 1, &capability).unwrap();
+        decode_health_response(5, session, 1, &response, &capability).unwrap();
+        assert!(decode_health_response(6, session, 1, &response, &capability).is_err());
+        assert!(decode_health_response(5, session, 1, &response, &wrong_capability).is_err());
+        let mut altered_session = session;
+        altered_session.id[0] ^= 1;
+        assert!(
+            decode_health_response(5, altered_session, 1, &response, &capability).is_err()
+        );
+    }
 
     #[test]
     fn request_binds_every_context_field_and_capability() {

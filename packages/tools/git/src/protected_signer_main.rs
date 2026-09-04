@@ -9,10 +9,12 @@ use mrml_git::{
     AuthorizedHybridPair, GitObjectType, HybridCommitSignatures, ObjectFormat,
     ProtectedSignerCapability, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
     SignaturePurpose, TrustGeneration, UnixProtectedSignerError, canonical_hybrid_transcript,
-    OP_ADVANCE_GENERATION, decode_advance_request, decode_protected_signer_request,
-    encode_advance_response, encode_loose_object_with_format, encode_protected_signer_hello,
-    encode_protected_signer_response, parse_trust_policy, protected_signer_operation,
-    verify_signer_generation_advancement, ProtectedSignerSession, MAX_ENCODED_TRUST_POLICY_BYTES,
+    OP_ADVANCE_GENERATION, OP_HEALTH, decode_advance_request, decode_health_request,
+    decode_health_response, decode_protected_signer_request, encode_advance_response,
+    encode_health_request, encode_health_response, encode_loose_object_with_format,
+    encode_protected_signer_hello, encode_protected_signer_response, parse_trust_policy,
+    protected_signer_operation, verify_signer_generation_advancement, ProtectedSignerSession,
+    MAX_ENCODED_TRUST_POLICY_BYTES,
 };
 use mrml_openpgp::{
     DigestAlgorithm, MAX_OPENPGP_SIGNATURE_BYTES, SigningKeyV6, sign_detached_v6_ascii_with_salt,
@@ -323,6 +325,10 @@ fn socket_health(
     if session.expires_at < now || session.maximum_sequence == 0 {
         return Err(());
     }
+    let request = encode_health_request(1, session, 1, &capability).map_err(|_| ())?;
+    write_frame(&mut stream, &request)?;
+    let response = read_frame(&mut stream)?;
+    decode_health_response(1, session, 1, &response, &capability).map_err(|_| ())?;
     println!("ready");
     Ok(())
 }
@@ -681,8 +687,9 @@ fn serve(
             state,
             session.0,
         ) {
-            Ok(()) => eprintln!(
-                "component=mrml-git-protected-signer event=request_complete category=sign"
+            Ok(completion) => eprintln!(
+                "component=mrml-git-protected-signer event=request_complete category={}",
+                completion.category()
             ),
             Err(error) => eprintln!(
                 "component=mrml-git-protected-signer event=request_failed category={}",
@@ -768,6 +775,23 @@ enum ServeError {
     Write,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServeCompletion {
+    Health,
+    Sign,
+    Advance,
+}
+
+impl ServeCompletion {
+    const fn category(self) -> &'static str {
+        match self {
+            Self::Health => "health",
+            Self::Sign => "sign",
+            Self::Advance => "advance",
+        }
+    }
+}
+
 impl ServeError {
     const fn category(self) -> &'static str {
         match self {
@@ -796,11 +820,31 @@ fn serve_one(
     authority_receipt_public: &[u8; 32],
     state: &mut SignerState,
     session: ProtectedSignerSession,
-) -> Result<(), ServeError> {
+) -> Result<ServeCompletion, ServeError> {
     let frame = read_frame(stream).map_err(|_| ServeError::Read)?;
-    if protected_signer_operation(&frame).map_err(|_| ServeError::Authenticate)?
-        == OP_ADVANCE_GENERATION
-    {
+    let operation = protected_signer_operation(&frame).map_err(|_| ServeError::Authenticate)?;
+    if operation == OP_HEALTH {
+        let request = decode_health_request(&frame, capability).map_err(|_| ServeError::Authenticate)?;
+        let now = mrml_runtime::unix_time_seconds().ok_or(ServeError::Authenticate)?;
+        validate_session_fields(
+            session,
+            request.session_id,
+            request.session_expires_at,
+            request.sequence,
+            now,
+        )
+        .map_err(|_| ServeError::Authenticate)?;
+        let response = encode_health_response(
+            request.request_id,
+            session,
+            request.sequence,
+            capability,
+        )
+        .map_err(|_| ServeError::Encode)?;
+        write_frame(stream, &response).map_err(|_| ServeError::Write)?;
+        return Ok(ServeCompletion::Health);
+    }
+    if operation == OP_ADVANCE_GENERATION {
         let request = decode_advance_request(&frame, capability)
             .map_err(|_| ServeError::Authenticate)?;
         let now = mrml_runtime::unix_time_seconds().ok_or(ServeError::Authenticate)?;
@@ -826,7 +870,9 @@ fn serve_one(
         )
         .map_err(|_| ServeError::Encode)?;
         write_frame(stream, &response).map_err(|_| ServeError::Write)?;
-        return result.map_err(|_| ServeError::SignContext);
+        return result
+            .map(|_| ServeCompletion::Advance)
+            .map_err(|_| ServeError::SignContext);
     }
     let request = decode_protected_signer_request(&frame, capability)
         .map_err(|_| ServeError::Authenticate)?;
@@ -846,7 +892,7 @@ fn serve_one(
     )
     .map_err(|_| ServeError::Encode)?;
     write_frame(stream, &response).map_err(|_| ServeError::Write)?;
-    result.map(|_| ()).map_err(|error| match error {
+    result.map(|_| ServeCompletion::Sign).map_err(|error| match error {
         SignError::Context => ServeError::SignContext,
         SignError::Commit => ServeError::SignCommit,
         SignError::Transcript => ServeError::SignTranscript,

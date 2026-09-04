@@ -199,11 +199,13 @@ pub use protected_push::{
 };
 #[cfg(target_os = "linux")]
 pub use protected_signer_unix::{
-    OP_ADVANCE_GENERATION, ProtectedSignerAdvanceRequest, ProtectedSignerCapability,
-    ProtectedSignerPeer, ProtectedSignerRequest, ProtectedSignerSession,
-    UnixProtectedCommitSigningProvider, UnixProtectedSignerError, decode_advance_request,
+    OP_ADVANCE_GENERATION, OP_HEALTH, ProtectedSignerAdvanceRequest, ProtectedSignerCapability,
+    ProtectedSignerHealthRequest, ProtectedSignerPeer, ProtectedSignerRequest,
+    ProtectedSignerSession, UnixProtectedCommitSigningProvider, UnixProtectedSignerError,
+    decode_advance_request, decode_health_request, decode_health_response,
     decode_protected_signer_hello, decode_protected_signer_request, encode_advance_response,
-    encode_protected_signer_hello, encode_protected_signer_response, protected_signer_operation,
+    encode_health_request, encode_health_response, encode_protected_signer_hello,
+    encode_protected_signer_response, protected_signer_operation,
 };
 pub use quarantine::{
     ActivationSnapshot, AuditReceipt, DEFAULT_MAX_EXPANDED_OBJECT_BYTES,
