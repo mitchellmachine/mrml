@@ -82,7 +82,8 @@ for operator in deploy/compose/install-volume-inputs.sh deploy/compose/construct
   require 'case $runtime in docker|podman)' "$operator"
 done
 for operator in deploy/compose/construct-git-trust-policy.sh deploy/compose/sign-git-trust-policy.sh deploy/compose/select-git-signer-key-slot.sh deploy/compose/transition-git-trust.sh; do
-  require 'running=$("$runtime" compose' "$operator"
+  require 'running=$(podman ps -q --filter volume="$volume")' "$operator"
+  require 'running=$(docker compose' "$operator"
   require 'cannot query service state for $service' "$operator"
 done
 require 'volume_spec=$signer_volume:/keys:nocopy' deploy/compose/generate-git-signer-keys.sh

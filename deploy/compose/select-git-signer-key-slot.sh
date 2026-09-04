@@ -17,16 +17,17 @@ case $runtime in docker|podman) ;; *) echo "container runtime must be docker or 
 case $1 in current) selected_volume=$volume_prefix-git-signer-keys ;; next) selected_volume=$volume_prefix-git-signer-next-keys ;; *) exit 64 ;; esac
 case $2:$3:$4 in *[!0-9:]*|:*|*:) exit 64 ;; esac
 [ "$2" -gt 0 ] && [ "$3" -gt 0 ] && [ "$4" -gt 0 ] || exit 64
-for service in gitd git-authority git-protected-signer; do
-  running=$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || {
-    echo "cannot query service state for $service" >&2
-    exit 1
-  }
-  [ -z "$running" ] || {
-    echo "signer key selection requires stopped Gitd, authority, and signer" >&2
-    exit 1
-  }
-done
+if [ "$runtime" = podman ]; then
+  for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
+    running=$(podman ps -q --filter volume="$volume") || exit 1
+    [ -z "$running" ] || { echo "signer key selection requires stopped Gitd, authority, and signer" >&2; exit 1; }
+  done
+else
+  for service in gitd git-authority git-protected-signer; do
+    running=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || { echo "cannot query service state for $service" >&2; exit 1; }
+    [ -z "$running" ] || { echo "signer key selection requires stopped Gitd, authority, and signer" >&2; exit 1; }
+  done
+fi
 "$runtime" volume inspect "$selected_volume" >/dev/null
 
 for name in MRML_GIT_SIGNER_KEYS_VOLUME MRML_OPENPGP_CREATED_AT MRML_TRUST_GENERATION MRML_REVOCATION_GENERATION; do

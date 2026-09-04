@@ -36,16 +36,17 @@ esac
 [ "${#4}" -eq 128 ] || { echo "expected policy digest must contain 128 lowercase hexadecimal digits" >&2; exit 64; }
 selected_repository=$(sed -n 's/^MRML_PROTECTED_REPOSITORY=//p' "$environment")
 [ "$selected_repository" = "$1" ] || { echo "repository does not match MRML_PROTECTED_REPOSITORY" >&2; exit 1; }
-for service in gitd git-authority git-protected-signer; do
-  running=$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || {
-    echo "cannot query service state for $service" >&2
-    exit 1
-  }
-  [ -z "$running" ] || {
-    echo "trust transition requires stopped Gitd, authority, and signer" >&2
-    exit 1
-  }
-done
+if [ "$runtime" = podman ]; then
+  for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
+    running=$(podman ps -q --filter volume="$volume") || exit 1
+    [ -z "$running" ] || { echo "trust transition requires stopped Gitd, authority, and signer" >&2; exit 1; }
+  done
+else
+  for service in gitd git-authority git-protected-signer; do
+    running=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || { echo "cannot query service state for $service" >&2; exit 1; }
+    [ -z "$running" ] || { echo "trust transition requires stopped Gitd, authority, and signer" >&2; exit 1; }
+  done
+fi
 
 if [ "$phase" = select-and-advance ]; then
   "$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \

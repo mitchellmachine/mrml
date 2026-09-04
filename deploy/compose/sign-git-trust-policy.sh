@@ -19,16 +19,17 @@ case $2:$3:$4:$5 in *[!0-9:]*|:*|*:) echo "generations and creation times must b
 [ "$2" -gt 0 ] && [ "$3" -eq "$(( $2 + 1 ))" ] && [ "$4" -gt 0 ] && [ "$5" -gt 0 ] || exit 64
 selected_repository=$(sed -n 's/^MRML_PROTECTED_REPOSITORY=//p' "$environment")
 [ "$selected_repository" = "$1" ] || exit 1
-for service in gitd git-authority git-protected-signer; do
-  running=$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || {
-    echo "cannot query service state for $service" >&2
-    exit 1
-  }
-  [ -z "$running" ] || {
-    echo "trust policy signing requires stopped Gitd, authority, and signer" >&2
-    exit 1
-  }
-done
+if [ "$runtime" = podman ]; then
+  for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
+    running=$(podman ps -q --filter volume="$volume") || exit 1
+    [ -z "$running" ] || { echo "trust policy signing requires stopped Gitd, authority, and signer" >&2; exit 1; }
+  done
+else
+  for service in gitd git-authority git-protected-signer; do
+    running=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || { echo "cannot query service state for $service" >&2; exit 1; }
+    [ -z "$running" ] || { echo "trust policy signing requires stopped Gitd, authority, and signer" >&2; exit 1; }
+  done
+fi
 
 "$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" \
   --profile admin run --rm --no-deps git-trust-sign-current \
