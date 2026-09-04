@@ -42,6 +42,14 @@ ceases to be active. Both supplied pairs remain public, immutable,
 owner-checked transition inputs; neither grants authority without matching
 policy status and hybrid signatures.
 
+Named-volume operator tooling now separates canonical policy construction
+(UID 21001), current and candidate signing (UID 21006), public transition
+staging (UID 21002), and durable policy selection (UID 21001). The selected
+signer key slot is explicit environment state and can name only one of the two
+provisioned volumes. Successful handoff consumes and synchronizes only the
+exact public workspace files; both private-key volumes remain intact for
+rollback analysis and deliberate later destruction under a separate operation.
+
 ## Verification
 
 ```text

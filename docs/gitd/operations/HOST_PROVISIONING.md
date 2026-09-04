@@ -69,6 +69,34 @@ workspace artifacts. The policy constructor never mounts signer private-key
 volumes. The operator must independently review the decoded generation,
 validity, active/retired pairs, previous digest, and printed next digest before
 asking either signer pair to authorize the bytes.
+
+The protected signer image authorizes the reviewed `next-policy.bin` twice via
+`sign-git-trust-policy.sh`: once through the currently selected key volume at
+the current trust generation and once through the separately provisioned
+`mrml-git-signer-next-keys` volume at the successor generation. Both one-shot
+services are read-only, networkless, and mount only their own private-key
+volume, the public construction volume, and the signer-owned public signature
+output volume. The policy input may be owned by UID 21001 while keys and
+outputs remain owned by UID 21006; those ownership domains are checked
+independently. `stage-git-trust-transition.sh` then copies the exact canonical
+policies, both public pairs, and four signatures between managed named volumes
+using the no-overwrite installer. No private key is copied or mounted into the
+authority transition service.
+
+After selecting and exercising the overlap generation, stop all three daemons
+and run `select-git-signer-key-slot.sh next OPENPGP_CREATED_AT
+TRUST_GENERATION REVOCATION_GENERATION`. It atomically updates the mode-0600
+environment file so the ordinary signer and the “current” rotation job resolve
+the logical signer-key volume to the candidate named volume. Selection is
+limited to the two provisioned managed slots and is refused while a consumer is
+running. Restart and validate a protected push with the candidate signer before
+constructing retirement. For retirement, stage the old public pair as the
+construction input, construct the monotonic retirement successor, authorize it
+with the now-current key for both required generations, stage it, and execute
+the same transition command. On complete signer advancement, the transition,
+construction, and signature volumes are synchronized after their exact public
+one-operation artifacts are consumed, allowing the next rotation without
+deleting either private-key volume.
 The networkless admin-profile container receives only the read-only current-key
 and transition-input volumes plus a writable policy volume. It reopens the exact
 expected generation, independently verifies both hybrid authorizations against
