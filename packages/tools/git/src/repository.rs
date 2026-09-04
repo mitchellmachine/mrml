@@ -2459,7 +2459,7 @@ impl Repository {
         result
     }
 
-    fn active_remote_refs(
+    pub(crate) fn active_remote_refs(
         &self,
         remote: &str,
     ) -> Result<Option<Vector<(Text, ObjectId)>>, RepositoryError> {

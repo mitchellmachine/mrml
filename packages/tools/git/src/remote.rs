@@ -1,7 +1,7 @@
 use crate::{
-    FetchPackLimits, HttpsRemote, MAX_FETCH_WANTS_PER_REQUEST, ObjectId, Repository,
-    extract_pack_response, fetch_request, parse_advertisement, parse_push_response_mode,
-    push_request_mode_negotiated,
+    FetchPackLimits, HttpsRemote, MAX_FETCH_HAVES_PER_REQUEST, MAX_FETCH_WANTS_PER_REQUEST,
+    ObjectId, Repository, extract_pack_response, fetch_request, parse_advertisement,
+    parse_push_response_mode, push_request_mode_negotiated,
 };
 use core::fmt;
 use mrml_runtime::{Text, Vector};
@@ -98,6 +98,7 @@ fn fetch_https_with_provider(
     }
     let limits =
         FetchPackLimits::production(maximum_pack_bytes).map_err(|_| FetchError::TooLarge)?;
+    let haves = previous_fetch_haves(repository, remote_name)?;
     let candidate = mrml_runtime::join_path(
         &repository.git_dir,
         &mrml_runtime::mrml_format!("mrml-fetch-{}", mrml_runtime::process_id()),
@@ -129,12 +130,12 @@ fn fetch_https_with_provider(
             match provider.as_deref_mut() {
                 Some(provider) => remote.fetch_pack_to_file_authenticated(
                     wants,
-                    &[],
+                    &haves,
                     &pack,
                     maximum_pack_bytes,
                     provider,
                 ),
-                None => remote.fetch_pack_to_file(wants, &[], &pack, maximum_pack_bytes),
+                None => remote.fetch_pack_to_file(wants, &haves, &pack, maximum_pack_bytes),
             }
             .map_err(FetchError::Https)?;
             let installed = repository
@@ -157,6 +158,28 @@ fn fetch_https_with_provider(
         let _ = mrml_runtime::remove_dir_all(&candidate);
     }
     result
+}
+
+fn previous_fetch_haves(
+    repository: &Repository,
+    remote_name: &str,
+) -> Result<Vector<ObjectId>, FetchError> {
+    let mut haves = Vector::new();
+    let Some(previous) = repository
+        .active_remote_refs(remote_name)
+        .map_err(|_| FetchError::Repository)?
+    else {
+        return Ok(haves);
+    };
+    for (_, id) in previous {
+        if haves.len() == MAX_FETCH_HAVES_PER_REQUEST {
+            break;
+        }
+        if !haves.contains(&id) && repository.read_object(id).is_ok() {
+            haves.push(id);
+        }
+    }
+    Ok(haves)
 }
 
 pub fn fetch_ssh(
@@ -825,6 +848,44 @@ impl core::error::Error for PushError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn root(name: &str) -> Text {
+        mrml_runtime::join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-git-remote-{name}-{}", mrml_runtime::process_id()),
+        )
+    }
+
+    #[test]
+    fn https_fetch_negotiates_from_authenticated_previous_remote_tips() {
+        let path = root("previous-haves");
+        let _ = mrml_runtime::remove_dir_all(&path);
+        let repository = Repository::init_with_format(&path, crate::ObjectFormat::Sha256).unwrap();
+        let first = repository
+            .write_object(crate::ObjectKind::Blob, b"first")
+            .unwrap();
+        let duplicate = first;
+        let second = repository
+            .write_object(crate::ObjectKind::Blob, b"second")
+            .unwrap();
+        repository
+            .activate_remote_refs_atomically(
+                "origin",
+                &[
+                    (Text::from("first"), first),
+                    (Text::from("same"), duplicate),
+                    (Text::from("second"), second),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(
+            previous_fetch_haves(&repository, "origin").unwrap(),
+            &[first, second][..]
+        );
+        assert!(previous_fetch_haves(&repository, "new").unwrap().is_empty());
+        mrml_runtime::remove_dir_all(&path).unwrap();
+    }
 
     #[test]
     fn advertisement_flush_is_recognized_only_at_packet_boundaries() {
