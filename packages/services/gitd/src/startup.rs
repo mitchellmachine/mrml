@@ -545,7 +545,7 @@ pub fn admit_catalog_repository(
     view.retain_arrival_directory(
         capabilities
             .quarantine
-            .open_directory("arrivals")
+            .try_clone()
             .map_err(|_| RepositoryAdmissionError::Arrival(GitdCoreError::Storage))?,
         receive_pack_limit(config.max_body_bytes),
     )
@@ -1271,6 +1271,14 @@ mod tests {
         );
         let objects = config.repository_root.join("owner/project");
         let admitted = admit_catalog_repository(&config, &entry).unwrap();
+        assert!(!config
+            .quarantine_root
+            .join("owner/project/arrivals/arrivals")
+            .exists());
+        assert!(!config
+            .quarantine_root
+            .join("owner/project/arrivals/quarantine")
+            .exists());
         assert_eq!(admitted.paths.objects, objects);
         assert_eq!(
             admitted.paths.receipts,
