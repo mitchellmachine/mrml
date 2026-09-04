@@ -203,7 +203,6 @@ fn validate_private_key_root(root: &DirectoryCapability) -> Result<(), ()> {
     if root_metadata.mode & 0o170000 != 0o040000
         || root_metadata.mode & 0o022 != 0
         || root_metadata.uid != 0
-        || root_metadata.links < 2
     {
         return Err(());
     }
@@ -246,8 +245,7 @@ fn validate_root(root: &DirectoryCapability) -> Result<(), ()> {
     (metadata.mode & 0o170000 == 0o040000
         && metadata.mode & 0o777 == 0o700
         && metadata.uid == 0
-        && metadata.gid == 0
-        && metadata.links >= 2)
+        && metadata.gid == 0)
         .then_some(())
         .ok_or(())
 }

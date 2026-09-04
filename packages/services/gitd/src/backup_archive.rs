@@ -263,7 +263,6 @@ pub fn write_backup_archive(
                     || metadata.mode & 0o7777 != u32::from(entry.mode)
                     || metadata.uid != entry.uid
                     || metadata.gid != entry.gid
-                    || metadata.links < 2
                     || entry.size != 0
                     || entry.digest != [0; 32]
                 {
@@ -284,7 +283,7 @@ fn open_roots(paths: [&str; 10]) -> Result<Vec<DirectoryCapability>, BackupArchi
     for path in paths {
         let root = DirectoryCapability::open_root(path).map_err(|_| BackupArchiveError::Open)?;
         let metadata = root.metadata().map_err(|_| BackupArchiveError::Open)?;
-        if metadata.mode & 0o170000 != 0o040000 || metadata.links < 2 {
+        if metadata.mode & 0o170000 != 0o040000 {
             return Err(BackupArchiveError::Open);
         }
         if identities.contains(&(metadata.device, metadata.inode)) {

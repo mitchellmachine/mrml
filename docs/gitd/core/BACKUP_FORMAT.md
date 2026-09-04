@@ -90,7 +90,7 @@ accepted.
 The implemented emitter writes the stream header and then bounded frames while
 holding retained capabilities for all ten source roots. It reopens every
 declared descendant beneath its corresponding root, exact-matches type, mode,
-UID, GID, link count, and size, hashes bytes as they stream, rejects short reads
+UID, GID, regular-file link count, and size, hashes bytes as they stream, rejects short reads
 or growth, and requires the second-pass digest to equal the inventory. Repository
 contents are never accumulated in memory. Archive-file atomic creation and the
 restore path remain service-layer acceptance gates.

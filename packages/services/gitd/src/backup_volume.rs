@@ -2,14 +2,15 @@
 
 use mrml_crypto::Sha256;
 use mrml_git::{
-    authority_generation_record_name, parse_authority_generation_record, ActiveRefFile,
-    BackupInventory, BackupInventoryEntry, BackupInventoryFileKind, BackupRepositoryGeneration,
-    BackupVolume, AUTHORITY_GENERATION_RECORD_MAX_BYTES, MAX_BACKUP_INVENTORY_ENTRIES,
+    AUTHORITY_GENERATION_RECORD_MAX_BYTES, ActiveRefFile, BackupInventory, BackupInventoryEntry,
+    BackupInventoryFileKind, BackupRepositoryGeneration, BackupVolume,
+    MAX_BACKUP_INVENTORY_ENTRIES, authority_generation_record_name,
+    parse_authority_generation_record,
 };
 use mrml_runtime::{DirectoryCapability, Text, Vector};
 
 use crate::{
-    load_deployment_catalog, verify_repository_admission, DeploymentRepositoryProfile, GitdConfig,
+    DeploymentRepositoryProfile, GitdConfig, load_deployment_catalog, verify_repository_admission,
 };
 
 const MAX_BACKUP_PATH_BYTES: usize = 1024;
@@ -214,7 +215,7 @@ fn collect_directory(
             let metadata = retained
                 .metadata()
                 .map_err(|_| BackupVolumeError::Changed)?;
-            if metadata.mode & 0o170000 != 0o040000 || metadata.links < 2 {
+            if metadata.mode & 0o170000 != 0o040000 {
                 return Err(BackupVolumeError::UnsafeEntry);
             }
             push_entry(
@@ -284,7 +285,7 @@ fn collect_directory(
 
 fn validate_directory(directory: &DirectoryCapability) -> Result<(), BackupVolumeError> {
     let metadata = directory.metadata().map_err(|_| BackupVolumeError::Open)?;
-    if metadata.mode & 0o170000 != 0o040000 || metadata.links < 2 {
+    if metadata.mode & 0o170000 != 0o040000 {
         return Err(BackupVolumeError::UnsafeEntry);
     }
     Ok(())
@@ -304,9 +305,9 @@ fn push_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mrml_git::{encode_authority_generation_record, RepositoryGeneration, RepositoryIdentity};
+    use mrml_git::{RepositoryGeneration, RepositoryIdentity, encode_authority_generation_record};
     use std::fs;
-    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
     fn root(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("mrml-backup-volume-{label}-{}", std::process::id()))
