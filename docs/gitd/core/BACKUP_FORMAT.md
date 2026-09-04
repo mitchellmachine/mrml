@@ -87,7 +87,15 @@ declared descendant beneath its corresponding root, exact-matches type, mode,
 UID, GID, link count, and size, hashes bytes as they stream, rejects short reads
 or growth, and requires the second-pass digest to equal the inventory. Repository
 contents are never accumulated in memory. Archive-file atomic creation and the
-reader/restore path remain service-layer acceptance gates.
+restore path remain service-layer acceptance gates.
+
+The implemented streaming verifier authenticates the header and every exact
+sequence, bounds the inventory length before allocation, parses its canonical
+digest, requires its generation to match the encrypted-stream header, and then
+hashes each size-delimited regular-file segment. Success additionally requires
+the authenticated empty terminal frame and physical end of input. Wrong keys,
+frame or payload tampering, reordered sequences, truncation, unexpected payload
+bytes, and bytes after authenticated EOF fail closed before any restore write.
 
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,

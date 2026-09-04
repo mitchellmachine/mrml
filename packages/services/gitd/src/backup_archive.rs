@@ -1,10 +1,11 @@
 //! Streaming emission of authenticated Git backup archives.
 
-use std::io::Write;
+use std::io::{Read, Write};
 
 use mrml_crypto::Sha256;
 use mrml_git::{
-    encode_backup_inventory, encode_backup_stream_header, seal_backup_frame, BackupInventory,
+    encode_backup_inventory, encode_backup_stream_header, open_backup_frame,
+    parse_backup_inventory, parse_backup_stream_header, seal_backup_frame, BackupInventory,
     BackupInventoryFileKind, BackupStreamHeader, BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES,
     MAX_BACKUP_INVENTORY_BYTES,
 };
@@ -24,6 +25,52 @@ pub enum BackupArchiveError {
     Encrypt,
     Write,
     Resource,
+    Authentication,
+    Truncated,
+    Trailing,
+}
+
+/// Authenticates and structurally verifies a complete archive without writing
+/// any restored state. Success proves every inventory byte, file segment, and
+/// the canonical terminal frame was consumed exactly once.
+pub fn verify_backup_archive(
+    reader: &mut dyn Read,
+    backup_key: &[u8; 32],
+) -> Result<BackupInventory, BackupArchiveError> {
+    let mut encoded_header = [0u8; BACKUP_STREAM_HEADER_BYTES];
+    read_exact_archive(reader, &mut encoded_header)?;
+    let header =
+        parse_backup_stream_header(&encoded_header).map_err(|_| BackupArchiveError::Header)?;
+    let mut frames = FrameReader::new(reader, backup_key, encoded_header, header.chunk_bytes)?;
+    let mut prefix = [0u8; PAYLOAD_PREFIX_BYTES];
+    frames.read_exact_plaintext(&mut prefix)?;
+    let inventory_length = backup_payload_inventory_length(&prefix)?;
+    let mut encoded_inventory = vec![0; inventory_length];
+    frames.read_exact_plaintext(&mut encoded_inventory)?;
+    let inventory =
+        parse_backup_inventory(&encoded_inventory).map_err(|_| BackupArchiveError::Inventory)?;
+    if inventory.backup_generation != header.generation {
+        return Err(BackupArchiveError::Inventory);
+    }
+    let mut buffer = [0u8; COPY_BUFFER_BYTES];
+    for entry in &inventory.entries {
+        if entry.kind == BackupInventoryFileKind::Regular {
+            let mut digest = Sha256::new();
+            let mut remaining = entry.size;
+            while remaining != 0 {
+                let count = usize::try_from(remaining.min(buffer.len() as u64))
+                    .map_err(|_| BackupArchiveError::Resource)?;
+                frames.read_exact_plaintext(&mut buffer[..count])?;
+                digest.update(&buffer[..count]);
+                remaining -= count as u64;
+            }
+            if digest.finalize() != entry.digest {
+                return Err(BackupArchiveError::Authentication);
+            }
+        }
+    }
+    frames.finish()?;
+    Ok(inventory)
 }
 
 /// Writes one archive as fixed authenticated frames. Plaintext is a canonical
@@ -154,6 +201,113 @@ struct FrameWriter<'a> {
     buffer: Vec<u8>,
     used: usize,
     sequence: u64,
+}
+
+struct FrameReader<'a> {
+    reader: &'a mut dyn Read,
+    backup_key: &'a [u8; 32],
+    header: [u8; BACKUP_STREAM_HEADER_BYTES],
+    plaintext: Vec<u8>,
+    position: usize,
+    length: usize,
+    sequence: u64,
+    final_seen: bool,
+}
+
+impl<'a> FrameReader<'a> {
+    fn new(
+        reader: &'a mut dyn Read,
+        backup_key: &'a [u8; 32],
+        header: [u8; BACKUP_STREAM_HEADER_BYTES],
+        chunk_bytes: u32,
+    ) -> Result<Self, BackupArchiveError> {
+        let length = usize::try_from(chunk_bytes).map_err(|_| BackupArchiveError::Resource)?;
+        Ok(Self {
+            reader,
+            backup_key,
+            header,
+            plaintext: vec![0; length],
+            position: 0,
+            length: 0,
+            sequence: 0,
+            final_seen: false,
+        })
+    }
+
+    fn read_exact_plaintext(&mut self, mut output: &mut [u8]) -> Result<(), BackupArchiveError> {
+        while !output.is_empty() {
+            if self.position == self.length && !self.fill()? {
+                return Err(BackupArchiveError::Truncated);
+            }
+            let count = output.len().min(self.length - self.position);
+            output[..count].copy_from_slice(&self.plaintext[self.position..self.position + count]);
+            self.position += count;
+            output = &mut output[count..];
+        }
+        Ok(())
+    }
+
+    fn fill(&mut self) -> Result<bool, BackupArchiveError> {
+        if self.final_seen {
+            return Ok(false);
+        }
+        let mut frame_header = [0u8; 16];
+        read_exact_archive(self.reader, &mut frame_header)?;
+        let length = usize::try_from(u32::from_be_bytes(frame_header[8..12].try_into().unwrap()))
+            .map_err(|_| BackupArchiveError::Resource)?;
+        if length > self.plaintext.len() {
+            return Err(BackupArchiveError::Authentication);
+        }
+        let mut frame = vec![0; BACKUP_FRAME_OVERHEAD + length];
+        frame[..16].copy_from_slice(&frame_header);
+        read_exact_archive(self.reader, &mut frame[16..])?;
+        let (opened, final_frame) = open_backup_frame(
+            self.backup_key,
+            &self.header,
+            self.sequence,
+            &frame,
+            &mut self.plaintext,
+        )
+        .map_err(|_| BackupArchiveError::Authentication)?;
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or(BackupArchiveError::Resource)?;
+        self.position = 0;
+        self.length = opened;
+        self.final_seen = final_frame;
+        Ok(!final_frame)
+    }
+
+    fn finish(&mut self) -> Result<(), BackupArchiveError> {
+        if self.position != self.length {
+            return Err(BackupArchiveError::Trailing);
+        }
+        if !self.final_seen && self.fill()? {
+            return Err(BackupArchiveError::Trailing);
+        }
+        let mut byte = [0u8; 1];
+        match self.reader.read(&mut byte) {
+            Ok(0) => Ok(()),
+            Ok(_) => Err(BackupArchiveError::Trailing),
+            Err(_) => Err(BackupArchiveError::Read),
+        }
+    }
+}
+
+fn read_exact_archive(
+    reader: &mut dyn Read,
+    mut output: &mut [u8],
+) -> Result<(), BackupArchiveError> {
+    while !output.is_empty() {
+        match reader.read(output) {
+            Ok(0) => return Err(BackupArchiveError::Truncated),
+            Ok(count) => output = &mut output[count..],
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return Err(BackupArchiveError::Read),
+        }
+    }
+    Ok(())
 }
 
 impl<'a> FrameWriter<'a> {
@@ -333,6 +487,31 @@ mod tests {
         assert_eq!(
             &plaintext[PAYLOAD_PREFIX_BYTES + encoded_inventory.len()..],
             b"hello"
+        );
+        assert_eq!(
+            verify_backup_archive(&mut std::io::Cursor::new(&archive), &key),
+            Ok(inventory.clone())
+        );
+        assert_eq!(
+            verify_backup_archive(&mut std::io::Cursor::new(&archive), &[0x72; 32]),
+            Err(BackupArchiveError::Authentication)
+        );
+        let mut tampered = archive.clone();
+        tampered[BACKUP_STREAM_HEADER_BYTES + 16] ^= 1;
+        assert_eq!(
+            verify_backup_archive(&mut std::io::Cursor::new(&tampered), &key),
+            Err(BackupArchiveError::Authentication)
+        );
+        assert!(verify_backup_archive(
+            &mut std::io::Cursor::new(&archive[..archive.len() - 1]),
+            &key
+        )
+        .is_err());
+        let mut trailing = archive.clone();
+        trailing.push(0);
+        assert_eq!(
+            verify_backup_archive(&mut std::io::Cursor::new(&trailing), &key),
+            Err(BackupArchiveError::Trailing)
         );
         fs::remove_dir_all(root).unwrap();
     }

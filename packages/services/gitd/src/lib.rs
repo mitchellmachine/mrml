@@ -25,7 +25,8 @@ pub use auth_store::{
     RetainedAuthenticationStore,
 };
 pub use backup_archive::{
-    BackupArchiveError, backup_payload_inventory_length, write_backup_archive,
+    BackupArchiveError, backup_payload_inventory_length, verify_backup_archive,
+    write_backup_archive,
 };
 pub use authority_rpc::{GitAuthorityChannelClient, GitAuthorityChannelError};
 pub use backend::{GitdRepositorySet, SharedGitdRepositorySet};
