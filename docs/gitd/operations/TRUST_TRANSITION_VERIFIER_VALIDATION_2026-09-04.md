@@ -243,13 +243,35 @@ the authenticated client probe; the socket subdirectory and socket were
 of a compatibility gap, not evidence that Compose automatically preserves
 those invariants on that older provider.
 
-Remaining Phase 24 gates include a protected push during the overlap interval,
-explicit stale-policy rollback rejection across daemon restarts, process-kill
-injection around every transition phase, and a supported old-Podman startup
-path that does not require manual runtime-volume metadata repair. This exercise
-used a controlled certificate fixture, loopback publication, and test keys; it
-does not establish public-service, real-certificate-renewal, production-key, or
+## Hosted stale-authority restart rejection
+
+The retained pre-push authority snapshot recorded repository generation 1 and
+selected trust generation 4. It was copied, without modifying the source, into
+a disposable current-layout named volume. A separate no-network authority used
+that state and a separate named socket volume while the healthy authority
+continued serving repository generation 2. A no-port Gitd restart probe mounted
+the live generation-2 repository state but used only the stale authority socket.
+
+The first probe failed at socket connection because older Podman had again
+removed the runtime-volume setgid mode; it is not counted as rollback evidence.
+After the disposable runtime metadata was restored and the stale authority
+restarted, the second Gitd probe passed authenticated dependency and identity
+checks, then emitted `startup_repository_admission_failed category=Generation`
+and exited 1 before recovery or listener binding. The live `active.refs`
+SHA-256 remained
+`c0c2a5afbd3937e8c071d88911bcc7367b6683c14bcd6db9504ab4ab0bbb115c`
+before and after the probe. Only the disposable containers and their two named
+volumes were removed; the healthy generation-4 authority, signer, and Gitd
+remained running. This is hosted stale-authority rollback rejection across a
+Gitd restart, not malicious-storage, power-loss, distributed rollback, or
 physical-hardware evidence.
+
+Remaining Phase 24 gates include a protected push during the overlap interval,
+process-kill injection around the remaining daemon/transition phases, and a
+supported old-Podman startup path that does not require manual runtime-volume
+metadata repair. This exercise used a controlled certificate fixture, loopback
+publication, and test keys; it does not establish public-service,
+real-certificate-renewal, production-key, or physical-hardware evidence.
 
 Patent review: **NOT_TRIGGERED**. This uses conventional immutable public-key
 files, exact metadata/content validation, directory capabilities, and ordered
