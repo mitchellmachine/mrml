@@ -1,6 +1,7 @@
 mod auth_store;
 mod authority_rpc;
 mod backend;
+mod backup_volume;
 mod catalog;
 mod certd_rpc;
 mod composition;
@@ -24,6 +25,7 @@ pub use auth_store::{
 };
 pub use authority_rpc::{GitAuthorityChannelClient, GitAuthorityChannelError};
 pub use backend::{GitdRepositorySet, SharedGitdRepositorySet};
+pub use backup_volume::{BackupVolumeError, collect_backup_volume};
 pub use catalog::{
     load_deployment_catalog, parse_deployment_catalog, verify_repository_admission,
     DeploymentCatalog, DeploymentCatalogError, DeploymentProfile, DeploymentRepository,

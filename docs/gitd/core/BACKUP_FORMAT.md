@@ -58,6 +58,13 @@ the manifest. The service layer remains responsible for proving every declared
 volume was mounted, generating the inventory from a cold consistent snapshot,
 streaming file bytes, and ensuring no missing or extra entry exists.
 
+The implemented Linux volume collector retains each mounted volume root and
+opens every descendant beneath directory capabilities. Enumeration is bounded
+before retaining names and limited to 64 levels and 1,000,000 entries. It emits
+canonical byte-ordered paths and rejects symlinks, special files, hard-linked
+regular files, invalid directory metadata, overlong paths, short reads, growth
+during hashing, and descriptor-relative replacement races.
+
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,
 and authenticated EOF in a conventional encrypted-record stream. It introduces
