@@ -144,6 +144,8 @@ require 'restore requires absent Docker volume' deploy/compose/restore-git.sh
 require 'runtime=${MRML_CONTAINER_RUNTIME:-docker}' deploy/compose/restore-git.sh
 require 'running=$("$runtime" ps -q --filter volume="$volume")' deploy/compose/restore-git.sh
 require 'compose --env-file "$environment" --profile admin' deploy/compose/restore-git.sh
+reject '-f "$backup_compose" run --rm --no-deps git-backup verify' deploy/compose/restore-git.sh
+require '-f "$restore_compose" run --rm --no-deps git-restore verify' deploy/compose/restore-git.sh
 require 'org.mrml.restore-disposable=true' deploy/compose/restore-git.sh
 require 'services remain disabled' deploy/compose/restore-git.sh
 require 'image: "mrml/git-backup:' "$backup_compose"

@@ -9,7 +9,6 @@ case $namespace in mrml-git-restore-[a-z0-9]*) ;; *) echo "invalid disposable re
 case $namespace in *[!a-z0-9-]*|*-) echo "invalid disposable restore namespace" >&2; exit 64 ;; esac
 directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 environment=${MRML_ENV_FILE:-$directory/.env.production}
-backup_compose=${MRML_GIT_BACKUP_COMPOSE_FILE:-$directory/compose.git-backup.yaml}
 restore_compose=${MRML_GIT_RESTORE_COMPOSE_FILE:-$directory/compose.git-restore.yaml}
 runtime=${MRML_CONTAINER_RUNTIME:-docker}
 [ "$runtime" = docker ] || [ "$runtime" = podman ] || { echo "container runtime must be docker or podman" >&2; exit 2; }
@@ -32,7 +31,7 @@ done
 for suffix in $suffixes; do
   "$runtime" volume create --label org.mrml.managed=true --label org.mrml.restore-disposable=true "$namespace-$suffix" >/dev/null
 done
-"$runtime" compose --env-file "$environment" --profile admin -f "$backup_compose" run --rm --no-deps git-backup verify "$generation"
+MRML_GIT_RESTORE_NAMESPACE=$namespace "$runtime" compose --env-file "$environment" --profile admin -f "$restore_compose" run --rm --no-deps git-restore verify "$generation"
 MRML_GIT_RESTORE_NAMESPACE=$namespace "$runtime" compose --env-file "$environment" --profile admin -f "$restore_compose" run --rm --no-deps git-restore restore "$generation" || {
   echo "restore failed; every $namespace-* volume is invalid and must remain disabled or be removed" >&2
   exit 1

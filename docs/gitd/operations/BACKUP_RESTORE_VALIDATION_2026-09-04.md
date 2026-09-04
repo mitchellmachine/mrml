@@ -123,6 +123,18 @@ authority record, catalog rollback, and trust/revocation drift, and preserve
 exact conventional admission. The live encrypted archive and destructive
 restore sequence remain pending after this correction.
 
+The subsequent destructive simulation retained only the encrypted backup and
+backup-key volumes after deleting the label-guarded disposable source service,
+authoritative, cache, and client volumes. Restore correctly refused before any
+write because its preliminary verification still selected the backup Compose
+service, whose mount set includes all destroyed source volumes even though the
+`verify` operation reads only the archive and key. Preliminary verification now
+uses the restore service against the already-created empty target namespace;
+the restore service mounts the archive and key read-only and verification still
+precedes any restore write. Static policy tests forbid the source-dependent
+verification invocation. The generation-9200 archive remains authenticated and
+the fresh target namespace remains disabled pending a retry with this fix.
+
 Patent review: **NOT_TRIGGERED**. The changes use conventional container image
 layout, filesystem metadata validation, encrypted streaming backup, and cache
 directory reconstruction. See `docs/patents/REVIEW_LOG.md`.
