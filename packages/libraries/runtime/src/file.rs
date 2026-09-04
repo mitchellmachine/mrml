@@ -1098,6 +1098,20 @@ mod tests {
         symlink("regular", join_path(&root, "regular-link").as_str()).unwrap();
 
         let root_capability = DirectoryCapability::open_root(&root).unwrap();
+        let first_entries = root_capability.read_directory().unwrap();
+        let second_entries = root_capability.read_directory().unwrap();
+        assert!(!first_entries.is_empty());
+        assert_eq!(first_entries.len(), second_entries.len());
+        assert!(
+            first_entries
+                .iter()
+                .zip(second_entries.iter())
+                .all(|(first, second)| {
+                    first.name == second.name
+                        && first.is_directory == second.is_directory
+                        && first.is_symlink == second.is_symlink
+                })
+        );
         let retained_file = root_capability.open_regular("regular").unwrap();
         assert_eq!(retained_file.metadata().unwrap().links, 1);
         assert!(root_capability.open_regular("regular-link").is_err());

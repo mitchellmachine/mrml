@@ -1258,15 +1258,11 @@ impl NativeDirectory {
     }
 
     pub fn try_clone(&self) -> Option<Self> {
-        const F_DUPFD_CLOEXEC: c_int = 1030;
-        let descriptor = unsafe { dirfd(self.0) };
-        if descriptor < 0 {
-            return None;
-        }
-        // SAFETY: `descriptor` is live for this call and fcntl returns a new
-        // independently owned close-on-exec descriptor or a negative error.
-        let duplicate = unsafe { fcntl(descriptor, F_DUPFD_CLOEXEC, 0) };
-        Self::from_descriptor(duplicate)
+        let current = CStr::from_bytes_with_nul(b".\0").ok()?;
+        // Reopening `.` beneath the retained descriptor creates an independent
+        // open-file description. `dup` would share the directory cursor and
+        // make later enumerations silently begin at end-of-directory.
+        self.open_beneath(current)
     }
 
     /// Opens a configured absolute root without following any symlink component.
