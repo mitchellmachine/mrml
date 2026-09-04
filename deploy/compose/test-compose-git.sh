@@ -39,7 +39,9 @@ require 'cap_drop: [ALL]' "$compose"
 require 'no-new-privileges:true' "$compose"
 require '443:8443/tcp' "$compose"
 require '443:8443/udp' "$compose"
-require 'mrml-runtime-certd-gitd:/run/mrml/certd-gitd:ro' "$compose"
+require 'source: mrml-runtime-certd-gitd' "$compose"
+require 'target: /run/mrml/certd-gitd' "$compose"
+require 'volume: {nocopy: true}' "$compose"
 require 'mrml-gitd-policies:/var/lib/mrml/git-policies:ro' "$compose"
 require 'mrml-gitd-repos:/mnt/mrml/gitd/repos:rw' "$compose"
 require 'name: "${MRML_VOLUME_PREFIX:-mrml}-gitd-repos"' "$compose"
@@ -49,6 +51,7 @@ require '/etc/mrml/authority/repositories.v1' "$compose"
 reject 'MRML_PROTECTED_REPOSITORY' "$compose"
 reject 'MRML_REPOSITORY_GENERATION' "$compose"
 require 'mrml-git-authority-secrets:/run/secrets:ro' "$compose"
+require 'source: mrml-runtime-git-authority' "$compose"
 require 'mrml-git-authority-transition:/run/mrml-transition:ro' "$compose"
 require '/var/lib/mrml/authority/generations' "$compose"
 require 'profiles: [admin]' "$compose"
@@ -89,6 +92,7 @@ require '/payload/rootfs/mnt/mrml/gitd/repos' "$gitd_dockerfile"
 require 'COPY --from=verify /payload/rootfs/ /' "$gitd_dockerfile"
 require '/payload/dirs/authority /var/lib/mrml/authority' "$authority_dockerfile"
 require 'docker volume create --label org.mrml.managed=true' deploy/compose/provision-git-host.sh
+require 'Docker volume copy-up sentinel' deploy/compose/provision-git-host.sh
 require 'wrong owner on Docker volume' deploy/compose/provision-git-host.sh
 require 'volume_name runtime-certd-gitd' deploy/compose/provision-git-host.sh
 require 'volume_name git-authority-transition' deploy/compose/provision-git-host.sh

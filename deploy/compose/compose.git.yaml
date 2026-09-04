@@ -47,7 +47,10 @@ services:
     volumes:
       - "mrml-authority-state:/var/lib/mrml/authority:rw"
       - "mrml-gitd-policies:/var/lib/mrml/git-policies:ro"
-      - "mrml-runtime-git-authority:/run/mrml/git-authority:rw"
+      - type: volume
+        source: mrml-runtime-git-authority
+        target: /run/mrml/git-authority
+        volume: {nocopy: true}
       - "mrml-git-authority-secrets:/run/secrets:ro"
       - "mrml-git-authority-config:/etc/mrml/authority:ro"
     command:
@@ -114,8 +117,16 @@ services:
       - "mrml-gitd-cache:/mnt/mrml/gitd/cache:rw"
       - "mrml-gitd-receipts:/mnt/mrml/gitd/receipts:rw"
       - "mrml-gitd-policies:/mnt/mrml/gitd/policies:ro"
-      - "mrml-runtime-git-authority:/run/mrml/git-authority:ro"
-      - "mrml-runtime-certd-gitd:/run/mrml/certd-gitd:ro"
+      - type: volume
+        source: mrml-runtime-git-authority
+        target: /run/mrml/git-authority
+        read_only: true
+        volume: {nocopy: true}
+      - type: volume
+        source: mrml-runtime-certd-gitd
+        target: /run/mrml/certd-gitd
+        read_only: true
+        volume: {nocopy: true}
       - "mrml-gitd-secrets:/run/secrets:ro"
       - "mrml-gitd-config:/etc/mrml:ro"
     command: [serve, /etc/mrml/gitd.conf, "${MRML_AUTHORITY_SIGNER_IDENTITY:?set MRML_AUTHORITY_SIGNER_IDENTITY}"]

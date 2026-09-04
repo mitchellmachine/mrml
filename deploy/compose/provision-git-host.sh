@@ -124,6 +124,8 @@ ensure_volume() {
     if [ "$created" = true ]; then
         chown "$uid:$gid" "$mountpoint" || fail "cannot set owner on Docker volume $name"
         chmod "$mode" "$mountpoint" || fail "cannot set mode on Docker volume $name"
+        install -o "$uid" -g "$gid" -m 0400 /dev/null "$mountpoint/.mrml-volume" ||
+            fail "cannot install Docker volume copy-up sentinel: $name"
     fi
     [ "$(stat -c '%u:%g' "$mountpoint")" = "$uid:$gid" ] || fail "wrong owner on Docker volume $name"
     [ "$(stat -c '%a' "$mountpoint")" = "$mode" ] || fail "wrong mode on Docker volume $name"

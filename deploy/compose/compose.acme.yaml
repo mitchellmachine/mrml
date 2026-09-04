@@ -24,7 +24,10 @@ services:
     volumes:
       - "mrml-certd-state:/var/lib/mrml/certd:rw"
       - "mrml-certd-publications:/var/lib/mrml/publications:rw"
-      - "mrml-runtime-certd-gitd:/run/mrml/certd-gitd:rw"
+      - type: volume
+        source: mrml-runtime-certd-gitd
+        target: /run/mrml/certd-gitd
+        volume: {nocopy: true}
       - "mrml-runtime-certd-acmed:/run/mrml/certd-acmed:rw"
       - "mrml-certd-secrets:/run/secrets:ro"
       - "mrml-certd-config:/etc/mrml/certd:ro"

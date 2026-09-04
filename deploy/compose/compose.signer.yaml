@@ -20,10 +20,24 @@ services:
       driver: local
       options: {max-size: 5m, max-file: "3"}
     volumes:
-      - "mrml-git-signer-state:/var/lib/mrml/git-protected-signer/state:rw"
-      - "mrml-git-signer-keys:/var/lib/mrml/git-protected-signer/keys:ro"
-      - "mrml-git-signer-channel:/run/secrets:ro"
-      - "mrml-runtime-git-signer:/run/mrml/git-protected-signer:rw"
+      - type: volume
+        source: mrml-git-signer-state
+        target: /var/lib/mrml/git-protected-signer/state
+        volume: {nocopy: true}
+      - type: volume
+        source: mrml-git-signer-keys
+        target: /var/lib/mrml/git-protected-signer/keys
+        read_only: true
+        volume: {nocopy: true}
+      - type: volume
+        source: mrml-git-signer-channel
+        target: /run/secrets
+        read_only: true
+        volume: {nocopy: true}
+      - type: volume
+        source: mrml-runtime-git-signer
+        target: /run/mrml/git-protected-signer
+        volume: {nocopy: true}
     command:
       - serve
       - /run/mrml/git-protected-signer/signer.sock
