@@ -38,7 +38,8 @@ require 'read_only: true' "$compose"
 require 'cap_drop: [ALL]' "$compose"
 require 'no-new-privileges:true' "$compose"
 require '443:8443/tcp' "$compose"
-require '443:8443/udp' "$compose"
+require 'command: [serve-h2,' "$compose"
+reject '443:8443/udp' "$compose"
 require 'source: mrml-runtime-certd-gitd' "$compose"
 require 'target: /run/mrml/certd-gitd' "$compose"
 require 'volume: {nocopy: true}' "$compose"
@@ -74,8 +75,8 @@ reject '/runtime/git-authority:/run/mrml/git-authority' "$compose"
 reject '${MRML_DEPLOY_ROOT' "$compose"
 
 published=$(grep -c '443:8443/' "$compose")
-[ "$published" -eq 2 ] || {
-  echo "Gitd must publish exactly TCP and UDP port 443" >&2
+[ "$published" -eq 1 ] || {
+  echo "H2-only Gitd must publish exactly TCP port 443" >&2
   exit 1
 }
 

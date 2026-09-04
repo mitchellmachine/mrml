@@ -20,7 +20,7 @@ use mrml_gitd::{
 };
 use mrml_http::{AccessScopes, RepositoryIdentity};
 use mrml_openpgp::{MAX_OPENPGP_PUBLIC_KEY_BYTES, parse_public_key_v6_ascii};
-use mrml_runtime::DirectoryCapability;
+use mrml_runtime::{DirectoryCapability, TcpListener};
 
 const REQUEST_ID_LEASE_SIZE: u64 = 1 << 32;
 
@@ -288,8 +288,8 @@ fn run() -> Result<(), ()> {
             );
             return Ok(());
         }
-        if command == "serve" {
-            return serve(Path::new(config_path), signer_identity);
+        if command == "serve" || command == "serve-h2" {
+            return serve(Path::new(config_path), signer_identity, command == "serve");
         }
         if command != "dependencies-health" && command != "recover-safe" {
             return Err(());
@@ -393,7 +393,7 @@ fn run() -> Result<(), ()> {
     ] = arguments.as_slice()
     else {
         eprintln!(
-            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | recovery-status CONFIG | initialize-repository CONFIG REPOSITORY | initialize-protected-policy CONFIG REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC VALID_FROM VALID_UNTIL | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | recover-safe CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
+            "usage: mrml-gitd validate-config CONFIG | listener-health CONFIG | recovery-status CONFIG | initialize-repository CONFIG REPOSITORY | initialize-protected-policy CONFIG REPOSITORY OPENPGP_PUBLIC ML_DSA_PUBLIC VALID_FROM VALID_UNTIL | initialize-token-store TOKEN_STORE PEPPER EXPECTED_UID | issue-token TOKEN_STORE PEPPER EXPECTED_UID REPOSITORY SCOPES VALID_FROM EXPIRES_AT REVOCATION_GENERATION LABEL | revoke-token TOKEN_STORE PEPPER EXPECTED_UID < TOKEN | dependencies-health CONFIG SIGNER_IDENTITY_HEX | recover-safe CONFIG SIGNER_IDENTITY_HEX | serve-h2 CONFIG SIGNER_IDENTITY_HEX | serve CONFIG SIGNER_IDENTITY_HEX | authority-health SOCKET CAPABILITY OWN_UID OWN_GID AUTHORITY_UID AUTHORITY_GID SIGNER_IDENTITY_HEX REQUEST_ID"
         );
         std::process::exit(64);
     };
@@ -432,7 +432,7 @@ fn parse_scopes(input: &str) -> Result<AccessScopes, ()> {
     }
 }
 
-fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
+fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Result<(), ()> {
     let _termination_signals = TerminationSignals::install()?;
     let config = load_gitd_config(config_path).map_err(|_| ())?;
     validate_storage_layout(&config).map_err(|_| ())?;
@@ -498,7 +498,9 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             eprintln!("component=mrml-gitd event=startup_identity_fetch_failed category={error:?}");
         })?;
     let identity = validate_identity_snapshot(identity, None).map_err(|error| {
-        eprintln!("component=mrml-gitd event=startup_identity_validation_failed category={error:?}");
+        eprintln!(
+            "component=mrml-gitd event=startup_identity_validation_failed category={error:?}"
+        );
     })?;
     prove_identity_signing_route(&mut certd, &identity, 1).map_err(|error| {
         eprintln!("component=mrml-gitd event=startup_signing_probe_failed category={error:?}");
@@ -509,7 +511,9 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     let identity_generation = identity.snapshot().identity_generation;
     let tls_config =
         build_certd_tls_server_config_with_route(identity, &signing_route).map_err(|error| {
-            eprintln!("component=mrml-gitd event=startup_tls_configuration_failed category={error:?}");
+            eprintln!(
+                "component=mrml-gitd event=startup_tls_configuration_failed category={error:?}"
+            );
         })?;
     let tls = Arc::new(GitdTlsConfigStore::new(identity_generation, tls_config).map_err(|_| ())?);
     operational_event("startup_identity_authenticated");
@@ -535,30 +539,57 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
     if !(4..=65_536).contains(&maximum_connections) {
         return Err(());
     }
-    let http2_maximum = maximum_connections / 2;
+    let http2_maximum = if enable_http3 {
+        maximum_connections / 2
+    } else {
+        maximum_connections
+    };
     let http3_maximum = maximum_connections - http2_maximum;
     let http2_workers = http2_maximum.min(16).min(http2_maximum / 2).max(1);
-    let http3_workers = http3_maximum.min(16).min(http3_maximum / 2).max(1);
     let http2_queue = http2_maximum.checked_sub(http2_workers).ok_or(())?;
-    let http3_queue = http3_maximum.checked_sub(http3_workers).ok_or(())?;
-    if http2_queue == 0 || http3_queue == 0 {
+    if http2_queue == 0 {
         return Err(());
     }
 
-    let retry_key = load_quic_retry_key(&config.quic_retry_key, config.gitd_uid).map_err(|_| ())?;
-    let mut listeners = GitdBoundListeners::bind(
-        [0, 0, 0, 0],
-        config.listen_port,
-        u32::try_from(http3_maximum).map_err(|_| ())?,
-    )
-    .map_err(|_| ())?;
-    listeners
-        .configure_public_quic(
-            retry_key,
-            config.quic_retry_generation,
+    let mut http3_listener = None;
+    let tcp = if enable_http3 {
+        let http3_workers = http3_maximum.min(16).min(http3_maximum / 2).max(1);
+        let http3_queue = http3_maximum.checked_sub(http3_workers).ok_or(())?;
+        if http3_queue == 0 {
+            return Err(());
+        }
+        let retry_key =
+            load_quic_retry_key(&config.quic_retry_key, config.gitd_uid).map_err(|_| ())?;
+        let mut listeners = GitdBoundListeners::bind(
+            [0, 0, 0, 0],
+            config.listen_port,
             u32::try_from(http3_maximum).map_err(|_| ())?,
         )
         .map_err(|_| ())?;
+        listeners
+            .configure_public_quic(
+                retry_key,
+                config.quic_retry_generation,
+                u32::try_from(http3_maximum).map_err(|_| ())?,
+            )
+            .map_err(|_| ())?;
+        let http3 = GitdHttp3WorkerPool::new(
+            &service,
+            tls.clone(),
+            http3_workers,
+            http3_queue,
+            http3_maximum,
+            8 * 1024 * 1024,
+            config.max_body_bytes,
+        )
+        .map_err(|_| ())?;
+        let reactor = GitdHttp3Reactor::new(http3, 256 * 1024, 64).map_err(|_| ())?;
+        let (tcp, quic) = listeners.into_parts();
+        http3_listener = Some((reactor, quic));
+        tcp
+    } else {
+        TcpListener::bind([0, 0, 0, 0], config.listen_port).map_err(|_| ())?
+    };
     let http2 = GitdHttp2WorkerPool::new(
         &service,
         tls.clone(),
@@ -572,18 +603,6 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             .ok_or(())?,
     )
     .map_err(|_| ())?;
-    let http3 = GitdHttp3WorkerPool::new(
-        &service,
-        tls.clone(),
-        http3_workers,
-        http3_queue,
-        http3_maximum,
-        8 * 1024 * 1024,
-        config.max_body_bytes,
-    )
-    .map_err(|_| ())?;
-    let reactor = GitdHttp3Reactor::new(http3, 256 * 1024, 64).map_err(|_| ())?;
-    let (tcp, mut quic) = listeners.into_parts();
     operational_event("startup_listeners_bound");
     let fatal = Arc::new(AtomicBool::new(false));
     let terminating = Arc::new(AtomicBool::new(false));
@@ -668,7 +687,9 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
             rotation_stop.store(true, Ordering::Release);
             authentication_stop.store(true, Ordering::Release);
             let _ = mrml_runtime::TcpStream::connect([127, 0, 0, 1], config.listen_port);
-            let quic_result = reactor.shutdown(&mut quic);
+            let quic_result = http3_listener.take().map_or(Ok(()), |(reactor, mut quic)| {
+                reactor.shutdown(&mut quic).map(|_| ())
+            });
             let rotation_result = rotation_worker.join();
             let authentication_result = authentication_worker.join();
             let tcp_result = _tcp_worker.join();
@@ -684,21 +705,31 @@ fn serve(config_path: &Path, signer_identity: &str) -> Result<(), ()> {
         if fatal.load(Ordering::Acquire) {
             operational_event("fatal_dependency_failure");
             operational_health.begin_drain();
-            let _ = reactor.shutdown(&mut quic);
+            if let Some((reactor, mut quic)) = http3_listener.take() {
+                let _ = reactor.shutdown(&mut quic);
+            }
             rotation_stop.store(true, Ordering::Release);
             authentication_stop.store(true, Ordering::Release);
             let _ = rotation_worker.join();
             let _ = authentication_worker.join();
             return Err(());
         }
-        if reactor.step(&mut quic).is_err() {
+        let http3_failed = if let Some((reactor, quic)) = http3_listener.as_mut() {
+            reactor.step(quic).is_err()
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            false
+        };
+        if http3_failed {
             if TERMINATION_SIGNALLED.load(Ordering::Acquire) {
                 terminating.store(true, Ordering::Release);
                 continue;
             }
             operational_health.fail();
             operational_event("fatal_http3_failure");
-            let _ = reactor.shutdown(&mut quic);
+            if let Some((reactor, mut quic)) = http3_listener.take() {
+                let _ = reactor.shutdown(&mut quic);
+            }
             fatal.store(true, Ordering::Release);
             rotation_stop.store(true, Ordering::Release);
             authentication_stop.store(true, Ordering::Release);
