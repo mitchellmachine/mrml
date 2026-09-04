@@ -137,6 +137,18 @@ root solely so restore can apply authenticated ownership, has a fixed
 or Gitd/authority daemon. Compose must still drop all capabilities for create
 and verify and add only the metadata capabilities required by restore.
 
+The backup and restore Compose definitions use named volumes exclusively. The
+backup service receives the ten authoritative source volumes read-only, plus a
+read-write archive volume and private key volume; it has no network and only
+`DAC_READ_SEARCH` for cold inspection. The restore service receives archives
+and key read-only and ten newly created disposable namespace volumes read-write;
+it has no network and only `CHOWN`, `FOWNER`, and `DAC_OVERRIDE` for faithfully
+reconstructing authenticated metadata. It receives no source volume and neither
+service receives a container-engine socket. The operator refuses running Gitd
+or authority, existing target names, noncanonical generations, and unsafe
+namespace names. Backup-key generation occurs inside the key volume and never
+through a host bind directory.
+
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,
 and authenticated EOF in a conventional encrypted-record stream. It introduces

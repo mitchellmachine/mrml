@@ -1,0 +1,47 @@
+services:
+  git-backup:
+    profiles: [admin]
+    image: "mrml/git-backup:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 16
+    mem_limit: 256m
+    cpus: 1.0
+    restart: "no"
+    ulimits:
+      nofile: {soft: 256, hard: 256}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=0,gid=0,mode=0700
+    volumes:
+      - "mrml-git-backups:/backup:rw"
+      - "mrml-git-backup-key:/backup-key:rw"
+      - "mrml-gitd-repos:/source/gitd-repos:ro"
+      - "mrml-gitd-state:/source/gitd-state:ro"
+      - "mrml-gitd-quarantine:/source/gitd-quarantine:ro"
+      - "mrml-gitd-receipts:/source/gitd-receipts:ro"
+      - "mrml-gitd-policies:/source/gitd-policies:ro"
+      - "mrml-gitd-secrets:/source/gitd-secrets:ro"
+      - "mrml-gitd-config:/source/gitd-config:ro"
+      - "mrml-authority-state:/source/authority-state:ro"
+      - "mrml-git-authority-secrets:/source/authority-secrets:ro"
+      - "mrml-git-authority-config:/source/authority-config:ro"
+
+volumes:
+  mrml-git-backups: {external: true, name: mrml-git-backups}
+  mrml-git-backup-key: {external: true, name: mrml-git-backup-key}
+  mrml-gitd-repos: {external: true, name: mrml-gitd-repos}
+  mrml-gitd-state: {external: true, name: mrml-gitd-state}
+  mrml-gitd-quarantine: {external: true, name: mrml-gitd-quarantine}
+  mrml-gitd-receipts: {external: true, name: mrml-gitd-receipts}
+  mrml-gitd-policies: {external: true, name: mrml-gitd-policies}
+  mrml-gitd-secrets: {external: true, name: mrml-gitd-secrets}
+  mrml-gitd-config: {external: true, name: mrml-gitd-config}
+  mrml-authority-state: {external: true, name: mrml-authority-state}
+  mrml-git-authority-secrets: {external: true, name: mrml-git-authority-secrets}
+  mrml-git-authority-config: {external: true, name: mrml-git-authority-config}

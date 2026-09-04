@@ -131,6 +131,8 @@ ensure_volume mrml-git-authority-config 0 0 755
 ensure_volume mrml-git-authority-transition "$authority_uid" "$authority_gid" 755
 ensure_volume mrml-gitd-secrets "$gitd_uid" "$gitd_gid" 700
 ensure_volume mrml-gitd-config 0 0 755
+ensure_volume mrml-git-backups 0 0 700
+ensure_volume mrml-git-backup-key 0 0 700
 
 authority_mount=$(docker volume inspect --format '{{.Mountpoint}}' mrml-authority-state) ||
     fail "cannot inspect authority state volume"

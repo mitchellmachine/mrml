@@ -49,6 +49,9 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
+    if arguments.as_slice() == [arguments[0].as_str(), "ensure-key"] {
+        return ensure_backup_key();
+    }
     let [_, command, generation] = arguments.as_slice() else {
         usage();
         return Err(());
@@ -66,6 +69,35 @@ fn run() -> Result<(), ()> {
     };
     erase_secret_bytes(&mut key);
     result
+}
+
+fn ensure_backup_key() -> Result<(), ()> {
+    let root = DirectoryCapability::open_root(KEY_ROOT).map_err(|_| ())?;
+    validate_private_key_root(&root)?;
+    if root.open_regular(KEY_NAME).is_ok() {
+        let mut key = read_backup_key()?;
+        erase_secret_bytes(&mut key);
+        return Ok(());
+    }
+    let mut key = [0u8; 32];
+    for _ in 0..8 {
+        fill_random(&mut key).map_err(|_| ())?;
+        if key != [0; 32] {
+            break;
+        }
+    }
+    if key == [0; 32] {
+        return Err(());
+    }
+    let mut file = root.create_new_file(KEY_NAME, 0o400).map_err(|_| ())?;
+    let result = file.write_all(&key).and_then(|()| file.sync());
+    erase_secret_bytes(&mut key);
+    result.map_err(|_| ())?;
+    drop(file);
+    root.sync().map_err(|_| ())?;
+    let mut reread = read_backup_key()?;
+    erase_secret_bytes(&mut reread);
+    Ok(())
 }
 
 fn create(generation: u64, key: &[u8; 32]) -> Result<(), ()> {
@@ -146,14 +178,7 @@ fn source_config() -> Result<mrml_gitd::GitdConfig, ()> {
 
 fn read_backup_key() -> Result<[u8; 32], ()> {
     let root = DirectoryCapability::open_root(KEY_ROOT).map_err(|_| ())?;
-    let root_metadata = root.metadata().map_err(|_| ())?;
-    if root_metadata.mode & 0o170000 != 0o040000
-        || root_metadata.mode & 0o022 != 0
-        || root_metadata.uid != 0
-        || root_metadata.links < 2
-    {
-        return Err(());
-    }
+    validate_private_key_root(&root)?;
     let mut file = root.open_regular(KEY_NAME).map_err(|_| ())?;
     let metadata = file.metadata().map_err(|_| ())?;
     if metadata.mode & 0o170000 != 0o100000
@@ -171,6 +196,18 @@ fn read_backup_key() -> Result<[u8; 32], ()> {
         return Err(());
     }
     Ok(key)
+}
+
+fn validate_private_key_root(root: &DirectoryCapability) -> Result<(), ()> {
+    let root_metadata = root.metadata().map_err(|_| ())?;
+    if root_metadata.mode & 0o170000 != 0o040000
+        || root_metadata.mode & 0o022 != 0
+        || root_metadata.uid != 0
+        || root_metadata.links < 2
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 fn random_header(generation: u64) -> Result<BackupStreamHeader, ()> {

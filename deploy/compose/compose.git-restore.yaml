@@ -1,0 +1,47 @@
+services:
+  git-restore:
+    profiles: [admin]
+    image: "mrml/git-backup:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 16
+    mem_limit: 256m
+    cpus: 1.0
+    restart: "no"
+    ulimits:
+      nofile: {soft: 256, hard: 256}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=0,gid=0,mode=0700
+    volumes:
+      - "mrml-git-backups:/backup:ro"
+      - "mrml-git-backup-key:/backup-key:ro"
+      - "restore-gitd-repos:/restore/gitd-repos:rw"
+      - "restore-gitd-state:/restore/gitd-state:rw"
+      - "restore-gitd-quarantine:/restore/gitd-quarantine:rw"
+      - "restore-gitd-receipts:/restore/gitd-receipts:rw"
+      - "restore-gitd-policies:/restore/gitd-policies:rw"
+      - "restore-gitd-secrets:/restore/gitd-secrets:rw"
+      - "restore-gitd-config:/restore/gitd-config:rw"
+      - "restore-authority-state:/restore/authority-state:rw"
+      - "restore-authority-secrets:/restore/authority-secrets:rw"
+      - "restore-authority-config:/restore/authority-config:rw"
+
+volumes:
+  mrml-git-backups: {external: true, name: mrml-git-backups}
+  mrml-git-backup-key: {external: true, name: mrml-git-backup-key}
+  restore-gitd-repos: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-repos"}
+  restore-gitd-state: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-state"}
+  restore-gitd-quarantine: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-quarantine"}
+  restore-gitd-receipts: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-receipts"}
+  restore-gitd-policies: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-policies"}
+  restore-gitd-secrets: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-secrets"}
+  restore-gitd-config: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-gitd-config"}
+  restore-authority-state: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-authority-state"}
+  restore-authority-secrets: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-authority-secrets"}
+  restore-authority-config: {external: true, name: "${MRML_GIT_RESTORE_NAMESPACE:?set MRML_GIT_RESTORE_NAMESPACE}-authority-config"}

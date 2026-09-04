@@ -9,6 +9,8 @@ if grep -F "gitd-certd-test-fixture" "$compose" >/dev/null; then
 fi
 gitd_dockerfile=${2:-deploy/compose/Dockerfile.gitd}
 authority_dockerfile=${3:-deploy/compose/Dockerfile.git-authority}
+backup_compose=${4:-deploy/compose/compose.git-backup.yaml}
+restore_compose=${5:-deploy/compose/compose.git-restore.yaml}
 
 require() {
   pattern=$1 file=$2
@@ -110,10 +112,31 @@ require 'docker load -i' deploy/compose/load-offline-git-images.sh
 require 'loaded image runtime identity does not match images.git.lock' deploy/compose/load-offline-git-images.sh
 require 'archive_sha256=' deploy/compose/build-offline-git-bundle.sh
 require 'localhost/mrml/$image:$version' deploy/compose/load-offline-git-images.sh
-require 'managed-volume backup must run as root' deploy/compose/backup-git.sh
-require 'mrml-gitd-repos' deploy/compose/backup-git.sh
+require 'compose.git-backup.yaml' deploy/compose/backup-git.sh
+require 'git-backup ensure-key' deploy/compose/backup-git.sh
+require 'git-backup create' deploy/compose/backup-git.sh
+require 'git-backup verify' deploy/compose/backup-git.sh
 require 'restore requires absent Docker volume' deploy/compose/restore-git.sh
-require 'strip-components' deploy/compose/restore-git.sh
+require 'org.mrml.restore-disposable=true' deploy/compose/restore-git.sh
+require 'services remain disabled' deploy/compose/restore-git.sh
+require 'image: "mrml/git-backup:' "$backup_compose"
+require 'cap_add: [DAC_READ_SEARCH]' "$backup_compose"
+require 'mrml-git-backups:/backup:rw' "$backup_compose"
+require 'mrml-git-backup-key:/backup-key:rw' "$backup_compose"
+require 'mrml-gitd-repos:/source/gitd-repos:ro' "$backup_compose"
+require 'image: "mrml/git-backup:' "$restore_compose"
+require 'cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]' "$restore_compose"
+require 'mrml-git-backups:/backup:ro' "$restore_compose"
+require 'mrml-git-backup-key:/backup-key:ro' "$restore_compose"
+require 'MRML_GIT_RESTORE_NAMESPACE' "$restore_compose"
+reject '/var/run/docker.sock' "$backup_compose"
+reject '/var/run/docker.sock' "$restore_compose"
+reject 'privileged:' "$backup_compose"
+reject 'privileged:' "$restore_compose"
+reject 'network_mode: host' "$backup_compose"
+reject 'network_mode: host' "$restore_compose"
+require 'ensure_volume mrml-git-backups 0 0 700' deploy/compose/provision-git-host.sh
+require 'ensure_volume mrml-git-backup-key 0 0 700' deploy/compose/provision-git-host.sh
 require 'run --rm --no-deps' deploy/compose/initialize-git.sh
 require 'initialize-token-store' deploy/compose/initialize-git.sh
 require 'repository initialization requires stopped Gitd' deploy/compose/initialize-git-repository.sh
