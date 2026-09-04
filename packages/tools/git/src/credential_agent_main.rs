@@ -10,6 +10,8 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -20,6 +22,10 @@ const O_CLOEXEC: i32 = 0o2000000;
 
 unsafe extern "C" {
     fn chown(path: *const core::ffi::c_char, owner: u32, group: u32) -> i32;
+    fn sigemptyset(set: *mut NativeSignalSet) -> i32;
+    fn sigaddset(set: *mut NativeSignalSet, signal: i32) -> i32;
+    fn pthread_sigmask(how: i32, set: *const NativeSignalSet, old: *mut NativeSignalSet) -> i32;
+    fn sigwait(set: *const NativeSignalSet, signal: *mut i32) -> i32;
 }
 
 struct Config {
@@ -40,6 +46,16 @@ struct Config {
 
 struct Secret(Vec<u8>);
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NativeSignalSet {
+    bits: [u64; 16],
+}
+
+struct TerminationSignals {
+    set: NativeSignalSet,
+}
+
 impl Drop for Secret {
     fn drop(&mut self) {
         erase(&mut self.0);
@@ -57,6 +73,7 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let config = parse_config(std::env::args().skip(1).collect())?;
+    let signals = TerminationSignals::block_current()?;
     let mut capability_bytes = read_secret(&config.capability_file, 32, config.owner_uid)?;
     let mut capability_array = [0; 32];
     capability_array.copy_from_slice(&capability_bytes);
@@ -76,19 +93,59 @@ fn run() -> Result<(), ()> {
     let listener = UnixListener::bind(&config.socket).map_err(|_| ())?;
     fs::set_permissions(&config.socket, fs::Permissions::from_mode(0o660)).map_err(|_| ())?;
     set_owner(&config.socket, config.owner_uid, config.socket_gid)?;
+    let socket_metadata = fs::symlink_metadata(&config.socket).map_err(|_| ())?;
+    if !socket_metadata.file_type().is_socket()
+        || socket_metadata.uid() != config.owner_uid
+        || socket_metadata.gid() != config.socket_gid
+        || socket_metadata.mode() & 0o777 != 0o660
+    {
+        return Err(());
+    }
+    let socket_device = socket_metadata.dev();
+    let socket_inode = socket_metadata.ino();
+    let terminating = Arc::new(AtomicBool::new(false));
+    let waiter_terminating = terminating.clone();
+    let wake_socket = config.socket.clone();
+    let signal_waiter = std::thread::spawn(move || {
+        if signals.wait().is_ok() {
+            waiter_terminating.store(true, Ordering::Release);
+            let _ = UnixStream::connect(wake_socket);
+        }
+    });
     eprintln!(
         "component=mrml-git-credential-agent event=ready generation={}",
         config.generation
     );
-    for incoming in listener.incoming() {
-        let Ok(mut stream) = incoming else { continue };
+    while !terminating.load(Ordering::Acquire) {
+        let Ok((mut stream, _)) = listener.accept() else {
+            if terminating.load(Ordering::Acquire) {
+                break;
+            }
+            continue;
+        };
+        if terminating.load(Ordering::Acquire) {
+            break;
+        }
         if handle(&mut stream, &config, &capability, &token.0).is_err() {
             eprintln!(
                 "component=mrml-git-credential-agent event=request_rejected category=invalid_or_unauthorized"
             );
         }
     }
-    Err(())
+    signal_waiter.join().map_err(|_| ())?;
+    let metadata = fs::symlink_metadata(&config.socket).map_err(|_| ())?;
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != config.owner_uid
+        || metadata.gid() != config.socket_gid
+        || metadata.mode() & 0o777 != 0o660
+        || metadata.dev() != socket_device
+        || metadata.ino() != socket_inode
+    {
+        return Err(());
+    }
+    fs::remove_file(&config.socket).map_err(|_| ())?;
+    eprintln!("component=mrml-git-credential-agent event=shutdown_complete");
+    Ok(())
 }
 
 fn handle(
@@ -295,6 +352,32 @@ fn erase(bytes: &mut [u8]) {
         unsafe { core::ptr::write_volatile(byte, 0) };
     }
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+}
+
+impl TerminationSignals {
+    fn block_current() -> Result<Self, ()> {
+        const SIG_BLOCK: i32 = 0;
+        const SIGINT: i32 = 2;
+        const SIGTERM: i32 = 15;
+        let mut set = NativeSignalSet { bits: [0; 16] };
+        if unsafe { sigemptyset(&mut set) } != 0
+            || unsafe { sigaddset(&mut set, SIGINT) } != 0
+            || unsafe { sigaddset(&mut set, SIGTERM) } != 0
+            || unsafe { pthread_sigmask(SIG_BLOCK, &set, core::ptr::null_mut()) } != 0
+        {
+            return Err(());
+        }
+        Ok(Self { set })
+    }
+
+    fn wait(self) -> Result<i32, ()> {
+        let mut signal = 0;
+        if unsafe { sigwait(&self.set, &mut signal) } == 0 && matches!(signal, 2 | 15) {
+            Ok(signal)
+        } else {
+            Err(())
+        }
+    }
 }
 
 #[cfg(test)]
