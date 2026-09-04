@@ -97,6 +97,13 @@ the authenticated empty terminal frame and physical end of input. Wrong keys,
 frame or payload tampering, reordered sequences, truncation, unexpected payload
 bytes, and bytes after authenticated EOF fail closed before any restore write.
 
+The Linux/runtime retained-file mechanism now supports descriptor-scoped owner
+and mode application for restore. It invokes `fchown` and then `fchmod` only on
+an already-open retained regular file or directory, validates the permission
+width, and never converts the object back into an ambient path. The restore
+service must retain the narrow container capabilities required for these calls;
+ordinary Gitd and authority services remain capability-dropped.
+
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,
 and authenticated EOF in a conventional encrypted-record stream. It introduces

@@ -242,6 +242,16 @@ impl DirectoryCapability {
             device: metadata.device,
         })
     }
+
+    /// Applies owner and permission metadata to this retained directory. The
+    /// operation never resolves an ambient path and requires operating-system
+    /// privilege for ownership changes.
+    pub fn set_owner_mode(&self, uid: u32, gid: u32, mode: u32) -> Result<(), FileError> {
+        self.inner
+            .set_owner_mode(uid, gid, mode)
+            .then_some(())
+            .ok_or(FileError::WriteFailed)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -932,6 +942,14 @@ impl File {
         })
     }
 
+    /// Applies owner and permission metadata to this retained regular file.
+    pub fn set_owner_mode(&self, uid: u32, gid: u32, mode: u32) -> Result<(), FileError> {
+        self.inner
+            .set_owner_mode(uid, gid, mode)
+            .then_some(())
+            .ok_or(FileError::WriteFailed)
+    }
+
     pub const fn position(&self) -> u64 {
         self.position
     }
@@ -1202,6 +1220,14 @@ mod tests {
         temporary.write_all(b"generation").unwrap();
         temporary.sync().unwrap();
         assert_eq!(temporary.metadata().unwrap().mode & 0o777, 0o600);
+        let temporary_metadata = temporary.metadata().unwrap();
+        temporary
+            .set_owner_mode(temporary_metadata.uid, temporary_metadata.gid, 0o640)
+            .unwrap();
+        assert_eq!(temporary.metadata().unwrap().mode & 0o777, 0o640);
+        temporary
+            .set_owner_mode(temporary_metadata.uid, temporary_metadata.gid, 0o600)
+            .unwrap();
         drop(temporary);
         root_capability
             .hard_link_child("state.new", "state.initial")
@@ -1240,6 +1266,11 @@ mod tests {
             assert!(root_capability.remove_directory(invalid).is_err());
         }
         let empty = root_capability.create_directory("empty", 0o700).unwrap();
+        let empty_metadata = empty.metadata().unwrap();
+        empty
+            .set_owner_mode(empty_metadata.uid, empty_metadata.gid, 0o750)
+            .unwrap();
+        assert_eq!(empty.metadata().unwrap().mode & 0o777, 0o750);
         drop(empty);
         root_capability.remove_directory("empty").unwrap();
         assert!(root_capability.open_directory("empty").is_err());

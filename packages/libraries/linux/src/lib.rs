@@ -104,6 +104,8 @@ unsafe extern "C" {
     fn fsync(file: c_int) -> c_int;
     fn flock(file: c_int, operation: c_int) -> c_int;
     fn fstat(file: c_int, status: *mut Stat) -> c_int;
+    fn fchown(file: c_int, owner: u32, group: u32) -> c_int;
+    fn fchmod(file: c_int, mode: u32) -> c_int;
     fn geteuid() -> u32;
     fn mkdir(path: *const i8, mode: u32) -> c_int;
     fn mkdirat(directory: c_int, path: *const i8, mode: u32) -> c_int;
@@ -1123,6 +1125,12 @@ impl NativeFile {
     pub fn metadata(&self) -> Option<NativeFileMetadata> {
         metadata_for_descriptor(self.0)
     }
+
+    pub fn set_owner_mode(&self, owner: u32, group: u32, mode: u32) -> bool {
+        mode & !0o7777 == 0
+            && unsafe { fchown(self.0, owner, group) } == 0
+            && unsafe { fchmod(self.0, mode) } == 0
+    }
 }
 
 #[cfg(unix)]
@@ -1276,6 +1284,14 @@ impl NativeDirectory {
         // open-file description. `dup` would share the directory cursor and
         // make later enumerations silently begin at end-of-directory.
         self.open_beneath(current)
+    }
+
+    pub fn set_owner_mode(&self, owner: u32, group: u32, mode: u32) -> bool {
+        let descriptor = unsafe { dirfd(self.0) };
+        descriptor >= 0
+            && mode & !0o7777 == 0
+            && unsafe { fchown(descriptor, owner, group) } == 0
+            && unsafe { fchmod(descriptor, mode) } == 0
     }
 
     /// Opens a configured absolute root without following any symlink component.
