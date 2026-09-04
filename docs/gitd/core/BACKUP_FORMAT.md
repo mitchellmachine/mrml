@@ -1,9 +1,10 @@
 # Git backup stream
 
-Status: **PARTIALLY IMPLEMENTED**. The bounded authenticated-encryption framing
-primitive and hostile frame tests are implemented. Canonical inventory records,
-the stopped one-shot backup/restore service, named-volume Compose wiring, and a
-destructive disposable-namespace restore test remain acceptance gates.
+Status: **PARTIALLY IMPLEMENTED**. The bounded authenticated-encryption framing,
+canonical inventory/generation records, and hostile parser tests are
+implemented. The stopped one-shot backup/restore service, named-volume Compose
+wiring, and a destructive disposable-namespace restore test remain acceptance
+gates.
 
 ## Security boundary
 
@@ -36,12 +37,21 @@ reordered sequences, unknown flags, nonzero reserved fields, oversized frames,
 noncanonical final frames, tag changes, and truncation. Authentication failure
 clears the affected plaintext output.
 
-This framing alone is not a backup. The subsequent inventory layer must bind
-all required logical named volumes, canonical ordered paths, types, modes,
-owners, sizes, content digests, repository generations, authority generations,
-and the excluded disposable cache. Restore must authenticate the complete
-stream before publishing any target namespace and must reject missing, extra,
-duplicated, reordered, stale, or corrupt records.
+The canonical inventory declares the complete fixed mask of ten authoritative
+logical volumes; cache is deliberately absent. It binds a nonzero backup
+generation, ordered unique repository identities, repository/pack/trust/
+revocation generations, the matching authority generation when protected, and
+up to 1,000,000 ordered unique filesystem entries. Each entry binds its logical
+volume, bounded safe UTF-8 relative path, directory-or-regular-file type, mode,
+UID, GID, size, and SHA-256 content digest. Directories have zero size and
+digest. The inventory is limited to 64 MiB and ends in a digest that detects
+internal corruption independently of the enclosing encrypted frames.
+
+Restore must still authenticate the complete stream before publishing any
+target namespace and reject a runtime source/target that does not exact-match
+the manifest. The service layer remains responsible for proving every declared
+volume was mounted, generating the inventory from a cold consistent snapshot,
+streaming file bytes, and ensuring no missing or extra entry exists.
 
 Patent review: **NOT_TRIGGERED**. This increment composes standardized
 AES-GCM, HMAC-SHA-256 key derivation, explicit sequence numbers, bounded chunks,

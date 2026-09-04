@@ -10,6 +10,7 @@ mod authority_candidate;
 mod authority_client;
 mod authority_wire;
 mod backup_stream;
+mod backup_inventory;
 mod cache_pack;
 mod cache_pack_file;
 mod compaction;
@@ -97,6 +98,12 @@ pub use authority_wire::{
 pub use backup_stream::{
     BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES, BackupStreamError, BackupStreamHeader,
     encode_backup_stream_header, open_backup_frame, parse_backup_stream_header, seal_backup_frame,
+};
+pub use backup_inventory::{
+    BACKUP_VOLUME_MASK, BackupInventory, BackupInventoryEntry, BackupInventoryError,
+    BackupInventoryFileKind, BackupRepositoryGeneration, BackupVolume,
+    MAX_BACKUP_INVENTORY_BYTES, MAX_BACKUP_INVENTORY_ENTRIES, encode_backup_inventory,
+    parse_backup_inventory,
 };
 pub use cache_pack::{
     ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES, MAX_PACK_CACHE_KEY_BYTES,
