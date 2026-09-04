@@ -371,9 +371,26 @@ without changing the environment. It does not simulate storage media
 lying about synchronization or termination inside individual cryptographic
 verification instructions.
 
-Remaining Phase 24 work is process-kill injection around signature-verification
-completion and authority trust-snapshot publication, plus the broader release
-gates listed in earlier records.
+The authority daemon test suite now also runs the full generated-key transition
+fixture in child processes and kills it at two exact internal boundaries: after
+both old/new hybrid authorizations verify, and after the immutable successor
+verification-key snapshot is synchronized but before policy selection. In both
+cases the reopened durable policy remains at generation 1. The first boundary
+has no generation-2 key snapshot; the second has both exact generation-2 public
+key files but does not expose them through a selected policy. Re-running against
+the same durable directory completes overlap generation 2, verifies exact
+selection and rollback rejection, completes old-key retirement generation 3,
+and selects only the surviving pair. The focused command was:
+
+```text
+target/release/mrml test org.mrml.service.git-authority --target linux
+```
+
+It passed 13 authority-library tests and 9 daemon tests. The complete transition
+fixture is intentionally ignored as a standalone top-level test and is executed
+twice by the passing process-kill matrix, avoiding nested test-output capture.
+This completes the Phase 24 process-kill boundary matrix. Broader release gates
+listed in earlier records remain.
 This controlled hosted-Linux
 exercise used test keys, a loopback listener, and a certificate fixture; it is
 not public-service, real-certificate-renewal, production-key, malicious-storage,

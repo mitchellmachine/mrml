@@ -607,6 +607,8 @@ fn transition_policy(
         &mut scratch,
     )
     .map_err(|_| transition_failure("next_authorization"))?;
+    #[cfg(test)]
+    pause_transition_test_boundary(&policy_path, "signature-verification-complete");
     install_transition_verifier(
         &policy_path,
         next.generation(),
@@ -615,6 +617,8 @@ fn transition_policy(
         own_uid,
     )
     .map_err(|_| transition_failure("verifier_install"))?;
+    #[cfg(test)]
+    pause_transition_test_boundary(&policy_path, "trust-snapshot-published");
     let selected = store
         .transition(
             TrustGeneration(expected_generation),
@@ -630,6 +634,24 @@ fn transition_policy(
         lower_hex(&selected.digest())
     );
     Ok(())
+}
+
+#[cfg(test)]
+fn pause_transition_test_boundary(policy_path: &Path, boundary: &str) {
+    if std::env::var("MRML_AUTHORITY_TRANSITION_TEST_BOUNDARY").as_deref() != Ok(boundary) {
+        return;
+    }
+    let marker = policy_path.join(".transition-test-boundary");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(marker)
+        .unwrap();
+    std::io::Write::write_all(&mut file, boundary.as_bytes()).unwrap();
+    file.sync_all().unwrap();
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 fn transition_failure(category: &'static str) {
@@ -1684,13 +1706,21 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "child fixture invoked by the transition process-kill matrix"]
     fn normal_transition_verifies_both_real_signatures_and_reopens_exact_policy() {
-        let root = std::env::temp_dir().join(format!(
-            "mrml-authority-normal-transition-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir(&root).unwrap();
+        let resume = std::env::var_os("MRML_AUTHORITY_TRANSITION_TEST_RESUME").is_some();
+        let root = std::env::var_os("MRML_AUTHORITY_TRANSITION_TEST_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "mrml-authority-normal-transition-{}",
+                    std::process::id()
+                ))
+            });
+        if !resume {
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir(&root).unwrap();
+        }
         let uid = std::fs::metadata(&root).unwrap().uid();
         let repository = RepositoryIdentity::parse("owner/repository").unwrap();
         let old_openpgp = SigningKeyV6::from_seed([7; 32], 1_700_000_000).unwrap();
@@ -1733,7 +1763,18 @@ mod tests {
         let expected_next = parse_trust_policy(&next_policy).unwrap();
         let policy_root = root.join("policies");
         let policy_directory = policy_root.join(repository.as_str());
-        LinuxDurableTrustPolicyStore::create(policy_directory.to_str().unwrap(), &initial).unwrap();
+        if resume {
+            assert_eq!(
+                LinuxDurableTrustPolicyStore::open(policy_directory.to_str().unwrap())
+                    .unwrap()
+                    .load()
+                    .unwrap(),
+                initial
+            );
+        } else {
+            LinuxDurableTrustPolicyStore::create(policy_directory.to_str().unwrap(), &initial)
+                .unwrap();
+        }
 
         let old_transcript = canonical_hybrid_transcript(
             &repository,
@@ -1997,6 +2038,75 @@ mod tests {
             next_pair
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn transition_process_kills_reopen_exact_signature_and_snapshot_boundaries() {
+        for boundary in [
+            "signature-verification-complete",
+            "trust-snapshot-published",
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "mrml-authority-transition-kill-{}-{boundary}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let executable = std::env::current_exe().unwrap();
+            let mut child = std::process::Command::new(&executable)
+                .args([
+                    "--exact",
+                    "tests::normal_transition_verifies_both_real_signatures_and_reopens_exact_policy",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("MRML_AUTHORITY_TRANSITION_TEST_ROOT", &root)
+                .env("MRML_AUTHORITY_TRANSITION_TEST_BOUNDARY", boundary)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let policy_directory = root.join("policies/owner/repository");
+            let marker = policy_directory.join(".transition-test-boundary");
+            for _ in 0..500 {
+                if marker.is_file() {
+                    break;
+                }
+                assert!(child.try_wait().unwrap().is_none());
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(std::fs::read_to_string(&marker).unwrap(), boundary);
+            child.kill().unwrap();
+            assert!(!child.wait().unwrap().success());
+
+            let selected = LinuxDurableTrustPolicyStore::open(path(&policy_directory))
+                .unwrap()
+                .load()
+                .unwrap();
+            assert_eq!(selected.generation(), TrustGeneration(1));
+            let keyring = policy_directory.join("verification-keys");
+            if boundary == "signature-verification-complete" {
+                assert!(!keyring.exists());
+            } else {
+                assert!(keyring.join("trust-2.openpgp.asc").is_file());
+                assert!(keyring.join("trust-2.ml-dsa.bin").is_file());
+            }
+
+            let resumed = std::process::Command::new(&executable)
+                .args([
+                    "--exact",
+                    "tests::normal_transition_verifies_both_real_signatures_and_reopens_exact_policy",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("MRML_AUTHORITY_TRANSITION_TEST_ROOT", &root)
+                .env("MRML_AUTHORITY_TRANSITION_TEST_RESUME", "1")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(resumed.success());
+            assert!(!root.exists());
+        }
     }
 
     #[test]
