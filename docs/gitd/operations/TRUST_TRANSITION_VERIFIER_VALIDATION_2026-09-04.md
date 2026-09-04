@@ -245,8 +245,22 @@ Older Podman copy-up changed the runtime volume root group on first mount. The
 test restored the provisioned `21006:21906` owner/group and mode `2770` before
 the authenticated client probe; the socket subdirectory and socket were
 `21006:21906` modes `2770` and `0660`. This Podman-host workaround is evidence
-of a compatibility gap, not evidence that Compose automatically preserves
-those invariants on that older provider.
+of the behavior before the current copy-up sentinel was exercised; it is not
+counted as evidence for the corrected provisioning path.
+
+Fresh disposable authority and signer runtime volumes then exercised the
+checked provisioning mechanism on the same older Podman provider. Each volume
+was populated only with the owner/group/mode-checked zero-byte `.mrml-volume`
+sentinel before its first container mount. Authority first mount preserved root
+`21002:21901` mode `2770` and created `authority.sock` as `21002:21901` mode
+`0660`. Signer first mount preserved root `21006:21906` mode `2770` and created
+`signer.sock` as `21006:21906` mode `0660`. The signer socket completed an
+authenticated client-owned split-capability health exchange. No post-mount
+metadata repair, bind directory, privileged container, or added capability was
+used. The disposable containers and four named volumes were then removed while
+the healthy generation-4 stack remained running. This proves the sentinel
+startup path on the exercised Podman version; it is not a general claim about
+all Podman or Docker versions.
 
 ## Hosted stale-authority restart rejection
 
@@ -272,11 +286,11 @@ Gitd restart, not malicious-storage, power-loss, distributed rollback, or
 physical-hardware evidence.
 
 Remaining Phase 24 gates include a protected push during the overlap interval,
-process-kill injection around the remaining daemon/transition phases, and a
-supported old-Podman startup path that does not require manual runtime-volume
-metadata repair. This exercise used a controlled certificate fixture, loopback
-publication, and test keys; it does not establish public-service,
-real-certificate-renewal, production-key, or physical-hardware evidence.
+process-kill injection around the remaining daemon/transition phases, and the
+broader release gates listed in the earlier records. This exercise used a
+controlled certificate fixture, loopback publication, and test keys; it does
+not establish public-service, real-certificate-renewal, production-key, or
+physical-hardware evidence.
 
 Patent review: **NOT_TRIGGERED**. This uses conventional immutable public-key
 files, exact metadata/content validation, directory capabilities, and ordered
