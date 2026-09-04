@@ -14,6 +14,7 @@ use mrml_git_authority::{
 use mrml_openpgp::{
     MAX_OPENPGP_PUBLIC_KEY_BYTES, MAX_OPENPGP_SIGNATURE_BYTES, parse_public_key_v6_ascii,
 };
+use mrml_runtime::DirectoryCapability;
 use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -693,11 +694,21 @@ fn load_authority(
     repository_generation: u64,
 ) -> Result<ProductionAuthority, ()> {
     let repository_identity = RepositoryIdentity::parse(repository).map_err(|_| ())?;
-    let (policy_path, proof_path) = authority_storage_paths(policy_path, proof_path, repository)?;
-    let policy =
-        LinuxDurableTrustPolicyStore::open(policy_path.to_str().ok_or(())?).map_err(|_| ())?;
-    let proofs = DurableDetachedCommitProofDirectory::open(proof_path.to_str().ok_or(())?)
-        .map_err(|_| ())?;
+    let policy_root = DirectoryCapability::open_root(policy_path).map_err(|_| ())?;
+    let policy = LinuxDurableTrustPolicyStore::open_capability(
+        policy_root
+            .open_directory(repository_identity.as_str())
+            .map_err(|_| ())?,
+    )
+    .map_err(|_| ())?;
+    let proofs = DurableDetachedCommitProofDirectory::open_capability(
+        open_or_create_authority_repository_directory(
+            proof_path,
+            &repository_identity,
+            authority_uid,
+        )?,
+    )
+    .map_err(|_| ())?;
     let openpgp_bytes = read_regular(
         openpgp_path,
         1,
@@ -756,6 +767,44 @@ fn load_authority(
     Ok(authority)
 }
 
+fn open_or_create_authority_repository_directory(
+    root: &str,
+    repository: &RepositoryIdentity,
+    authority_uid: u32,
+) -> Result<DirectoryCapability, ()> {
+    let root = DirectoryCapability::open_root(root).map_err(|_| ())?;
+    let root_metadata = root.metadata().map_err(|_| ())?;
+    if root_metadata.uid != authority_uid
+        || root_metadata.mode & 0o777 != 0o700
+        || root_metadata.links < 2
+    {
+        return Err(());
+    }
+    let (owner, name) = repository.as_str().split_once('/').ok_or(())?;
+    let owner = match root.open_directory(owner) {
+        Ok(directory) => directory,
+        Err(_) => root.create_directory(owner, 0o700).map_err(|_| ())?,
+    };
+    let directory = match owner.open_directory(name) {
+        Ok(directory) => directory,
+        Err(_) => owner.create_directory(name, 0o700).map_err(|_| ())?,
+    };
+    for candidate in [&owner, &directory] {
+        let metadata = candidate.metadata().map_err(|_| ())?;
+        if metadata.uid != root_metadata.uid
+            || metadata.gid != root_metadata.gid
+            || metadata.mode & 0o777 != 0o700
+            || metadata.links < 2
+        {
+            return Err(());
+        }
+    }
+    owner.sync().map_err(|_| ())?;
+    root.sync().map_err(|_| ())?;
+    Ok(directory)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn authority_storage_paths(
     policy_root: &str,
     proof_root: &str,
