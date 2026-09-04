@@ -166,6 +166,32 @@ impl ReceivePackCore {
         input: &mut dyn BoundedRead,
         output: &mut dyn BoundedWrite,
     ) -> Result<SmartGitResponse, GitdCoreError> {
+        let receipts = AuthenticatedAuditReceiptDirectory::open(signed_receipts_path)
+            .map_err(|_| GitdCoreError::Storage)?;
+        self.execute_with_authority_receipts(
+            active,
+            active_objects,
+            store,
+            policy,
+            receipts,
+            authority,
+            input,
+            output,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_with_authority_receipts(
+        &self,
+        active: &ActiveRefState,
+        active_objects: &Repository,
+        store: &mut LinuxDurableReceiveStore,
+        policy: &TrustPolicyState,
+        receipt_directory: AuthenticatedAuditReceiptDirectory,
+        authority: &mut dyn ProtectedReceiveAuthority,
+        input: &mut dyn BoundedRead,
+        output: &mut dyn BoundedWrite,
+    ) -> Result<SmartGitResponse, GitdCoreError> {
         if self.request.repository != active.repository
             || self.request.repository_generation != active.repository_generation
             || self.request.object_format != active.object_format
@@ -200,8 +226,6 @@ impl ReceivePackCore {
             self.work_budget,
         )?;
         let candidate = prepared.candidate_context(policy.digest())?;
-        let receipt_directory = AuthenticatedAuditReceiptDirectory::open(signed_receipts_path)
-            .map_err(|_| GitdCoreError::Storage)?;
         authority.begin_candidate(&candidate)?;
         if let Err(error) = prepared.install_candidate_proofs(
             store,

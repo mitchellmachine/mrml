@@ -636,6 +636,51 @@ impl FilesystemRepositoryView {
         )
     }
 
+    #[cfg(target_os = "linux")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_protected_receive_with_receipts(
+        &mut self,
+        request: SmartGitRequest,
+        store: &mut crate::LinuxDurableReceiveStore,
+        policy: &crate::TrustPolicyState,
+        receipts: crate::AuthenticatedAuditReceiptDirectory,
+        authority: &mut dyn crate::ProtectedReceiveAuthority,
+        transaction: crate::QuarantineTransactionId,
+        quarantine_limits: crate::QuarantineLimits,
+        history_limits: crate::HistoryVerificationLimits,
+        ordinary_free_bytes: u64,
+        input: &mut dyn BoundedRead,
+        output: &mut dyn BoundedWrite,
+        work_budget: WorkBudget,
+    ) -> Result<SmartGitResponse, GitdCoreError> {
+        let active = self.refs.load().map_err(|_| GitdCoreError::Storage)?;
+        if active.repository != self.identity
+            || request.repository != self.identity
+            || request.repository_generation != active.repository_generation
+            || request.object_format != active.object_format
+        {
+            return Err(GitdCoreError::StaleGeneration);
+        }
+        crate::ReceivePackCore {
+            request,
+            transaction,
+            quarantine_limits,
+            history_limits,
+            ordinary_free_bytes,
+            work_budget,
+        }
+        .execute_with_authority_receipts(
+            &active,
+            &self.objects,
+            store,
+            policy,
+            receipts,
+            authority,
+            input,
+            output,
+        )
+    }
+
     fn stream_pack_response(
         &self,
         state: &crate::ActiveRefState,

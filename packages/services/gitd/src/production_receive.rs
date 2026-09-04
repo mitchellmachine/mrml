@@ -20,7 +20,7 @@ pub struct ProductionReceiveRepository {
     journals: DirectoryCapability,
     quarantine: PathBuf,
     plain_receipts: DirectoryCapability,
-    authenticated_receipts: PathBuf,
+    authenticated_receipts: DirectoryCapability,
     max_body_bytes: u64,
     max_object_bytes: u64,
     minimum_free_space_bytes: u64,
@@ -50,9 +50,11 @@ impl ProductionReceiveRepository {
             mrml_git::AuthorityCandidateStatus::ReceiptPersisted
                 | mrml_git::AuthorityCandidateStatus::Completed
         ) {
-            let directory = mrml_git::AuthenticatedAuditReceiptDirectory::open(path(
-                &self.authenticated_receipts,
-            )?)
+            let directory = mrml_git::AuthenticatedAuditReceiptDirectory::open_capability(
+                self.authenticated_receipts
+                    .try_clone()
+                    .map_err(|_| BackendError::NotFound)?,
+            )
             .map_err(|_| BackendError::NotFound)?;
             let receipt = directory
                 .load(id, authority)
@@ -112,7 +114,11 @@ impl ProductionReceiveRepository {
                 .receipts
                 .open_directory("plain")
                 .map_err(|_| BackendError::Storage)?,
-            authenticated_receipts: admitted.paths.receipts.join("authenticated"),
+            authenticated_receipts: admitted
+                .capabilities
+                .receipts
+                .open_directory("authenticated")
+                .map_err(|_| BackendError::Storage)?,
             max_body_bytes: receive_pack_limit(config.max_body_bytes),
             max_object_bytes: entry.profile.max_object_bytes,
             minimum_free_space_bytes: config.minimum_free_space_bytes,
@@ -185,11 +191,17 @@ impl ProductionReceiveRepository {
             let policy = LinuxDurableTrustPolicyStore::open(path(policy_path)?)
                 .and_then(|store| store.load())
                 .map_err(|_| BackendError::Private)?;
-            view.execute_protected_receive(
+            let receipts = mrml_git::AuthenticatedAuditReceiptDirectory::open_capability(
+                self.authenticated_receipts
+                    .try_clone()
+                    .map_err(|_| BackendError::Storage)?,
+            )
+            .map_err(|_| BackendError::Storage)?;
+            view.execute_protected_receive_with_receipts(
                 core_request,
                 &mut store,
                 &policy,
-                path(&self.authenticated_receipts)?,
+                receipts,
                 authority,
                 QuarantineTransactionId(transaction),
                 quarantine_limits,

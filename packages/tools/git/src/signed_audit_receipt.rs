@@ -2,7 +2,7 @@
 
 use mrml_crypto::{Sha256, ed25519_verify};
 use mrml_runtime::{
-    File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory,
+    File, Text, Vector, canonical_path, create_dir_all, join_path, path_is_directory,
 };
 
 use crate::{
@@ -61,8 +61,8 @@ pub fn verify_signer_generation_advancement(
     let signature: &[u8; 64] = (&authenticated.signature[..])
         .try_into()
         .map_err(|_| DurableFailure::AuditReceipt)?;
-    let canonical = encode_audit_receipt(&authenticated.receipt)
-        .map_err(|_| DurableFailure::AuditReceipt)?;
+    let canonical =
+        encode_audit_receipt(&authenticated.receipt).map_err(|_| DurableFailure::AuditReceipt)?;
     let transcript = authenticated_audit_receipt_transcript(&canonical)
         .and_then(|transcript| authority_receipt_signature_transcript(&transcript))
         .map_err(|_| DurableFailure::AuditReceipt)?;
@@ -74,6 +74,7 @@ pub fn verify_signer_generation_advancement(
 
 pub struct AuthenticatedAuditReceiptDirectory {
     root: Text,
+    retained: Option<mrml_runtime::DirectoryCapability>,
 }
 
 impl AuthenticatedAuditReceiptDirectory {
@@ -83,7 +84,24 @@ impl AuthenticatedAuditReceiptDirectory {
         if !path_is_directory(&root) {
             return Err(DurableFailure::Rename);
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            retained: None,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn open_capability(
+        root: mrml_runtime::DirectoryCapability,
+    ) -> Result<Self, DurableFailure> {
+        let metadata = root.metadata().map_err(|_| DurableFailure::AuditReceipt)?;
+        if metadata.mode & 0o777 != 0o700 || metadata.links < 2 {
+            return Err(DurableFailure::AuditReceipt);
+        }
+        Ok(Self {
+            root: Text::new(),
+            retained: Some(root),
+        })
     }
 
     pub fn append(
@@ -109,16 +127,13 @@ impl AuthenticatedAuditReceiptDirectory {
             authority.signer_identity(),
             &signature[..signature_len],
         )?;
-        let path = join_path(&self.root, &receipt_name(receipt.transaction));
-        if path_exists(&path) {
-            return Err(DurableFailure::AuditReceipt);
-        }
-        let mut file = File::create_new(&path).map_err(|_| DurableFailure::AuditReceipt)?;
+        let name = receipt_name(receipt.transaction);
+        let mut file = self.create_file(&name)?;
         file.write_all(&encoded)
             .map_err(|_| DurableFailure::AuditReceipt)?;
         file.sync().map_err(|_| DurableFailure::AuditReceipt)?;
         drop(file);
-        sync_directory(&self.root)?;
+        self.sync()?;
         let reopened = self.load(receipt.transaction, authority)?;
         if reopened.receipt != *receipt || reopened.signer_identity != authority.signer_identity() {
             return Err(DurableFailure::AuditReceipt);
@@ -131,8 +146,7 @@ impl AuthenticatedAuditReceiptDirectory {
         transaction: QuarantineTransactionId,
         authority: &mut dyn AuditReceiptAuthority,
     ) -> Result<AuthenticatedAuditReceipt, DurableFailure> {
-        let path = join_path(&self.root, &receipt_name(transaction));
-        let mut file = File::open_regular(&path).map_err(|_| DurableFailure::AuditReceipt)?;
+        let mut file = self.open_file(&receipt_name(transaction))?;
         let length = usize::try_from(file.len().map_err(|_| DurableFailure::AuditReceipt)?)
             .map_err(|_| DurableFailure::AuditReceipt)?;
         if length > MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES {
@@ -162,6 +176,58 @@ impl AuthenticatedAuditReceiptDirectory {
             .map_err(|_| DurableFailure::AuditReceipt)?;
         Ok(authenticated)
     }
+
+    fn create_file(&self, name: &str) -> Result<File, DurableFailure> {
+        match &self.retained {
+            Some(root) => {
+                let file = root
+                    .create_new_file(name, 0o600)
+                    .map_err(|_| DurableFailure::AuditReceipt)?;
+                validate_authenticated_receipt_file(root, &file)?;
+                Ok(file)
+            }
+            None => File::create_new(&join_path(&self.root, name))
+                .map_err(|_| DurableFailure::AuditReceipt),
+        }
+    }
+
+    fn open_file(&self, name: &str) -> Result<File, DurableFailure> {
+        match &self.retained {
+            Some(root) => {
+                let file = root
+                    .open_regular(name)
+                    .map_err(|_| DurableFailure::AuditReceipt)?;
+                validate_authenticated_receipt_file(root, &file)?;
+                Ok(file)
+            }
+            None => File::open_regular(&join_path(&self.root, name))
+                .map_err(|_| DurableFailure::AuditReceipt),
+        }
+    }
+
+    fn sync(&self) -> Result<(), DurableFailure> {
+        match &self.retained {
+            Some(root) => root.sync().map_err(|_| DurableFailure::AuditReceipt),
+            None => sync_directory(&self.root),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn validate_authenticated_receipt_file(
+    root: &mrml_runtime::DirectoryCapability,
+    file: &File,
+) -> Result<(), DurableFailure> {
+    let parent = root.metadata().map_err(|_| DurableFailure::AuditReceipt)?;
+    let metadata = file.metadata().map_err(|_| DurableFailure::AuditReceipt)?;
+    if metadata.uid != parent.uid
+        || metadata.gid != parent.gid
+        || metadata.mode & 0o777 != 0o600
+        || metadata.links != 1
+    {
+        return Err(DurableFailure::AuditReceipt);
+    }
+    Ok(())
 }
 
 pub struct AuthenticatedReceiveStore<'a> {
@@ -244,7 +310,10 @@ impl<'a> AuthenticatedReceiveStore<'a> {
         journal: &crate::ReceiveJournalRecord,
     ) -> Result<AuthenticatedAuditReceipt, DurableFailure> {
         let receipt = self.inner.recovery_audit_receipt(journal)?;
-        match self.receipts.load(journal.transaction, self.authority.receipt()) {
+        match self
+            .receipts
+            .load(journal.transaction, self.authority.receipt())
+        {
             Ok(existing) if existing.receipt == receipt => return Ok(existing),
             Ok(_) => return Err(DurableFailure::AuditReceipt),
             Err(DurableFailure::AuditReceipt) => {}
@@ -289,9 +358,7 @@ impl DurableReceiveStore for AuthenticatedReceiveStore<'_> {
         verified: &VerifiedRefTransaction,
     ) -> Result<(), DurableFailure> {
         if let ReceiveReceiptAuthority::Candidate {
-            authority,
-            context,
-            ..
+            authority, context, ..
         } = &mut self.authority
         {
             authority
@@ -323,10 +390,7 @@ impl DurableReceiveStore for AuthenticatedReceiveStore<'_> {
         Ok(())
     }
 
-    fn authenticated_audit_receipt(
-        &self,
-        transaction: QuarantineTransactionId,
-    ) -> Option<&[u8]> {
+    fn authenticated_audit_receipt(&self, transaction: QuarantineTransactionId) -> Option<&[u8]> {
         self.last_authenticated_receipt
             .as_ref()
             .filter(|_| {
@@ -416,8 +480,8 @@ pub fn authority_receipt_signature_transcript(payload: &[u8]) -> Result<Vector<u
 pub fn encode_authenticated_audit_receipt(
     authenticated: &AuthenticatedAuditReceipt,
 ) -> Result<Vector<u8>, DurableFailure> {
-    let canonical = encode_audit_receipt(&authenticated.receipt)
-        .map_err(|_| DurableFailure::AuditReceipt)?;
+    let canonical =
+        encode_audit_receipt(&authenticated.receipt).map_err(|_| DurableFailure::AuditReceipt)?;
     encode_authenticated(
         &canonical,
         authenticated.signer_identity,
@@ -549,6 +613,7 @@ fn sync_directory(_: &str) -> Result<(), DurableFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    extern crate std;
     use crate::{
         ActiveRefFile, ActiveRefState, FullRefName, LinuxDurableReceiveStore, ObjectFormat,
         ObjectId, PackGeneration, QuarantinePhase, ReceiveJournalRecord, RepositoryGeneration,
@@ -722,6 +787,53 @@ mod tests {
             Err(DurableFailure::AuditReceipt)
         );
         mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_authenticated_receipt_root_survives_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!(
+                "mrml-authenticated-receipts-retained-{}",
+                mrml_runtime::process_id()
+            ),
+        );
+        let displaced = mrml_runtime::mrml_format!("{root}-displaced");
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let _ = mrml_runtime::remove_dir_all(&displaced);
+        mrml_runtime::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(root.as_str(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let capability = mrml_runtime::DirectoryCapability::open_root(&root).unwrap();
+        let directory = AuthenticatedAuditReceiptDirectory::open_capability(capability).unwrap();
+        mrml_runtime::rename_file(&root, &displaced).unwrap();
+        mrml_runtime::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(root.as_str(), std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let receipt = fixture();
+        let mut authority = DigestAuthority {
+            identity: [7u8; 64],
+        };
+        directory.append(&receipt, &mut authority).unwrap();
+        assert_eq!(
+            directory
+                .load(receipt.transaction, &mut authority)
+                .unwrap()
+                .receipt,
+            receipt
+        );
+        assert!(mrml_runtime::path_exists(&join_path(
+            &displaced,
+            &receipt_name(receipt.transaction),
+        )));
+        assert!(!mrml_runtime::path_exists(&join_path(
+            &root,
+            &receipt_name(receipt.transaction),
+        )));
+        mrml_runtime::remove_dir_all(&root).unwrap();
+        mrml_runtime::remove_dir_all(&displaced).unwrap();
     }
 
     #[cfg(unix)]
