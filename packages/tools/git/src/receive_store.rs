@@ -113,9 +113,9 @@ impl LinuxDurableReceiveStore {
     }
 
     #[cfg(target_os = "linux")]
-    pub fn open_with_ref_capability(
+    pub fn open_with_capabilities(
         journals: &str,
-        arrivals: &str,
+        arrivals: mrml_runtime::DirectoryCapability,
         refs: mrml_runtime::DirectoryCapability,
         receipts: &str,
         format: ObjectFormat,
@@ -123,7 +123,7 @@ impl LinuxDurableReceiveStore {
     ) -> Result<Self, DurableFailure> {
         Ok(Self {
             journals: ReceiveJournalDirectory::open(journals)?,
-            arrivals: ArrivalPackStore::open(arrivals, format, max_pack_bytes)?,
+            arrivals: ArrivalPackStore::open_capability(arrivals, format, max_pack_bytes)?,
             refs: ActiveRefFile::open_capability(refs)
                 .map_err(|_| DurableFailure::VerifierCrash)?,
             receipts: AuditReceiptDirectory::open(receipts)?,

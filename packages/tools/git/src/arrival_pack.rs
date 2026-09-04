@@ -6,7 +6,7 @@ use mrml_runtime::{
     path_exists, path_is_directory, rename_file,
 };
 
-use crate::pack_file::validate_pack_file_with_bases;
+use crate::pack_file::validate_pack_file_with_bases_from_opener;
 use crate::pack_set::AuthenticatedPackIndexSummary;
 use crate::sha1::GitObjectHasher;
 use crate::{
@@ -16,13 +16,183 @@ use crate::{
     build_pack_index_v2, parse_pack_index_v2, parse_pack_with_index,
 };
 
+enum ArrivalDirectory {
+    Ambient(Text),
+    #[cfg(target_os = "linux")]
+    Retained(mrml_runtime::DirectoryCapability),
+}
+
+impl ArrivalDirectory {
+    fn open_child(&self, name: &str) -> Result<Self, DurableFailure> {
+        match self {
+            Self::Ambient(path) => {
+                let child = join_path(path, name);
+                if !path_is_directory(&child) {
+                    return Err(DurableFailure::VerifierCrash);
+                }
+                Ok(Self::Ambient(child))
+            }
+            #[cfg(target_os = "linux")]
+            Self::Retained(directory) => {
+                let parent = directory
+                    .metadata()
+                    .map_err(|_| DurableFailure::VerifierCrash)?;
+                let child = directory
+                    .open_directory(name)
+                    .map_err(|_| DurableFailure::VerifierCrash)?;
+                let metadata = child
+                    .metadata()
+                    .map_err(|_| DurableFailure::VerifierCrash)?;
+                if metadata.uid != parent.uid
+                    || metadata.gid != parent.gid
+                    || metadata.mode & 0o777 != 0o700
+                    || metadata.links < 2
+                {
+                    return Err(DurableFailure::VerifierCrash);
+                }
+                Ok(Self::Retained(child))
+            }
+        }
+    }
+
+    fn create_child(&self, name: &str) -> Result<Self, DurableFailure> {
+        match self {
+            Self::Ambient(path) => {
+                let child = join_path(path, name);
+                if path_exists(&child) {
+                    return Err(DurableFailure::StaleLock);
+                }
+                create_dir_all(&child).map_err(|_| DurableFailure::DiskFull)?;
+                Ok(Self::Ambient(child))
+            }
+            #[cfg(target_os = "linux")]
+            Self::Retained(directory) => {
+                let parent = directory
+                    .metadata()
+                    .map_err(|_| DurableFailure::VerifierCrash)?;
+                let child = directory
+                    .create_directory(name, 0o700)
+                    .map_err(|_| DurableFailure::StaleLock)?;
+                let metadata = child
+                    .metadata()
+                    .map_err(|_| DurableFailure::VerifierCrash)?;
+                if metadata.uid != parent.uid
+                    || metadata.gid != parent.gid
+                    || metadata.mode & 0o777 != 0o700
+                    || metadata.links < 2
+                {
+                    return Err(DurableFailure::VerifierCrash);
+                }
+                Ok(Self::Retained(child))
+            }
+        }
+    }
+
+    fn open_regular(&self, name: &str) -> Result<File, DurableFailure> {
+        match self {
+            Self::Ambient(path) => File::open_regular(&join_path(path, name))
+                .map_err(|_| DurableFailure::VerifierCrash),
+            #[cfg(target_os = "linux")]
+            Self::Retained(directory) => {
+                let parent = directory
+                    .metadata()
+                    .map_err(|_| DurableFailure::VerifierCrash)?;
+                let file = directory
+                    .open_regular(name)
+                    .map_err(|_| DurableFailure::VerifierCrash)?;
+                let metadata = file.metadata().map_err(|_| DurableFailure::VerifierCrash)?;
+                if metadata.uid != parent.uid
+                    || metadata.gid != parent.gid
+                    || metadata.mode & 0o777 != 0o600
+                    || metadata.links != 1
+                {
+                    return Err(DurableFailure::VerifierCrash);
+                }
+                Ok(file)
+            }
+        }
+    }
+
+    fn create_file(&self, name: &str) -> Result<File, DurableFailure> {
+        match self {
+            Self::Ambient(path) => {
+                File::create_new(&join_path(path, name)).map_err(|_| DurableFailure::StaleLock)
+            }
+            #[cfg(target_os = "linux")]
+            Self::Retained(directory) => {
+                let parent = directory
+                    .metadata()
+                    .map_err(|_| DurableFailure::VerifierCrash)?;
+                let file = directory
+                    .create_new_file(name, 0o600)
+                    .map_err(|_| DurableFailure::StaleLock)?;
+                let metadata = file.metadata().map_err(|_| DurableFailure::VerifierCrash)?;
+                if metadata.uid != parent.uid
+                    || metadata.gid != parent.gid
+                    || metadata.mode & 0o777 != 0o600
+                    || metadata.links != 1
+                {
+                    return Err(DurableFailure::VerifierCrash);
+                }
+                Ok(file)
+            }
+        }
+    }
+
+    fn rename_child(&self, existing: &str, replacement: &str) -> Result<(), DurableFailure> {
+        match self {
+            Self::Ambient(path) => {
+                rename_file(&join_path(path, existing), &join_path(path, replacement))
+            }
+            #[cfg(target_os = "linux")]
+            Self::Retained(directory) => directory.rename_child(existing, replacement),
+        }
+        .map_err(|_| DurableFailure::Rename)
+    }
+
+    fn move_child_to(
+        &self,
+        existing: &str,
+        destination: &Self,
+        replacement: &str,
+    ) -> Result<(), DurableFailure> {
+        match (self, destination) {
+            (Self::Ambient(source), Self::Ambient(destination)) => rename_file(
+                &join_path(source, existing),
+                &join_path(destination, replacement),
+            ),
+            #[cfg(target_os = "linux")]
+            (Self::Retained(source), Self::Retained(destination)) => {
+                source.rename_child_to(existing, destination, replacement)
+            }
+            #[cfg(target_os = "linux")]
+            _ => return Err(DurableFailure::Rename),
+        }
+        .map_err(|_| DurableFailure::Rename)
+    }
+
+    fn sync(&self) -> Result<(), DurableFailure> {
+        match self {
+            Self::Ambient(path) => sync_pack_directory(path),
+            #[cfg(target_os = "linux")]
+            Self::Retained(directory) => directory.sync().map_err(|_| DurableFailure::Fsync),
+        }
+    }
+}
+
 pub struct ArrivalPackStore {
     quarantine: Text,
     arrivals: Text,
+    retained: Option<RetainedArrivalDirectories>,
     format: ObjectFormat,
     max_pack_bytes: u64,
     selected: SpinMutex<Option<AuthenticatedSelectedPackSnapshot>>,
     statistics: ArrivalPackReadStatistics,
+}
+
+struct RetainedArrivalDirectories {
+    quarantine: ArrivalDirectory,
+    arrivals: ArrivalDirectory,
 }
 
 struct AuthenticatedSelectedPackSnapshot {
@@ -87,23 +257,26 @@ impl ArrivalPackStore {
         .ok_or(DurableFailure::VerifierCrash)?;
         let index = build_pack_index_v2(self.format, &entries, trailer)
             .map_err(|_| DurableFailure::VerifierCrash)?;
-        let directory = self.quarantine_path(transaction);
-        if path_exists(&directory) || path_exists(&self.arrival_path(transaction)) {
+        if self.quarantine_directory(transaction).is_ok()
+            || self.arrival_directory(transaction).is_ok()
+        {
             return Err(DurableFailure::StaleLock);
         }
-        create_dir_all(&directory).map_err(|_| DurableFailure::DiskFull)?;
-        let scratch = join_path(&directory, "objects");
-        create_dir_all(&scratch).map_err(|_| DurableFailure::DiskFull)?;
+        let directory = self.create_quarantine_directory(transaction)?;
+        let scratch = directory.create_child("objects")?;
         for object in &objects {
-            write_scratch_object(&scratch, object.id, object.kind, &object.contents)?;
+            write_scratch_object_to_directory(&scratch, object.id, object.kind, &object.contents)?;
         }
-        write_new_synced(&join_path(&directory, "objects.pack"), pack)?;
-        write_new_synced(&join_path(&directory, "objects.idx"), &index)?;
-        sync_pack_directory(&scratch)?;
-        sync_pack_directory(&directory)?;
-        sync_pack_directory(&self.quarantine)?;
+        write_new_synced_to_directory(&directory, "objects.pack", pack)?;
+        write_new_synced_to_directory(&directory, "objects.idx", &index)?;
+        scratch.sync()?;
+        directory.sync()?;
+        match &self.retained {
+            Some(retained) => retained.quarantine.sync()?,
+            None => sync_pack_directory(&self.quarantine)?,
+        }
         let object_count = u32::try_from(objects.len()).map_err(|_| DurableFailure::DiskFull)?;
-        self.summarize_directory(&directory, transaction, object_count)
+        self.summarize_arrival_directory(&directory, transaction, object_count)
     }
 
     /// Streams the exact already-admitted body into an isolated transaction
@@ -118,18 +291,20 @@ impl ArrivalPackStore {
         if expected == 0 || expected > self.max_pack_bytes || input.remaining() != expected {
             return Err(GitdCoreError::Resource);
         }
-        let directory = self.quarantine_path(transaction.id());
-        if path_exists(&directory) || path_exists(&self.arrival_path(transaction.id())) {
+        if self.quarantine_directory(transaction.id()).is_ok()
+            || self.arrival_directory(transaction.id()).is_ok()
+        {
             return Err(GitdCoreError::Storage);
         }
-        create_dir_all(&directory).map_err(|_| GitdCoreError::Storage)?;
-        let incoming = join_path(&directory, "incoming.pack");
-        let scratch = join_path(&directory, "objects");
-        if path_exists(&scratch) {
-            return Err(GitdCoreError::Storage);
-        }
-        create_dir_all(&scratch).map_err(|_| GitdCoreError::Storage)?;
-        let mut file = File::create_new(&incoming).map_err(|_| GitdCoreError::Storage)?;
+        let directory = self
+            .create_quarantine_directory(transaction.id())
+            .map_err(|_| GitdCoreError::Storage)?;
+        let scratch = directory
+            .create_child("objects")
+            .map_err(|_| GitdCoreError::Storage)?;
+        let mut file = directory
+            .create_file("incoming.pack")
+            .map_err(|_| GitdCoreError::Storage)?;
         let mut remaining = expected;
         let mut buffer = [0u8; 64 * 1024];
         while remaining != 0 {
@@ -149,8 +324,15 @@ impl ArrivalPackStore {
             return Err(GitdCoreError::MalformedInput);
         }
         file.sync().map_err(|_| GitdCoreError::Storage)?;
-        sync_pack_directory(&directory).map_err(|_| GitdCoreError::Storage)?;
-        sync_pack_directory(&self.quarantine).map_err(|_| GitdCoreError::Storage)?;
+        scratch.sync().map_err(|_| GitdCoreError::Storage)?;
+        directory.sync().map_err(|_| GitdCoreError::Storage)?;
+        match &self.retained {
+            Some(retained) => retained
+                .quarantine
+                .sync()
+                .map_err(|_| GitdCoreError::Storage)?,
+            None => sync_pack_directory(&self.quarantine).map_err(|_| GitdCoreError::Storage)?,
+        }
         transaction
             .objects_quarantined(expected)
             .map_err(|_| GitdCoreError::ObjectValidation)
@@ -181,17 +363,24 @@ impl ArrivalPackStore {
     where
         B: FnMut(ObjectId, u64) -> Result<Option<(crate::ObjectKind, Vector<u8>)>, PackError>,
     {
-        let directory = self.quarantine_path(transaction.id());
-        let incoming = join_path(&directory, "incoming.pack");
-        let scratch = join_path(&directory, "objects");
+        let directory = self
+            .quarantine_directory(transaction.id())
+            .map_err(|_| GitdCoreError::Storage)?;
+        let scratch = directory
+            .open_child("objects")
+            .map_err(|_| GitdCoreError::Storage)?;
         let max_work = transaction
             .reservation()
             .incoming_pack_bytes()
             .checked_mul(2)
             .and_then(|value| value.checked_add(transaction.reservation().expanded_object_bytes()))
             .ok_or(GitdCoreError::Resource)?;
-        let validated = validate_pack_file_with_bases(
-            &incoming,
+        let validated = validate_pack_file_with_bases_from_opener(
+            || {
+                directory
+                    .open_regular("incoming.pack")
+                    .map_err(|_| PackError::Truncated)
+            },
             self.format,
             transaction.reservation().incoming_pack_bytes(),
             transaction.reservation().object_count(),
@@ -199,10 +388,10 @@ impl ArrivalPackStore {
             transaction.reservation().individual_object_bytes(),
             max_work,
             &mut |id, kind, contents| {
-                write_scratch_object(&scratch, id, kind, contents)
+                write_scratch_object_to_directory(&scratch, id, kind, contents)
                     .map_err(|_| crate::PackError::TooLarge)
             },
-            |id, limit| match read_scratch_object(&scratch, id, limit)? {
+            |id, limit| match read_scratch_object_from_directory(&scratch, id, limit)? {
                 Some(object) => Ok(Some(object)),
                 None => {
                     let Some((kind, contents)) = external_base(id, limit)? else {
@@ -215,7 +404,7 @@ impl ArrivalPackStore {
                     if hash.finalize() != id {
                         return Err(PackError::ObjectId);
                     }
-                    write_scratch_object(&scratch, id, kind, &contents)
+                    write_scratch_object_to_directory(&scratch, id, kind, &contents)
                         .map_err(|_| PackError::MissingBase)?;
                     Ok(Some((kind, contents)))
                 }
@@ -233,16 +422,17 @@ impl ArrivalPackStore {
         }
         let index = build_pack_index_v2(self.format, &validated.entries, validated.checksum)
             .map_err(|_| GitdCoreError::ObjectValidation)?;
-        write_new_synced(&join_path(&directory, "objects.idx"), &index)
+        write_new_synced_to_directory(&directory, "objects.idx", &index)
             .map_err(|_| GitdCoreError::Storage)?;
-        rename_file(&incoming, &join_path(&directory, "objects.pack"))
+        directory
+            .rename_child("incoming.pack", "objects.pack")
             .map_err(|_| GitdCoreError::Storage)?;
-        sync_pack_directory(&scratch).map_err(|_| GitdCoreError::Storage)?;
-        sync_pack_directory(&directory).map_err(|_| GitdCoreError::Storage)?;
+        scratch.sync().map_err(|_| GitdCoreError::Storage)?;
+        directory.sync().map_err(|_| GitdCoreError::Storage)?;
         transaction
             .objects_validated(validated.expanded_bytes, validated.objects.len() as u32)
             .map_err(|_| GitdCoreError::ObjectValidation)?;
-        self.summarize_directory(
+        self.summarize_arrival_directory(
             &directory,
             transaction.id(),
             validated.objects.len() as u32,
@@ -270,6 +460,40 @@ impl ArrivalPackStore {
         Ok(Self {
             quarantine,
             arrivals,
+            retained: None,
+            format,
+            max_pack_bytes,
+            selected: SpinMutex::new(None),
+            statistics: ArrivalPackReadStatistics::default(),
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn open_capability(
+        root: mrml_runtime::DirectoryCapability,
+        format: ObjectFormat,
+        max_pack_bytes: u64,
+    ) -> Result<Self, DurableFailure> {
+        if max_pack_bytes == 0 || max_pack_bytes > DEFAULT_MAX_INCOMING_PACK_BYTES {
+            return Err(DurableFailure::DiskFull);
+        }
+        let root = ArrivalDirectory::Retained(root);
+        let quarantine = match root.open_child("quarantine") {
+            Ok(directory) => directory,
+            Err(_) => root.create_child("quarantine")?,
+        };
+        let arrivals = match root.open_child("arrivals") {
+            Ok(directory) => directory,
+            Err(_) => root.create_child("arrivals")?,
+        };
+        root.sync()?;
+        Ok(Self {
+            quarantine: Text::new(),
+            arrivals: Text::new(),
+            retained: Some(RetainedArrivalDirectories {
+                quarantine,
+                arrivals,
+            }),
             format,
             max_pack_bytes,
             selected: SpinMutex::new(None),
@@ -287,29 +511,24 @@ impl ArrivalPackStore {
         if id.format() != self.format || max_bytes == 0 {
             return Err(GitdCoreError::ObjectValidation);
         }
-        let path = join_path(
-            &join_path(&self.quarantine_path(transaction), "objects"),
-            &id.to_hex(),
-        );
-        let encoded = read_regular_bounded(
-            &path,
-            max_bytes.checked_add(1).ok_or(GitdCoreError::Resource)?,
-        )
-        .map_err(|_| GitdCoreError::ObjectValidation)?;
-        let (&kind, contents) = encoded
-            .split_first()
+        let directory = self
+            .quarantine_directory(transaction)
+            .map_err(|_| GitdCoreError::ObjectValidation)?
+            .open_child("objects")
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        let (kind, contents) = read_scratch_object_from_directory(&directory, id, max_bytes)
+            .map_err(|_| GitdCoreError::ObjectValidation)?
             .ok_or(GitdCoreError::ObjectValidation)?;
-        let kind = decode_kind(kind)?;
         let header = mrml_runtime::mrml_format!("{} {}\0", kind.name(), contents.len());
         let mut hash = GitObjectHasher::new(self.format);
         hash.update(header.as_bytes());
-        hash.update(contents);
+        hash.update(&contents);
         if hash.finalize() != id {
             return Err(GitdCoreError::ObjectValidation);
         }
         let mut copied = Vector::new();
         copied
-            .try_extend_from_slice(contents)
+            .try_extend_from_slice(&contents)
             .map_err(|_| GitdCoreError::Resource)?;
         Ok(crate::Object {
             kind,
@@ -355,23 +574,30 @@ impl ArrivalPackStore {
         let index = build_pack_index_v2(self.format, &entries, trailer)
             .map_err(|_| DurableFailure::VerifierCrash)?;
 
-        let directory = self.quarantine_path(transaction.id());
-        if path_exists(&directory) || path_exists(&self.arrival_path(transaction.id())) {
+        if self.quarantine_directory(transaction.id()).is_ok()
+            || self.arrival_directory(transaction.id()).is_ok()
+        {
             return Err(DurableFailure::StaleLock);
         }
-        create_dir_all(&directory).map_err(|_| DurableFailure::DiskFull)?;
-        let scratch = join_path(&directory, "objects");
-        create_dir_all(&scratch).map_err(|_| DurableFailure::DiskFull)?;
+        let directory = self.create_quarantine_directory(transaction.id())?;
+        let scratch = directory.create_child("objects")?;
         for object in &objects {
-            write_scratch_object(&scratch, object.id, object.kind, &object.contents)
+            write_scratch_object_to_directory(&scratch, object.id, object.kind, &object.contents)
                 .map_err(|_| DurableFailure::ShortWrite)?;
         }
-        write_new_synced(&join_path(&directory, "objects.pack"), pack)?;
-        write_new_synced(&join_path(&directory, "objects.idx"), &index)?;
-        sync_pack_directory(&scratch)?;
-        sync_pack_directory(&directory)?;
-        sync_pack_directory(&self.quarantine)?;
-        self.verify_directory(&directory, transaction.reservation().object_count())?;
+        write_new_synced_to_directory(&directory, "objects.pack", pack)?;
+        write_new_synced_to_directory(&directory, "objects.idx", &index)?;
+        scratch.sync()?;
+        directory.sync()?;
+        match &self.retained {
+            Some(retained) => retained.quarantine.sync()?,
+            None => sync_pack_directory(&self.quarantine)?,
+        }
+        self.summarize_arrival_directory(
+            &directory,
+            transaction.id(),
+            transaction.reservation().object_count(),
+        )?;
         Ok(())
     }
 
@@ -380,16 +606,37 @@ impl ArrivalPackStore {
         transaction: QuarantineTransactionId,
         object_count: u32,
     ) -> Result<(), DurableFailure> {
-        let staged = self.quarantine_path(transaction);
-        let installed = self.arrival_path(transaction);
-        if path_exists(&installed) {
+        if self.arrival_directory(transaction).is_ok() {
             return Err(DurableFailure::StaleLock);
         }
-        self.verify_directory(&staged, object_count)?;
-        rename_file(&staged, &installed).map_err(|_| DurableFailure::Rename)?;
-        sync_pack_directory(&self.arrivals)?;
-        sync_pack_directory(&self.quarantine)?;
-        self.verify_directory(&installed, object_count)
+        let staged = self.quarantine_directory(transaction)?;
+        self.summarize_arrival_directory(&staged, transaction, object_count)?;
+        let name = transaction_name(transaction);
+        match &self.retained {
+            Some(retained) => {
+                retained
+                    .quarantine
+                    .move_child_to(&name, &retained.arrivals, &name)?
+            }
+            None => ArrivalDirectory::Ambient(self.quarantine.clone()).move_child_to(
+                &name,
+                &ArrivalDirectory::Ambient(self.arrivals.clone()),
+                &name,
+            )?,
+        }
+        match &self.retained {
+            Some(retained) => {
+                retained.arrivals.sync()?;
+                retained.quarantine.sync()?;
+            }
+            None => {
+                sync_pack_directory(&self.arrivals)?;
+                sync_pack_directory(&self.quarantine)?;
+            }
+        }
+        let installed = self.arrival_directory(transaction)?;
+        self.summarize_arrival_directory(&installed, transaction, object_count)
+            .map(|_| ())
     }
 
     pub fn verify_installed(
@@ -397,7 +644,9 @@ impl ArrivalPackStore {
         transaction: QuarantineTransactionId,
         object_count: u32,
     ) -> Result<(), DurableFailure> {
-        self.verify_directory(&self.arrival_path(transaction), object_count)
+        let directory = self.arrival_directory(transaction)?;
+        self.summarize_arrival_directory(&directory, transaction, object_count)
+            .map(|_| ())
     }
 
     pub(crate) fn authenticated_installed_summary(
@@ -405,7 +654,8 @@ impl ArrivalPackStore {
         transaction: QuarantineTransactionId,
         object_count: u32,
     ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
-        self.summarize_directory(&self.arrival_path(transaction), transaction, object_count)
+        let directory = self.arrival_directory(transaction)?;
+        self.summarize_arrival_directory(&directory, transaction, object_count)
     }
 
     pub(crate) fn read_selected_object(
@@ -533,13 +783,15 @@ impl ArrivalPackStore {
                 .get(&id)
                 .ok_or(GitdCoreError::Unsupported)?
         };
-        let (kind, contents) = read_scratch_object(
-            &join_path(&self.arrival_path(transaction), "objects"),
-            id,
-            max_bytes,
-        )
-        .map_err(|_| GitdCoreError::ObjectValidation)?
-        .ok_or(GitdCoreError::ObjectValidation)?;
+        let arrival = self
+            .arrival_directory(transaction)
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        let objects = arrival
+            .open_child("objects")
+            .map_err(|_| GitdCoreError::ObjectValidation)?;
+        let (kind, contents) = read_scratch_object_from_directory(&objects, id, max_bytes)
+            .map_err(|_| GitdCoreError::ObjectValidation)?
+            .ok_or(GitdCoreError::ObjectValidation)?;
         self.statistics.object_reads.fetch_add(1, Ordering::Relaxed);
         self.statistics
             .bytes_read
@@ -569,14 +821,9 @@ impl ArrivalPackStore {
         }
     }
 
-    fn verify_directory(&self, directory: &str, object_count: u32) -> Result<(), DurableFailure> {
-        self.summarize_directory(directory, QuarantineTransactionId([1; 16]), object_count)
-            .map(|_| ())
-    }
-
-    fn summarize_directory(
+    fn summarize_arrival_directory(
         &self,
-        directory: &str,
+        directory: &ArrivalDirectory,
         transaction: QuarantineTransactionId,
         object_count: u32,
     ) -> Result<AuthenticatedPackIndexSummary, DurableFailure> {
@@ -588,9 +835,13 @@ impl ArrivalPackStore {
             .checked_mul(2)
             .and_then(|value| value.checked_add(DEFAULT_MAX_EXPANDED_OBJECT_BYTES))
             .ok_or(DurableFailure::DiskFull)?;
-        let scratch = join_path(directory, "objects");
-        let validated = validate_pack_file_with_bases(
-            &join_path(directory, "objects.pack"),
+        let scratch = directory.open_child("objects")?;
+        let validated = validate_pack_file_with_bases_from_opener(
+            || {
+                directory
+                    .open_regular("objects.pack")
+                    .map_err(|_| PackError::Truncated)
+            },
             self.format,
             self.max_pack_bytes,
             object_count,
@@ -598,7 +849,7 @@ impl ArrivalPackStore {
             DEFAULT_MAX_INDIVIDUAL_OBJECT_BYTES,
             max_work,
             &mut |_, _, _| Ok(()),
-            |id, limit| read_scratch_object(&scratch, id, limit),
+            |id, limit| read_scratch_object_from_directory(&scratch, id, limit),
         )
         .map_err(|_| DurableFailure::VerifierCrash)?;
         let per_object = u64::try_from(self.format.hash_len())
@@ -610,7 +861,7 @@ impl ArrivalPackStore {
             .and_then(|value| value.checked_add(u64::from(object_count).checked_mul(per_object)?))
             .and_then(|value| value.checked_add((self.format.hash_len() * 2) as u64))
             .ok_or(DurableFailure::DiskFull)?;
-        let index = read_regular_bounded(&join_path(directory, "objects.idx"), index_limit)?;
+        let index = read_open_file_bounded(directory.open_regular("objects.idx")?, index_limit)?;
         if validated.objects.len()
             != usize::try_from(object_count).map_err(|_| DurableFailure::VerifierCrash)?
         {
@@ -633,8 +884,9 @@ impl ArrivalPackStore {
         if parsed.pack_checksum() != validated.checksum {
             return Err(DurableFailure::VerifierCrash);
         }
-        let pack_bytes = File::open_regular(&join_path(directory, "objects.pack"))
-            .and_then(|file| file.len())
+        let pack_bytes = directory
+            .open_regular("objects.pack")
+            .and_then(|file| file.len().map_err(|_| DurableFailure::VerifierCrash))
             .map_err(|_| DurableFailure::VerifierCrash)?;
         let index_bytes = u64::try_from(index.len()).map_err(|_| DurableFailure::DiskFull)?;
         let index_checksum =
@@ -662,11 +914,46 @@ impl ArrivalPackStore {
         })
     }
 
+    #[cfg(test)]
     fn quarantine_path(&self, transaction: QuarantineTransactionId) -> Text {
         join_path(&self.quarantine, &transaction_name(transaction))
     }
+    #[cfg(test)]
     pub(crate) fn arrival_path(&self, transaction: QuarantineTransactionId) -> Text {
         join_path(&self.arrivals, &transaction_name(transaction))
+    }
+
+    fn quarantine_directory(
+        &self,
+        transaction: QuarantineTransactionId,
+    ) -> Result<ArrivalDirectory, DurableFailure> {
+        let name = transaction_name(transaction);
+        match &self.retained {
+            Some(retained) => retained.quarantine.open_child(&name),
+            None => ArrivalDirectory::Ambient(self.quarantine.clone()).open_child(&name),
+        }
+    }
+
+    fn create_quarantine_directory(
+        &self,
+        transaction: QuarantineTransactionId,
+    ) -> Result<ArrivalDirectory, DurableFailure> {
+        let name = transaction_name(transaction);
+        match &self.retained {
+            Some(retained) => retained.quarantine.create_child(&name),
+            None => ArrivalDirectory::Ambient(self.quarantine.clone()).create_child(&name),
+        }
+    }
+
+    fn arrival_directory(
+        &self,
+        transaction: QuarantineTransactionId,
+    ) -> Result<ArrivalDirectory, DurableFailure> {
+        let name = transaction_name(transaction);
+        match &self.retained {
+            Some(retained) => retained.arrivals.open_child(&name),
+            None => ArrivalDirectory::Ambient(self.arrivals.clone()).open_child(&name),
+        }
     }
 }
 
@@ -696,9 +983,59 @@ pub(crate) fn read_scratch_object(
     Ok(Some((kind, copied)))
 }
 
-fn write_new_synced(path: &str, bytes: &[u8]) -> Result<(), DurableFailure> {
-    let mut file = File::create_new(path).map_err(|_| DurableFailure::StaleLock)?;
+fn read_scratch_object_from_directory(
+    directory: &ArrivalDirectory,
+    id: ObjectId,
+    max_bytes: u64,
+) -> Result<Option<(crate::ObjectKind, Vector<u8>)>, PackError> {
+    let encoded = match directory.open_regular(&id.to_hex()) {
+        Ok(file) => {
+            read_open_file_bounded(file, max_bytes.checked_add(1).ok_or(PackError::TooLarge)?)
+                .map_err(|_| PackError::MissingBase)?
+        }
+        Err(_) => return Ok(None),
+    };
+    let (&kind, contents) = encoded.split_first().ok_or(PackError::MissingBase)?;
+    let kind = match kind {
+        1 => crate::ObjectKind::Commit,
+        2 => crate::ObjectKind::Tree,
+        3 => crate::ObjectKind::Blob,
+        4 => crate::ObjectKind::Tag,
+        _ => return Err(PackError::ObjectType),
+    };
+    let mut copied = Vector::new();
+    copied
+        .try_extend_from_slice(contents)
+        .map_err(|_| PackError::TooLarge)?;
+    Ok(Some((kind, copied)))
+}
+
+fn write_new_synced_to_directory(
+    directory: &ArrivalDirectory,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), DurableFailure> {
+    let mut file = directory.create_file(name)?;
     file.write_all(bytes)
+        .map_err(|_| DurableFailure::ShortWrite)?;
+    file.sync().map_err(|_| DurableFailure::Fsync)
+}
+
+fn write_scratch_object_to_directory(
+    directory: &ArrivalDirectory,
+    id: ObjectId,
+    kind: crate::ObjectKind,
+    contents: &[u8],
+) -> Result<(), DurableFailure> {
+    let mut file = directory.create_file(&id.to_hex())?;
+    let kind = match kind {
+        crate::ObjectKind::Commit => 1,
+        crate::ObjectKind::Tree => 2,
+        crate::ObjectKind::Blob => 3,
+        crate::ObjectKind::Tag => 4,
+    };
+    file.write_all(&[kind])
+        .and_then(|_| file.write_all(contents))
         .map_err(|_| DurableFailure::ShortWrite)?;
     file.sync().map_err(|_| DurableFailure::Fsync)
 }
@@ -735,7 +1072,11 @@ fn decode_kind(kind: u8) -> Result<crate::ObjectKind, GitdCoreError> {
 }
 
 fn read_regular_bounded(path: &str, limit: u64) -> Result<Vector<u8>, DurableFailure> {
-    let mut file = File::open_regular(path).map_err(|_| DurableFailure::VerifierCrash)?;
+    let file = File::open_regular(path).map_err(|_| DurableFailure::VerifierCrash)?;
+    read_open_file_bounded(file, limit)
+}
+
+fn read_open_file_bounded(mut file: File, limit: u64) -> Result<Vector<u8>, DurableFailure> {
     let length = file.len().map_err(|_| DurableFailure::VerifierCrash)?;
     if length > limit {
         return Err(DurableFailure::DiskFull);
@@ -873,5 +1214,80 @@ mod tests {
             Err(GitdCoreError::Resource | GitdCoreError::Storage)
         ));
         mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn retained_arrival_root_survives_ambient_directory_replacement() {
+        let root = root();
+        let displaced = mrml_runtime::mrml_format!("{root}-displaced");
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let _ = mrml_runtime::remove_dir_all(&displaced);
+        mrml_runtime::create_dir_all(&root).unwrap();
+        let capability = mrml_runtime::DirectoryCapability::open_root(&root).unwrap();
+        let store =
+            ArrivalPackStore::open_capability(capability, ObjectFormat::Sha256, 1024 * 1024)
+                .unwrap();
+        mrml_runtime::rename_file(&root, &displaced).unwrap();
+        mrml_runtime::create_dir_all(&join_path(&root, "quarantine")).unwrap();
+        mrml_runtime::create_dir_all(&join_path(&root, "arrivals")).unwrap();
+
+        let object = PackObject {
+            id: ObjectId::blob_with_format(ObjectFormat::Sha256, b"retained arrival"),
+            kind: ObjectKind::Blob,
+            contents: Vector::from(*b"retained arrival"),
+        };
+        let object_id = object.id;
+        let pack = encode_pack_with_format(&[object], ObjectFormat::Sha256).unwrap();
+        let reservation = reserve_push_disk(
+            QuarantineLimits {
+                minimum_free_space_bytes: 0,
+                ..QuarantineLimits::default()
+            },
+            PushStorageForecast {
+                incoming_pack_bytes: pack.len() as u64,
+                expanded_object_bytes: 16,
+                largest_object_bytes: 16,
+                object_count: 1,
+                ref_count: 1,
+                arrival_index_bytes: 4096,
+                staging_metadata_bytes: 4096,
+                audit_receipt_bytes: 4096,
+                ordinary_free_bytes: 1_000_000,
+            },
+        )
+        .unwrap();
+        let mut transaction = QuarantineTransaction::begin(
+            QuarantineTransactionId([13u8; 16]),
+            RepositoryIdentity::parse("owner/repository").unwrap(),
+            RepositoryGeneration(1),
+            TrustGeneration(1),
+            RevocationGeneration(1),
+            reservation,
+        )
+        .unwrap();
+        let mut reader = Reader {
+            bytes: pack,
+            offset: 0,
+        };
+        store
+            .receive_pack_body(&mut transaction, &mut reader)
+            .unwrap();
+        store
+            .validate_received_pack(&mut transaction, &[object_id])
+            .unwrap();
+        store.install(transaction.id(), 1).unwrap();
+        store.verify_installed(transaction.id(), 1).unwrap();
+
+        let transaction = transaction_name(transaction.id());
+        assert!(path_is_directory(&join_path(
+            &join_path(&displaced, "arrivals"),
+            &transaction,
+        )));
+        assert!(!path_exists(&join_path(
+            &join_path(&root, "arrivals"),
+            &transaction,
+        )));
+        mrml_runtime::remove_dir_all(&root).unwrap();
+        mrml_runtime::remove_dir_all(&displaced).unwrap();
     }
 }

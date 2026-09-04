@@ -2,9 +2,9 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
 use mrml_git::{
-    HistoryVerificationLimits, LinuxDurableReceiveStore, LinuxDurableTrustPolicyStore,
-    ObjectFormat, ProtectedReceiveAuthority, QuarantineLimits, QuarantineTransactionId,
-    DEFAULT_MAX_INCOMING_PACK_BYTES,
+    DEFAULT_MAX_INCOMING_PACK_BYTES, HistoryVerificationLimits, LinuxDurableReceiveStore,
+    LinuxDurableTrustPolicyStore, ObjectFormat, ProtectedReceiveAuthority, QuarantineLimits,
+    QuarantineTransactionId,
 };
 use mrml_http::{
     BackendError, BoundedRead, BoundedWrite, SmartGitOperation, SmartGitRequest, SmartGitResponse,
@@ -25,6 +25,7 @@ pub struct ProductionReceiveRepository {
     max_object_bytes: u64,
     minimum_free_space_bytes: u64,
     refs: DirectoryCapability,
+    arrivals: DirectoryCapability,
 }
 
 impl ProductionReceiveRepository {
@@ -112,6 +113,11 @@ impl ProductionReceiveRepository {
                 .state
                 .try_clone()
                 .map_err(|_| BackendError::Storage)?,
+            arrivals: admitted
+                .capabilities
+                .quarantine
+                .try_clone()
+                .map_err(|_| BackendError::Storage)?,
         })
     }
 
@@ -127,9 +133,11 @@ impl ProductionReceiveRepository {
         if request.operation != SmartGitOperation::ReceivePack {
             return Err(BackendError::Unsupported);
         }
-        let mut store = LinuxDurableReceiveStore::open_with_ref_capability(
+        let mut store = LinuxDurableReceiveStore::open_with_capabilities(
             path(&self.journals)?,
-            path(&self.quarantine)?,
+            self.arrivals
+                .try_clone()
+                .map_err(|_| BackendError::Storage)?,
             self.refs.try_clone().map_err(|_| BackendError::Storage)?,
             path(&self.plain_receipts)?,
             ObjectFormat::Sha256,
