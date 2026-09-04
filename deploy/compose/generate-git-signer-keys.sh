@@ -22,6 +22,14 @@ docker volume inspect "$signer_volume" >/dev/null
   exit 1
 }
 
+if docker --version 2>/dev/null | grep -qi podman; then
+  volume_option=--volume
+  volume_spec=$signer_volume:/keys:nocopy
+else
+  volume_option=--mount
+  volume_spec=type=volume,source=$signer_volume,target=/keys,volume-nocopy
+fi
+
 docker run --rm \
   --network none \
   --read-only \
@@ -31,7 +39,7 @@ docker run --rm \
   --memory 256m \
   --cpus 0.5 \
   --user 21006:21006 \
-  --mount "type=volume,source=$signer_volume,target=/keys,volume-nocopy" \
+  "$volume_option" "$volume_spec" \
   "mrml/git-protected-signer:$version" \
   generate-key-material 21006 "$openpgp_created_at" /keys
 
