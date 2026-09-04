@@ -138,10 +138,28 @@ impl UnixProtectedCommitSigningProvider {
         if peer.0 != self.expected_peer.uid || peer.1 != self.expected_peer.gid {
             return Err(UnixProtectedSignerError::UnauthorizedPeer);
         }
-        let hello = read_frame(&mut stream)?;
-        let session = decode_protected_signer_hello(&hello, &self.capability)?;
-        let now = mrml_runtime::unix_time_seconds().ok_or(UnixProtectedSignerError::Protocol)?;
+        let hello = read_frame(&mut stream).map_err(|error| {
+            mrml_runtime::mrml_eprintln!(
+                "component=mrml-git event=protected_signer_request_failed stage=hello_read category={error:?}"
+            );
+            error
+        })?;
+        let session = decode_protected_signer_hello(&hello, &self.capability).map_err(|error| {
+            mrml_runtime::mrml_eprintln!(
+                "component=mrml-git event=protected_signer_request_failed stage=hello_authentication category={error:?}"
+            );
+            error
+        })?;
+        let now = mrml_runtime::unix_time_seconds().ok_or_else(|| {
+            mrml_runtime::mrml_eprintln!(
+                "component=mrml-git event=protected_signer_request_failed stage=trusted_time category=Protocol"
+            );
+            UnixProtectedSignerError::Protocol
+        })?;
         if session.expires_at < now || session.maximum_sequence == 0 {
+            mrml_runtime::mrml_eprintln!(
+                "component=mrml-git event=protected_signer_request_failed stage=session_policy category=Protocol"
+            );
             return Err(UnixProtectedSignerError::Protocol);
         }
         let frame = encode_request(request_id, session, 1, request, &self.capability)?;
@@ -156,8 +174,12 @@ impl HybridCommitSigningProvider for UnixProtectedCommitSigningProvider {
         &mut self,
         request: ProtectedCommitSigningRequest<'_>,
     ) -> Result<HybridCommitSignatures, HistoryVerificationError> {
-        self.sign(request)
-            .map_err(|_| HistoryVerificationError::Signature)
+        self.sign(request).map_err(|error| {
+            mrml_runtime::mrml_eprintln!(
+                "component=mrml-git event=protected_signer_request_failed category={error:?}"
+            );
+            HistoryVerificationError::Signature
+        })
     }
 }
 
@@ -677,13 +699,7 @@ fn read_frame(stream: &mut UnixStream) -> Result<Vector<u8>, UnixProtectedSigner
         .map_err(|_| UnixProtectedSignerError::Io)?;
     let length = usize::try_from(u32::from_be_bytes(prefix))
         .map_err(|_| UnixProtectedSignerError::Resource)?;
-    if !(RESPONSE_HEADER + TAG_BYTES
-        ..=RESPONSE_HEADER
-            + mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES
-            + mrml_crypto::ML_DSA_65_SIGNATURE_BYTES
-            + TAG_BYTES)
-        .contains(&length)
-    {
+    if !valid_inbound_frame_length(length) {
         return Err(UnixProtectedSignerError::Protocol);
     }
     let mut output =
@@ -693,6 +709,16 @@ fn read_frame(stream: &mut UnixStream) -> Result<Vector<u8>, UnixProtectedSigner
         .read_exact(&mut output)
         .map_err(|_| UnixProtectedSignerError::Io)?;
     Ok(output)
+}
+
+fn valid_inbound_frame_length(length: usize) -> bool {
+    length == SESSION_HELLO_BYTES
+        || (RESPONSE_HEADER + TAG_BYTES
+            ..=RESPONSE_HEADER
+                + mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES
+                + mrml_crypto::ML_DSA_65_SIGNATURE_BYTES
+                + TAG_BYTES)
+            .contains(&length)
 }
 
 fn read_u16(input: &[u8], offset: usize) -> Result<u16, UnixProtectedSignerError> {
@@ -837,6 +863,21 @@ mod tests {
             decode_response(9, session, 1, &tampered, &capability).err(),
             Some(UnixProtectedSignerError::Protocol)
         );
+    }
+
+    #[test]
+    fn inbound_frame_bounds_admit_session_hello_and_bounded_responses() {
+        let minimum_response = RESPONSE_HEADER + TAG_BYTES;
+        let maximum_response = RESPONSE_HEADER
+            + mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES
+            + mrml_crypto::ML_DSA_65_SIGNATURE_BYTES
+            + TAG_BYTES;
+        assert!(valid_inbound_frame_length(SESSION_HELLO_BYTES));
+        assert!(valid_inbound_frame_length(minimum_response));
+        assert!(valid_inbound_frame_length(maximum_response));
+        assert!(!valid_inbound_frame_length(0));
+        assert!(!valid_inbound_frame_length(SESSION_HELLO_BYTES - 1));
+        assert!(!valid_inbound_frame_length(maximum_response + 1));
     }
 
     #[test]
