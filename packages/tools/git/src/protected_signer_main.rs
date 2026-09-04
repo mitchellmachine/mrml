@@ -2,7 +2,8 @@
 
 use mrml_crypto::{
     ML_DSA_65_PUBLIC_KEY_BYTES, ML_DSA_65_SECRET_KEY_BYTES, ML_DSA_65_SIGNATURE_BYTES,
-    Sha256, Sha3_512, erase_secret_bytes, ml_dsa_65_sign, ml_dsa_65_verify,
+    Sha256, Sha3_512, erase_secret_bytes, ml_dsa_65_keygen_random, ml_dsa_65_sign,
+    ml_dsa_65_verify,
 };
 use mrml_git::{
     AuthorizedHybridPair, GitObjectType, HybridCommitSignatures, ObjectFormat,
@@ -82,6 +83,15 @@ fn main() {
 
 fn run() -> Result<(), ()> {
     let arguments: Vec<String> = std::env::args().collect();
+    if let [_, command, owner_uid, openpgp_created_at, output_directory] = arguments.as_slice()
+        && command == "generate-key-material"
+    {
+        return generate_key_material(
+            owner_uid.parse().map_err(|_| ())?,
+            openpgp_created_at.parse().map_err(|_| ())?,
+            Path::new(output_directory),
+        );
+    }
     if let [
         _,
         command,
@@ -184,6 +194,94 @@ fn run() -> Result<(), ()> {
         &mut state,
         &terminating,
     )
+}
+
+fn generate_key_material(
+    owner_uid: u32,
+    openpgp_created_at: u32,
+    output_directory: &Path,
+) -> Result<(), ()> {
+    if owner_uid == 0
+        || openpgp_created_at == 0
+        || !output_directory.is_absolute()
+        || fs::canonicalize(output_directory).map_err(|_| ())? != output_directory
+    {
+        return Err(());
+    }
+    let directory = fs::symlink_metadata(output_directory).map_err(|_| ())?;
+    if directory.file_type().is_symlink()
+        || !directory.file_type().is_dir()
+        || directory.uid() != owner_uid
+        || directory.mode() & 0o077 != 0
+    {
+        return Err(());
+    }
+    let openpgp_seed_path = output_directory.join("openpgp.seed");
+    let openpgp_public_path = output_directory.join("openpgp-public.asc");
+    let ml_dsa_public_path = output_directory.join("ml-dsa-public.bin");
+    let ml_dsa_secret_path = output_directory.join("ml-dsa-secret.bin");
+    let outputs = [
+        openpgp_seed_path.as_path(),
+        openpgp_public_path.as_path(),
+        ml_dsa_public_path.as_path(),
+        ml_dsa_secret_path.as_path(),
+    ];
+    if outputs.iter().any(|path| fs::symlink_metadata(path).is_ok()) {
+        return Err(());
+    }
+
+    let mut openpgp_seed = [0; 32];
+    mrml_runtime::fill_random(&mut openpgp_seed).map_err(|_| ())?;
+    let openpgp = match SigningKeyV6::from_seed(openpgp_seed, openpgp_created_at) {
+        Ok(key) => key,
+        Err(_) => {
+            erase_secret_bytes(&mut openpgp_seed);
+            return Err(());
+        }
+    };
+    let mut openpgp_public = [0; mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES];
+    let openpgp_public_length = match openpgp.public_key().encode_ascii(&mut openpgp_public) {
+        Ok(length) => length,
+        Err(_) => {
+            erase_secret_bytes(&mut openpgp_seed);
+            return Err(());
+        }
+    };
+    let mut ml_dsa_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
+    let mut ml_dsa_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
+    if ml_dsa_65_keygen_random(&mut ml_dsa_public, &mut ml_dsa_secret).is_err() {
+        erase_secret_bytes(&mut openpgp_seed);
+        erase_secret_bytes(&mut ml_dsa_secret);
+        return Err(());
+    }
+
+    let result = write_new_exact(&openpgp_seed_path, &openpgp_seed, owner_uid, 0o400)
+        .and_then(|_| {
+            write_new_exact(
+                &openpgp_public_path,
+                &openpgp_public[..openpgp_public_length],
+                owner_uid,
+                0o444,
+            )
+        })
+        .and_then(|_| {
+            write_new_exact(&ml_dsa_public_path, &ml_dsa_public, owner_uid, 0o444)
+        })
+        .and_then(|_| {
+            write_new_exact(&ml_dsa_secret_path, &ml_dsa_secret, owner_uid, 0o400)
+        })
+        .and_then(|_| sync_parent(&openpgp_seed_path));
+    erase_secret_bytes(&mut openpgp_seed);
+    erase_secret_bytes(&mut ml_dsa_secret);
+    if result.is_err() {
+        for path in outputs {
+            let _ = fs::remove_file(path);
+        }
+        let _ = sync_parent(&openpgp_seed_path);
+        return Err(());
+    }
+    println!("signer key material generated");
+    Ok(())
 }
 
 fn socket_health(
@@ -1016,6 +1114,40 @@ fn write_new_public(path: &Path, bytes: &[u8], expected_owner: u32) -> Result<()
     directory.sync_all().map_err(|_| ())
 }
 
+fn write_new_exact(
+    path: &Path,
+    bytes: &[u8],
+    expected_owner: u32,
+    mode: u32,
+) -> Result<(), ()> {
+    if !matches!(mode, 0o400 | 0o444) {
+        return Err(());
+    }
+    validate_new_public_output(path, expected_owner)?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| ())?;
+    output.write_all(bytes).map_err(|_| ())?;
+    output.sync_all().map_err(|_| ())?;
+    drop(output);
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|_| ())?;
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != expected_owner
+        || metadata.mode() & 0o777 != mode
+        || metadata.len() != bytes.len() as u64
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
 fn read_secret(path: &Path, exact: usize, expected_owner: u32) -> Result<SecretBuffer, ()> {
     let mut file = OpenOptions::new()
         .read(true)
@@ -1380,6 +1512,59 @@ mod tests {
             &mut signature_scratch,
         )
         .unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn one_shot_key_generation_is_exact_private_and_non_overwriting() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-key-generation-signer-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let owner_uid = fs::metadata(&root).unwrap().uid();
+        generate_key_material(owner_uid, 1_700_000_000, &root).unwrap();
+
+        let seed_path = root.join("openpgp.seed");
+        let openpgp_public_path = root.join("openpgp-public.asc");
+        let ml_public_path = root.join("ml-dsa-public.bin");
+        let ml_secret_path = root.join("ml-dsa-secret.bin");
+        for (path, length, mode) in [
+            (&seed_path, 32, 0o400),
+            (&openpgp_public_path, 0, 0o444),
+            (&ml_public_path, ML_DSA_65_PUBLIC_KEY_BYTES, 0o444),
+            (&ml_secret_path, ML_DSA_65_SECRET_KEY_BYTES, 0o400),
+        ] {
+            let metadata = fs::symlink_metadata(path).unwrap();
+            assert!(metadata.file_type().is_file());
+            assert_eq!(metadata.nlink(), 1);
+            assert_eq!(metadata.uid(), owner_uid);
+            assert_eq!(metadata.mode() & 0o777, mode);
+            if length != 0 {
+                assert_eq!(metadata.len(), length as u64);
+            }
+        }
+
+        let mut public_scratch = vec![0; mrml_openpgp::MAX_OPENPGP_PUBLIC_KEY_BYTES];
+        let exported_openpgp = mrml_openpgp::parse_public_key_v6_ascii(
+            &fs::read(&openpgp_public_path).unwrap(),
+            &mut public_scratch,
+        )
+        .unwrap();
+        let mut seed: [u8; 32] = fs::read(&seed_path).unwrap().try_into().unwrap();
+        let expected_openpgp = SigningKeyV6::from_seed(seed, 1_700_000_000).unwrap();
+        erase_secret_bytes(&mut seed);
+        assert_eq!(exported_openpgp, expected_openpgp.public_key());
+        let ml_public = fs::read(&ml_public_path).unwrap();
+        let mut ml_secret = fs::read(&ml_secret_path).unwrap();
+        validate_ml_dsa_pair(&ml_public, &ml_secret).unwrap();
+        erase_secret_bytes(&mut ml_secret);
+
+        let original_seed = fs::read(&seed_path).unwrap();
+        assert!(generate_key_material(owner_uid, 1_700_000_001, &root).is_err());
+        assert_eq!(fs::read(&seed_path).unwrap(), original_seed);
         fs::remove_dir_all(root).unwrap();
     }
 

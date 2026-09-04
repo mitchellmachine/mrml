@@ -53,5 +53,13 @@ require 'client and signer UID must differ' deploy/compose/provision-git-signer-
 require 'signer channel copies differ' deploy/compose/provision-git-signer-host.sh
 require 'git_volume git-signer-keys' deploy/compose/install-volume-inputs.sh
 require 'authority-receipt-public.bin' deploy/compose/install-volume-inputs.sh
+require 'generate-key-material 21006 "$openpgp_created_at" /keys' deploy/compose/generate-git-signer-keys.sh
+require '--network none' deploy/compose/generate-git-signer-keys.sh
+require '--read-only' deploy/compose/generate-git-signer-keys.sh
+require '--cap-drop ALL' deploy/compose/generate-git-signer-keys.sh
+require '--security-opt no-new-privileges' deploy/compose/generate-git-signer-keys.sh
+require 'type=volume,source=$signer_volume,target=/keys,volume-nocopy' deploy/compose/generate-git-signer-keys.sh
+require '"21006:21006 400 32 1"' deploy/compose/generate-git-signer-keys.sh
+require '"21006:21006 400 4032 1"' deploy/compose/generate-git-signer-keys.sh
 
 echo "protected signer Compose and image isolation policy PASS"

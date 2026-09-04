@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 2 ] || {
+  echo "usage: $0 VERSION OPENPGP_CREATED_AT" >&2
+  exit 2
+}
+version=$1
+openpgp_created_at=$2
+volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
+signer_volume=${volume_prefix}-git-signer-keys
+
+case $version in ''|*[!a-zA-Z0-9._-]*) echo "invalid image version" >&2; exit 2 ;; esac
+case $openpgp_created_at in ''|*[!0-9]*|0) echo "OpenPGP creation time must be nonzero decimal" >&2; exit 2 ;; esac
+case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
+[ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
+[ "$(id -u)" -eq 0 ] || { echo "signer key generation must run as root" >&2; exit 1; }
+command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
+docker volume inspect "$signer_volume" >/dev/null
+[ -z "$(docker ps -q --filter volume="$signer_volume")" ] || {
+  echo "refusing to generate keys in a volume used by a running container" >&2
+  exit 1
+}
+
+docker run --rm \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 16 \
+  --memory 256m \
+  --cpus 0.5 \
+  --user 21006:21006 \
+  --mount "type=volume,source=$signer_volume,target=/keys,volume-nocopy" \
+  "mrml/git-protected-signer:$version" \
+  generate-key-material 21006 "$openpgp_created_at" /keys
+
+mountpoint=$(docker volume inspect --format '{{.Mountpoint}}' "$signer_volume")
+case $mountpoint in /*/_data) ;; *) echo "unsafe Docker volume mountpoint" >&2; exit 1 ;; esac
+[ -d "$mountpoint" ] && [ ! -L "$mountpoint" ]
+[ "$(stat -c '%u:%g %a %s %h' "$mountpoint/openpgp.seed")" = "21006:21006 400 32 1" ]
+[ "$(stat -c '%u:%g %a %s %h' "$mountpoint/ml-dsa-public.bin")" = "21006:21006 444 1952 1" ]
+[ "$(stat -c '%u:%g %a %s %h' "$mountpoint/ml-dsa-secret.bin")" = "21006:21006 400 4032 1" ]
+openpgp_size=$(stat -c %s "$mountpoint/openpgp-public.asc")
+[ "$openpgp_size" -gt 0 ] && [ "$openpgp_size" -le 1048576 ]
+[ "$(stat -c '%u:%g %a %h' "$mountpoint/openpgp-public.asc")" = "21006:21006 444 1" ]
+
+echo "protected signer key material generated directly in named volume $signer_volume"

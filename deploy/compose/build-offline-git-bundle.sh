@@ -136,6 +136,7 @@ install -m 0444 "$COSIGN_PUBLIC_KEY" "$payload/signatures/cosign.pub"
 
 install -m 0555 deploy/compose/provision-git-host.sh "$payload/deploy/provision-git-host.sh"
 install -m 0555 deploy/compose/provision-git-signer-host.sh "$payload/deploy/provision-git-signer-host.sh"
+install -m 0555 deploy/compose/generate-git-signer-keys.sh "$payload/deploy/generate-git-signer-keys.sh"
 install -m 0555 deploy/compose/provision-git-credential-agent-host.sh "$payload/deploy/provision-git-credential-agent-host.sh"
 install -m 0555 deploy/compose/start-git.sh "$payload/deploy/start-git.sh"
 install -m 0555 deploy/compose/initialize-git.sh "$payload/deploy/initialize-git.sh"
