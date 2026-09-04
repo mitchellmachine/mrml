@@ -69,7 +69,8 @@ git rev-parse --verify HEAD > "$payload/source.commit"
 sha256sum \
   target/mrml-native/linux/release/mrml-git-authority \
   target/mrml-native/linux/release/mrml-gitd \
-  target/mrml-native/linux/release/mrml-git-protected-signer > "$payload/binaries.sha256"
+  target/mrml-native/linux/release/mrml-git-protected-signer \
+  target/mrml-native/linux/release/mrml-git-backup > "$payload/binaries.sha256"
 cat > "$payload/test-evidence.txt" <<'EOF'
 PASS target/release/mrml manifest lock --check
 PASS target/release/mrml manifest check
@@ -87,8 +88,10 @@ docker buildx build --platform linux/amd64 --network=none --pull=false --load \
   -f deploy/compose/Dockerfile.gitd -t "mrml/gitd:$version" .
 docker buildx build --platform linux/amd64 --network=none --pull=false --load \
   -f deploy/compose/Dockerfile.git-protected-signer -t "mrml/git-protected-signer:$version" .
+docker buildx build --platform linux/amd64 --network=none --pull=false --load \
+  -f deploy/compose/Dockerfile.git-backup -t "mrml/git-backup:$version" .
 
-for image in git-authority gitd git-protected-signer; do
+for image in git-authority gitd git-protected-signer git-backup; do
   docker image inspect --format '{{json .RepoDigests}} {{.Id}}' \
     "mrml/$image:$version" > "$payload/images/$image.identity"
   docker save -o "$payload/images/$image.tar" "mrml/$image:$version"
@@ -102,14 +105,15 @@ for image in git-authority gitd git-protected-signer; do
     --bundle "$payload/signatures/$image.cosign.bundle" "$payload/images/$image.tar"
 done
 {
-  printf '%s\n' 'format=mrml-images-git-v3' "version=$version" "platform=linux/amd64"
-  for image in git-authority gitd git-protected-signer; do
+  printf '%s\n' 'format=mrml-images-git-v4' "version=$version" "platform=linux/amd64"
+  for image in git-authority gitd git-protected-signer git-backup; do
     archive_digest=$(sha256sum "$payload/images/$image.tar" | awk '{print $1}')
     producer_id=$(docker image inspect --format '{{.Id}}' "mrml/$image:$version")
     case $image in
       git-authority) user=21002:21002 entrypoint=/usr/bin/mrml-git-authority ;;
       gitd) user=21001:21001 entrypoint=/usr/bin/mrml-gitd ;;
       git-protected-signer) user=21006:21006 entrypoint=/usr/bin/mrml-git-protected-signer ;;
+      git-backup) user=0:0 entrypoint=/usr/bin/mrml-git-backup ;;
       *) exit 1 ;;
     esac
     printf 'image=mrml/%s:%s archive_sha256=%s producer_id=%s user=%s entrypoint=%s\n' \
@@ -142,6 +146,8 @@ install -m 0555 deploy/compose/load-offline-git-images.sh "$payload/load-offline
 install -m 0444 deploy/compose/gitd.example.conf "$payload/deploy/gitd.example.conf"
 install -m 0444 deploy/compose/compose.git.yaml "$payload/deploy/compose.git.yaml"
 install -m 0444 deploy/compose/compose.signer.yaml "$payload/deploy/compose.signer.yaml"
+install -m 0444 deploy/compose/compose.git-backup.yaml "$payload/deploy/compose.git-backup.yaml"
+install -m 0444 deploy/compose/compose.git-restore.yaml "$payload/deploy/compose.git-restore.yaml"
 install -m 0444 deploy/compose/.env.git.production.example "$payload/deploy/.env.production.example"
 install -m 0444 deploy/compose/.env.signer.production.example "$payload/deploy/.env.signer.production.example"
 
