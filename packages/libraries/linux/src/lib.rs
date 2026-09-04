@@ -105,6 +105,7 @@ unsafe extern "C" {
     fn fstat(file: c_int, status: *mut Stat) -> c_int;
     fn geteuid() -> u32;
     fn mkdir(path: *const i8, mode: u32) -> c_int;
+    fn mkdirat(directory: c_int, path: *const i8, mode: u32) -> c_int;
     fn unlink(path: *const i8) -> c_int;
     fn rmdir(path: *const i8) -> c_int;
     fn pipe(files: *mut c_int) -> c_int;
@@ -1439,6 +1440,17 @@ impl NativeDirectory {
         file.is_regular().then_some(file)
     }
 
+    pub fn create_directory(&self, name: &CStr, mode: u32) -> Option<Self> {
+        if !safe_child_name(name) || mode & !0o777 != 0 {
+            return None;
+        }
+        let parent = unsafe { dirfd(self.0) };
+        if parent < 0 || unsafe { mkdirat(parent, name.as_ptr(), mode) } != 0 {
+            return None;
+        }
+        self.open_beneath(name)
+    }
+
     pub fn rename_child(&self, existing: &CStr, replacement: &CStr) -> bool {
         if !safe_child_name(existing) || !safe_child_name(replacement) {
             return false;
@@ -1453,6 +1465,31 @@ impl NativeDirectory {
                     existing.as_ptr(),
                     directory,
                     replacement.as_ptr(),
+                )
+            } == 0
+    }
+
+    pub fn rename_child_to(&self, existing: &CStr, destination: &Self, replacement: &CStr) -> bool {
+        if !safe_child_name(existing) || !safe_child_name(replacement) {
+            return false;
+        }
+        let source_directory = unsafe { dirfd(self.0) };
+        let destination_directory = unsafe { dirfd(destination.0) };
+        const SYS_RENAMEAT2_X86_64: c_long = 316;
+        const RENAME_NOREPLACE: u32 = 1;
+        // SAFETY: both names are single NUL-terminated children, both retained
+        // directory descriptors remain live, and `RENAME_NOREPLACE` prevents
+        // an attacker from racing an existing destination into replacement.
+        source_directory >= 0
+            && destination_directory >= 0
+            && unsafe {
+                syscall(
+                    SYS_RENAMEAT2_X86_64,
+                    source_directory,
+                    existing.as_ptr(),
+                    destination_directory,
+                    replacement.as_ptr(),
+                    RENAME_NOREPLACE,
                 )
             } == 0
     }

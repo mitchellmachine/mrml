@@ -100,6 +100,18 @@ impl DirectoryCapability {
         Ok(File { inner, position: 0 })
     }
 
+    pub fn create_directory(&self, name: &str, mode: u32) -> Result<Self, FileError> {
+        validate_capability_child_name(name)?;
+        let encoded = encode_unix_path(name).ok_or(FileError::InvalidPath)?;
+        let name =
+            core::ffi::CStr::from_bytes_with_nul(&encoded).map_err(|_| FileError::InvalidPath)?;
+        let inner = self
+            .inner
+            .create_directory(name, mode)
+            .ok_or(FileError::DirectoryFailed)?;
+        Ok(Self { inner })
+    }
+
     pub fn rename_child(&self, existing: &str, replacement: &str) -> Result<(), FileError> {
         validate_capability_child_name(existing)?;
         validate_capability_child_name(replacement)?;
@@ -111,6 +123,26 @@ impl DirectoryCapability {
             .map_err(|_| FileError::InvalidPath)?;
         self.inner
             .rename_child(existing, replacement)
+            .then_some(())
+            .ok_or(FileError::RenameFailed)
+    }
+
+    pub fn rename_child_to(
+        &self,
+        existing: &str,
+        destination: &Self,
+        replacement: &str,
+    ) -> Result<(), FileError> {
+        validate_capability_child_name(existing)?;
+        validate_capability_child_name(replacement)?;
+        let existing = encode_unix_path(existing).ok_or(FileError::InvalidPath)?;
+        let replacement = encode_unix_path(replacement).ok_or(FileError::InvalidPath)?;
+        let existing =
+            core::ffi::CStr::from_bytes_with_nul(&existing).map_err(|_| FileError::InvalidPath)?;
+        let replacement = core::ffi::CStr::from_bytes_with_nul(&replacement)
+            .map_err(|_| FileError::InvalidPath)?;
+        self.inner
+            .rename_child_to(existing, &destination.inner, replacement)
             .then_some(())
             .ok_or(FileError::RenameFailed)
     }
@@ -1084,7 +1116,46 @@ mod tests {
         assert!(root_capability.open_regular("state.active").is_err());
         for invalid in ["", ".", "..", "nested/state", "nested\\state"] {
             assert!(root_capability.create_new_file(invalid, 0o600).is_err());
+            assert!(root_capability.create_directory(invalid, 0o700).is_err());
             assert!(root_capability.remove_file(invalid).is_err());
+        }
+        let quarantine = root_capability
+            .create_directory("quarantine", 0o700)
+            .unwrap();
+        let arrivals = root_capability.create_directory("arrivals", 0o700).unwrap();
+        let transaction = quarantine.create_directory("transaction", 0o700).unwrap();
+        let mut pack = transaction.create_new_file("incoming.pack", 0o600).unwrap();
+        pack.write_all(b"retained pack").unwrap();
+        pack.sync().unwrap();
+        drop(pack);
+        quarantine
+            .rename_child_to("transaction", &arrivals, "pack-id")
+            .unwrap();
+        let mut installed = arrivals.open_regular("pack-id/incoming.pack").unwrap();
+        let mut pack_bytes = [0; 13];
+        installed.read_exact(&mut pack_bytes).unwrap();
+        assert_eq!(&pack_bytes, b"retained pack");
+        drop(installed);
+        assert!(quarantine.open_directory("transaction").is_err());
+        let collision = quarantine.create_directory("collision", 0o700).unwrap();
+        drop(collision);
+        assert!(
+            quarantine
+                .rename_child_to("collision", &arrivals, "pack-id")
+                .is_err()
+        );
+        assert!(quarantine.open_directory("collision").is_ok());
+        for invalid in ["", ".", "..", "nested/name", "nested\\name"] {
+            assert!(
+                quarantine
+                    .rename_child_to(invalid, &arrivals, "new-name")
+                    .is_err()
+            );
+            assert!(
+                quarantine
+                    .rename_child_to("collision", &arrivals, invalid)
+                    .is_err()
+            );
         }
         let retained = root_capability.open_directory("owner/repository").unwrap();
         let retained_metadata = retained.metadata().unwrap();
