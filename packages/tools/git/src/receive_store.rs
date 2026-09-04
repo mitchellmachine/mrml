@@ -253,7 +253,9 @@ impl LinuxDurableReceiveStore {
         self.journals.remove_exact(journal)
     }
 
-    pub(crate) fn recovery_audit_receipt(
+    /// Reconstructs the exact post-activation receipt after live refs and all
+    /// generations match the durable journal. This does not sign or persist it.
+    pub fn recovery_audit_receipt(
         &self,
         journal: &ReceiveJournalRecord,
     ) -> Result<AuditReceipt, DurableFailure> {

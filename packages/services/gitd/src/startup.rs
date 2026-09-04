@@ -245,7 +245,8 @@ pub fn initialize_catalog_repository(
     let mut capabilities = Vec::new();
     for root in roots {
         let root_capability = DirectoryCapability::open_root(
-            root.to_str().ok_or(RepositoryInitializationError::Identity)?,
+            root.to_str()
+                .ok_or(RepositoryInitializationError::Identity)?,
         )
         .map_err(|_| RepositoryInitializationError::Layout)?;
         validate_directory_metadata(
@@ -316,8 +317,8 @@ pub fn initialize_catalog_repository(
         return Err(RepositoryInitializationError::Initialize);
     }
     drop(initialized);
-    let admitted =
-        admit_catalog_repository(config, entry).map_err(|_| RepositoryInitializationError::Verify)?;
+    let admitted = admit_catalog_repository(config, entry)
+        .map_err(|_| RepositoryInitializationError::Verify)?;
     let tip = admitted
         .view
         .resolve_ref(&entry.repository, "refs/heads/main")
@@ -352,7 +353,44 @@ pub enum RepositoryRecoveryError {
     Receipt,
     PreActivationReverificationRequired,
     ManualUncertain,
+    AuthorityCandidate,
     Count,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProtectedRecoveryProgress {
+    CommitThenReceiptAndComplete,
+    ReceiptAndComplete,
+    ReceiptAlreadyComplete,
+    Complete,
+    CompleteAlreadyDone,
+}
+
+fn protected_recovery_progress(
+    action: RecoveryAction,
+    status: mrml_git::AuthorityCandidateStatus,
+) -> Result<ProtectedRecoveryProgress, RepositoryRecoveryError> {
+    match (action, status) {
+        (
+            RecoveryAction::RecoverAuditReceipt,
+            mrml_git::AuthorityCandidateStatus::ActivationStarted,
+        ) => Ok(ProtectedRecoveryProgress::CommitThenReceiptAndComplete),
+        (RecoveryAction::RecoverAuditReceipt, mrml_git::AuthorityCandidateStatus::Activated)
+        | (
+            RecoveryAction::RecoverAuditReceipt,
+            mrml_git::AuthorityCandidateStatus::ReceiptPersisted,
+        ) => Ok(ProtectedRecoveryProgress::ReceiptAndComplete),
+        (RecoveryAction::RecoverAuditReceipt, mrml_git::AuthorityCandidateStatus::Completed) => {
+            Ok(ProtectedRecoveryProgress::ReceiptAlreadyComplete)
+        }
+        (RecoveryAction::MarkComplete, mrml_git::AuthorityCandidateStatus::ReceiptPersisted) => {
+            Ok(ProtectedRecoveryProgress::Complete)
+        }
+        (RecoveryAction::MarkComplete, mrml_git::AuthorityCandidateStatus::Completed) => {
+            Ok(ProtectedRecoveryProgress::CompleteAlreadyDone)
+        }
+        _ => Err(RepositoryRecoveryError::AuthorityCandidate),
+    }
 }
 
 pub fn inspect_admitted_repository_recovery(
@@ -635,6 +673,127 @@ pub fn recover_admitted_repository(
     Ok(summary)
 }
 
+pub fn recover_admitted_protected_repository(
+    config: &GitdConfig,
+    entry: &DeploymentRepository,
+    admitted: &AdmittedRepository,
+    authority: &mut dyn mrml_git::ProtectedReceiveAuthority,
+) -> Result<RepositoryRecoverySummary, RepositoryRecoveryError> {
+    if entry.profile.class != DeploymentRepositoryProfile::Protected {
+        return Err(RepositoryRecoveryError::AuthorityCandidate);
+    }
+    let mut store = open_recovery_store(admitted, receive_pack_limit(config.max_body_bytes))?;
+    let actions = store
+        .recovery_actions()
+        .map_err(|_| RepositoryRecoveryError::Journal)?;
+    let mut summary = RepositoryRecoverySummary::default();
+    for (journal, action) in actions {
+        match action {
+            RecoveryAction::RecoverAuditReceipt => {
+                let receipt = store
+                    .recovery_audit_receipt(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
+                let record = authority
+                    .query_candidate_by_id(&journal.repository, journal.transaction)
+                    .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+                validate_recovery_candidate(&journal, &receipt, &record)?;
+                let progress = protected_recovery_progress(action, record.status)?;
+                if progress == ProtectedRecoveryProgress::CommitThenReceiptAndComplete {
+                    authority
+                        .commit_candidate(&record.context)
+                        .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+                }
+                let mut authenticated = AuthenticatedReceiveStore::new_with_receipts(
+                    &mut store,
+                    open_authenticated_receipts(admitted)?,
+                    authority,
+                );
+                authenticated
+                    .recover_audit_receipt(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Receipt)?;
+                drop(authenticated);
+                if progress != ProtectedRecoveryProgress::ReceiptAlreadyComplete {
+                    authority
+                        .complete_candidate(&record.context)
+                        .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+                }
+                store
+                    .complete_recovered_journal(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
+                summary.authenticated_receipts_recovered = summary
+                    .authenticated_receipts_recovered
+                    .checked_add(1)
+                    .ok_or(RepositoryRecoveryError::Count)?;
+            }
+            RecoveryAction::MarkComplete => {
+                let record = authority
+                    .query_candidate_by_id(&journal.repository, journal.transaction)
+                    .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+                let receipt = open_authenticated_receipts(admitted)?
+                    .load(journal.transaction, authority)
+                    .map_err(|_| RepositoryRecoveryError::Receipt)?;
+                validate_recovery_candidate(&journal, &receipt.receipt, &record)?;
+                let progress = protected_recovery_progress(action, record.status)?;
+                if progress == ProtectedRecoveryProgress::Complete {
+                    authority
+                        .complete_candidate(&record.context)
+                        .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+                }
+                store
+                    .complete_recovered_journal(&journal)
+                    .map_err(|_| RepositoryRecoveryError::Journal)?;
+                summary.completed_journals = summary
+                    .completed_journals
+                    .checked_add(1)
+                    .ok_or(RepositoryRecoveryError::Count)?;
+            }
+            RecoveryAction::DiscardBeforeActivation | RecoveryAction::ReverifyBeforeActivation => {
+                return Err(RepositoryRecoveryError::PreActivationReverificationRequired);
+            }
+            RecoveryAction::ManualUncertain => {
+                return Err(RepositoryRecoveryError::ManualUncertain);
+            }
+        }
+    }
+    Ok(summary)
+}
+
+fn open_authenticated_receipts(
+    admitted: &AdmittedRepository,
+) -> Result<AuthenticatedAuditReceiptDirectory, RepositoryRecoveryError> {
+    AuthenticatedAuditReceiptDirectory::open_capability(
+        admitted
+            .capabilities
+            .receipts
+            .open_directory("authenticated")
+            .map_err(|_| RepositoryRecoveryError::Receipt)?,
+    )
+    .map_err(|_| RepositoryRecoveryError::Receipt)
+}
+
+fn validate_recovery_candidate(
+    journal: &mrml_git::ReceiveJournalRecord,
+    receipt: &mrml_git::AuditReceipt,
+    record: &mrml_git::AuthorityCandidateRecord,
+) -> Result<(), RepositoryRecoveryError> {
+    let canonical = mrml_git::encode_audit_receipt(receipt)
+        .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+    let transcript = mrml_git::authenticated_audit_receipt_transcript(&canonical)
+        .map_err(|_| RepositoryRecoveryError::AuthorityCandidate)?;
+    let context = &record.context;
+    if context.id != journal.transaction
+        || context.repository != journal.repository
+        || context.current_generation != journal.repository_generation
+        || context.next_generation != receipt.activated_repository_generation
+        || context.trust_generation != journal.trust_generation
+        || context.revocation_generation != journal.revocation_generation
+        || context.activation_digest != mrml_git::candidate_activation_digest(&transcript)
+    {
+        return Err(RepositoryRecoveryError::AuthorityCandidate);
+    }
+    Ok(())
+}
+
 fn open_recovery_store(
     admitted: &AdmittedRepository,
     max_pack_bytes: u64,
@@ -795,6 +954,50 @@ fn validate_components(path: &Path) -> Result<(), StartupValidationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protected_recovery_accepts_only_authority_states_proven_by_local_phase() {
+        use mrml_git::AuthorityCandidateStatus as Status;
+
+        assert_eq!(
+            protected_recovery_progress(
+                RecoveryAction::RecoverAuditReceipt,
+                Status::ActivationStarted
+            ),
+            Ok(ProtectedRecoveryProgress::CommitThenReceiptAndComplete)
+        );
+        assert_eq!(
+            protected_recovery_progress(RecoveryAction::RecoverAuditReceipt, Status::Activated),
+            Ok(ProtectedRecoveryProgress::ReceiptAndComplete)
+        );
+        assert_eq!(
+            protected_recovery_progress(RecoveryAction::RecoverAuditReceipt, Status::Completed),
+            Ok(ProtectedRecoveryProgress::ReceiptAlreadyComplete)
+        );
+        assert_eq!(
+            protected_recovery_progress(RecoveryAction::MarkComplete, Status::ReceiptPersisted),
+            Ok(ProtectedRecoveryProgress::Complete)
+        );
+        assert_eq!(
+            protected_recovery_progress(RecoveryAction::MarkComplete, Status::Completed),
+            Ok(ProtectedRecoveryProgress::CompleteAlreadyDone)
+        );
+        for status in [
+            Status::Receiving,
+            Status::ProofsSealed,
+            Status::Authorized,
+            Status::Aborted,
+        ] {
+            assert_eq!(
+                protected_recovery_progress(RecoveryAction::RecoverAuditReceipt, status),
+                Err(RepositoryRecoveryError::AuthorityCandidate)
+            );
+            assert_eq!(
+                protected_recovery_progress(RecoveryAction::MarkComplete, status),
+                Err(RepositoryRecoveryError::AuthorityCandidate)
+            );
+        }
+    }
     use mrml_crypto::ml_dsa_65_keygen;
     use mrml_git::{
         RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,

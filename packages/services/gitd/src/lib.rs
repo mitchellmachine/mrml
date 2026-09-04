@@ -54,7 +54,8 @@ pub use listener::{load_quic_retry_key, GitdBoundListeners, GitdListenerError};
 pub use production_receive::ProductionReceiveRepository;
 pub use startup::{
     admit_catalog_repository, initialize_catalog_protected_policy, initialize_catalog_repository,
-    inspect_admitted_repository_recovery, recover_admitted_repository, validate_storage_layout,
+    inspect_admitted_repository_recovery, recover_admitted_protected_repository,
+    recover_admitted_repository, validate_storage_layout,
     AdmittedRepository, ProtectedPolicyInitializationError, RepositoryAdmissionError,
     RepositoryInitializationError, RepositoryRecoveryError, RepositoryRecoveryStatus,
     RepositoryRecoverySummary, RepositoryStorageCapabilities, RepositoryStoragePaths,

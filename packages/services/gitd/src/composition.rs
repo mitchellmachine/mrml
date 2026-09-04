@@ -8,7 +8,7 @@ use crate::{
     AuthenticationStoreError, DeploymentCatalog, GitdConfig, GitdRepositorySet,
     RepositoryAdmissionError, RepositoryRecoveryError, RepositoryRecoverySummary,
     SharedGitdRepositorySet, admit_catalog_repository, load_gitd_authentication,
-    recover_admitted_repository,
+    recover_admitted_protected_repository, recover_admitted_repository,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,8 +77,12 @@ pub fn compose_gitd_service<A: ProtectedReceiveAuthority + Send + Clone + 'stati
     for entry in &catalog.repositories {
         let admitted =
             admit_catalog_repository(config, entry).map_err(GitdCompositionError::Admission)?;
-        let summary = recover_admitted_repository(config, entry, &admitted, &mut authority)
-            .map_err(GitdCompositionError::Recovery)?;
+        let summary = if entry.profile.class == crate::DeploymentRepositoryProfile::Protected {
+            recover_admitted_protected_repository(config, entry, &admitted, &mut authority)
+        } else {
+            recover_admitted_repository(config, entry, &admitted, &mut authority)
+        }
+        .map_err(GitdCompositionError::Recovery)?;
         recovery.push((entry.repository.clone(), summary));
         admitted_repositories.push(admitted);
     }

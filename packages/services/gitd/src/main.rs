@@ -12,7 +12,8 @@ use mrml_gitd::{
     initialize_catalog_repository, initialize_empty_token_store,
     inspect_admitted_repository_recovery, issue_access_token, load_deployment_catalog,
     load_gitd_authentication, load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
-    recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
+    recover_admitted_protected_repository, recover_admitted_repository, refresh_certd_tls_config,
+    revoke_access_token,
     validate_identity_snapshot, validate_storage_layout, GitAuthorityChannelClient,
     GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute, GitdCompositionError,
     GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool, GitdTlsConfigStore,
@@ -296,8 +297,17 @@ fn run() -> Result<(), ()> {
         let mut receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
         for repository in &catalog.repositories {
             let admitted = admit_catalog_repository(&config, repository).map_err(|_| ())?;
-            recover_admitted_repository(&config, repository, &admitted, &mut receipt_authority)
-                .map_err(|_| ())?;
+            if repository.profile.class == mrml_gitd::DeploymentRepositoryProfile::Protected {
+                recover_admitted_protected_repository(
+                    &config,
+                    repository,
+                    &admitted,
+                    &mut receipt_authority,
+                )
+            } else {
+                recover_admitted_repository(&config, repository, &admitted, &mut receipt_authority)
+            }
+            .map_err(|_| ())?;
         }
         println!(
             "{}",
