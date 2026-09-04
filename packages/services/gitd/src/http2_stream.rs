@@ -314,8 +314,18 @@ pub fn serve_gitd_http2_connection_with_drain<B: GitdBackend>(
 }
 
 fn is_smart_git_target(target: &str) -> bool {
-    let path = target.split_once('?').map_or(target, |(path, _)| path);
-    path.split('/').any(|component| component.ends_with(".git"))
+    let (path, query) = target
+        .split_once('?')
+        .map_or((target, None), |(path, query)| (path, Some(query)));
+    let repository = path
+        .split('/')
+        .any(|component| component.ends_with(".git"));
+    repository
+        && (matches!(
+            query,
+            Some("service=git-upload-pack" | "service=git-receive-pack")
+        ) || path.ends_with("/git-upload-pack")
+            || path.ends_with("/git-receive-pack"))
 }
 
 fn prepare_error_status(error: BackendError) -> u16 {
@@ -399,6 +409,12 @@ mod tests {
         ));
         assert!(is_smart_git_target(
             "/mitchellrenouf/mrml.git/info/refs?service=git-upload-pack"
+        ));
+        assert!(!is_smart_git_target(
+            "/owner/project.git/mrml-candidate-v1/00112233445566778899aabbccddeeff"
+        ));
+        assert!(!is_smart_git_target(
+            "/owner/project.git/info/refs?service=unknown"
         ));
         assert!(!is_smart_git_target("/mitchellrenouf/mrml"));
         assert!(!is_smart_git_target("/mrml.git.example/path"));
