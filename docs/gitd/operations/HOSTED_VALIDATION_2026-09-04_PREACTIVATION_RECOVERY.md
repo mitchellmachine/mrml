@@ -8,11 +8,11 @@ Cosign-signed release, physical-hardware evidence, or independent review.
 ## Source and recovery result
 
 - Branch: `main`.
-- Exact image source commit: `2c403c0e` (`gitd recovery: discard retained
-  preactivation state`).
+- Exact image source commit: `0b7cfb66` (`gitd recovery: discard unactivated
+  installed candidates`).
 - The ordinary worktree contained pre-existing unrelated Gitd and HTTP edits.
-  Release binaries and images were built from `/tmp/mrml-release-2c403c0e`,
-  populated by `git archive 2c403c0e`; those unrelated edits were excluded.
+  Release binaries and images were built from `/tmp/mrml-release-0b7cfb66`,
+  populated by `git archive 0b7cfb66`; those unrelated edits were excluded.
 - The source commit was signed locally. No repository push was performed.
 
 Gitd can now reconcile `DiscardBeforeActivation` journals at both durable crash
@@ -52,15 +52,15 @@ Docker archive to SPDX JSON.
 
 | Image | Local Podman ID | Archive SHA-256 | SPDX JSON SHA-256 |
 | --- | --- | --- | --- |
-| `mrml/git-authority:2c403c0e` | `cc414ce7577052dbfb4f75b5b31a52066489788cc7c070f7bdd2454dd77319aa` | `798bdad3f77d974ad325156c7ec2fdedee1dad6e10779732d5d2294c4ca5b761` | `9a82260149d916aa1d23eb03f61185c49c1249dca5d33afa38e48852934441c9` |
-| `mrml/gitd:2c403c0e` | `5dc3aa6029e29189724cab28121c648435e7ae3eb64396f3def5de5e90f1112c` | `0a749ca51259fcd43e8b81df0a2210c27f87647775abfd82fff515416d0148fd` | `9e9dddd7633508b1628267cc52582f219e0969e36855cf539f6ec77d507882c9` |
-| `mrml/git-protected-signer:2c403c0e` | `09a49e69348766af4dd5f55a9d5bf1ff12513c891e2537f04230c9449c302748` | `c323a7463189a2116bf38a8f421e42969a63174e1229c76ea54b7e82bc51b8c7` | `0deab1e1bea9ac74dbf2e95a5c3e811729e4a4ca85d3387babd80fa39174cff5` |
+| `mrml/git-authority:0b7cfb66` | `cc414ce7577052dbfb4f75b5b31a52066489788cc7c070f7bdd2454dd77319aa` | `612dc2489c779caec69464b16f8550c6ce575c0b6c91d34cce1950ef4ec21907` | `9395b0228780a7c551abf02080b2126557f33ea24cde719b479c88a6e811f301` |
+| `mrml/gitd:0b7cfb66` | `5c5fe8c5f1e1a9b37c6f6304cb6c72cada3c508263ca09a0cff4163e48e47136` | `01ba15afb2ef35b28d2af59bbcffd38d42a418f0e1c18f8608be2461133ec9f0` | `3aadfc085b140b59bb4af4929f5c8c3caf1896ee847292d5b1e12bb36844443d` |
+| `mrml/git-protected-signer:0b7cfb66` | `09a49e69348766af4dd5f55a9d5bf1ff12513c891e2537f04230c9449c302748` | `181c1cfb7d19949c14978d837e280d62822bdc2dbeaca9e2c773e58496352f2f` | `f4f4e53e4a064b87d91f64db0478062cb5f886cbed5312dc11cbfaaf0bcc55df` |
 
 The archives were streamed directly over the approved SSH connection into
 Docker 29.6.1 with `docker load`; no source checkout, build toolchain, registry,
 or bind-mounted host data was used on the VPS. Docker's loaded runtime image IDs
 are `92fab5e8e2c06458f09e9edbb5178ebec18f7608b2015a4a86ba95c03165cc9b`,
-`3f00d8245d798db2a01059079b6c83fe0952956f1531dce4cf7a2e4724ed93a9`,
+`87d5850d164dafed5fddda5832a76cbe957d64fc541df3c83234a81aa96a83cc`,
 and `e980b251f947657f93da25ac734ade7b04b6510b2a1ad3941078f73dd5d9eb87`.
 Their configured identities are respectively `21002:21002`, `21001:21001`,
 and `21006:21006`, with their narrow daemon entrypoints.
