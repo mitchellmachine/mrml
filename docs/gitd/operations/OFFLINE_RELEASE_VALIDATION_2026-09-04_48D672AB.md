@@ -86,6 +86,31 @@ same producer image IDs now locked as `48d672ab`; Gitd remained bound only to
 `127.0.0.1:30443`. Its repository and authority state volumes retained
 `org.mrml.managed=true` and `org.mrml.restore-disposable=true` labels.
 
+A subsequent production-engine audit found that the unprefixed production
+named volumes are owned by Docker Snap, while the destructive-restore target
+above intentionally used rootful Podman. The same five already verified image
+archives were therefore also streamed into Docker Snap with `docker load`, and
+their imported `localhost/mrml/...` tags were locally aliased to the exact
+`mrml/...:48d672ab` names consumed by Compose. No registry, pull, or server-side
+build was used. Docker runtime inspection reported:
+
+```text
+mrml/git-authority:48d672ab       sha256:e3c983e1a908 21002:21002 /usr/bin/mrml-git-authority
+mrml/gitd:48d672ab                sha256:f4ac80a5ca28 21001:21001 /usr/bin/mrml-gitd
+mrml/git-protected-signer:48d672ab sha256:89d70cf13ba7 21006:21006 /usr/bin/mrml-git-protected-signer
+mrml/git-credential-agent:48d672ab sha256:cd0042804681 21009:21009 /usr/bin/mrml-git-credential-agent
+mrml/git-backup:48d672ab          sha256:67a4bd22161b 0:0         /usr/bin/mrml-git-backup
+```
+
+The Docker production namespace already contained MRML-managed Git, authority,
+signer-runtime, certd-runtime, backup, certd, and acmed named volumes. Metadata-
+only inspection found generated ACME state/channel/backup keys, but no
+`cloudflare-api-token`; the production certd and acmed configuration volumes and
+the Git authority configuration volume were empty. Consequently no production
+container was started and public port 443 remained untouched. Populating those
+owner/ACME-agent inputs is a real prerequisite, not a value that Git deployment
+automation may invent.
+
 ## Source-only review archive
 
 The deterministic review builder screened the exact commit's tracked paths for
