@@ -97,6 +97,15 @@ Podman Compose render with distinct source and target prefixes resolved all
 eleven targets, including the corrected authority volumes. The full live
 transaction sequence remains required and will use the corrected names.
 
+The same activation audit found that the operator scripts invoked Docker
+directly and used Docker Compose's `ps --status` syntax. That made the declared
+Podman runtime unusable and, for manually created containers, could miss a live
+volume consumer. Backup and restore now route both engine and Compose operations
+through the exact `MRML_CONTAINER_RUNTIME` selection and determine cold state
+from engine-level consumers of the prefix's Gitd-state and authority-state
+named volumes. The check is independent of Compose project names and does not
+depend on ACME Compose rendering.
+
 Patent review: **NOT_TRIGGERED**. The changes use conventional container image
 layout, filesystem metadata validation, encrypted streaming backup, and cache
 directory reconstruction. See `docs/patents/REVIEW_LOG.md`.

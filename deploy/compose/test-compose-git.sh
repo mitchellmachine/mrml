@@ -137,7 +137,11 @@ require 'compose.git-backup.yaml' deploy/compose/backup-git.sh
 require 'git-backup ensure-key' deploy/compose/backup-git.sh
 require 'git-backup create' deploy/compose/backup-git.sh
 require 'git-backup verify' deploy/compose/backup-git.sh
+require 'runtime=${MRML_CONTAINER_RUNTIME:-docker}' deploy/compose/backup-git.sh
+require 'running=$("$runtime" ps -q --filter volume="$volume")' deploy/compose/backup-git.sh
 require 'restore requires absent Docker volume' deploy/compose/restore-git.sh
+require 'runtime=${MRML_CONTAINER_RUNTIME:-docker}' deploy/compose/restore-git.sh
+require 'running=$("$runtime" ps -q --filter volume="$volume")' deploy/compose/restore-git.sh
 require 'org.mrml.restore-disposable=true' deploy/compose/restore-git.sh
 require 'services remain disabled' deploy/compose/restore-git.sh
 require 'image: "mrml/git-backup:' "$backup_compose"

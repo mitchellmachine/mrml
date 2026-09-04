@@ -225,7 +225,11 @@ and manual-uncertain states remain unavailable rather than being guessed.
 mountpoints after confirming their exact names, bounded mountpoint shape, and
 absence of symlinks. It writes the same deterministic, numeric-owner archive
 namespace as before, combining the separately scoped data, secret, and
-configuration volumes. `restore-git.sh` refuses any pre-existing target data
+configuration volumes. Both backup and restore use the explicitly selected
+Docker or Podman runtime and refuse operation while any container consumes the
+prefix's Gitd-state or authority-state volume; this remains effective for
+containers not created by the current Compose project. `restore-git.sh` refuses
+any pre-existing target data
 volume, validates the archive before extraction, provisions fresh volumes, and
 extracts each subtree into only its exact volume before a final structural
 revalidation. Runtime socket volumes and the rebuildable cache are not restored.
