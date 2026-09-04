@@ -9,20 +9,22 @@ version=$1
 openpgp_created_at=$2
 volume_prefix=${MRML_VOLUME_PREFIX:-mrml}
 signer_volume=${volume_prefix}-git-signer-keys
+runtime=${MRML_CONTAINER_RUNTIME:-docker}
 
 case $version in ''|*[!a-zA-Z0-9._-]*) echo "invalid image version" >&2; exit 2 ;; esac
 case $openpgp_created_at in ''|*[!0-9]*|0) echo "OpenPGP creation time must be nonzero decimal" >&2; exit 2 ;; esac
 case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
 [ "$(printf %s "$volume_prefix" | wc -c)" -le 63 ] || { echo "MRML_VOLUME_PREFIX is too long" >&2; exit 2; }
 [ "$(id -u)" -eq 0 ] || { echo "signer key generation must run as root" >&2; exit 1; }
-command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
-docker volume inspect "$signer_volume" >/dev/null
-[ -z "$(docker ps -q --filter volume="$signer_volume")" ] || {
+case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
+command -v "$runtime" >/dev/null 2>&1 || { echo "$runtime is required" >&2; exit 1; }
+"$runtime" volume inspect "$signer_volume" >/dev/null
+[ -z "$("$runtime" ps -q --filter volume="$signer_volume")" ] || {
   echo "refusing to generate keys in a volume used by a running container" >&2
   exit 1
 }
 
-if docker --version 2>/dev/null | grep -qi podman; then
+if [ "$runtime" = podman ] || "$runtime" --version 2>/dev/null | grep -qi podman; then
   volume_option=--volume
   volume_spec=$signer_volume:/keys:nocopy
 else
@@ -30,7 +32,7 @@ else
   volume_spec=type=volume,source=$signer_volume,target=/keys,volume-nocopy
 fi
 
-docker run --rm \
+"$runtime" run --rm \
   --network none \
   --read-only \
   --cap-drop ALL \
@@ -43,7 +45,7 @@ docker run --rm \
   "mrml/git-protected-signer:$version" \
   generate-key-material 21006 "$openpgp_created_at" /keys
 
-mountpoint=$(docker volume inspect --format '{{.Mountpoint}}' "$signer_volume")
+mountpoint=$("$runtime" volume inspect --format '{{.Mountpoint}}' "$signer_volume")
 case $mountpoint in /*/_data) ;; *) echo "unsafe Docker volume mountpoint" >&2; exit 1 ;; esac
 [ -d "$mountpoint" ] && [ ! -L "$mountpoint" ]
 [ "$(stat -c '%u:%g %a %s %h' "$mountpoint/openpgp.seed")" = "21006:21006 400 32 1" ]

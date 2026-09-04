@@ -58,7 +58,9 @@ require '--network none' deploy/compose/generate-git-signer-keys.sh
 require '--read-only' deploy/compose/generate-git-signer-keys.sh
 require '--cap-drop ALL' deploy/compose/generate-git-signer-keys.sh
 require '--security-opt no-new-privileges' deploy/compose/generate-git-signer-keys.sh
-require 'docker --version 2>/dev/null | grep -qi podman' deploy/compose/generate-git-signer-keys.sh
+require 'runtime=${MRML_CONTAINER_RUNTIME:-docker}' deploy/compose/generate-git-signer-keys.sh
+require 'case $runtime in docker|podman)' deploy/compose/generate-git-signer-keys.sh
+require 'if [ "$runtime" = podman ]' deploy/compose/generate-git-signer-keys.sh
 require 'volume_spec=$signer_volume:/keys:nocopy' deploy/compose/generate-git-signer-keys.sh
 require 'volume_spec=type=volume,source=$signer_volume,target=/keys,volume-nocopy' deploy/compose/generate-git-signer-keys.sh
 require '"21006:21006 400 32 1"' deploy/compose/generate-git-signer-keys.sh
