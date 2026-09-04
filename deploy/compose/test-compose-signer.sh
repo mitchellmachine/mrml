@@ -138,6 +138,7 @@ require 'next_keys=$current_keys' deploy/compose/stage-git-trust-transition.sh
 require 'install-volume-inputs.sh" authority-transition' deploy/compose/stage-git-trust-transition.sh
 require 'git-trust-signatures' deploy/compose/stage-git-trust-transition.sh
 deploy/compose/test-transition-git-trust-resume.sh
+deploy/compose/test-construct-git-trust-policy-resume.sh
 deploy/compose/test-sign-git-trust-policy-modes.sh
 
 echo "protected signer Compose and image isolation policy PASS"

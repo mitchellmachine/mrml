@@ -354,9 +354,23 @@ and left the client clean.
 All persistent and runtime container state used named volumes. The only host
 file was the mode-0600 Compose interpolation environment; it was not mounted as
 container state. Generation 4 therefore has an overlap protected push and
-generation 5 has a post-retirement protected push. Remaining Phase 24 work is
-process-kill injection around the remaining daemon/transition phases and the
-broader release gates listed in earlier records. This controlled hosted-Linux
+generation 5 has a post-retirement protected push.
+
+An executable construction crash test kills the operator process after the
+constructor has synced `previous-policy.bin` and its parent directory but before
+`next-policy.bin` exists. Re-running the same construction exact-verifies the
+retained first output and durably completes the pair. Replacing that partial
+output with conflicting bytes makes the restart fail before it creates a next
+policy. Together with the transition process-kill matrix, this covers candidate
+policy write, authority selection invocation, signer advance, and post-advance
+cleanup recovery at the operator boundary. It does not simulate storage media
+lying about synchronization or termination inside individual cryptographic
+verification instructions.
+
+Remaining Phase 24 work is process-kill injection around signature-verification
+completion, authority trust-snapshot publication, and the exact old-key
+retirement boundary, plus the broader release gates listed in earlier records.
+This controlled hosted-Linux
 exercise used test keys, a loopback listener, and a certificate fixture; it is
 not public-service, real-certificate-renewal, production-key, malicious-storage,
 power-loss, or physical-hardware evidence.
