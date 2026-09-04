@@ -96,7 +96,9 @@ require 'trust transition requires stopped Gitd, authority, and signer' deploy/c
 require 'previous-openpgp-public.asc' deploy/compose/transition-git-trust.sh
 require 'previous-ml-dsa-public.bin' deploy/compose/transition-git-trust.sh
 require '--profile admin run --rm --no-deps git-signer-trust-advance' deploy/compose/transition-git-trust.sh
-require 'advance-trust 21006 21001 21002 "$1"' deploy/compose/transition-git-trust.sh
+require 'verify-selected-policy /var/lib/mrml/git-policies "$1"' deploy/compose/transition-git-trust.sh
+require 'advance-trust 21006 21002 21002 "$1"' deploy/compose/transition-git-trust.sh
+reject '"/var/lib/mrml/git-policies/$1/trust-policy.current"' deploy/compose/transition-git-trust.sh
 require 'if [ "${1:-}" = --resume-signer ]' deploy/compose/transition-git-trust.sh
 require 'if [ "$phase" = select-and-advance ]' deploy/compose/transition-git-trust.sh
 require 'git-trust-construction' deploy/compose/transition-git-trust.sh

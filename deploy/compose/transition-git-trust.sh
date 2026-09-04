@@ -60,12 +60,17 @@ if [ "$phase" = select-and-advance ]; then
     "$2" "$3" "$4" 21002
 fi
 
+"$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
+  --profile admin run --rm --no-deps git-trust-transition \
+  verify-selected-policy /var/lib/mrml/git-policies "$1" \
+  /run/mrml-transition/next-policy.bin 21002
+
 "$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" \
   --profile admin run --rm --no-deps git-signer-trust-advance \
-  advance-trust 21006 21001 21002 "$1" \
+  advance-trust 21006 21002 21002 "$1" \
   /var/lib/mrml/git-protected-signer/state/generation.state \
   /run/mrml-transition/previous-policy.bin \
-  "/var/lib/mrml/git-policies/$1/trust-policy.current" \
+  /run/mrml-transition/next-policy.bin \
   /var/lib/mrml/git-protected-signer/keys/openpgp.seed \
   "${MRML_OPENPGP_CREATED_AT:?set MRML_OPENPGP_CREATED_AT}" \
   /var/lib/mrml/git-protected-signer/keys/ml-dsa-public.bin \
