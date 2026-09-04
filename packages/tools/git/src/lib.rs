@@ -10,8 +10,8 @@ mod authority_candidate;
 mod authority_client;
 mod authority_generation_record;
 mod authority_wire;
-mod backup_stream;
 mod backup_inventory;
+mod backup_stream;
 mod cache_pack;
 mod cache_pack_file;
 mod compaction;
@@ -72,17 +72,20 @@ pub use authority_candidate::{
     candidate_ref_update_digest,
 };
 pub use authority_client::{
-    AUTHORITY_OP_ABORT_CANDIDATE, AUTHORITY_OP_AUTHORIZE_CANDIDATE,
-    AUTHORITY_OP_AUTHORIZE_RECEIVE, AUTHORITY_OP_AUTHORIZE_REF_TRANSACTION,
-    AUTHORITY_OP_BEGIN_CANDIDATE, AUTHORITY_OP_COMMIT_CANDIDATE,
-    AUTHORITY_OP_COMPLETE_CANDIDATE, AUTHORITY_OP_INSTALL_CANDIDATE_PROOF,
-    AUTHORITY_OP_INSTALL_PROOF,
+    AUTHORITY_OP_ABORT_CANDIDATE, AUTHORITY_OP_AUTHORIZE_CANDIDATE, AUTHORITY_OP_AUTHORIZE_RECEIVE,
+    AUTHORITY_OP_AUTHORIZE_REF_TRANSACTION, AUTHORITY_OP_BEGIN_CANDIDATE,
+    AUTHORITY_OP_COMMIT_CANDIDATE, AUTHORITY_OP_COMPLETE_CANDIDATE,
+    AUTHORITY_OP_INSTALL_CANDIDATE_PROOF, AUTHORITY_OP_INSTALL_PROOF,
     AUTHORITY_OP_PERSIST_CANDIDATE_RECEIPT, AUTHORITY_OP_QUERY_CANDIDATE,
-    AUTHORITY_OP_QUERY_CANDIDATE_BY_ID,
-    AUTHORITY_OP_QUERY_GENERATIONS,
+    AUTHORITY_OP_QUERY_CANDIDATE_BY_ID, AUTHORITY_OP_QUERY_GENERATIONS,
     AUTHORITY_OP_SEAL_CANDIDATE_PROOF_SET, AUTHORITY_OP_SIGN_RECEIPT,
     AUTHORITY_OP_START_CANDIDATE_ACTIVATION, AUTHORITY_OP_VERIFY_COMMIT,
     AUTHORITY_OP_VERIFY_RECEIPT, ProtectedAuthorityRpc, RemoteProtectedReceiveAuthority,
+};
+pub use authority_generation_record::{
+    AUTHORITY_GENERATION_RECORD_MAX_BYTES, AuthorityGenerationRecordError,
+    authority_generation_record_name, encode_authority_generation_record,
+    parse_authority_generation_record,
 };
 pub use authority_wire::{
     AuthorityCandidateLookup, AuthorityCandidateProofRequest, AuthorityCandidateStatusResult,
@@ -90,31 +93,24 @@ pub use authority_wire::{
     AuthorityRefTransactionRequest, MAX_AUTHORITY_COMMIT_BYTES,
     MAX_AUTHORITY_RECEIPT_TRANSCRIPT_BYTES, encode_authority_candidate,
     encode_authority_candidate_lookup, encode_authority_candidate_proof,
-    encode_authority_generation_query, encode_authority_generation_result,
-    encode_authority_candidate_record, encode_authority_commit, encode_authority_proof_install,
-    encode_authority_candidate_status_result,
-    encode_authority_receipt, encode_authority_receive, encode_authority_ref_transaction,
-    parse_authority_candidate, parse_authority_candidate_lookup, parse_authority_candidate_proof,
+    encode_authority_candidate_record, encode_authority_candidate_status_result,
+    encode_authority_commit, encode_authority_generation_query, encode_authority_generation_result,
+    encode_authority_proof_install, encode_authority_receipt, encode_authority_receive,
+    encode_authority_ref_transaction, parse_authority_candidate, parse_authority_candidate_lookup,
+    parse_authority_candidate_proof, parse_authority_candidate_record,
+    parse_authority_candidate_status_result, parse_authority_commit,
     parse_authority_generation_query, parse_authority_generation_result,
-    parse_authority_candidate_record, parse_authority_commit,
-    parse_authority_candidate_status_result,
     parse_authority_proof_install, parse_authority_receipt, parse_authority_receive,
     parse_authority_ref_transaction,
 };
-pub use authority_generation_record::{
-    AUTHORITY_GENERATION_RECORD_MAX_BYTES, AuthorityGenerationRecordError,
-    authority_generation_record_name, encode_authority_generation_record,
-    parse_authority_generation_record,
+pub use backup_inventory::{
+    BACKUP_VOLUME_MASK, BackupInventory, BackupInventoryEntry, BackupInventoryError,
+    BackupInventoryFileKind, BackupRepositoryGeneration, BackupVolume, MAX_BACKUP_INVENTORY_BYTES,
+    MAX_BACKUP_INVENTORY_ENTRIES, encode_backup_inventory, parse_backup_inventory,
 };
 pub use backup_stream::{
     BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES, BackupStreamError, BackupStreamHeader,
     encode_backup_stream_header, open_backup_frame, parse_backup_stream_header, seal_backup_frame,
-};
-pub use backup_inventory::{
-    BACKUP_VOLUME_MASK, BackupInventory, BackupInventoryEntry, BackupInventoryError,
-    BackupInventoryFileKind, BackupRepositoryGeneration, BackupVolume,
-    MAX_BACKUP_INVENTORY_BYTES, MAX_BACKUP_INVENTORY_ENTRIES, encode_backup_inventory,
-    parse_backup_inventory,
 };
 pub use cache_pack::{
     ImmutablePackCache, MAX_CACHED_PACK_BYTES, MAX_PACK_CACHE_ENTRIES, MAX_PACK_CACHE_KEY_BYTES,
@@ -127,20 +123,19 @@ pub use compaction::{
     CompactionJournal, CompactionPhase, CompactionProfile, CompactionResources, CompactionResult,
     CompactionSnapshot, CrashOutcome, compact_reachable,
 };
+#[cfg(target_os = "linux")]
+pub use credential_agent_unix::{
+    CredentialAgentCapability, CredentialAgentError, CredentialAgentPeer, CredentialAgentRequest,
+    CredentialAgentSession, UnixHttpsCredentialProvider, decode_credential_agent_hello,
+    decode_credential_agent_request, encode_credential_agent_hello,
+    encode_credential_agent_request, encode_credential_agent_response,
+};
 pub use detached_commit_proof::{
     DetachedCommitProofRecord, DetachedCommitProofStore, DetachedHybridCommitVerifier,
     DurableDetachedHybridCommitVerifier, MAX_DETACHED_COMMIT_PROOFS,
 };
 pub use detached_commit_proof_file::{
     DetachedCommitProofFileError, DurableDetachedCommitProofDirectory,
-};
-#[cfg(target_os = "linux")]
-pub use credential_agent_unix::{
-    CredentialAgentCapability, CredentialAgentError, CredentialAgentPeer,
-    CredentialAgentRequest, CredentialAgentSession, UnixHttpsCredentialProvider,
-    decode_credential_agent_hello, decode_credential_agent_request,
-    encode_credential_agent_hello, encode_credential_agent_request,
-    encode_credential_agent_response,
 };
 pub use diff::FileDiff;
 pub use gitd_core::{
@@ -213,8 +208,8 @@ pub use quarantine::{
     DEFAULT_MAX_OBJECTS_PER_PUSH, DEFAULT_MINIMUM_FREE_SPACE_BYTES, DurableFailure,
     DurableReceiveError, DurableReceiveStore, PushDiskReservation, PushStorageForecast,
     QuarantineError, QuarantineLimits, QuarantinePhase, QuarantineTransaction,
-    QuarantineTransactionId, durably_activate_verified_receive, reserve_push_disk,
-    reserve_push_disk_before_body, expected_audit_receipt,
+    QuarantineTransactionId, durably_activate_verified_receive, expected_audit_receipt,
+    reserve_push_disk, reserve_push_disk_before_body,
 };
 pub use receive_backend::{
     PreparedProtectedReceive, ProtectedCommitVerifier, activate_prepared_protected_receive,
@@ -232,8 +227,8 @@ pub use receive_pack_core::{
 pub use receive_store::LinuxDurableReceiveStore;
 pub use ref_state::{
     ActiveRefState, ActiveRefStateError, MAX_ACTIVE_REF_STATE_BYTES, MAX_ACTIVE_REFS,
-    apply_verified_ref_transaction, apply_verified_ref_transaction_with_pack_set,
-    encode_active_ref_state, parse_active_ref_state,
+    apply_authority_generation_transition, apply_verified_ref_transaction,
+    apply_verified_ref_transaction_with_pack_set, encode_active_ref_state, parse_active_ref_state,
 };
 pub use ref_state_file::ActiveRefFile;
 pub use remote::{
@@ -254,9 +249,8 @@ pub use signed_audit_receipt::{
     AuditReceiptAuthority, AuthenticatedAuditReceipt, AuthenticatedAuditReceiptDirectory,
     AuthenticatedReceiveStore, MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES,
     authenticated_audit_receipt_transcript, authority_receipt_signature_transcript,
-    encode_authenticated_audit_receipt,
-    parse_authenticated_audit_receipt, parse_authenticated_audit_receipt_transcript,
-    verify_signer_generation_advancement,
+    encode_authenticated_audit_receipt, parse_authenticated_audit_receipt,
+    parse_authenticated_audit_receipt_transcript, verify_signer_generation_advancement,
 };
 pub use smart_protocol::{
     MAX_PKT_LINE_BYTES, MAX_V2_ARGUMENTS, MAX_V2_REF_PREFIXES, PktLine, ProtocolBudget,

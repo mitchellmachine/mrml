@@ -138,10 +138,24 @@ fn verify_protected_live_generations<A: ProtectedReceiveAuthority>(
     let authoritative = authority
         .current_generations(&entry.repository)
         .map_err(|_| GitdCompositionError::Admission(RepositoryAdmissionError::Generation))?;
-    if live != authoritative
-        || live.0.0 < entry.repository_generation.0
-        || live.1 != entry.trust_generation
-        || live.2 != entry.revocation_generation
+    if authoritative.0 != live.0
+        || authoritative.0.0 < entry.repository_generation.0
+        || authoritative.1 != entry.trust_generation
+        || authoritative.2 != entry.revocation_generation
+    {
+        return Err(GitdCompositionError::Admission(
+            RepositoryAdmissionError::Generation,
+        ));
+    }
+    admitted
+        .view
+        .advance_authority_generations(authoritative.0, authoritative.1, authoritative.2)
+        .map_err(|_| GitdCompositionError::Admission(RepositoryAdmissionError::Generation))?;
+    if admitted
+        .view
+        .authority_generations()
+        .map_err(|_| GitdCompositionError::Admission(RepositoryAdmissionError::Generation))?
+        != authoritative
     {
         return Err(GitdCompositionError::Admission(
             RepositoryAdmissionError::Generation,

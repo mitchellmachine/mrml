@@ -11,7 +11,8 @@ use crate::ref_state::apply_compaction_pack_set;
 use crate::{
     ActivationSnapshot, ActiveRefState, ActiveRefStateError, DurableFailure,
     MAX_ACTIVE_REF_STATE_BYTES, MAX_PACK_SET_MANIFEST_BYTES, PackSetLimits, PackSetManifest,
-    VerifiedRefTransaction, apply_verified_ref_transaction,
+    RepositoryGeneration, RevocationGeneration, TrustGeneration, VerifiedRefTransaction,
+    apply_authority_generation_transition, apply_verified_ref_transaction,
     apply_verified_ref_transaction_with_pack_set, encode_active_ref_state,
     encode_pack_set_manifest, parse_active_ref_state, parse_pack_set_manifest,
 };
@@ -254,6 +255,42 @@ impl ActiveRefFile {
         }
     }
 
+    pub fn advance_authority_generations(
+        &self,
+        repository_generation: RepositoryGeneration,
+        trust_generation: TrustGeneration,
+        revocation_generation: RevocationGeneration,
+    ) -> Result<ActiveRefState, DurableFailure> {
+        let lock = self.create_new(&self.lock, "active.refs.lock")?;
+        lock.sync().map_err(|_| DurableFailure::Fsync)?;
+        drop(lock);
+        self.sync_directory()?;
+        let result = self.advance_authority_generations_while_locked(
+            repository_generation,
+            trust_generation,
+            revocation_generation,
+        );
+        match result {
+            Ok(next) => {
+                self.remove(&self.lock, "active.refs.lock")?;
+                self.sync_directory()?;
+                Ok(next)
+            }
+            Err(error) => {
+                if matches!(
+                    error,
+                    DurableFailure::StaleLock
+                        | DurableFailure::DiskFull
+                        | DurableFailure::ShortWrite
+                ) {
+                    let _ = self.remove(&self.lock, "active.refs.lock");
+                    let _ = self.sync_directory();
+                }
+                Err(error)
+            }
+        }
+    }
+
     /// Persists an immutable canonical manifest before atomically selecting its
     /// digest in the active-ref record. A crash before the ref rename can leave
     /// only an inert content-addressed manifest; a crash after rename is
@@ -376,6 +413,48 @@ impl ActiveRefFile {
         self.sync_directory()?;
         let reread = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
         if reread != next {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        Ok(next)
+    }
+
+    fn advance_authority_generations_while_locked(
+        &self,
+        repository_generation: RepositoryGeneration,
+        trust_generation: TrustGeneration,
+        revocation_generation: RevocationGeneration,
+    ) -> Result<ActiveRefState, DurableFailure> {
+        let current = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
+        let next = apply_authority_generation_transition(
+            &current,
+            repository_generation,
+            trust_generation,
+            revocation_generation,
+        )
+        .map_err(|error| match error {
+            ActiveRefStateError::Stale => DurableFailure::StaleLock,
+            ActiveRefStateError::Resource => DurableFailure::DiskFull,
+            _ => DurableFailure::VerifierCrash,
+        })?;
+        if next == current {
+            return Ok(current);
+        }
+        let encoded = encode_active_ref_state(&next).map_err(|_| DurableFailure::VerifierCrash)?;
+        let mut temporary = self.create_new(&self.temporary, "active.refs.new")?;
+        temporary
+            .write_all(&encoded)
+            .map_err(|_| DurableFailure::ShortWrite)?;
+        temporary.sync().map_err(|_| DurableFailure::Fsync)?;
+        drop(temporary);
+        self.rename(
+            &self.temporary,
+            "active.refs.new",
+            &self.active,
+            "active.refs",
+        )?;
+        self.sync_directory()?;
+        let reopened = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
+        if reopened != next {
             return Err(DurableFailure::VerifierCrash);
         }
         Ok(next)
@@ -740,6 +819,45 @@ mod tests {
         assert_eq!(next.refs[0].1, new);
         assert_eq!(ActiveRefFile::open(&root).unwrap().load().unwrap(), next);
         assert_eq!(store.activate(&verified), Err(DurableFailure::StaleLock));
+        mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn authority_generation_transition_is_durable_idempotent_and_rollback_safe() {
+        let root = root("mrml-active-authority-generation");
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let (state, _, _) = fixture();
+        let store = ActiveRefFile::initialize(&root, &state).unwrap();
+        let next = store
+            .advance_authority_generations(
+                state.repository_generation,
+                TrustGeneration(10),
+                RevocationGeneration(11),
+            )
+            .unwrap();
+        assert_eq!(next.repository_generation, state.repository_generation);
+        assert_eq!(next.refs, state.refs);
+        assert_eq!(next.pack_set_digest, state.pack_set_digest);
+        assert_eq!(ActiveRefFile::open(&root).unwrap().load().unwrap(), next);
+        assert_eq!(
+            store
+                .advance_authority_generations(
+                    state.repository_generation,
+                    TrustGeneration(10),
+                    RevocationGeneration(11),
+                )
+                .unwrap(),
+            next
+        );
+        assert_eq!(
+            store.advance_authority_generations(
+                state.repository_generation,
+                TrustGeneration(9),
+                RevocationGeneration(11),
+            ),
+            Err(DurableFailure::StaleLock)
+        );
+        assert_eq!(ActiveRefFile::open(&root).unwrap().load().unwrap(), next);
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 

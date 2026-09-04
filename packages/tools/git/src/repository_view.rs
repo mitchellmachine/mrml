@@ -485,8 +485,8 @@ impl FilesystemRepositoryView {
         objects: DirectoryCapability,
         refs: DirectoryCapability,
     ) -> Result<Self, GitdCoreError> {
-        let objects = Repository::open_sha256_capability(objects)
-            .map_err(|_| GitdCoreError::Storage)?;
+        let objects =
+            Repository::open_sha256_capability(objects).map_err(|_| GitdCoreError::Storage)?;
         let refs = ActiveRefFile::open_capability(refs).map_err(|_| GitdCoreError::Storage)?;
         let state = refs.load().map_err(|_| GitdCoreError::Storage)?;
         if state.repository != identity || state.object_format != objects.object_format() {
@@ -1099,6 +1099,22 @@ impl FilesystemRepositoryView {
             state.trust_generation,
             state.revocation_generation,
         ))
+    }
+
+    pub fn advance_authority_generations(
+        &self,
+        repository_generation: RepositoryGeneration,
+        trust_generation: TrustGeneration,
+        revocation_generation: RevocationGeneration,
+    ) -> Result<(), GitdCoreError> {
+        self.refs
+            .advance_authority_generations(
+                repository_generation,
+                trust_generation,
+                revocation_generation,
+            )
+            .map_err(|_| GitdCoreError::Storage)?;
+        Ok(())
     }
 
     pub fn repository_summary(
@@ -2148,9 +2164,18 @@ mod tests {
         mrml_runtime::create_dir_all(&refs_path).unwrap();
 
         let tip = view.resolve_ref(&identity, "refs/heads/main").unwrap();
-        assert_eq!(view.objects.read_commit(tip).unwrap().message.as_str(), "MRML repository initialization\n");
-        assert!(!mrml_runtime::path_exists(&join_path(&objects_path, ".git")));
-        assert!(!mrml_runtime::path_exists(&join_path(&refs_path, "active.refs")));
+        assert_eq!(
+            view.objects.read_commit(tip).unwrap().message.as_str(),
+            "MRML repository initialization\n"
+        );
+        assert!(!mrml_runtime::path_exists(&join_path(
+            &objects_path,
+            ".git"
+        )));
+        assert!(!mrml_runtime::path_exists(&join_path(
+            &refs_path,
+            "active.refs"
+        )));
 
         drop(view);
         mrml_runtime::remove_dir_all(&root).unwrap();

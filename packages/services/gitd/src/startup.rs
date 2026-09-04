@@ -558,7 +558,7 @@ pub fn admit_catalog_repository(
         entry.revocation_generation,
     );
     if entry.profile.class == DeploymentRepositoryProfile::Protected {
-        if live.0.0 < catalog.0.0 || live.1 != catalog.1 || live.2 != catalog.2 {
+        if live.0.0 < catalog.0.0 || live.1.0 > catalog.1.0 || live.2.0 > catalog.2.0 {
             return Err(RepositoryAdmissionError::Generation);
         }
     } else {
@@ -1304,6 +1304,8 @@ mod tests {
         );
         let mut stale = entry.clone();
         stale.revocation_generation = RevocationGeneration(9);
+        assert!(admit_catalog_repository(&config, &stale).is_ok());
+        stale.revocation_generation = RevocationGeneration(7);
         assert!(matches!(
             admit_catalog_repository(&config, &stale),
             Err(RepositoryAdmissionError::Generation)

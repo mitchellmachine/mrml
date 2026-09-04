@@ -182,6 +182,28 @@ pub fn apply_verified_ref_transaction(
     Ok(next)
 }
 
+/// Advances only the authority-policy dimensions after an authenticated
+/// authority query. Repository, refs, and selected pack identity are preserved.
+pub fn apply_authority_generation_transition(
+    current: &ActiveRefState,
+    repository_generation: RepositoryGeneration,
+    trust_generation: TrustGeneration,
+    revocation_generation: RevocationGeneration,
+) -> Result<ActiveRefState, ActiveRefStateError> {
+    validate_state(current)?;
+    if repository_generation != current.repository_generation
+        || trust_generation.0 < current.trust_generation.0
+        || revocation_generation.0 < current.revocation_generation.0
+    {
+        return Err(ActiveRefStateError::Stale);
+    }
+    let mut next = current.clone();
+    next.trust_generation = trust_generation;
+    next.revocation_generation = revocation_generation;
+    validate_state(&next)?;
+    Ok(next)
+}
+
 /// Applies one verified ref transaction while atomically selecting the exact
 /// canonical pack set that contains the newly introduced objects. Possession
 /// of a manifest is insufficient: every authority dimension and both next
@@ -376,6 +398,43 @@ mod tests {
         stale.trust_generation = TrustGeneration(99);
         assert_eq!(
             apply_verified_ref_transaction(&stale, &verified),
+            Err(ActiveRefStateError::Stale)
+        );
+    }
+
+    #[test]
+    fn authority_generation_transition_only_moves_policy_forward() {
+        let (state, _, _) = fixture();
+        let next = apply_authority_generation_transition(
+            &state,
+            state.repository_generation,
+            TrustGeneration(10),
+            RevocationGeneration(11),
+        )
+        .unwrap();
+        assert_eq!(next.repository, state.repository);
+        assert_eq!(next.repository_generation, state.repository_generation);
+        assert_eq!(next.pack_generation, state.pack_generation);
+        assert_eq!(next.pack_set_digest, state.pack_set_digest);
+        assert_eq!(next.refs, state.refs);
+        assert_eq!(next.trust_generation, TrustGeneration(10));
+        assert_eq!(next.revocation_generation, RevocationGeneration(11));
+        assert_eq!(
+            apply_authority_generation_transition(
+                &state,
+                RepositoryGeneration(8),
+                TrustGeneration(10),
+                RevocationGeneration(11),
+            ),
+            Err(ActiveRefStateError::Stale)
+        );
+        assert_eq!(
+            apply_authority_generation_transition(
+                &state,
+                state.repository_generation,
+                TrustGeneration(7),
+                state.revocation_generation,
+            ),
             Err(ActiveRefStateError::Stale)
         );
     }
