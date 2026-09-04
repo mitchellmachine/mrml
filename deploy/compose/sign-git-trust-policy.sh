@@ -20,7 +20,11 @@ case $2:$3:$4:$5 in *[!0-9:]*|:*|*:) echo "generations and creation times must b
 selected_repository=$(sed -n 's/^MRML_PROTECTED_REPOSITORY=//p' "$environment")
 [ "$selected_repository" = "$1" ] || exit 1
 for service in gitd git-authority git-protected-signer; do
-  [ -z "$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service")" ] || {
+  running=$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || {
+    echo "cannot query service state for $service" >&2
+    exit 1
+  }
+  [ -z "$running" ] || {
     echo "trust policy signing requires stopped Gitd, authority, and signer" >&2
     exit 1
   }

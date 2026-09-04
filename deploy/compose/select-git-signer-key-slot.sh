@@ -18,7 +18,11 @@ case $1 in current) selected_volume=$volume_prefix-git-signer-keys ;; next) sele
 case $2:$3:$4 in *[!0-9:]*|:*|*:) exit 64 ;; esac
 [ "$2" -gt 0 ] && [ "$3" -gt 0 ] && [ "$4" -gt 0 ] || exit 64
 for service in gitd git-authority git-protected-signer; do
-  [ -z "$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service")" ] || {
+  running=$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || {
+    echo "cannot query service state for $service" >&2
+    exit 1
+  }
+  [ -z "$running" ] || {
     echo "signer key selection requires stopped Gitd, authority, and signer" >&2
     exit 1
   }

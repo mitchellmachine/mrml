@@ -81,6 +81,10 @@ for operator in deploy/compose/install-volume-inputs.sh deploy/compose/construct
   require 'runtime=${MRML_CONTAINER_RUNTIME:-docker}' "$operator"
   require 'case $runtime in docker|podman)' "$operator"
 done
+for operator in deploy/compose/construct-git-trust-policy.sh deploy/compose/sign-git-trust-policy.sh deploy/compose/select-git-signer-key-slot.sh deploy/compose/transition-git-trust.sh; do
+  require 'running=$("$runtime" compose' "$operator"
+  require 'cannot query service state for $service' "$operator"
+done
 require 'volume_spec=$signer_volume:/keys:nocopy' deploy/compose/generate-git-signer-keys.sh
 require 'volume_spec=type=volume,source=$signer_volume,target=/keys,volume-nocopy' deploy/compose/generate-git-signer-keys.sh
 require '"21006:21006 400 32 1"' deploy/compose/generate-git-signer-keys.sh

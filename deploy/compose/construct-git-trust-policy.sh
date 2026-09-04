@@ -43,7 +43,11 @@ esac
 selected_repository=$(sed -n 's/^MRML_PROTECTED_REPOSITORY=//p' "$environment")
 [ "$selected_repository" = "$repository" ] || { echo "repository does not match MRML_PROTECTED_REPOSITORY" >&2; exit 1; }
 for service in gitd git-authority git-protected-signer; do
-  [ -z "$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service")" ] || {
+  running=$("$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || {
+    echo "cannot query service state for $service" >&2
+    exit 1
+  }
+  [ -z "$running" ] || {
     echo "trust policy construction requires stopped Gitd, authority, and signer" >&2
     exit 1
   }
