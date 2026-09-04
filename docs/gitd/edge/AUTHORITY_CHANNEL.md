@@ -97,9 +97,15 @@ proof request, and durably installs it only below that candidate. The authority
 reopens the ordered proof ledger and every immutable proof and recomputes the
 exact proof-set digest before accepting `SealCandidateProofSet`. This preserves
 memory proportional to bounded graph identifiers plus the largest admitted
-commit rather than buffering every commit body. Automated restart recovery for
-all incomplete candidate states remains required before the overall protected
-push lifecycle is production-complete.
+commit rather than buffering every commit body. Startup now reconciles every
+locally classifiable candidate state. Exact old refs cause an exact
+pre-activation authority candidate to be aborted and its unselected retained
+transaction state to be discarded for a clean retry. Exact new refs reconcile
+`ActivationStarted`, `Activated`, `ReceiptPersisted`, and `Completed` authority
+states with an authenticated receipt and terminal journal cleanup. Any
+cross-repository identity, generation, activation transcript, selected-pack, or
+authority/local-state contradiction fails closed for manual inspection.
+Power-loss and owner-key production evidence remain separate gates.
 
 The protected Smart Git capability advertisement now includes
 `mrml-candidate-v1`. Each protected client generates the nonzero 128-bit value,

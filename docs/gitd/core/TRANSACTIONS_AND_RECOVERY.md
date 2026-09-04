@@ -262,20 +262,29 @@ kill-at-every-syscall evidence.
 Recovery enumeration re-reads the canonical active-ref file for every bounded
 journal and classifies it using the old repository generation before activation
 or exactly the next generation after activation. A journal whose refs are
-exactly new may reconstruct and immutably append the checksum-protected receipt;
-an existing byte-exact receipt makes that operation idempotent. Pre-activation
-installed objects still require complete history and policy re-verification,
-and any generation/ref divergence remains `ManualUncertain`. Protected recovery
-uses the same exact live-state reconstruction but writes through
-`AuthenticatedReceiveStore`: an existing receipt must reopen and verify under
-the exact signer identity, while a missing receipt is signed, independently
-verified, durably appended, reopened, and exact-compared. Repeating recovery is
-idempotent. Hosted Linux evidence is
-`./target/debug/mrml test org.mrml.tool.git --target linux` (195 library and 3
-CLI tests passed), including exact post-activation signed recovery. This does
-not yet durably advance the recovered journal to a terminal phase, re-verify a
-pre-activation transaction, or prove production key-service, power-loss, or
-physical-storage behavior.
+exactly new reconstructs and immutably appends the checksum-protected receipt;
+an existing byte-exact receipt makes that operation idempotent, and the exact
+journal is then removed durably. Any generation/ref divergence remains
+`ManualUncertain`.
+
+When refs remain exactly old, startup does not reconstruct authorization from a
+journal that intentionally omits the complete proof and reservation transcript.
+It instead proves that any installed arrival is absent from the authenticated
+selected pack set, validates the complete bounded transaction layout through
+retained directory capabilities, removes only that transaction, and then
+removes the exact journal. This handles both the quarantine and already-moved
+arrival crash boundaries. Unexpected children, links, selected arrivals, or
+contradictory state fail closed before cleanup. Protected recovery additionally
+queries and exact-matches the candidate identity and generations, permits abort
+only from a pre-activation authority state, and accepts an already-aborted
+candidate idempotently. Activated or completed authority state paired with old
+local refs is contradictory and fails closed.
+
+Hosted Linux evidence is `./target/debug/mrml test org.mrml.tool.git --target
+linux` (258 library, 4 CLI, and 7 signer tests) plus
+`./target/debug/mrml test org.mrml.service.gitd --target linux` (43 library and
+6 binary tests). This does not prove power-loss, physical-storage, or owner-key
+production behavior.
 
 Patent review: **NOT_TRIGGERED**. Exact state comparison, immutable receipt
 append, signature verification, fsync, and idempotent crash recovery are
