@@ -33,6 +33,7 @@ pub enum DetachedCommitProofFileError {
 /// accelerators; every lookup rechecks the complete stored context and record.
 pub struct DurableDetachedCommitProofDirectory {
     root: Text,
+    retained: Option<mrml_runtime::DirectoryCapability>,
 }
 
 impl DurableDetachedCommitProofDirectory {
@@ -42,7 +43,24 @@ impl DurableDetachedCommitProofDirectory {
         if !path_is_directory(&root) {
             return Err(DetachedCommitProofFileError::Io);
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            retained: None,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn open_capability(
+        root: mrml_runtime::DirectoryCapability,
+    ) -> Result<Self, DetachedCommitProofFileError> {
+        let metadata = root.metadata().map_err(|_| DetachedCommitProofFileError::Io)?;
+        if metadata.mode & 0o777 != 0o700 || metadata.links < 2 {
+            return Err(DetachedCommitProofFileError::Io);
+        }
+        Ok(Self {
+            root: Text::new(),
+            retained: Some(root),
+        })
     }
 
     pub fn insert(
@@ -52,13 +70,13 @@ impl DurableDetachedCommitProofDirectory {
     ) -> Result<(), DetachedCommitProofFileError> {
         validate_context(context, record.commit())?;
         let bytes = encode_record(context, record)?;
-        let path = self.path(context, record.commit())?;
-        if path_exists(&path) {
-            return self.exact_existing(context, record, &path);
+        let name = self.name(context, record.commit())?;
+        if self.exists(&name)? {
+            return self.exact_existing(context, record, &name);
         }
-        let mut file = match File::create_new(&path) {
+        let mut file = match self.create_file(&name) {
             Ok(file) => file,
-            Err(_) if path_exists(&path) => return self.exact_existing(context, record, &path),
+            Err(_) if self.exists(&name)? => return self.exact_existing(context, record, &name),
             Err(_) => return Err(DetachedCommitProofFileError::Io),
         };
         file.write_all(&bytes)
@@ -66,7 +84,7 @@ impl DurableDetachedCommitProofDirectory {
         file.sync()
             .map_err(|_| DetachedCommitProofFileError::Durability)?;
         drop(file);
-        sync_proof_directory(&self.root)?;
+        self.sync()?;
         match self.lookup(context, record.commit())? {
             Some(reopened) if reopened == *record => Ok(()),
             _ => Err(DetachedCommitProofFileError::Integrity),
@@ -77,13 +95,13 @@ impl DurableDetachedCommitProofDirectory {
         &self,
         context: ProtectedHistoryContext<'_>,
         record: &DetachedCommitProofRecord,
-        path: &str,
+        name: &str,
     ) -> Result<(), DetachedCommitProofFileError> {
-        let file = File::open_regular(path).map_err(|_| DetachedCommitProofFileError::Integrity)?;
+        let file = self.open_file(name)?;
         file.sync()
             .map_err(|_| DetachedCommitProofFileError::Durability)?;
         drop(file);
-        sync_proof_directory(&self.root)?;
+        self.sync()?;
         match self.lookup(context, record.commit())? {
             Some(existing) if existing == *record => Ok(()),
             Some(_) => Err(DetachedCommitProofFileError::AlreadyExists),
@@ -97,12 +115,11 @@ impl DurableDetachedCommitProofDirectory {
         commit: ObjectId,
     ) -> Result<Option<DetachedCommitProofRecord>, DetachedCommitProofFileError> {
         validate_context(context, commit)?;
-        let path = self.path(context, commit)?;
-        if !path_exists(&path) {
+        let name = self.name(context, commit)?;
+        if !self.exists(&name)? {
             return Ok(None);
         }
-        let mut file =
-            File::open_regular(&path).map_err(|_| DetachedCommitProofFileError::Integrity)?;
+        let mut file = self.open_file(&name)?;
         let length = usize::try_from(
             file.len()
                 .map_err(|_| DetachedCommitProofFileError::Integrity)?,
@@ -121,7 +138,7 @@ impl DurableDetachedCommitProofDirectory {
         parse_record(context, commit, &bytes).map(Some)
     }
 
-    fn path(
+    fn name(
         &self,
         context: ProtectedHistoryContext<'_>,
         commit: ObjectId,
@@ -135,7 +152,66 @@ impl DurableDetachedCommitProofDirectory {
             name.push(HEX[(byte & 15) as usize] as char);
         }
         name.push_str(".commit-proof");
-        Ok(join_path(&self.root, &name))
+        Ok(name)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn path(
+        &self,
+        context: ProtectedHistoryContext<'_>,
+        commit: ObjectId,
+    ) -> Result<Text, DetachedCommitProofFileError> {
+        Ok(join_path(&self.root, &self.name(context, commit)?))
+    }
+
+    fn exists(&self, name: &str) -> Result<bool, DetachedCommitProofFileError> {
+        if let Some(root) = &self.retained {
+            if root.open_regular(name).is_ok() {
+                return Ok(true);
+            }
+            if root
+                .read_directory()
+                .map_err(|_| DetachedCommitProofFileError::Io)?
+                .iter()
+                .any(|entry| entry.name.as_str() == name)
+            {
+                return Err(DetachedCommitProofFileError::Integrity);
+            }
+            return Ok(false);
+        }
+        Ok(path_exists(&join_path(&self.root, name)))
+    }
+
+    fn create_file(&self, name: &str) -> Result<File, DetachedCommitProofFileError> {
+        match &self.retained {
+            Some(root) => root
+                .create_new_file(name, 0o600)
+                .map_err(|_| DetachedCommitProofFileError::Io),
+            None => File::create_new(&join_path(&self.root, name))
+                .map_err(|_| DetachedCommitProofFileError::Io),
+        }
+    }
+
+    fn open_file(&self, name: &str) -> Result<File, DetachedCommitProofFileError> {
+        let file = match &self.retained {
+            Some(root) => root.open_regular(name),
+            None => File::open_regular(&join_path(&self.root, name)),
+        }
+        .map_err(|_| DetachedCommitProofFileError::Integrity)?;
+        if self.retained.is_some() {
+            let metadata = file.metadata().map_err(|_| DetachedCommitProofFileError::Integrity)?;
+            if metadata.mode & 0o777 != 0o600 || metadata.links != 1 {
+                return Err(DetachedCommitProofFileError::Integrity);
+            }
+        }
+        Ok(file)
+    }
+
+    fn sync(&self) -> Result<(), DetachedCommitProofFileError> {
+        match &self.retained {
+            Some(root) => root.sync().map_err(|_| DetachedCommitProofFileError::Durability),
+            None => sync_proof_directory(&self.root),
+        }
     }
 }
 
@@ -317,6 +393,8 @@ fn sync_proof_directory(_: &str) -> Result<(), DetachedCommitProofFileError> {
 
 #[cfg(all(test, unix))]
 mod tests {
+    extern crate std;
+
     use super::*;
     use crate::{RepositoryGeneration, RevocationGeneration, TrustGeneration};
 
@@ -456,5 +534,32 @@ mod tests {
             Err(DetachedCommitProofFileError::Context)
         );
         mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn retained_proof_root_survives_ambient_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temporary_root("retained");
+        let displaced = mrml_runtime::mrml_format!("{root}-displaced");
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let _ = mrml_runtime::remove_dir_all(&displaced);
+        mrml_runtime::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(root.as_str(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let capability = mrml_runtime::DirectoryCapability::open_root(&root).unwrap();
+        let directory = DurableDetachedCommitProofDirectory::open_capability(capability).unwrap();
+        mrml_runtime::rename_file(&root, &displaced).unwrap();
+        mrml_runtime::create_dir_all(&root).unwrap();
+
+        let repository = repository();
+        let exact = context(&repository, 3);
+        let proof = record(5);
+        directory.insert(exact, &proof).unwrap();
+        assert_eq!(directory.lookup(exact, proof.commit()).unwrap(), Some(proof.clone()));
+        let name = directory.name(exact, proof.commit()).unwrap();
+        assert!(mrml_runtime::path_exists(&join_path(&displaced, &name)));
+        assert!(!mrml_runtime::path_exists(&join_path(&root, &name)));
+        mrml_runtime::remove_dir_all(&root).unwrap();
+        mrml_runtime::remove_dir_all(&displaced).unwrap();
     }
 }
