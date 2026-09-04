@@ -12553,3 +12553,12 @@ Patent review: **NOT_TRIGGERED**. This increment binds the existing standard
 HTTP ALPN identifiers to the explicitly selected TCP-only or TCP-plus-QUIC
 listener mode at startup and certificate refresh. It adds no protocol,
 selection heuristic, cryptographic mechanism, or patent-sensitive mechanism.
+
+# 2026-09-04 — Self-contained offline Git verification and volume provisioning
+
+Patent review: **NOT_TRIGGERED**. This increment uses conventional tracked-file
+archival, checksums, offline signatures, exclusive temporary-file creation,
+numeric ownership, fixed metadata validation, named Docker volumes, and
+standard-input image loading. It adds no cryptographic primitive, compression
+method, storage-selection mechanism, transport protocol, adaptive policy, or
+other patent-sensitive mechanism.

@@ -671,3 +671,69 @@ Patent review: **NOT_TRIGGERED**. This follow-up records conventional SSH rekey
 bounds, exact release builds, SBOM generation, checksum transfer, standard-input
 Docker loading, and metadata-only volume inspection. See
 `docs/patents/REVIEW_LOG.md`.
+
+## Exact Gitd recovery, streaming, bundle, and fresh-volume follow-up
+
+The clean `1796bfe2` candidate completed an authenticated loopback clone of
+268,456,731 source bytes in 24 seconds, or 11,185,697 bytes/second. Seventeen
+samples recorded Gitd peak RSS of 70,992 KiB, RSS growth of 65,888 KiB, and 26
+peak descriptors. The client peaked at 331,156 KiB and 5 descriptors; authority
+peaked at 12,368 KiB and 9 descriptors. The four 64 MiB incompressible fixture
+files independently matched their expected SHA-256 digests after checkout.
+
+A live test stopped the certificate fixture during an in-flight bounded wait.
+Gitd remained running, classified the severed request as `Read`, classified
+subsequent absence as `Connect`, blocked new TLS handshakes, applied jittered
+exponential delays, and emitted `certificate_refresh_recovered` after the
+fixture returned. A fresh authenticated 256 MiB clone then completed with the
+same four file digests. Existing validated connections were not killed by the
+refresh worker. The fixture and loopback endpoint are test evidence, not a
+production certificate-service claim.
+
+The exact offline bundle `mrml-git-1796bfe2.tar.gz` has SHA-256
+`cbec1999e5cec7f01a8ec9328d0f89bc6a97357f1e5a0178784fc37e4d1b9480`.
+Its four Docker archives, SPDX JSON SBOMs, test-only offline Cosign bundles,
+binary digests, streaming evidence, and complete SHA-256 manifest verified
+locally. The first self-verification exposed that the archive omitted source
+files required by its own Compose policy checks. Signed commit `1796bfe2`
+corrected this by embedding only exact Git-tracked policy inputs with
+`git archive`; the corrected archive passed both policy suites from that sealed
+subset. Ignored and untracked production inputs cannot enter that subset.
+
+The outer digest and every inner SHA-256 entry verified again on the authorized
+VPS. Docker Engine 29.6.1 loaded the archives from standard input because Docker
+Snap could not resolve their `/tmp` path. Docker reported these runtime
+identities after canonical local tagging:
+
+```text
+mrml/git-authority:1796bfe2 sha256:958fd49ba7ace0f2d161facaa6b1f33cc0ae8df1b8d40237f4a6dcb3d30b765e user=21002:21002 entrypoint=/usr/bin/mrml-git-authority
+mrml/gitd:1796bfe2 sha256:69f29be9469c80294424db0e61c2868432d487e6c8d47a7911ef545194f9905f user=21001:21001 entrypoint=/usr/bin/mrml-gitd
+mrml/git-protected-signer:1796bfe2 sha256:64b87e3c10783cf4909b9f99cfe818825d39872674ca46d2329786d9368782a8 user=21006:21006 entrypoint=/usr/bin/mrml-git-protected-signer
+mrml/git-backup:1796bfe2 sha256:0f64dbbb830d224f07df001628bf2f6f51fa3b9c08aaebafc554ca35339a002c user=0:0 entrypoint=/usr/bin/mrml-git-backup
+```
+
+The first truly empty-host provision attempt found that numeric `install -o`
+was not portable to a host without matching passwd entries. Signed commits
+`6ebcf4e5` and `60e32e32` changed secret temporaries to exclusive `mktemp`
+files inside isolated volumes, changed sentinel ownership to numeric `chown`,
+and added exact managed-label, owner, mode, size, and link-count checks. From an
+absent `/mnt/mrml-phase21-60e32e32` root and zero matching volumes, the corrected
+provisioner succeeded twice and retained exactly 16 named volumes.
+
+The resulting loopback-only fixture stack did not pass the container-start
+gate. Kernel audit records show Docker Snap's `snap.docker.dockerd` AppArmor
+profile denied entrypoint execution with `info="no new privs"` for both fixed
+numeric service users. Removing `no-new-privileges:true` would weaken a required
+production isolation invariant, so the failed test containers and network were
+removed while all named volumes were retained. This server therefore proves
+offline load and fresh named-volume provisioning, but not a production daemon
+start. A non-Snap engine whose LSM profile permits execution under
+`no-new-privileges`, or a narrowly reviewed corrected Snap/AppArmor policy, is
+required before the start gate can be rerun. Real certd configuration and
+owner-selected production trust inputs also remain required.
+
+Patent review: **NOT_TRIGGERED**. This follow-up records conventional bounded
+retry, resource sampling, tracked-file archival, checksum/signature
+verification, exclusive temporary-file creation, named-volume provisioning,
+standard-input image loading, and LSM diagnostics. See
+`docs/patents/REVIEW_LOG.md`.
