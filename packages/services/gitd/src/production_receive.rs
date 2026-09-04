@@ -10,6 +10,7 @@ use mrml_http::{
     BackendError, BoundedRead, BoundedWrite, SmartGitOperation, SmartGitRequest, SmartGitResponse,
     WorkBudget,
 };
+use mrml_runtime::DirectoryCapability;
 
 use crate::{AdmittedRepository, DeploymentRepository, DeploymentRepositoryProfile, GitdConfig};
 
@@ -18,12 +19,12 @@ pub struct ProductionReceiveRepository {
     policy: Option<PathBuf>,
     journals: PathBuf,
     quarantine: PathBuf,
-    state: PathBuf,
     plain_receipts: PathBuf,
     authenticated_receipts: PathBuf,
     max_body_bytes: u64,
     max_object_bytes: u64,
     minimum_free_space_bytes: u64,
+    refs: DirectoryCapability,
 }
 
 impl ProductionReceiveRepository {
@@ -101,12 +102,16 @@ impl ProductionReceiveRepository {
             policy,
             journals: admitted.paths.state.join("receive-journals"),
             quarantine: admitted.paths.quarantine.clone(),
-            state: admitted.paths.state.clone(),
             plain_receipts: admitted.paths.receipts.join("plain"),
             authenticated_receipts: admitted.paths.receipts.join("authenticated"),
             max_body_bytes: receive_pack_limit(config.max_body_bytes),
             max_object_bytes: entry.profile.max_object_bytes,
             minimum_free_space_bytes: config.minimum_free_space_bytes,
+            refs: admitted
+                .capabilities
+                .state
+                .try_clone()
+                .map_err(|_| BackendError::Storage)?,
         })
     }
 
@@ -122,10 +127,10 @@ impl ProductionReceiveRepository {
         if request.operation != SmartGitOperation::ReceivePack {
             return Err(BackendError::Unsupported);
         }
-        let mut store = LinuxDurableReceiveStore::open(
+        let mut store = LinuxDurableReceiveStore::open_with_ref_capability(
             path(&self.journals)?,
             path(&self.quarantine)?,
-            path(&self.state)?,
+            self.refs.try_clone().map_err(|_| BackendError::Storage)?,
             path(&self.plain_receipts)?,
             ObjectFormat::Sha256,
             self.max_body_bytes,

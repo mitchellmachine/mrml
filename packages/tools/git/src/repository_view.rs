@@ -1,5 +1,7 @@
 //! Generation-stable, bounded repository queries for the untrusted edge.
 
+#[cfg(target_os = "linux")]
+use mrml_runtime::DirectoryCapability;
 use mrml_runtime::Vector;
 
 use crate::object_id_set::ObjectIdSet;
@@ -477,6 +479,22 @@ impl GitdCoreBackend for FilesystemRepositoryView {
 }
 
 impl FilesystemRepositoryView {
+    #[cfg(target_os = "linux")]
+    pub fn retain_ref_directory(
+        &mut self,
+        capability: DirectoryCapability,
+    ) -> Result<(), GitdCoreError> {
+        let refs =
+            ActiveRefFile::open_capability(capability).map_err(|_| GitdCoreError::Storage)?;
+        let state = refs.load().map_err(|_| GitdCoreError::Storage)?;
+        if state.repository != self.identity || state.object_format != self.objects.object_format()
+        {
+            return Err(GitdCoreError::Authorization);
+        }
+        self.refs = refs;
+        Ok(())
+    }
+
     /// Creates the canonical empty SHA-256 state used by a deployment-owned
     /// repository catalog. The initial root commit is deterministic and carries
     /// no authorization; protected policy activation remains a separate gate.

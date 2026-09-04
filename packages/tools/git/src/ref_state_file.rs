@@ -1,5 +1,7 @@
 //! Crash-durable single-file activation for canonical active ref generations.
 
+#[cfg(target_os = "linux")]
+use mrml_runtime::DirectoryCapability;
 use mrml_runtime::{
     File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory,
     remove_file, rename_file,
@@ -19,6 +21,8 @@ pub struct ActiveRefFile {
     active: Text,
     temporary: Text,
     lock: Text,
+    #[cfg(target_os = "linux")]
+    capability: Option<DirectoryCapability>,
 }
 
 impl ActiveRefFile {
@@ -75,9 +79,21 @@ impl ActiveRefFile {
         Ok(store)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn open_capability(capability: DirectoryCapability) -> Result<Self, ActiveRefStateError> {
+        let store = Self {
+            directory: Text::new(),
+            active: Text::from("active.refs"),
+            temporary: Text::from("active.refs.new"),
+            lock: Text::from("active.refs.lock"),
+            capability: Some(capability),
+        };
+        store.load()?;
+        Ok(store)
+    }
+
     pub fn load(&self) -> Result<ActiveRefState, ActiveRefStateError> {
-        let mut file =
-            File::open_regular(&self.active).map_err(|_| ActiveRefStateError::Malformed)?;
+        let mut file = self.open_regular(&self.active, "active.refs")?;
         let length = usize::try_from(file.len().map_err(|_| ActiveRefStateError::Malformed)?)
             .map_err(|_| ActiveRefStateError::Resource)?;
         if length > MAX_ACTIVE_REF_STATE_BYTES {
@@ -124,16 +140,16 @@ impl ActiveRefFile {
         &self,
         verified: &VerifiedRefTransaction,
     ) -> Result<ActiveRefState, DurableFailure> {
-        let lock = File::create_new(&self.lock).map_err(|_| DurableFailure::StaleLock)?;
+        let lock = self.create_new(&self.lock, "active.refs.lock")?;
         lock.sync().map_err(|_| DurableFailure::Fsync)?;
         drop(lock);
-        sync_ref_directory(&self.directory)?;
+        self.sync_directory()?;
 
         let result = self.activate_while_locked(verified);
         match result {
             Ok(next) => {
-                remove_file(&self.lock).map_err(|_| DurableFailure::Rename)?;
-                sync_ref_directory(&self.directory)?;
+                self.remove(&self.lock, "active.refs.lock")?;
+                self.sync_directory()?;
                 Ok(next)
             }
             Err(error) => {
@@ -146,8 +162,8 @@ impl ActiveRefFile {
                         | DurableFailure::DiskFull
                         | DurableFailure::ShortWrite
                 ) {
-                    let _ = remove_file(&self.lock);
-                    let _ = sync_ref_directory(&self.directory);
+                    let _ = self.remove(&self.lock, "active.refs.lock");
+                    let _ = self.sync_directory();
                 }
                 Err(error)
             }
@@ -163,16 +179,16 @@ impl ActiveRefFile {
         verified: &VerifiedRefTransaction,
         manifest: &PackSetManifest,
     ) -> Result<ActiveRefState, DurableFailure> {
-        let lock = File::create_new(&self.lock).map_err(|_| DurableFailure::StaleLock)?;
+        let lock = self.create_new(&self.lock, "active.refs.lock")?;
         lock.sync().map_err(|_| DurableFailure::Fsync)?;
         drop(lock);
-        sync_ref_directory(&self.directory)?;
+        self.sync_directory()?;
 
         let result = self.activate_pack_set_while_locked(verified, manifest);
         match result {
             Ok(next) => {
-                remove_file(&self.lock).map_err(|_| DurableFailure::Rename)?;
-                sync_ref_directory(&self.directory)?;
+                self.remove(&self.lock, "active.refs.lock")?;
+                self.sync_directory()?;
                 Ok(next)
             }
             Err(error) => {
@@ -182,8 +198,8 @@ impl ActiveRefFile {
                         | DurableFailure::DiskFull
                         | DurableFailure::ShortWrite
                 ) {
-                    let _ = remove_file(&self.lock);
-                    let _ = sync_ref_directory(&self.directory);
+                    let _ = self.remove(&self.lock, "active.refs.lock");
+                    let _ = self.sync_directory();
                 }
                 Err(error)
             }
@@ -197,15 +213,15 @@ impl ActiveRefFile {
         &self,
         manifest: &PackSetManifest,
     ) -> Result<ActiveRefState, DurableFailure> {
-        let lock = File::create_new(&self.lock).map_err(|_| DurableFailure::StaleLock)?;
+        let lock = self.create_new(&self.lock, "active.refs.lock")?;
         lock.sync().map_err(|_| DurableFailure::Fsync)?;
         drop(lock);
-        sync_ref_directory(&self.directory)?;
+        self.sync_directory()?;
         let result = self.activate_compaction_while_locked(manifest);
         match result {
             Ok(next) => {
-                remove_file(&self.lock).map_err(|_| DurableFailure::Rename)?;
-                sync_ref_directory(&self.directory)?;
+                self.remove(&self.lock, "active.refs.lock")?;
+                self.sync_directory()?;
                 Ok(next)
             }
             Err(error) => {
@@ -215,8 +231,8 @@ impl ActiveRefFile {
                         | DurableFailure::DiskFull
                         | DurableFailure::ShortWrite
                 ) {
-                    let _ = remove_file(&self.lock);
-                    let _ = sync_ref_directory(&self.directory);
+                    let _ = self.remove(&self.lock, "active.refs.lock");
+                    let _ = self.sync_directory();
                 }
                 Err(error)
             }
@@ -230,8 +246,9 @@ impl ActiveRefFile {
         limits: PackSetLimits,
     ) -> Result<PackSetManifest, ActiveRefStateError> {
         let state = self.load()?;
+        let name = Self::pack_set_name(&state.pack_set_digest);
         let path = self.pack_set_path(&state.pack_set_digest);
-        let bytes = read_bounded(&path, MAX_PACK_SET_MANIFEST_BYTES)?;
+        let bytes = self.read_bounded(&path, &name, MAX_PACK_SET_MANIFEST_BYTES)?;
         let manifest =
             parse_pack_set_manifest(&bytes, limits).map_err(|_| ActiveRefStateError::Integrity)?;
         if manifest
@@ -260,15 +277,19 @@ impl ActiveRefFile {
                 _ => DurableFailure::VerifierCrash,
             })?;
         let encoded = encode_active_ref_state(&next).map_err(|_| DurableFailure::VerifierCrash)?;
-        let mut temporary =
-            File::create_new(&self.temporary).map_err(|_| DurableFailure::StaleLock)?;
+        let mut temporary = self.create_new(&self.temporary, "active.refs.new")?;
         temporary
             .write_all(&encoded)
             .map_err(|_| DurableFailure::ShortWrite)?;
         temporary.sync().map_err(|_| DurableFailure::Fsync)?;
         drop(temporary);
-        rename_file(&self.temporary, &self.active).map_err(|_| DurableFailure::Rename)?;
-        sync_ref_directory(&self.directory)?;
+        self.rename(
+            &self.temporary,
+            "active.refs.new",
+            &self.active,
+            "active.refs",
+        )?;
+        self.sync_directory()?;
         let reread = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
         if reread != next {
             return Err(DurableFailure::VerifierCrash);
@@ -290,18 +311,23 @@ impl ActiveRefFile {
             })?;
         let manifest_bytes =
             encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
+        let manifest_name = Self::pack_set_name(&next.pack_set_digest);
         let manifest_path = self.pack_set_path(&next.pack_set_digest);
-        self.persist_manifest_bytes(&manifest_path, &manifest_bytes)?;
+        self.persist_manifest_bytes(&manifest_path, &manifest_name, &manifest_bytes)?;
         let encoded = encode_active_ref_state(&next).map_err(|_| DurableFailure::VerifierCrash)?;
-        let mut temporary =
-            File::create_new(&self.temporary).map_err(|_| DurableFailure::StaleLock)?;
+        let mut temporary = self.create_new(&self.temporary, "active.refs.new")?;
         temporary
             .write_all(&encoded)
             .map_err(|_| DurableFailure::ShortWrite)?;
         temporary.sync().map_err(|_| DurableFailure::Fsync)?;
         drop(temporary);
-        rename_file(&self.temporary, &self.active).map_err(|_| DurableFailure::Rename)?;
-        sync_ref_directory(&self.directory)?;
+        self.rename(
+            &self.temporary,
+            "active.refs.new",
+            &self.active,
+            "active.refs",
+        )?;
+        self.sync_directory()?;
         let reread = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
         if reread != next {
             return Err(DurableFailure::VerifierCrash);
@@ -330,17 +356,26 @@ impl ActiveRefFile {
         })?;
         let manifest_bytes =
             encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
-        self.persist_manifest_bytes(&self.pack_set_path(&next.pack_set_digest), &manifest_bytes)?;
+        let manifest_name = Self::pack_set_name(&next.pack_set_digest);
+        self.persist_manifest_bytes(
+            &self.pack_set_path(&next.pack_set_digest),
+            &manifest_name,
+            &manifest_bytes,
+        )?;
         let encoded = encode_active_ref_state(&next).map_err(|_| DurableFailure::VerifierCrash)?;
-        let mut temporary =
-            File::create_new(&self.temporary).map_err(|_| DurableFailure::StaleLock)?;
+        let mut temporary = self.create_new(&self.temporary, "active.refs.new")?;
         temporary
             .write_all(&encoded)
             .map_err(|_| DurableFailure::ShortWrite)?;
         temporary.sync().map_err(|_| DurableFailure::Fsync)?;
         drop(temporary);
-        rename_file(&self.temporary, &self.active).map_err(|_| DurableFailure::Rename)?;
-        sync_ref_directory(&self.directory)?;
+        self.rename(
+            &self.temporary,
+            "active.refs.new",
+            &self.active,
+            "active.refs",
+        )?;
+        self.sync_directory()?;
         let reread = self.load().map_err(|_| DurableFailure::VerifierCrash)?;
         if reread != next {
             return Err(DurableFailure::VerifierCrash);
@@ -357,6 +392,10 @@ impl ActiveRefFile {
     }
 
     fn pack_set_path(&self, digest: &[u8; 32]) -> Text {
+        join_path(&self.directory, &Self::pack_set_name(digest))
+    }
+
+    fn pack_set_name(digest: &[u8; 32]) -> Text {
         let mut name = Text::from("pack-set-");
         const HEX: &[u8; 16] = b"0123456789abcdef";
         for byte in digest {
@@ -364,7 +403,7 @@ impl ActiveRefFile {
             name.push(char::from(HEX[usize::from(byte & 0x0f)]));
         }
         name.push_str(".manifest");
-        join_path(&self.directory, &name)
+        name
     }
 
     #[allow(dead_code)]
@@ -375,24 +414,34 @@ impl ActiveRefFile {
     ) -> Result<(), DurableFailure> {
         let bytes =
             encode_pack_set_manifest(manifest).map_err(|_| DurableFailure::VerifierCrash)?;
-        self.persist_manifest_bytes(&self.pack_set_path(digest), &bytes)
+        self.persist_manifest_bytes(
+            &self.pack_set_path(digest),
+            &Self::pack_set_name(digest),
+            &bytes,
+        )
     }
 
-    fn persist_manifest_bytes(&self, path: &str, bytes: &[u8]) -> Result<(), DurableFailure> {
-        if path_exists(path) {
-            let existing = read_bounded(path, MAX_PACK_SET_MANIFEST_BYTES)
+    fn persist_manifest_bytes(
+        &self,
+        path: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<(), DurableFailure> {
+        if self.open_regular(path, name).is_ok() {
+            let existing = self
+                .read_bounded(path, name, MAX_PACK_SET_MANIFEST_BYTES)
                 .map_err(|_| DurableFailure::VerifierCrash)?;
             if existing != bytes {
                 return Err(DurableFailure::VerifierCrash);
             }
             return Ok(());
         }
-        let mut file = File::create_new(path).map_err(|_| DurableFailure::StaleLock)?;
+        let mut file = self.create_new(path, name)?;
         file.write_all(bytes)
             .map_err(|_| DurableFailure::ShortWrite)?;
         file.sync().map_err(|_| DurableFailure::Fsync)?;
         drop(file);
-        sync_ref_directory(&self.directory)
+        self.sync_directory()
     }
 
     fn paths(directory: &str) -> Result<Self, DurableFailure> {
@@ -405,12 +454,97 @@ impl ActiveRefFile {
             temporary: join_path(&directory, "active.refs.new"),
             lock: join_path(&directory, "active.refs.lock"),
             directory,
+            #[cfg(target_os = "linux")]
+            capability: None,
         })
+    }
+
+    fn open_regular(&self, path: &str, name: &str) -> Result<File, ActiveRefStateError> {
+        #[cfg(target_os = "linux")]
+        if let Some(capability) = &self.capability {
+            let file = capability
+                .open_regular(name)
+                .map_err(|_| ActiveRefStateError::Malformed)?;
+            let file_metadata = file
+                .metadata()
+                .map_err(|_| ActiveRefStateError::Malformed)?;
+            let directory_metadata = capability
+                .metadata()
+                .map_err(|_| ActiveRefStateError::Malformed)?;
+            if file_metadata.links != 1
+                || file_metadata.uid != directory_metadata.uid
+                || file_metadata.gid != directory_metadata.gid
+                || file_metadata.mode & 0o022 != 0
+            {
+                return Err(ActiveRefStateError::Malformed);
+            }
+            return Ok(file);
+        }
+        File::open_regular(path).map_err(|_| ActiveRefStateError::Malformed)
+    }
+
+    fn create_new(&self, path: &str, name: &str) -> Result<File, DurableFailure> {
+        #[cfg(target_os = "linux")]
+        if let Some(capability) = &self.capability {
+            return capability
+                .create_new_file(name, 0o600)
+                .map_err(|_| DurableFailure::StaleLock);
+        }
+        File::create_new(path).map_err(|_| DurableFailure::StaleLock)
+    }
+
+    fn rename(
+        &self,
+        existing_path: &str,
+        existing_name: &str,
+        replacement_path: &str,
+        replacement_name: &str,
+    ) -> Result<(), DurableFailure> {
+        #[cfg(target_os = "linux")]
+        if let Some(capability) = &self.capability {
+            return capability
+                .rename_child(existing_name, replacement_name)
+                .map_err(|_| DurableFailure::Rename);
+        }
+        rename_file(existing_path, replacement_path).map_err(|_| DurableFailure::Rename)
+    }
+
+    fn remove(&self, path: &str, name: &str) -> Result<(), DurableFailure> {
+        #[cfg(target_os = "linux")]
+        if let Some(capability) = &self.capability {
+            return capability
+                .remove_file(name)
+                .map_err(|_| DurableFailure::Rename);
+        }
+        remove_file(path).map_err(|_| DurableFailure::Rename)
+    }
+
+    fn sync_directory(&self) -> Result<(), DurableFailure> {
+        #[cfg(target_os = "linux")]
+        if let Some(capability) = &self.capability {
+            return capability.sync().map_err(|_| DurableFailure::Fsync);
+        }
+        sync_ref_directory(&self.directory)
+    }
+
+    fn read_bounded(
+        &self,
+        path: &str,
+        name: &str,
+        maximum: usize,
+    ) -> Result<Vector<u8>, ActiveRefStateError> {
+        let mut file = self.open_regular(path, name)?;
+        read_bounded_file(&mut file, maximum)
     }
 }
 
+#[cfg(test)]
 fn read_bounded(path: &str, maximum: usize) -> Result<Vector<u8>, ActiveRefStateError> {
     let mut file = File::open_regular(path).map_err(|_| ActiveRefStateError::Malformed)?;
+    read_bounded_file(&mut file, maximum)
+}
+
+fn read_bounded_file(file: &mut File, maximum: usize) -> Result<Vector<u8>, ActiveRefStateError> {
     let length = usize::try_from(file.len().map_err(|_| ActiveRefStateError::Malformed)?)
         .map_err(|_| ActiveRefStateError::Resource)?;
     if length == 0 || length > maximum {
@@ -439,6 +573,7 @@ fn sync_ref_directory(_: &str) -> Result<(), DurableFailure> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    extern crate std;
     use crate::pack_set::{AuthenticatedPackIndexSummary, build_pack_set_manifest};
     use crate::{
         CandidateRefTransaction, CandidateRefUpdate, FullRefName, HistoryVerificationLimits,
@@ -522,6 +657,49 @@ mod tests {
         assert_eq!(ActiveRefFile::open(&root).unwrap().load().unwrap(), next);
         assert_eq!(store.activate(&verified), Err(DurableFailure::StaleLock));
         mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn capability_activation_survives_directory_swap_and_rejects_hard_links() {
+        let root_path = root("mrml-active-capability");
+        let displaced = root("mrml-active-capability-displaced");
+        let _ = mrml_runtime::remove_dir_all(&root_path);
+        let _ = mrml_runtime::remove_dir_all(&displaced);
+        let (state, verified, new) = fixture();
+        ActiveRefFile::initialize(&root_path, &state).unwrap();
+        let capability = DirectoryCapability::open_root(&root_path).unwrap();
+        let retained = ActiveRefFile::open_capability(capability).unwrap();
+        mrml_runtime::rename_file(&root_path, &displaced).unwrap();
+        ActiveRefFile::initialize(&root_path, &state).unwrap();
+
+        let next = retained.activate(&verified).unwrap();
+        assert_eq!(next.refs[0].1, new);
+        assert_eq!(
+            ActiveRefFile::open(&displaced).unwrap().load().unwrap(),
+            next
+        );
+        assert_eq!(
+            ActiveRefFile::open(&root_path).unwrap().load().unwrap(),
+            state
+        );
+        drop(retained);
+        mrml_runtime::remove_dir_all(&root_path).unwrap();
+        mrml_runtime::remove_dir_all(&displaced).unwrap();
+
+        let linked = root("mrml-active-capability-linked");
+        let _ = mrml_runtime::remove_dir_all(&linked);
+        ActiveRefFile::initialize(&linked, &state).unwrap();
+        std::fs::hard_link(
+            join_path(&linked, "active.refs").as_str(),
+            join_path(&linked, "active.refs.link").as_str(),
+        )
+        .unwrap();
+        assert!(
+            ActiveRefFile::open_capability(DirectoryCapability::open_root(&linked).unwrap())
+                .is_err()
+        );
+        mrml_runtime::remove_dir_all(&linked).unwrap();
     }
 
     #[test]

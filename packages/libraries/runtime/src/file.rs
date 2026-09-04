@@ -48,6 +48,11 @@ pub struct DirectoryCapability {
 
 #[cfg(target_os = "linux")]
 impl DirectoryCapability {
+    pub fn try_clone(&self) -> Result<Self, FileError> {
+        let inner = self.inner.try_clone().ok_or(FileError::OpenFailed)?;
+        Ok(Self { inner })
+    }
+
     pub fn open_root(path: &str) -> Result<Self, FileError> {
         if !path_is_absolute(path) {
             return Err(FileError::InvalidPath);
@@ -83,6 +88,51 @@ impl DirectoryCapability {
         Ok(File { inner, position: 0 })
     }
 
+    pub fn create_new_file(&self, name: &str, mode: u32) -> Result<File, FileError> {
+        validate_capability_child_name(name)?;
+        let encoded = encode_unix_path(name).ok_or(FileError::InvalidPath)?;
+        let name =
+            core::ffi::CStr::from_bytes_with_nul(&encoded).map_err(|_| FileError::InvalidPath)?;
+        let inner = self
+            .inner
+            .create_file(name, mode)
+            .ok_or(FileError::OpenFailed)?;
+        Ok(File { inner, position: 0 })
+    }
+
+    pub fn rename_child(&self, existing: &str, replacement: &str) -> Result<(), FileError> {
+        validate_capability_child_name(existing)?;
+        validate_capability_child_name(replacement)?;
+        let existing = encode_unix_path(existing).ok_or(FileError::InvalidPath)?;
+        let replacement = encode_unix_path(replacement).ok_or(FileError::InvalidPath)?;
+        let existing =
+            core::ffi::CStr::from_bytes_with_nul(&existing).map_err(|_| FileError::InvalidPath)?;
+        let replacement = core::ffi::CStr::from_bytes_with_nul(&replacement)
+            .map_err(|_| FileError::InvalidPath)?;
+        self.inner
+            .rename_child(existing, replacement)
+            .then_some(())
+            .ok_or(FileError::RenameFailed)
+    }
+
+    pub fn remove_file(&self, name: &str) -> Result<(), FileError> {
+        validate_capability_child_name(name)?;
+        let encoded = encode_unix_path(name).ok_or(FileError::InvalidPath)?;
+        let name =
+            core::ffi::CStr::from_bytes_with_nul(&encoded).map_err(|_| FileError::InvalidPath)?;
+        self.inner
+            .remove_file(name)
+            .then_some(())
+            .ok_or(FileError::RemoveFailed)
+    }
+
+    pub fn sync(&self) -> Result<(), FileError> {
+        self.inner
+            .sync()
+            .then_some(())
+            .ok_or(FileError::WriteFailed)
+    }
+
     pub fn metadata(&self) -> Result<DirectoryMetadata, FileError> {
         let metadata = self.inner.metadata().ok_or(FileError::MetadataFailed)?;
         Ok(DirectoryMetadata {
@@ -106,6 +156,20 @@ fn validate_relative_capability_path(path: &str) -> Result<(), FileError> {
         || path
             .split('/')
             .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(FileError::InvalidPath);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_capability_child_name(name: &str) -> Result<(), FileError> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
     {
         return Err(FileError::InvalidPath);
     }
@@ -1002,6 +1066,26 @@ mod tests {
                 .links,
             2
         );
+        let mut temporary = root_capability.create_new_file("state.new", 0o600).unwrap();
+        temporary.write_all(b"generation").unwrap();
+        temporary.sync().unwrap();
+        assert_eq!(temporary.metadata().unwrap().mode & 0o777, 0o600);
+        drop(temporary);
+        root_capability
+            .rename_child("state.new", "state.active")
+            .unwrap();
+        root_capability.sync().unwrap();
+        let mut active = root_capability.open_regular("state.active").unwrap();
+        let mut active_bytes = [0; 10];
+        active.read_exact(&mut active_bytes).unwrap();
+        assert_eq!(&active_bytes, b"generation");
+        drop(active);
+        root_capability.remove_file("state.active").unwrap();
+        assert!(root_capability.open_regular("state.active").is_err());
+        for invalid in ["", ".", "..", "nested/state", "nested\\state"] {
+            assert!(root_capability.create_new_file(invalid, 0o600).is_err());
+            assert!(root_capability.remove_file(invalid).is_err());
+        }
         let retained = root_capability.open_directory("owner/repository").unwrap();
         let retained_metadata = retained.metadata().unwrap();
         assert_eq!(retained_metadata.mode & 0o170000, 0o040000);

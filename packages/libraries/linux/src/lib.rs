@@ -116,6 +116,13 @@ unsafe extern "C" {
     fn kill(process: c_int, signal: c_int) -> c_int;
     fn fcntl(file: c_int, command: c_int, ...) -> c_int;
     fn rename(existing: *const i8, replacement: *const i8) -> c_int;
+    fn renameat(
+        old_directory: c_int,
+        old_path: *const i8,
+        new_directory: c_int,
+        new_path: *const i8,
+    ) -> c_int;
+    fn unlinkat(directory: c_int, path: *const i8, flags: c_int) -> c_int;
     fn opendir(path: *const i8) -> *mut c_void;
     fn fdopendir(file: c_int) -> *mut c_void;
     fn dirfd(directory: *mut c_void) -> c_int;
@@ -1249,6 +1256,18 @@ impl NativeDirectory {
         NonNull::new(unsafe { opendir(path.as_ptr()) }).map(|directory| Self(directory.as_ptr()))
     }
 
+    pub fn try_clone(&self) -> Option<Self> {
+        const F_DUPFD_CLOEXEC: c_int = 1030;
+        let descriptor = unsafe { dirfd(self.0) };
+        if descriptor < 0 {
+            return None;
+        }
+        // SAFETY: `descriptor` is live for this call and fcntl returns a new
+        // independently owned close-on-exec descriptor or a negative error.
+        let duplicate = unsafe { fcntl(descriptor, F_DUPFD_CLOEXEC, 0) };
+        Self::from_descriptor(duplicate)
+    }
+
     /// Opens a configured absolute root without following any symlink component.
     pub fn open_root(path: &CStr) -> Option<Self> {
         const SYS_OPENAT2_X86_64: c_long = 437;
@@ -1376,6 +1395,78 @@ impl NativeDirectory {
         file.is_regular().then_some(file)
     }
 
+    pub fn create_file(&self, name: &CStr, mode: u32) -> Option<NativeFile> {
+        const SYS_OPENAT2_X86_64: c_long = 437;
+        const O_WRONLY: u64 = 1;
+        const O_CREAT: u64 = 64;
+        const O_EXCL: u64 = 128;
+        const O_NOFOLLOW: u64 = 0x2_0000;
+        const O_CLOEXEC: u64 = 0x8_0000;
+        const RESOLVE_NO_XDEV: u64 = 0x01;
+        const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+        const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+        const RESOLVE_BENEATH: u64 = 0x08;
+        if !safe_child_name(name) || mode & !0o777 != 0 {
+            return None;
+        }
+        let how = OpenHow {
+            flags: O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            mode: u64::from(mode),
+            resolve: RESOLVE_NO_XDEV
+                | RESOLVE_NO_MAGICLINKS
+                | RESOLVE_NO_SYMLINKS
+                | RESOLVE_BENEATH,
+        };
+        let parent = unsafe { dirfd(self.0) };
+        if parent < 0 {
+            return None;
+        }
+        // SAFETY: `name` is one retained-directory child, `how` has the Linux
+        // ABI layout, and `NativeFile` assumes ownership only on success.
+        let descriptor = unsafe {
+            syscall(
+                SYS_OPENAT2_X86_64,
+                parent,
+                name.as_ptr(),
+                &how as *const OpenHow,
+                core::mem::size_of::<OpenHow>(),
+            )
+        };
+        if descriptor < 0 || descriptor > c_int::MAX as c_long {
+            return None;
+        }
+        let file = NativeFile(descriptor as c_int);
+        file.is_regular().then_some(file)
+    }
+
+    pub fn rename_child(&self, existing: &CStr, replacement: &CStr) -> bool {
+        if !safe_child_name(existing) || !safe_child_name(replacement) {
+            return false;
+        }
+        let directory = unsafe { dirfd(self.0) };
+        // SAFETY: both names are single NUL-terminated children and both dirfd
+        // arguments refer to the same retained directory.
+        directory >= 0
+            && unsafe {
+                renameat(
+                    directory,
+                    existing.as_ptr(),
+                    directory,
+                    replacement.as_ptr(),
+                )
+            } == 0
+    }
+
+    pub fn remove_file(&self, name: &CStr) -> bool {
+        if !safe_child_name(name) {
+            return false;
+        }
+        let directory = unsafe { dirfd(self.0) };
+        // SAFETY: `name` is a single NUL-terminated child and `directory` is
+        // live for the duration of unlinkat.
+        directory >= 0 && unsafe { unlinkat(directory, name.as_ptr(), 0) } == 0
+    }
+
     fn from_descriptor(descriptor: c_int) -> Option<Self> {
         if descriptor < 0 {
             return None;
@@ -1424,6 +1515,12 @@ fn metadata_for_descriptor(descriptor: c_int) -> Option<NativeFileMetadata> {
         links: status.links,
         device: status.device,
     })
+}
+
+#[cfg(unix)]
+fn safe_child_name(name: &CStr) -> bool {
+    let name = name.to_bytes();
+    !name.is_empty() && name != b"." && name != b".." && !name.contains(&b'/')
 }
 
 #[cfg(unix)]

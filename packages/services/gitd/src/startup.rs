@@ -381,7 +381,7 @@ pub fn admit_catalog_repository(
             config.gitd_gid,
         )?,
     };
-    let view = FilesystemRepositoryView::open_with_arrivals(
+    let mut view = FilesystemRepositoryView::open_with_arrivals(
         entry.repository.clone(),
         paths
             .objects
@@ -396,6 +396,13 @@ pub fn admit_catalog_repository(
             .to_str()
             .ok_or(RepositoryAdmissionError::Identity)?,
         receive_pack_limit(config.max_body_bytes),
+    )
+    .map_err(|_| RepositoryAdmissionError::Open)?;
+    view.retain_ref_directory(
+        capabilities
+            .state
+            .try_clone()
+            .map_err(|_| RepositoryAdmissionError::Open)?,
     )
     .map_err(|_| RepositoryAdmissionError::Open)?;
     verify_repository_admission(entry, &view).map_err(|_| RepositoryAdmissionError::Generation)?;
