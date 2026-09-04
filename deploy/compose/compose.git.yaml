@@ -15,8 +15,6 @@ services:
     restart: "no"
     ulimits:
       nofile: {soft: 256, hard: 256}
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=21001,gid=21001,mode=0700
     volumes:
       - "mrml-gitd-policies:/var/lib/mrml/git-policies:ro"
       - "mrml-git-trust-construction:/run/mrml-trust-construction:rw"
@@ -37,8 +35,6 @@ services:
     restart: "no"
     ulimits:
       nofile: {soft: 256, hard: 256}
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=21001,gid=21001,mode=0700
     volumes:
       - "mrml-gitd-policies:/var/lib/mrml/git-policies:rw"
       - "mrml-git-authority-config:/etc/mrml/authority:ro"

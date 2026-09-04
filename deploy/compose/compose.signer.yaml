@@ -53,8 +53,6 @@ services:
     restart: "no"
     ulimits:
       nofile: {soft: 256, hard: 256}
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=8m,uid=21006,gid=21006,mode=0700
     volumes:
       - type: volume
         source: mrml-git-signer-state
