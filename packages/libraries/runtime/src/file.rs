@@ -158,6 +158,23 @@ impl DirectoryCapability {
             .ok_or(FileError::RemoveFailed)
     }
 
+    pub fn read_directory(&self) -> Result<Vector<DirectoryEntry>, FileError> {
+        let mut directory = self.inner.try_clone().ok_or(FileError::DirectoryFailed)?;
+        let mut entries = Vector::new();
+        let mut name_buffer = [0u8; 256];
+        while let Some((name, is_directory, is_symlink)) = directory.next(&mut name_buffer) {
+            let name = core::str::from_utf8(name).map_err(|_| FileError::InvalidUtf8)?;
+            if name != "." && name != ".." {
+                entries.push(DirectoryEntry {
+                    name: name.into(),
+                    is_directory,
+                    is_symlink,
+                });
+            }
+        }
+        Ok(entries)
+    }
+
     pub fn sync(&self) -> Result<(), FileError> {
         self.inner
             .sync()
@@ -1190,6 +1207,22 @@ mod tests {
                 .unwrap()
                 .inode,
             retained_metadata.inode
+        );
+        let entries = root_capability.read_directory().unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.name == "owner" && entry.is_directory)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.name == "regular" && !entry.is_directory)
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry.name == "." || entry.name == "..")
         );
         remove_dir_all(&root).unwrap();
     }
