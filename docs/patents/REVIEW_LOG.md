@@ -12529,3 +12529,11 @@ source accounting, queue deadlines, and scope-bound permit release before the
 existing TLS and HTTP/2 paths. It adds no transport or cryptographic protocol,
 congestion algorithm, adaptive classifier, content-selection mechanism, or
 other patent-sensitive mechanism.
+
+# 2026-09-04 — Coherent bounded HTTP/2 server state
+
+Patent review: **NOT_TRIGGERED**. This increment enforces conventional RFC 9113
+frame sequencing, stream lifecycle, fixed header limits, flow-control checks,
+and exact Content-Length accounting on the existing HTTP/2 implementation. It
+adds no header-compression scheme, transport or cryptographic protocol,
+congestion algorithm, adaptive policy, or patent-sensitive mechanism.

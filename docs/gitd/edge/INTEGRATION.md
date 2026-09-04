@@ -138,6 +138,22 @@ packets reach CRYPTO/TLS assembly; ACK frames derive from the authenticated
 ranges. Application-space state remains independently owned by the established
 connection.
 
+The production HTTP/2 server connection now applies one `Http2ConnectionState`
+to every frame read after the required client preface and initial SETTINGS.
+It rejects reused, decreasing, or even client stream IDs; overlapping streams;
+wrong or unsolicited CONTINUATION; DATA after remote close; client push;
+malformed SETTINGS, PING, GOAWAY, RST_STREAM, and WINDOW_UPDATE state; and new
+streams after GOAWAY. Fragmented header blocks are collected only to a fixed
+64 KiB compressed limit, while decoded header-list accounting includes the RFC
+per-field overhead and a 256-field ceiling. Request parsing enforces pseudo-
+header ordering and uniqueness, rejects connection-specific fields, and binds
+DATA length to one exact decimal Content-Length when present. The live server
+still deliberately admits one active request stream per connection; excess
+concurrency fails immediately rather than allocating another stream. Hosted
+Linux HTTP tests cover these deterministic state transitions. Real-listener
+hostile byte-stream coverage, sustained fragmented-header timing, and an
+independent HTTP/2 oracle remain open evidence gates.
+
 The authorized RFC 8878 encoder work began with bounded forward/reverse bit
 writers and normalized-count table-description serialization. The hosted Linux
 Zstandard suite passes 33 tests, including exact writer/reader round trips,
