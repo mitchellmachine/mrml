@@ -1,13 +1,13 @@
 use mrml_crypto::Sha256;
-use mrml_git::{RepositoryGeneration, RepositoryIdentity};
-use mrml_runtime::{DirectoryCapability, File};
+use mrml_git::{
+    AUTHORITY_GENERATION_RECORD_MAX_BYTES, RepositoryGeneration, RepositoryIdentity,
+    encode_authority_generation_record, parse_authority_generation_record,
+};
+use mrml_runtime::{DirectoryCapability, File, Vector};
 #[cfg(test)]
 use std::fs;
 
-const MAGIC: &[u8; 8] = b"MRAGEN01";
-const DOMAIN: &[u8] = b"MRML git authority repository generation v1\0";
 const LOCK_EXCLUSIVE_NONBLOCKING: i32 = 2 | 4;
-const MAX_REPOSITORY_BYTES: usize = 255;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenerationStoreError {
@@ -188,13 +188,14 @@ impl AuthorityGenerationStore for LinuxAuthorityGenerationStore {
             .map_err(|_| GenerationStoreError::Unavailable)?;
         let length = file.len().map_err(|_| GenerationStoreError::Unavailable)?;
         validate_file(&file, self.owner_uid, Some(length))?;
-        if length > (8 + 2 + MAX_REPOSITORY_BYTES + 8 + 32) as u64 {
+        if length > AUTHORITY_GENERATION_RECORD_MAX_BYTES as u64 {
             return Err(GenerationStoreError::Invalid);
         }
         let mut bytes = vec![0; length as usize];
         file.read_exact(&mut bytes)
             .map_err(|_| GenerationStoreError::Unavailable)?;
-        decode(&bytes, repository)
+        parse_authority_generation_record(&bytes, repository)
+            .map_err(|_| GenerationStoreError::Invalid)
     }
 
     fn commit_next(
@@ -224,62 +225,9 @@ impl AuthorityGenerationStore for LinuxAuthorityGenerationStore {
 fn encode(
     repository: &RepositoryIdentity,
     generation: RepositoryGeneration,
-) -> Result<Vec<u8>, GenerationStoreError> {
-    let name = repository.as_str().as_bytes();
-    if name.is_empty() || name.len() > MAX_REPOSITORY_BYTES || generation.0 == 0 {
-        return Err(GenerationStoreError::Invalid);
-    }
-    let mut output = Vec::with_capacity(8 + 2 + name.len() + 8 + 32);
-    output.extend_from_slice(MAGIC);
-    output.extend_from_slice(&(name.len() as u16).to_be_bytes());
-    output.extend_from_slice(name);
-    output.extend_from_slice(&generation.0.to_be_bytes());
-    let checksum = checksum(&output);
-    output.extend_from_slice(&checksum);
-    Ok(output)
-}
-
-fn decode(
-    input: &[u8],
-    repository: &RepositoryIdentity,
-) -> Result<RepositoryGeneration, GenerationStoreError> {
-    if input.len() < 8 + 2 + 1 + 8 + 32 || !input.starts_with(MAGIC) {
-        return Err(GenerationStoreError::Invalid);
-    }
-    let body_end = input.len() - 32;
-    if checksum(&input[..body_end]) != input[body_end..] {
-        return Err(GenerationStoreError::Invalid);
-    }
-    let name_len = u16::from_be_bytes(
-        input[8..10]
-            .try_into()
-            .map_err(|_| GenerationStoreError::Invalid)?,
-    ) as usize;
-    let generation_offset = 10usize
-        .checked_add(name_len)
-        .ok_or(GenerationStoreError::Invalid)?;
-    if name_len == 0
-        || name_len > MAX_REPOSITORY_BYTES
-        || generation_offset.checked_add(8) != Some(body_end)
-        || &input[10..generation_offset] != repository.as_str().as_bytes()
-    {
-        return Err(GenerationStoreError::Invalid);
-    }
-    let generation = u64::from_be_bytes(
-        input[generation_offset..body_end]
-            .try_into()
-            .map_err(|_| GenerationStoreError::Invalid)?,
-    );
-    (generation != 0)
-        .then_some(RepositoryGeneration(generation))
-        .ok_or(GenerationStoreError::Invalid)
-}
-
-fn checksum(bytes: &[u8]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(DOMAIN);
-    digest.update(bytes);
-    digest.finalize()
+) -> Result<Vector<u8>, GenerationStoreError> {
+    encode_authority_generation_record(repository, generation)
+        .map_err(|_| GenerationStoreError::Invalid)
 }
 
 fn repository_key(repository: &RepositoryIdentity) -> String {

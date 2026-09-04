@@ -47,6 +47,11 @@ UID, GID, size, and SHA-256 content digest. Directories have zero size and
 digest. The inventory is limited to 64 MiB and ends in a digest that detects
 internal corruption independently of the enclosing encrypted frames.
 
+Protected authority generations are read with the same bounded `MRAGEN01`
+codec used by the live authority store. The checksum domain, repository
+identity, and nonzero generation therefore cannot drift between online writes
+and offline inventory collection; a record for another repository is rejected.
+
 Restore must still authenticate the complete stream before publishing any
 target namespace and reject a runtime source/target that does not exact-match
 the manifest. The service layer remains responsible for proving every declared

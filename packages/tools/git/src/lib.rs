@@ -8,6 +8,7 @@ mod arrival_pack;
 mod audit_receipt;
 mod authority_candidate;
 mod authority_client;
+mod authority_generation_record;
 mod authority_wire;
 mod backup_stream;
 mod backup_inventory;
@@ -94,6 +95,11 @@ pub use authority_wire::{
     parse_authority_candidate_status_result,
     parse_authority_proof_install, parse_authority_receipt, parse_authority_receive,
     parse_authority_ref_transaction,
+};
+pub use authority_generation_record::{
+    AUTHORITY_GENERATION_RECORD_MAX_BYTES, AuthorityGenerationRecordError,
+    encode_authority_generation_record,
+    parse_authority_generation_record,
 };
 pub use backup_stream::{
     BACKUP_FRAME_OVERHEAD, BACKUP_STREAM_HEADER_BYTES, BackupStreamError, BackupStreamHeader,
