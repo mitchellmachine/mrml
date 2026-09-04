@@ -501,9 +501,11 @@ fn transition_policy(
     }
     let repository = RepositoryIdentity::parse(repository).map_err(|_| ())?;
     let policy_path = policy_storage_path(policy_root, &repository)?;
-    let store =
-        LinuxDurableTrustPolicyStore::open(policy_path.to_str().ok_or(())?).map_err(|_| ())?;
-    let current = store.load().map_err(|_| ())?;
+    let store = LinuxDurableTrustPolicyStore::open(policy_path.to_str().ok_or(())?)
+        .map_err(|_| transition_failure("policy_store"))?;
+    let current = store
+        .load()
+        .map_err(|_| transition_failure("current_policy"))?;
     if current.repository() != &repository {
         return Err(());
     }
@@ -513,51 +515,59 @@ fn transition_policy(
         mrml_git::MAX_ENCODED_TRUST_POLICY_BYTES,
         own_uid,
         false,
-    )?;
-    let next = parse_trust_policy(&next_policy_bytes).map_err(|_| ())?;
+    )
+    .map_err(|_| transition_failure("next_policy_input"))?;
+    let next = parse_trust_policy(&next_policy_bytes)
+        .map_err(|_| transition_failure("next_policy_parse"))?;
     if next.repository() != &repository {
         return Err(());
     }
     let (previous_openpgp, previous_ml_dsa) =
-        read_hybrid_public_pair(previous_openpgp_path, previous_ml_dsa_path, own_uid)?;
+        read_hybrid_public_pair(previous_openpgp_path, previous_ml_dsa_path, own_uid)
+            .map_err(|_| transition_failure("previous_public_pair"))?;
     let (next_openpgp, next_ml_dsa) =
-        read_hybrid_public_pair(next_openpgp_path, next_ml_dsa_path, own_uid)?;
+        read_hybrid_public_pair(next_openpgp_path, next_ml_dsa_path, own_uid)
+            .map_err(|_| transition_failure("next_public_pair"))?;
     let previous_pair = AuthorizedHybridPair::bind(&previous_openpgp, &previous_ml_dsa);
     let next_pair = AuthorizedHybridPair::bind(&next_openpgp, &next_ml_dsa);
     let previous_policy = current
         .active_verification_policy_at(previous_pair, validation_time, true)
-        .map_err(|_| ())?;
+        .map_err(|_| transition_failure("previous_pair_inactive"))?;
     let next_verification_policy = next
         .active_verification_policy_at(next_pair, validation_time, true)
-        .map_err(|_| ())?;
+        .map_err(|_| transition_failure("next_pair_inactive"))?;
     let previous_openpgp_signature = read_regular(
         previous_openpgp_signature_path,
         1,
         MAX_OPENPGP_SIGNATURE_BYTES,
         own_uid,
         false,
-    )?;
+    )
+    .map_err(|_| transition_failure("previous_openpgp_signature_input"))?;
     let previous_ml_dsa_signature = read_regular(
         previous_ml_dsa_signature_path,
         mrml_crypto::ML_DSA_65_SIGNATURE_BYTES,
         mrml_crypto::ML_DSA_65_SIGNATURE_BYTES,
         own_uid,
         false,
-    )?;
+    )
+    .map_err(|_| transition_failure("previous_ml_dsa_signature_input"))?;
     let next_openpgp_signature = read_regular(
         next_openpgp_signature_path,
         1,
         MAX_OPENPGP_SIGNATURE_BYTES,
         own_uid,
         false,
-    )?;
+    )
+    .map_err(|_| transition_failure("next_openpgp_signature_input"))?;
     let next_ml_dsa_signature = read_regular(
         next_ml_dsa_signature_path,
         mrml_crypto::ML_DSA_65_SIGNATURE_BYTES,
         mrml_crypto::ML_DSA_65_SIGNATURE_BYTES,
         own_uid,
         false,
-    )?;
+    )
+    .map_err(|_| transition_failure("next_ml_dsa_signature_input"))?;
     let previous_request = HybridVerificationRequest {
         repository: &repository,
         object_format: ObjectFormat::Sha256,
@@ -577,7 +587,7 @@ fn transition_policy(
         &previous_request,
         &mut scratch,
     )
-    .map_err(|_| ())?;
+    .map_err(|_| transition_failure("previous_authorization"))?;
     let next_request = HybridVerificationRequest {
         repository: &repository,
         object_format: ObjectFormat::Sha256,
@@ -596,14 +606,15 @@ fn transition_policy(
         &next_request,
         &mut scratch,
     )
-    .map_err(|_| ())?;
+    .map_err(|_| transition_failure("next_authorization"))?;
     install_transition_verifier(
         &policy_path,
         next.generation(),
         next_openpgp_path,
         next_ml_dsa_path,
         own_uid,
-    )?;
+    )
+    .map_err(|_| transition_failure("verifier_install"))?;
     let selected = store
         .transition(
             TrustGeneration(expected_generation),
@@ -612,13 +623,17 @@ fn transition_policy(
             &previous_authorization,
             &next_authorization,
         )
-        .map_err(|_| ())?;
+        .map_err(|_| transition_failure("durable_selection"))?;
     println!(
         "generation={} digest={}",
         selected.generation().0,
         lower_hex(&selected.digest())
     );
     Ok(())
+}
+
+fn transition_failure(category: &'static str) {
+    eprintln!("component=mrml-git-authority event=trust_transition_failed category={category}");
 }
 
 fn install_transition_verifier(
