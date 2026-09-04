@@ -168,7 +168,7 @@ create_channel_pair() {
         fail "incomplete Git authority channel pair"
     fi
     if [ ! -e "$authority_copy" ] && [ ! -e "$gitd_copy" ]; then
-        seed=$deployment_root/secrets/channels/.git-authority.seed.$$
+        seed=$authority_secrets/.git-authority.seed.$$
         umask 077
         dd if=/dev/urandom of="$seed" bs=32 count=1 status=none || fail "cannot create channel seed"
         cp "$seed" "$authority_copy"
