@@ -105,6 +105,7 @@ reject 'install -o "$uid" -g "$gid" -m 0400 /dev/null' deploy/compose/provision-
 require 'volume_name runtime-certd-gitd' deploy/compose/provision-git-host.sh
 require 'volume_name git-authority-transition' deploy/compose/provision-git-host.sh
 require 'volume_name git-trust-construction' deploy/compose/provision-git-host.sh
+require 'git-trust-construction)" "$gitd_uid" "$gitd_gid" 755' deploy/compose/provision-git-host.sh
 require 'gitd-token-pepper' deploy/compose/provision-git-host.sh
 reject '$deployment_root/secrets/channels' deploy/compose/provision-git-host.sh
 require 'mktemp "$path.new.XXXXXX"' deploy/compose/provision-git-host.sh
