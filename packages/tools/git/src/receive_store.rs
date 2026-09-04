@@ -117,7 +117,7 @@ impl LinuxDurableReceiveStore {
         journals: mrml_runtime::DirectoryCapability,
         arrivals: mrml_runtime::DirectoryCapability,
         refs: mrml_runtime::DirectoryCapability,
-        receipts: &str,
+        receipts: mrml_runtime::DirectoryCapability,
         format: ObjectFormat,
         max_pack_bytes: u64,
     ) -> Result<Self, DurableFailure> {
@@ -126,7 +126,7 @@ impl LinuxDurableReceiveStore {
             arrivals: ArrivalPackStore::open_capability(arrivals, format, max_pack_bytes)?,
             refs: ActiveRefFile::open_capability(refs)
                 .map_err(|_| DurableFailure::VerifierCrash)?,
-            receipts: AuditReceiptDirectory::open(receipts)?,
+            receipts: AuditReceiptDirectory::open_capability(receipts)?,
             pending: None,
             pending_summary: None,
         })

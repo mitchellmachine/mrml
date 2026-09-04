@@ -19,7 +19,7 @@ pub struct ProductionReceiveRepository {
     policy: Option<PathBuf>,
     journals: DirectoryCapability,
     quarantine: PathBuf,
-    plain_receipts: PathBuf,
+    plain_receipts: DirectoryCapability,
     authenticated_receipts: PathBuf,
     max_body_bytes: u64,
     max_object_bytes: u64,
@@ -107,7 +107,11 @@ impl ProductionReceiveRepository {
                 .open_directory("receive-journals")
                 .map_err(|_| BackendError::Storage)?,
             quarantine: admitted.paths.quarantine.clone(),
-            plain_receipts: admitted.paths.receipts.join("plain"),
+            plain_receipts: admitted
+                .capabilities
+                .receipts
+                .open_directory("plain")
+                .map_err(|_| BackendError::Storage)?,
             authenticated_receipts: admitted.paths.receipts.join("authenticated"),
             max_body_bytes: receive_pack_limit(config.max_body_bytes),
             max_object_bytes: entry.profile.max_object_bytes,
@@ -145,7 +149,9 @@ impl ProductionReceiveRepository {
                 .try_clone()
                 .map_err(|_| BackendError::Storage)?,
             self.refs.try_clone().map_err(|_| BackendError::Storage)?,
-            path(&self.plain_receipts)?,
+            self.plain_receipts
+                .try_clone()
+                .map_err(|_| BackendError::Storage)?,
             ObjectFormat::Sha256,
             self.max_body_bytes,
         )
