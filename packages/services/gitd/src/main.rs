@@ -11,13 +11,12 @@ use mrml_gitd::{
     GitAuthorityChannelClient, GitdBoundListeners, GitdCertdChannelClient, GitdCertdSigningRoute,
     GitdCompositionError, GitdHttp2WorkerPool, GitdHttp3Reactor, GitdHttp3WorkerPool,
     GitdTlsConfigStore, RetainedAuthenticationStore, TcpAdmissionController, TcpAdmissionLimits,
-    admit_catalog_repository,
-    build_certd_tls_server_config_with_route, compose_gitd_service, initialize_catalog_repository,
-    initialize_empty_token_store, inspect_admitted_repository_recovery, issue_access_token,
-    load_deployment_catalog, load_gitd_authentication, load_gitd_config, load_quic_retry_key,
-    gitd_alpn_protocols, prove_identity_signing_route, recover_admitted_protected_repository,
-    recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
-    validate_identity_snapshot, validate_storage_layout,
+    admit_catalog_repository, build_certd_tls_server_config_with_route, compose_gitd_service,
+    gitd_alpn_protocols, initialize_catalog_repository, initialize_empty_token_store,
+    inspect_admitted_repository_recovery, issue_access_token, load_deployment_catalog,
+    load_gitd_authentication, load_gitd_config, load_quic_retry_key, prove_identity_signing_route,
+    recover_admitted_protected_repository, recover_admitted_repository, refresh_certd_tls_config,
+    revoke_access_token, validate_identity_snapshot, validate_storage_layout,
 };
 use mrml_http::{AccessScopes, GitdHealthDependency, RepositoryIdentity};
 use mrml_openpgp::{MAX_OPENPGP_PUBLIC_KEY_BYTES, parse_public_key_v6_ascii};
@@ -523,6 +522,11 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
     let receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
     let service = compose_gitd_service(&config, &catalog, receipt_authority, 16 * 1024 * 1024)
         .map_err(|error| {
+            if let GitdCompositionError::Admission(category) = error {
+                eprintln!(
+                    "component=mrml-gitd event=startup_repository_admission_failed category={category:?}"
+                );
+            }
             operational_event(match error {
                 GitdCompositionError::Authentication(_) => "startup_authentication_failed",
                 GitdCompositionError::Admission(_) => "startup_repository_admission_failed",
@@ -555,8 +559,7 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
     let tcp_admission = TcpAdmissionController::new(TcpAdmissionLimits {
         maximum_sources: http2_maximum.min(65_536),
         maximum_connections: u32::try_from(http2_maximum).map_err(|_| ())?,
-        maximum_connections_per_source: u32::try_from(http2_maximum.min(32))
-            .map_err(|_| ())?,
+        maximum_connections_per_source: u32::try_from(http2_maximum.min(32)).map_err(|_| ())?,
         maximum_handshakes: u32::try_from(http2_workers).map_err(|_| ())?,
         rate_capacity: 64,
         rate_refill_per_second: 8,
