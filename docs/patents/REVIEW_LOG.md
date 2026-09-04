@@ -12497,3 +12497,10 @@ Patent review: **NOT_TRIGGERED**. This increment combines adjacent application
 response fragments into a fixed 16 KiB buffer before using the existing HTTP/2
 DATA-frame and TLS-record paths. It changes no wire protocol, compression,
 cryptographic mechanism, congestion algorithm, or adaptive selection policy.
+
+# 2026-09-04 — TLS TCP delayed-send suppression
+
+Patent review: **NOT_TRIGGERED**. This increment enables the conventional
+TCP_NODELAY socket option for TLS streams so small protocol-control records are
+not held behind delayed acknowledgements. It adds no transport protocol,
+congestion algorithm, cryptographic mechanism, or adaptive selection policy.

@@ -429,6 +429,7 @@ impl NativeUdpSocket {
             )
         }) == 0
     }
+
 }
 
 #[cfg(unix)]
@@ -483,6 +484,19 @@ impl NativeTcpStream {
                 option,
                 (&value as *const TimeVal).cast(),
                 core::mem::size_of::<TimeVal>() as u32,
+            )
+        }) == 0
+    }
+
+    pub fn set_no_delay(&self, enabled: bool) -> bool {
+        let value = c_int::from(enabled);
+        (unsafe {
+            setsockopt(
+                self.0,
+                6,
+                1,
+                (&value as *const c_int).cast(),
+                core::mem::size_of::<c_int>() as u32,
             )
         }) == 0
     }

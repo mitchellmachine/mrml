@@ -9,6 +9,7 @@ pub enum NetError {
     ReadFailed,
     WriteFailed,
     TimeoutFailed,
+    SocketOptionFailed,
     ResolveFailed,
 }
 
@@ -22,6 +23,7 @@ impl fmt::Display for NetError {
             Self::ReadFailed => "failed to read TCP stream",
             Self::WriteFailed => "failed to write TCP stream",
             Self::TimeoutFailed => "failed to configure TCP timeout",
+            Self::SocketOptionFailed => "failed to configure TCP socket option",
             Self::ResolveFailed => "failed to resolve IPv4 host name",
         })
     }
@@ -120,6 +122,7 @@ impl UnixStream {
             .then_some(())
             .ok_or(NetError::TimeoutFailed)
     }
+
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -244,6 +247,13 @@ impl TcpStream {
             .then_some(())
             .ok_or(NetError::TimeoutFailed)
     }
+
+    pub fn set_no_delay(&self, enabled: bool) -> Result<(), NetError> {
+        self.native
+            .set_no_delay(enabled)
+            .then_some(())
+            .ok_or(NetError::SocketOptionFailed)
+    }
 }
 
 #[cfg(test)]
@@ -265,6 +275,9 @@ mod tests {
             .is_ok()
         );
         let mut stream = TcpStream::connect([127, 0, 0, 1], port).unwrap();
+        stream.set_no_delay(true).unwrap();
+        stream.set_no_delay(false).unwrap();
+        stream.set_no_delay(true).unwrap();
         stream.set_read_timeout_millis(1000).unwrap();
         stream.set_write_timeout_millis(1000).unwrap();
         stream.write_all(b"hello").unwrap();

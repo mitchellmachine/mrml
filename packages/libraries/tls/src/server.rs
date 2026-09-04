@@ -815,6 +815,7 @@ impl TlsServerStream {
         timeout_millis: u64,
     ) -> Result<Self, TlsError> {
         validate_server_timeout(timeout_millis)?;
+        stream.set_no_delay(true).map_err(|_| TlsError::Io)?;
         stream
             .set_read_timeout_millis(timeout_millis)
             .map_err(|_| TlsError::Io)?;

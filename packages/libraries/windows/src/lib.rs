@@ -1107,6 +1107,7 @@ impl NativeUdpSocket {
             )
         }) == 0
     }
+
 }
 
 #[cfg(windows)]
@@ -1175,6 +1176,19 @@ impl NativeTcpStream {
                 option,
                 (&value as *const u32).cast(),
                 core::mem::size_of::<u32>() as i32,
+            )
+        }) == 0
+    }
+
+    pub fn set_no_delay(&self, enabled: bool) -> bool {
+        let value = i32::from(enabled);
+        (unsafe {
+            setsockopt(
+                self.0,
+                6,
+                1,
+                (&value as *const i32).cast(),
+                core::mem::size_of::<i32>() as i32,
             )
         }) == 0
     }

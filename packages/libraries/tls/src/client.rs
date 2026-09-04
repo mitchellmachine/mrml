@@ -725,6 +725,7 @@ impl TlsClientStream {
         acme_tls_alpn01_digest: Option<[u8; 32]>,
     ) -> Result<Self, TlsError> {
         let mut stream = TcpStream::connect(address, port).map_err(|_| TlsError::Io)?;
+        stream.set_no_delay(true).map_err(|_| TlsError::Io)?;
         stream
             .set_read_timeout_millis(30_000)
             .map_err(|_| TlsError::Io)?;
