@@ -6,8 +6,16 @@ authority. Repository configuration may select a credential or signer provider
 and a key identity, but ordinary production operation must route the exact SSH
 authentication or Git-signing operation to that provider.
 
-The current host-file bridge is development-only. It is disabled unless the
-operator deliberately sets `MRML_GIT_DEVELOPMENT_KEY_FILES=1`; configuration
+Native SSH authentication and SSH-format Git signing are **EXPERIMENTAL** and
+excluded from the production client profile. Every operation that parses or
+uses an SSH private key, and every network operation against an SSH remote,
+fails closed unless the operator deliberately sets
+`MRML_GIT_EXPERIMENTAL_SSH=1`. HTTPS remains the production transport. This
+explicit switch does not assert that SSH is production-safe.
+
+The current host-file bridge is development-only. It additionally remains
+disabled unless the operator deliberately sets
+`MRML_GIT_DEVELOPMENT_KEY_FILES=1`; configuration
 must additionally select `development-key-file`. The loader opens the final
 component without following a link, requires an already-open regular file owned
 by the effective user with mode `0400` or `0600`, bounds the descriptor read,
@@ -128,7 +136,7 @@ signature came from which generation. The candidate policy remains data until
 the separately stopped, volume-fed authority transition independently verifies
 both hybrid authorizations and durably selects it.
 
-The native SSH proposal advertises `rsa-sha2-256` only; the SHA-1 `ssh-rsa`
+The experimental native SSH proposal advertises `rsa-sha2-256` only; the SHA-1 `ssh-rsa`
 signature algorithm is not negotiable. Duplicate algorithm-list entries fail
 closed. Independent inbound and outbound encrypted states force a complete
 Curve25519 key exchange after either 1,048,576 packets, 1 GiB of wire bytes, or
@@ -144,7 +152,11 @@ key exchange, authentication, and channel setup additionally have 60-second
 phase deadlines; an SSH operation has a four-hour absolute deadline checked at
 every packet boundary. These bounds are implementation evidence, not a claim
 that the custom cryptographic code has received independent constant-time
-validation. That external review remains a residual risk.
+validation. The current RSA parser also admits keys below the intended
+production minimum and the custom RSA private operation has not established
+blinding or an equivalent reviewed side-channel defense. Those are production
+blockers, which is why the production client profile rejects SSH rather than
+treating the environment switch as an approval or capability.
 
 Patent review: **NOT_TRIGGERED**. These changes use conventional local
 secret-file confinement, a purpose-limited authenticated Unix channel, provider

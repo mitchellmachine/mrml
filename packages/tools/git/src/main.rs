@@ -167,7 +167,7 @@ fn help() {
         println!("  mrml-git {}", usage);
     }
     println!(
-        "\nPulls are fast-forward only. Private-key files are disabled by default and accepted only by the explicit development provider with MRML_GIT_DEVELOPMENT_KEY_FILES=1; production uses narrow signer and credential providers. Capability-authorized isolated service routing remains planned. Fetch and clone install advertised branch references only; tag references are not installed. No command invokes host Git, GnuPG, or OpenSSH."
+        "\nPulls are fast-forward only. Native SSH is experimental and disabled unless MRML_GIT_EXPERIMENTAL_SSH=1; HTTPS is the production transport. Private-key files are disabled by default and accepted only by the explicit development provider with MRML_GIT_DEVELOPMENT_KEY_FILES=1; production uses narrow signer and credential providers. Capability-authorized isolated service routing remains planned. Fetch and clone install advertised branch references only; tag references are not installed. No command invokes host Git, GnuPG, or OpenSSH."
     );
 }
 
@@ -195,6 +195,22 @@ fn checked_positionals(values: &[Text]) -> Result<&[Text]> {
     Ok(values)
 }
 
+fn experimental_ssh_enabled(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+fn require_experimental_ssh() -> Result<()> {
+    if experimental_ssh_enabled(
+        mrml_runtime::environment_variable("MRML_GIT_EXPERIMENTAL_SSH").as_deref(),
+    ) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "SSH is experimental and disabled; use HTTPS or explicitly set MRML_GIT_EXPERIMENTAL_SSH=1"
+        ))
+    }
+}
+
 fn parse_pull_arguments(arguments: &[Text]) -> Result<(&str, Option<&str>)> {
     let positionals = if arguments.first().is_some_and(|value| value == "--ff-only") {
         &arguments[1..]
@@ -212,6 +228,7 @@ fn parse_pull_arguments(arguments: &[Text]) -> Result<(&str, Option<&str>)> {
 }
 
 fn ssh_remote(repository: Option<&str>, name: &str) -> Result<(Text, SshRemote)> {
+    require_experimental_ssh()?;
     let url = native_repository(repository)?
         .remotes()
         .map_err(|error| anyhow!("{}", error))?
@@ -445,6 +462,7 @@ fn load_development_secret(path: &str, maximum: usize) -> Result<Vector<u8>> {
 }
 
 fn load_development_rsa_key(path: &str) -> Result<RsaPrivateKey> {
+    require_experimental_ssh()?;
     let mut bytes = load_development_secret(path, 64 * 1024)?;
     let parsed = core::str::from_utf8(&bytes)
         .map_err(|_| anyhow!("development SSH private key is not text"))
@@ -487,6 +505,7 @@ fn repository_ssh_signing_key(repository: &Repository) -> Result<RsaPrivateKey> 
     load_development_rsa_key(&path)
 }
 fn repository_ssh_verification_key(repository: &Repository) -> Result<mrml_ssh::RsaPublicKey> {
+    require_experimental_ssh()?;
     let path = repository
         .config_value("gpg.ssh", "allowedSignersFile")
         .map_err(|error| anyhow!("{}", error))?
@@ -943,6 +962,7 @@ fn native_fetch(repository: Option<&str>, name: &str) -> Result<()> {
             .map_err(|error| anyhow!("invalid HTTPS remote: {}", error))?;
         fetch_configured_https(&repo, name, &remote)?
     } else {
+        require_experimental_ssh()?;
         let remote =
             SshRemote::parse(&url).map_err(|error| anyhow!("invalid SSH remote: {}", error))?;
         let (key, host) = ssh_credentials(&repo)?;
@@ -1030,6 +1050,7 @@ fn native_clone(url: &str, explicit_target: Option<&str>) -> Result<()> {
         return finish_clone(&repo, url, &target, &result);
     }
 
+    require_experimental_ssh()?;
     let remote = SshRemote::parse(url).map_err(|error| anyhow!("invalid SSH remote: {}", error))?;
     let target: Text = explicit_target.map(Into::into).unwrap_or_else(|| {
         remote
@@ -1106,6 +1127,7 @@ fn native_push(repository: Option<&str>, name: &str, branch: Option<&str>) -> Re
             }
         }
     } else {
+        require_experimental_ssh()?;
         let remote =
             SshRemote::parse(&url).map_err(|error| anyhow!("invalid SSH remote: {}", error))?;
         let (key, host) = ssh_credentials(&repo)?;
@@ -2226,6 +2248,15 @@ mod tests {
         );
         assert!(parse_pull_arguments(&values(&["--rebase"])).is_err());
         assert!(parse_pull_arguments(&values(&["origin", "main", "extra"])).is_err());
+    }
+
+    #[test]
+    fn ssh_requires_the_exact_experimental_switch() {
+        assert!(!experimental_ssh_enabled(None));
+        assert!(!experimental_ssh_enabled(Some("0")));
+        assert!(!experimental_ssh_enabled(Some("true")));
+        assert!(!experimental_ssh_enabled(Some("01")));
+        assert!(experimental_ssh_enabled(Some("1")));
     }
 
     #[test]

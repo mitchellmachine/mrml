@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-09-04 — Production-profile exclusion for experimental native SSH
+
+- **Scope:** require an exact, explicit experimental environment switch before
+  MRML Git performs native SSH transport or SSH private-key operations, while
+  retaining HTTPS as the production transport.
+- **Result:** **NOT_TRIGGERED**.
+- **Reason:** this is a fail-closed product-profile restriction around an
+  existing implementation. It introduces no cryptographic primitive, wire
+  protocol, key algorithm, or patent-sensitive selection mechanism.
+
 ## 2026-09-03: Offline purpose-limited key-rotation signing
 
 - Result: **NOT_TRIGGERED**.
