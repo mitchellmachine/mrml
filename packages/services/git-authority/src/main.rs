@@ -1335,7 +1335,7 @@ fn healthcheck(
     own_peer: AuthorityPeer,
     authority_peer: AuthorityPeer,
 ) -> Result<(), ()> {
-    let capability = read_capability(capability_path, authority_peer.uid)?;
+    let capability = read_healthcheck_capability(capability_path, own_peer)?;
     let mut session = AuthoritySession::connect(Path::new(socket)).map_err(|_| ())?;
     let request_id = mrml_runtime::unix_time_seconds().ok_or(())?;
     let request = AuthorityFrame {
@@ -1368,6 +1368,13 @@ fn healthcheck(
     }
     println!("ready");
     Ok(())
+}
+
+fn read_healthcheck_capability(
+    capability_path: &str,
+    own_peer: AuthorityPeer,
+) -> Result<AuthorityCapability, ()> {
+    read_capability(capability_path, own_peer.uid)
 }
 
 #[repr(C)]
@@ -1548,6 +1555,34 @@ mod tests {
 
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(displaced).unwrap();
+    }
+
+    #[test]
+    fn healthcheck_reads_the_client_owned_capability_copy() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-authority-health-capability-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let capability = root.join("authority-channel");
+        std::fs::write(&capability, [0x51; AUTHORITY_CAPABILITY_BYTES]).unwrap();
+        std::fs::set_permissions(&capability, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&capability).unwrap());
+        let own_peer = AuthorityPeer { uid, gid: uid };
+
+        assert!(read_healthcheck_capability(capability.to_str().unwrap(), own_peer).is_ok());
+        assert!(
+            read_healthcheck_capability(
+                capability.to_str().unwrap(),
+                AuthorityPeer {
+                    uid: uid.saturating_add(1),
+                    gid: uid,
+                },
+            )
+            .is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
