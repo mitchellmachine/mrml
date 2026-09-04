@@ -104,7 +104,7 @@ fn create(generation: u64, key: &[u8; 32]) -> Result<(), ()> {
     let config = source_config()?;
     let inventory =
         collect_backup_inventory(&config, generation, SOURCE_ROOTS, AUTHORITY_GENERATIONS)
-            .map_err(|_| ())?;
+            .map_err(|error| reject("inventory", error))?;
     let header = random_header(generation)?;
     let root = DirectoryCapability::open_root(BACKUP_ROOT).map_err(|_| ())?;
     validate_root(&root)?;
@@ -118,7 +118,8 @@ fn create(generation: u64, key: &[u8; 32]) -> Result<(), ()> {
         .map_err(|_| ())?;
     let result = (|| {
         let mut writer = RuntimeFile(&mut file);
-        write_backup_archive(&mut writer, key, header, &inventory, SOURCE_ROOTS).map_err(|_| ())?;
+        write_backup_archive(&mut writer, key, header, &inventory, SOURCE_ROOTS)
+            .map_err(|error| reject("archive", error))?;
         drop(writer);
         file.sync().map_err(|_| ())?;
         validate_archive_file(&file)?;
@@ -144,7 +145,8 @@ fn verify(generation: u64, key: &[u8; 32]) -> Result<(), ()> {
         .map_err(|_| ())?;
     validate_archive_file(&file)?;
     let mut reader = RuntimeFile(&mut file);
-    let inventory = verify_backup_archive(&mut reader, key).map_err(|_| ())?;
+    let inventory =
+        verify_backup_archive(&mut reader, key).map_err(|error| reject("verification", error))?;
     (inventory.backup_generation == generation)
         .then_some(())
         .ok_or(())
@@ -158,7 +160,8 @@ fn restore(generation: u64, key: &[u8; 32]) -> Result<(), ()> {
         .map_err(|_| ())?;
     validate_archive_file(&file)?;
     let mut archive = RuntimeFile(&mut file);
-    let inventory = restore_backup_archive(&mut archive, key, RESTORE_ROOTS).map_err(|_| ())?;
+    let inventory = restore_backup_archive(&mut archive, key, RESTORE_ROOTS)
+        .map_err(|error| reject("restore", error))?;
     (inventory.backup_generation == generation)
         .then_some(())
         .ok_or(())
@@ -263,6 +266,10 @@ fn validate_archive_file(file: &File) -> Result<(), ()> {
 
 fn usage() {
     eprintln!("usage: mrml-git-backup create|verify|restore GENERATION");
+}
+
+fn reject(stage: &str, error: impl core::fmt::Debug) {
+    eprintln!("mrml-git-backup: {stage} rejected ({error:?})");
 }
 
 struct RuntimeFile<'a>(&'a mut File);
