@@ -117,6 +117,8 @@ ensure_volume() {
             fail "cannot create Docker volume $name"
         created=true
     fi
+    [ "$(docker volume inspect --format '{{index .Labels "org.mrml.managed"}}' "$name")" = true ] ||
+        fail "Docker volume is not MRML-managed: $name"
     mountpoint=$(docker volume inspect --format '{{.Mountpoint}}' "$name") ||
         fail "cannot inspect Docker volume $name"
     case $mountpoint in /*/_data) ;; *) fail "unsafe Docker volume mountpoint for $name" ;; esac
@@ -124,11 +126,18 @@ ensure_volume() {
     if [ "$created" = true ]; then
         chown "$uid:$gid" "$mountpoint" || fail "cannot set owner on Docker volume $name"
         chmod "$mode" "$mountpoint" || fail "cannot set mode on Docker volume $name"
-        install -o "$uid" -g "$gid" -m 0400 /dev/null "$mountpoint/.mrml-volume" ||
+        install -m 0400 /dev/null "$mountpoint/.mrml-volume" ||
             fail "cannot install Docker volume copy-up sentinel: $name"
+        chown "$uid:$gid" "$mountpoint/.mrml-volume" ||
+            fail "cannot set Docker volume sentinel owner: $name"
     fi
     [ "$(stat -c '%u:%g' "$mountpoint")" = "$uid:$gid" ] || fail "wrong owner on Docker volume $name"
     [ "$(stat -c '%a' "$mountpoint")" = "$mode" ] || fail "wrong mode on Docker volume $name"
+    sentinel=$mountpoint/.mrml-volume
+    [ ! -L "$sentinel" ] && [ -f "$sentinel" ] || fail "missing Docker volume copy-up sentinel: $name"
+    [ "$(stat -c '%u:%g' "$sentinel")" = "$uid:$gid" ] || fail "wrong sentinel owner on Docker volume $name"
+    [ "$(stat -c '%a' "$sentinel")" = 400 ] || fail "wrong sentinel mode on Docker volume $name"
+    [ "$(stat -c '%s:%h' "$sentinel")" = 0:1 ] || fail "unsafe Docker volume sentinel: $name"
 }
 
 ensure_volume "$(volume_name gitd-repos)" "$gitd_uid" "$gitd_gid" 700

@@ -95,6 +95,9 @@ require '/payload/dirs/authority /var/lib/mrml/authority' "$authority_dockerfile
 require 'docker volume create --label org.mrml.managed=true' deploy/compose/provision-git-host.sh
 require 'Docker volume copy-up sentinel' deploy/compose/provision-git-host.sh
 require 'wrong owner on Docker volume' deploy/compose/provision-git-host.sh
+require 'Docker volume is not MRML-managed' deploy/compose/provision-git-host.sh
+require 'missing Docker volume copy-up sentinel' deploy/compose/provision-git-host.sh
+reject 'install -o "$uid" -g "$gid" -m 0400 /dev/null' deploy/compose/provision-git-host.sh
 require 'volume_name runtime-certd-gitd' deploy/compose/provision-git-host.sh
 require 'volume_name git-authority-transition' deploy/compose/provision-git-host.sh
 require 'gitd-token-pepper' deploy/compose/provision-git-host.sh
