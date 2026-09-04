@@ -68,6 +68,8 @@ require 'client and signer UID must differ' deploy/compose/provision-git-signer-
 require 'signer channel copies differ' deploy/compose/provision-git-signer-host.sh
 require 'git_volume git-signer-keys' deploy/compose/install-volume-inputs.sh
 require 'authority-receipt-public.bin' deploy/compose/install-volume-inputs.sh
+require 'signer-receipt)' deploy/compose/install-volume-inputs.sh
+require 'next) signer_suffix=git-signer-next-keys' deploy/compose/install-volume-inputs.sh
 require 'generate-key-material 21006 "$openpgp_created_at" /keys' deploy/compose/generate-git-signer-keys.sh
 require 'slot=${3:-current}' deploy/compose/generate-git-signer-keys.sh
 require 'next) suffix=git-signer-next-keys' deploy/compose/generate-git-signer-keys.sh
