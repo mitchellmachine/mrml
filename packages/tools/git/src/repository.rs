@@ -4,6 +4,8 @@ use mrml_runtime::{
     path_exists, path_is_directory, path_is_file, read_directory, read_file_bounded,
     read_file_text_bounded, remove_file, rename_file, sync_directory, write_file,
 };
+#[cfg(target_os = "linux")]
+use mrml_runtime::{DirectoryCapability, Shared};
 use mrml_ssh::{RsaPrivateKey, RsaPublicKey, sign_sshsig, verify_sshsig};
 
 use crate::{
@@ -79,12 +81,43 @@ fn append_reachable_children(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+struct RetainedGitDirectory {
+    capability: Shared<DirectoryCapability>,
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(target_os = "linux")]
+impl fmt::Debug for RetainedGitDirectory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RetainedGitDirectory")
+            .field("device", &self.device)
+            .field("inode", &self.inode)
+            .finish()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl PartialEq for RetainedGitDirectory {
+    fn eq(&self, other: &Self) -> bool {
+        self.device == other.device && self.inode == other.inode
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Eq for RetainedGitDirectory {}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Repository {
     pub worktree: Text,
     pub git_dir: Text,
     object_format: ObjectFormat,
     pack_cache: RefCell<Vector<PackObject>>,
+    #[cfg(target_os = "linux")]
+    retained_git: Option<RetainedGitDirectory>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -215,6 +248,8 @@ impl Repository {
                     git_dir: marker,
                     object_format,
                     pack_cache: RefCell::new(Vector::new()),
+                    #[cfg(target_os = "linux")]
+                    retained_git: None,
                 });
             }
             if path_exists(&marker) {
@@ -266,6 +301,82 @@ impl Repository {
             git_dir,
             object_format,
             pack_cache: RefCell::new(Vector::new()),
+            #[cfg(target_os = "linux")]
+            retained_git: None,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn initialize_sha256_capability(
+        worktree: DirectoryCapability,
+    ) -> Result<Self, RepositoryError> {
+        if !worktree
+            .read_directory()?
+            .iter()
+            .all(|entry| entry.name.as_str() != ".git")
+        {
+            return Err(RepositoryError::AlreadyExists);
+        }
+        let git = worktree.create_directory(".git", 0o700)?;
+        let objects = git.create_directory("objects", 0o700)?;
+        objects.create_directory("info", 0o700)?;
+        objects.create_directory("pack", 0o700)?;
+        let refs = git.create_directory("refs", 0o700)?;
+        refs.create_directory("heads", 0o700)?;
+        refs.create_directory("tags", 0o700)?;
+        write_capability_file(&git, "HEAD", b"ref: refs/heads/main\n")?;
+        write_capability_file(
+            &git,
+            "config",
+            b"[extensions]\n\tobjectformat = sha256\n[core]\n\trepositoryformatversion = 1\n\tbare = false\n",
+        )?;
+        write_capability_file(&git, "description", b"Unnamed MRML repository\n")?;
+        objects.sync()?;
+        refs.sync()?;
+        git.sync()?;
+        worktree.sync()?;
+        Self::from_git_capability(git, ObjectFormat::Sha256)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn open_sha256_capability(
+        worktree: DirectoryCapability,
+    ) -> Result<Self, RepositoryError> {
+        let git = worktree.open_directory(".git")?;
+        let config = read_capability_file(&git, "config", 1024 * 1024)?;
+        let config = core::str::from_utf8(&config)
+            .map_err(|_| RepositoryError::UnsupportedObjectFormat)?;
+        let format = parse_repository_object_format(config)?;
+        if format != ObjectFormat::Sha256 {
+            return Err(RepositoryError::UnsupportedObjectFormat);
+        }
+        git.open_directory("objects")?.open_directory("pack")?;
+        Self::from_git_capability(git, format)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_git_capability(
+        git: DirectoryCapability,
+        object_format: ObjectFormat,
+    ) -> Result<Self, RepositoryError> {
+        let metadata = git.metadata()?;
+        if metadata.mode & 0o170000 != 0o040000
+            || metadata.mode & 0o022 != 0
+            || metadata.mode & 0o700 != 0o700
+            || metadata.links < 2
+        {
+            return Err(RepositoryError::UnsupportedLayout);
+        }
+        Ok(Self {
+            worktree: Text::new(),
+            git_dir: Text::new(),
+            object_format,
+            pack_cache: RefCell::new(Vector::new()),
+            retained_git: Some(RetainedGitDirectory {
+                capability: Shared::new(git),
+                device: metadata.device,
+                inode: metadata.inode,
+            }),
         })
     }
 
@@ -315,6 +426,27 @@ impl Repository {
     ) -> Result<ObjectId, RepositoryError> {
         let (id, encoded) = encode_loose_object_with_format(self.object_format, kind, contents);
         let hex = id.to_hex();
+        #[cfg(target_os = "linux")]
+        if let Some(retained) = &self.retained_git {
+            let objects = retained.capability.open_directory("objects")?;
+            let prefix = match objects.open_directory(&hex[..2]) {
+                Ok(prefix) => prefix,
+                Err(_) => objects.create_directory(&hex[..2], 0o700)?,
+            };
+            let name = &hex[2..];
+            if prefix.open_regular(name).is_err() {
+                let mut file = prefix.create_new_file(name, 0o600)?;
+                file.write_all(&encoded)?;
+                file.sync()?;
+                prefix.sync()?;
+                objects.sync()?;
+            }
+            let stored = self.read_object(id)?;
+            if stored.kind != kind || &stored.contents[..] != contents {
+                return Err(RepositoryError::InvalidHead);
+            }
+            return Ok(id);
+        }
         let directory = join_path(&join_path(&self.git_dir, "objects"), &hex[..2]);
         let path = join_path(&directory, &hex[2..]);
         if !path_is_file(&path) {
@@ -333,6 +465,22 @@ impl Repository {
             return Err(RepositoryError::InvalidReference);
         }
         let hex = id.to_hex();
+        #[cfg(target_os = "linux")]
+        if let Some(retained) = &self.retained_git {
+            let objects = retained.capability.open_directory("objects")?;
+            if let Ok(file) = objects.open_regular(&mrml_runtime::mrml_format!(
+                "{}/{}",
+                &hex[..2],
+                &hex[2..]
+            )) {
+                return decode_retained_object(file, id, self.object_format);
+            }
+            if let Some(object) = self.cached_object(id) {
+                return Ok(object);
+            }
+            let pack_root = objects.open_directory("pack")?;
+            return self.read_packed_capability(&pack_root, id);
+        }
         let path = join_path(
             &join_path(&self.git_dir, "objects"),
             &mrml_runtime::mrml_format!("{}/{}", &hex[..2], &hex[2..]),
@@ -347,18 +495,8 @@ impl Repository {
             }
             return Ok(object);
         }
-        let cached = {
-            let cache = self.pack_cache.borrow();
-            cache
-                .binary_search_by_key(&id, |object| object.id)
-                .ok()
-                .map(|index| cache[index].clone())
-        };
-        if let Some(object) = cached {
-            return Ok(Object {
-                kind: object.kind,
-                contents: object.contents,
-            });
+        if let Some(object) = self.cached_object(id) {
+            return Ok(object);
         }
         let pack_root = join_path(&self.git_dir, "objects/pack");
         if path_is_directory(&pack_root) {
@@ -387,6 +525,55 @@ impl Repository {
                             contents: packed.contents,
                         });
                     }
+                }
+            }
+        }
+        Err(RepositoryError::ReferenceMissing)
+    }
+
+    fn cached_object(&self, id: ObjectId) -> Option<Object> {
+        let cache = self.pack_cache.borrow();
+        cache
+            .binary_search_by_key(&id, |object| object.id)
+            .ok()
+            .map(|index| Object {
+                kind: cache[index].kind,
+                contents: cache[index].contents.clone(),
+            })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn read_packed_capability(
+        &self,
+        pack_root: &DirectoryCapability,
+        id: ObjectId,
+    ) -> Result<Object, RepositoryError> {
+        let mut inspected = 0usize;
+        for entry in pack_root.read_directory()? {
+            if entry.is_symlink {
+                return Err(RepositoryError::UnsupportedFileType);
+            }
+            if !entry.is_directory && entry.name.ends_with(".pack") {
+                inspected = inspected
+                    .checked_add(1)
+                    .ok_or(RepositoryError::TooManyFiles)?;
+                if inspected > 4096 {
+                    return Err(RepositoryError::TooManyFiles);
+                }
+                let bytes = read_open_file_bounded(
+                    pack_root.open_regular(&entry.name)?,
+                    MAX_PACK_BYTES,
+                )?;
+                let parsed = parse_pack_with_format(&bytes, self.object_format)?;
+                let found = parsed.iter().find(|object| object.id == id).cloned();
+                let mut cache = self.pack_cache.borrow_mut();
+                cache.extend(parsed);
+                cache.sort_unstable_by_key(|object| object.id);
+                if let Some(packed) = found {
+                    return Ok(Object {
+                        kind: packed.kind,
+                        contents: packed.contents,
+                    });
                 }
             }
         }
@@ -3260,6 +3447,56 @@ fn repository_object_format(git_dir: &str) -> Result<ObjectFormat, RepositoryErr
     parse_repository_object_format(&config)
 }
 
+#[cfg(target_os = "linux")]
+fn write_capability_file(
+    directory: &DirectoryCapability,
+    name: &str,
+    contents: &[u8],
+) -> Result<(), RepositoryError> {
+    let mut file = directory.create_new_file(name, 0o600)?;
+    file.write_all(contents)?;
+    file.sync()?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn read_open_file_bounded(mut file: File, maximum: usize) -> Result<Vector<u8>, RepositoryError> {
+    let length = usize::try_from(file.len()?).map_err(|_| RepositoryError::FileTooLarge)?;
+    if length > maximum {
+        return Err(RepositoryError::FileTooLarge);
+    }
+    let mut bytes = Vector::new();
+    bytes
+        .try_resize(length, 0)
+        .map_err(|_| RepositoryError::FileTooLarge)?;
+    file.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+#[cfg(target_os = "linux")]
+fn read_capability_file(
+    directory: &DirectoryCapability,
+    name: &str,
+    maximum: usize,
+) -> Result<Vector<u8>, RepositoryError> {
+    read_open_file_bounded(directory.open_regular(name)?, maximum)
+}
+
+#[cfg(target_os = "linux")]
+fn decode_retained_object(
+    file: File,
+    id: ObjectId,
+    format: ObjectFormat,
+) -> Result<Object, RepositoryError> {
+    let encoded = read_open_file_bounded(file, MAX_WORKTREE_FILE)?;
+    let object = decode_loose_object(&encoded)?;
+    let (computed, _) = encode_loose_object_with_format(format, object.kind, &object.contents);
+    if computed != id {
+        return Err(RepositoryError::InvalidHead);
+    }
+    Ok(object)
+}
+
 fn parse_repository_object_format(config: &str) -> Result<ObjectFormat, RepositoryError> {
     let mut section = Text::new();
     let mut repository_version = None;
@@ -3920,6 +4157,36 @@ mod tests {
         create_dir_all(&nested).unwrap();
         assert_eq!(Repository::discover(&nested).unwrap(), repository);
         remove_dir_all(&path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn retained_repository_objects_survive_ambient_replacement() {
+        let path = root("retained-objects");
+        let displaced = mrml_runtime::mrml_format!("{path}-displaced");
+        let _ = remove_dir_all(&path);
+        let _ = remove_dir_all(&displaced);
+        create_dir_all(&path).unwrap();
+        let capability = DirectoryCapability::open_root(&path).unwrap();
+        let repository = Repository::initialize_sha256_capability(capability).unwrap();
+        mrml_runtime::rename_file(&path, &displaced).unwrap();
+        create_dir_all(&path).unwrap();
+
+        let id = repository.write_object(ObjectKind::Blob, b"retained\n").unwrap();
+        assert_eq!(
+            repository.read_object(id).unwrap().contents,
+            &b"retained\n"[..]
+        );
+        let hex = id.to_hex();
+        assert!(path_is_file(&join_path(
+            &displaced,
+            &mrml_runtime::mrml_format!(".git/objects/{}/{}", &hex[..2], &hex[2..])
+        )));
+        assert!(!path_exists(&join_path(&path, ".git")));
+
+        drop(repository);
+        remove_dir_all(&path).unwrap();
+        remove_dir_all(&displaced).unwrap();
     }
 
     #[test]

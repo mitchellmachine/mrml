@@ -52,6 +52,76 @@ impl ActiveRefFile {
         Self::initialize(directory, state)
     }
 
+    #[cfg(target_os = "linux")]
+    pub(crate) fn initialize_with_pack_set_capability(
+        capability: DirectoryCapability,
+        state: &ActiveRefState,
+        manifest: &PackSetManifest,
+    ) -> Result<Self, DurableFailure> {
+        if manifest
+            .digest()
+            .map_err(|_| DurableFailure::VerifierCrash)?
+            != state.pack_set_digest
+            || manifest.repository() != &state.repository
+            || manifest.repository_generation() != state.repository_generation
+            || manifest.pack_generation() != state.pack_generation
+            || manifest.object_format() != state.object_format
+        {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        let store = Self::from_capability(capability).map_err(|_| DurableFailure::VerifierCrash)?;
+        if store
+            .capability
+            .as_ref()
+            .ok_or(DurableFailure::VerifierCrash)?
+            .read_directory()
+            .map_err(|_| DurableFailure::VerifierCrash)?
+            .iter()
+            .any(|entry| {
+                entry.name.as_str() == store.active.as_str()
+                    || entry.name.as_str() == store.temporary.as_str()
+            })
+        {
+            return Err(DurableFailure::StaleLock);
+        }
+        store.persist_manifest(manifest, &state.pack_set_digest)?;
+        let encoded = encode_active_ref_state(state).map_err(|_| DurableFailure::VerifierCrash)?;
+        let mut temporary = store.create_new(&store.temporary, "active.refs.new")?;
+        temporary
+            .write_all(&encoded)
+            .map_err(|_| DurableFailure::ShortWrite)?;
+        temporary.sync().map_err(|_| DurableFailure::Fsync)?;
+        drop(temporary);
+        let capability = store
+            .capability
+            .as_ref()
+            .ok_or(DurableFailure::VerifierCrash)?;
+        if capability
+            .hard_link_child("active.refs.new", "active.refs")
+            .is_err()
+        {
+            let _ = capability.remove_file("active.refs.new");
+            return Err(DurableFailure::StaleLock);
+        }
+        capability
+            .remove_file("active.refs.new")
+            .map_err(|_| DurableFailure::Fsync)?;
+        store.sync_directory()?;
+        if store.load().map_err(|_| DurableFailure::VerifierCrash)? != *state {
+            return Err(DurableFailure::VerifierCrash);
+        }
+        store
+            .load_selected_pack_set(PackSetLimits {
+                max_packs: u32::MAX,
+                max_objects: u64::MAX,
+                max_pack_bytes: u64::MAX,
+                max_index_bytes: u64::MAX,
+                max_work_units: u64::MAX,
+            })
+            .map_err(|_| DurableFailure::VerifierCrash)?;
+        Ok(store)
+    }
+
     pub fn initialize(directory: &str, state: &ActiveRefState) -> Result<Self, DurableFailure> {
         create_dir_all(directory).map_err(|_| DurableFailure::DiskFull)?;
         let store = Self::paths(directory)?;
@@ -81,15 +151,30 @@ impl ActiveRefFile {
 
     #[cfg(target_os = "linux")]
     pub fn open_capability(capability: DirectoryCapability) -> Result<Self, ActiveRefStateError> {
-        let store = Self {
+        let store = Self::from_capability(capability)?;
+        store.load()?;
+        Ok(store)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn from_capability(capability: DirectoryCapability) -> Result<Self, ActiveRefStateError> {
+        let metadata = capability
+            .metadata()
+            .map_err(|_| ActiveRefStateError::Malformed)?;
+        if metadata.mode & 0o022 != 0
+            || metadata.mode & 0o500 != 0o500
+            || metadata.mode & 0o200 == 0
+            || metadata.links < 2
+        {
+            return Err(ActiveRefStateError::Malformed);
+        }
+        Ok(Self {
             directory: Text::new(),
             active: Text::from("active.refs"),
             temporary: Text::from("active.refs.new"),
             lock: Text::from("active.refs.lock"),
             capability: Some(capability),
-        };
-        store.load()?;
-        Ok(store)
+        })
     }
 
     pub fn load(&self) -> Result<ActiveRefState, ActiveRefStateError> {
@@ -762,6 +847,51 @@ mod tests {
             Err(ActiveRefStateError::Integrity)
         );
         mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn retained_initial_ref_and_pack_set_publication_survives_replacement() {
+        let root = root("mrml-active-initialize-retained");
+        let displaced = mrml_runtime::mrml_format!("{root}-displaced");
+        let _ = mrml_runtime::remove_dir_all(&root);
+        let _ = mrml_runtime::remove_dir_all(&displaced);
+        mrml_runtime::create_dir_all(&root).unwrap();
+        let capability = DirectoryCapability::open_root(&root).unwrap();
+        mrml_runtime::rename_file(&root, &displaced).unwrap();
+        mrml_runtime::create_dir_all(&root).unwrap();
+        let (mut state, _, _) = fixture();
+        let limits = PackSetLimits {
+            max_packs: 1,
+            max_objects: 1,
+            max_pack_bytes: 128,
+            max_index_bytes: 128,
+            max_work_units: 128,
+        };
+        let manifest = build_pack_set_manifest(
+            state.repository.clone(),
+            state.repository_generation,
+            state.pack_generation,
+            state.object_format,
+            Vector::new(),
+            limits,
+        )
+        .unwrap();
+        state.pack_set_digest = manifest.digest().unwrap();
+
+        let store = ActiveRefFile::initialize_with_pack_set_capability(
+            capability,
+            &state,
+            &manifest,
+        )
+        .unwrap();
+        assert_eq!(store.load().unwrap(), state);
+        assert_eq!(store.load_selected_pack_set(limits).unwrap(), manifest);
+        assert!(path_exists(&join_path(&displaced, "active.refs")));
+        assert!(!path_exists(&join_path(&root, "active.refs")));
+
+        drop(store);
+        mrml_runtime::remove_dir_all(&root).unwrap();
+        mrml_runtime::remove_dir_all(&displaced).unwrap();
     }
 
     #[test]

@@ -480,6 +480,30 @@ impl GitdCoreBackend for FilesystemRepositoryView {
 
 impl FilesystemRepositoryView {
     #[cfg(target_os = "linux")]
+    pub fn open_capabilities(
+        identity: RepositoryIdentity,
+        objects: DirectoryCapability,
+        refs: DirectoryCapability,
+    ) -> Result<Self, GitdCoreError> {
+        let objects = Repository::open_sha256_capability(objects)
+            .map_err(|_| GitdCoreError::Storage)?;
+        let refs = ActiveRefFile::open_capability(refs).map_err(|_| GitdCoreError::Storage)?;
+        let state = refs.load().map_err(|_| GitdCoreError::Storage)?;
+        if state.repository != identity || state.object_format != objects.object_format() {
+            return Err(GitdCoreError::Authorization);
+        }
+        Ok(Self {
+            identity,
+            objects,
+            refs,
+            arrivals: None,
+            #[cfg(test)]
+            pack_cache: None,
+            verification: VerificationSummaryStore::new(Vector::new())?,
+        })
+    }
+
+    #[cfg(target_os = "linux")]
     pub fn retain_ref_directory(
         &mut self,
         capability: DirectoryCapability,
@@ -548,6 +572,61 @@ impl FilesystemRepositoryView {
         )
         .map_err(|_| GitdCoreError::Storage)?;
         Self::open(identity, objects_path, state_path)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn initialize_sha256_capabilities(
+        identity: RepositoryIdentity,
+        objects: DirectoryCapability,
+        refs: DirectoryCapability,
+        repository_generation: RepositoryGeneration,
+        trust_generation: TrustGeneration,
+        revocation_generation: RevocationGeneration,
+    ) -> Result<Self, GitdCoreError> {
+        if repository_generation.0 == 0 || trust_generation.0 == 0 || revocation_generation.0 == 0 {
+            return Err(GitdCoreError::Policy);
+        }
+        let repository = Repository::initialize_sha256_capability(
+            objects.try_clone().map_err(|_| GitdCoreError::Storage)?,
+        )
+        .map_err(|_| GitdCoreError::Storage)?;
+        let tree = repository
+            .write_object(ObjectKind::Tree, &[])
+            .map_err(|_| GitdCoreError::Storage)?;
+        let contents = mrml_runtime::mrml_format!(
+            "tree {}\nauthor MRML Deployment <deployment@mrml.invalid> 1 +0000\ncommitter MRML Deployment <deployment@mrml.invalid> 1 +0000\n\nMRML repository initialization\n",
+            tree.to_hex()
+        );
+        let tip = repository
+            .write_object(ObjectKind::Commit, contents.as_bytes())
+            .map_err(|_| GitdCoreError::Storage)?;
+        let manifest = crate::pack_set::build_pack_set_manifest(
+            identity.clone(),
+            repository_generation,
+            PackGeneration(1),
+            ObjectFormat::Sha256,
+            Vector::new(),
+            SELECTED_PACK_SET_LIMITS,
+        )
+        .map_err(|_| GitdCoreError::Storage)?;
+        let pack_set_digest = manifest.digest().map_err(|_| GitdCoreError::Storage)?;
+        ActiveRefFile::initialize_with_pack_set_capability(
+            refs.try_clone().map_err(|_| GitdCoreError::Storage)?,
+            &crate::ActiveRefState {
+                repository: identity.clone(),
+                repository_generation,
+                trust_generation,
+                revocation_generation,
+                pack_generation: PackGeneration(1),
+                pack_set_digest,
+                object_format: ObjectFormat::Sha256,
+                default_branch: FullRefName::parse("refs/heads/main")?,
+                refs: [(FullRefName::parse("refs/heads/main")?, tip)].into(),
+            },
+            &manifest,
+        )
+        .map_err(|_| GitdCoreError::Storage)?;
+        Self::open_capabilities(identity, objects, refs)
     }
 
     /// Executes one conventional fast-forward receive against the same
@@ -2012,6 +2091,50 @@ mod tests {
     #[test]
     fn production_full_buffer_pack_cache_is_compile_time_disabled() {
         assert!(!PRODUCTION_FULL_PACK_CACHE_ENABLED);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn capability_initialized_view_survives_both_ambient_replacements() {
+        let root = join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!(
+                "mrml-repository-capability-view-{}",
+                mrml_runtime::process_id()
+            ),
+        );
+        let objects_path = join_path(&root, "objects");
+        let refs_path = join_path(&root, "refs");
+        let displaced_objects = join_path(&root, "objects-displaced");
+        let displaced_refs = join_path(&root, "refs-displaced");
+        let _ = mrml_runtime::remove_dir_all(&root);
+        mrml_runtime::create_dir_all(&objects_path).unwrap();
+        mrml_runtime::create_dir_all(&refs_path).unwrap();
+        let objects = DirectoryCapability::open_root(&objects_path).unwrap();
+        let refs = DirectoryCapability::open_root(&refs_path).unwrap();
+        let identity = RepositoryIdentity::parse("owner/retained").unwrap();
+
+        let view = FilesystemRepositoryView::initialize_sha256_capabilities(
+            identity.clone(),
+            objects,
+            refs,
+            RepositoryGeneration(1),
+            TrustGeneration(1),
+            RevocationGeneration(1),
+        )
+        .unwrap();
+        mrml_runtime::rename_file(&objects_path, &displaced_objects).unwrap();
+        mrml_runtime::rename_file(&refs_path, &displaced_refs).unwrap();
+        mrml_runtime::create_dir_all(&objects_path).unwrap();
+        mrml_runtime::create_dir_all(&refs_path).unwrap();
+
+        let tip = view.resolve_ref(&identity, "refs/heads/main").unwrap();
+        assert_eq!(view.objects.read_commit(tip).unwrap().message.as_str(), "MRML repository initialization\n");
+        assert!(!mrml_runtime::path_exists(&join_path(&objects_path, ".git")));
+        assert!(!mrml_runtime::path_exists(&join_path(&refs_path, "active.refs")));
+
+        drop(view);
+        mrml_runtime::remove_dir_all(&root).unwrap();
     }
     use crate::{
         ActiveRefState, FullRefName, ObjectFormat, PackGeneration, RevocationGeneration,
