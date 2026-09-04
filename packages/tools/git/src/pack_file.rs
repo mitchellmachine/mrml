@@ -101,6 +101,7 @@ fn crc32_update(mut crc: u32, byte: u8) -> u32 {
     crc
 }
 
+#[allow(dead_code)] // compatibility entry point; production retained-capability callers use an opener
 pub(crate) fn scan_pack_file(
     path: &str,
     format: ObjectFormat,
@@ -108,7 +109,17 @@ pub(crate) fn scan_pack_file(
     max_objects: u32,
     max_work_units: u64,
 ) -> Result<PackFileScan, PackError> {
-    let mut file = File::open_regular(path).map_err(|_| PackError::Truncated)?;
+    let file = File::open_regular(path).map_err(|_| PackError::Truncated)?;
+    scan_open_pack_file(file, format, max_pack_bytes, max_objects, max_work_units)
+}
+
+fn scan_open_pack_file(
+    mut file: File,
+    format: ObjectFormat,
+    max_pack_bytes: u64,
+    max_objects: u32,
+    max_work_units: u64,
+) -> Result<PackFileScan, PackError> {
     let bytes = file.len().map_err(|_| PackError::Truncated)?;
     let hash_len = format.hash_len() as u64;
     let data_bytes = bytes.checked_sub(hash_len).ok_or(PackError::Truncated)?;
@@ -230,13 +241,48 @@ pub(crate) fn validate_pack_file_with_bases<F, B>(
     max_individual_bytes: u64,
     max_work_units: u64,
     sink: &mut F,
-    mut load_base: B,
+    load_base: B,
 ) -> Result<ValidatedDirectPack, PackError>
 where
     F: FnMut(ObjectId, ObjectKind, &[u8]) -> Result<(), PackError>,
     B: FnMut(ObjectId, u64) -> Result<Option<(ObjectKind, mrml_runtime::Vector<u8>)>, PackError>,
 {
-    let scan = scan_pack_file(path, format, max_pack_bytes, max_objects, max_work_units)?;
+    validate_pack_file_with_bases_from_opener(
+        || File::open_regular(path).map_err(|_| PackError::Truncated),
+        format,
+        max_pack_bytes,
+        max_objects,
+        max_expanded_bytes,
+        max_individual_bytes,
+        max_work_units,
+        sink,
+        load_base,
+    )
+}
+
+pub(crate) fn validate_pack_file_with_bases_from_opener<F, B, O>(
+    mut open_pack: O,
+    format: ObjectFormat,
+    max_pack_bytes: u64,
+    max_objects: u32,
+    max_expanded_bytes: u64,
+    max_individual_bytes: u64,
+    max_work_units: u64,
+    sink: &mut F,
+    mut load_base: B,
+) -> Result<ValidatedDirectPack, PackError>
+where
+    F: FnMut(ObjectId, ObjectKind, &[u8]) -> Result<(), PackError>,
+    B: FnMut(ObjectId, u64) -> Result<Option<(ObjectKind, mrml_runtime::Vector<u8>)>, PackError>,
+    O: FnMut() -> Result<File, PackError>,
+{
+    let scan = scan_open_pack_file(
+        open_pack()?,
+        format,
+        max_pack_bytes,
+        max_objects,
+        max_work_units,
+    )?;
     let second_pass = scan
         .bytes
         .checked_sub(format.hash_len() as u64)
@@ -248,7 +294,7 @@ where
     if minimum_work > max_work_units {
         return Err(PackError::TooLarge);
     }
-    let mut file = File::open_regular(path).map_err(|_| PackError::Truncated)?;
+    let mut file = open_pack()?;
     file.seek(12).map_err(|_| PackError::Truncated)?;
     let mut cursor = FileCursor {
         file,
@@ -456,7 +502,7 @@ where
             return Err(PackError::Delta);
         }
         let program = inflate_at(
-            path,
+            &mut open_pack,
             delta.payload_offset,
             cursor.data_end,
             max_individual_bytes,
@@ -560,14 +606,17 @@ fn hash_object(format: ObjectFormat, kind: ObjectKind, contents: &[u8]) -> Objec
     hash.finalize()
 }
 
-fn inflate_at(
-    path: &str,
+fn inflate_at<O>(
+    open_pack: &mut O,
     offset: u64,
     data_end: u64,
     max_output: u64,
     work_remaining: &mut u64,
-) -> Result<mrml_runtime::Vector<u8>, PackError> {
-    let file = File::open_regular(path).map_err(|_| PackError::Truncated)?;
+) -> Result<mrml_runtime::Vector<u8>, PackError>
+where
+    O: FnMut() -> Result<File, PackError>,
+{
+    let file = open_pack()?;
     let mut cursor = FileCursor {
         file,
         position: offset,
@@ -779,6 +828,25 @@ mod tests {
             assert_eq!(validated.expanded_bytes, 13);
             assert_eq!(validated.largest_object, 13);
             assert_eq!(validated.checksum, scan.checksum);
+
+            let directory = mrml_runtime::DirectoryCapability::open_root(&root).unwrap();
+            let capability_validated = validate_pack_file_with_bases_from_opener(
+                || {
+                    directory
+                        .open_regular(format.name())
+                        .map_err(|_| PackError::Truncated)
+                },
+                format,
+                pack.len() as u64,
+                1,
+                1024,
+                1024,
+                pack.len() as u64 * 2 + 1024,
+                &mut |_, _, _| Ok(()),
+                |_, _| Ok(None),
+            )
+            .unwrap();
+            assert_eq!(capability_validated.checksum, scan.checksum);
 
             let last = pack.len() - 1;
             pack[last] ^= 1;
