@@ -117,6 +117,7 @@ unsafe extern "C" {
     fn fcntl(file: c_int, command: c_int, ...) -> c_int;
     fn rename(existing: *const i8, replacement: *const i8) -> c_int;
     fn opendir(path: *const i8) -> *mut c_void;
+    fn fdopendir(file: c_int) -> *mut c_void;
     fn dirfd(directory: *mut c_void) -> c_int;
     fn readdir(directory: *mut c_void) -> *mut Dirent;
     fn closedir(directory: *mut c_void) -> c_int;
@@ -1215,10 +1216,138 @@ pub fn rename_file(existing: &CStr, replacement: &CStr) -> bool {
 #[cfg(unix)]
 pub struct NativeDirectory(*mut c_void);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeFileMetadata {
+    pub inode: u64,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub links: u64,
+    pub device: u64,
+}
+
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
 #[cfg(unix)]
 impl NativeDirectory {
     pub fn open(path: &CStr) -> Option<Self> {
         NonNull::new(unsafe { opendir(path.as_ptr()) }).map(|directory| Self(directory.as_ptr()))
+    }
+
+    /// Opens a configured root without following its final component.
+    pub fn open_root(path: &CStr) -> Option<Self> {
+        const SYS_OPENAT2_X86_64: c_long = 437;
+        const AT_FDCWD: c_int = -100;
+        const O_RDONLY: u64 = 0;
+        const O_DIRECTORY: u64 = 0o200000;
+        const O_NOFOLLOW: u64 = 0x2_0000;
+        const O_CLOEXEC: u64 = 0x8_0000;
+        const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+        const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+        if path.to_bytes().first() != Some(&b'/') {
+            return None;
+        }
+        let how = OpenHow {
+            flags: O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC,
+            mode: 0,
+            resolve: RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS,
+        };
+        // SAFETY: the immutable C string and ABI-layout `OpenHow` remain live
+        // for the syscall. `from_descriptor` owns or closes the result.
+        let descriptor = unsafe {
+            syscall(
+                SYS_OPENAT2_X86_64,
+                AT_FDCWD,
+                path.as_ptr(),
+                &how as *const OpenHow,
+                core::mem::size_of::<OpenHow>(),
+            )
+        };
+        if descriptor < 0 || descriptor > c_int::MAX as c_long {
+            return None;
+        }
+        Self::from_descriptor(descriptor as c_int)
+    }
+
+    /// Resolves a relative directory beneath this retained descriptor.
+    ///
+    /// This is the only `openat2` syscall boundary. The fixed flags reject
+    /// absolute paths, `..`, symlinks, magic links, and mount crossings before
+    /// a descriptor can escape the caller's retained root.
+    pub fn open_beneath(&self, path: &CStr) -> Option<Self> {
+        const SYS_OPENAT2_X86_64: c_long = 437;
+        const O_RDONLY: u64 = 0;
+        const O_DIRECTORY: u64 = 0o200000;
+        const O_NOFOLLOW: u64 = 0x2_0000;
+        const O_CLOEXEC: u64 = 0x8_0000;
+        const RESOLVE_NO_XDEV: u64 = 0x01;
+        const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+        const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+        const RESOLVE_BENEATH: u64 = 0x08;
+        if path.to_bytes().is_empty() || path.to_bytes().first() == Some(&b'/') {
+            return None;
+        }
+        let how = OpenHow {
+            flags: O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC,
+            mode: 0,
+            resolve: RESOLVE_NO_XDEV
+                | RESOLVE_NO_MAGICLINKS
+                | RESOLVE_NO_SYMLINKS
+                | RESOLVE_BENEATH,
+        };
+        let parent = unsafe { dirfd(self.0) };
+        if parent < 0 {
+            return None;
+        }
+        // SAFETY: `path` and `how` remain valid for the duration of the
+        // syscall, `how` has the kernel ABI layout, and no returned descriptor
+        // is exposed until fdopendir assumes ownership of it.
+        let descriptor = unsafe {
+            syscall(
+                SYS_OPENAT2_X86_64,
+                parent,
+                path.as_ptr(),
+                &how as *const OpenHow,
+                core::mem::size_of::<OpenHow>(),
+            )
+        };
+        if descriptor < 0 || descriptor > c_int::MAX as c_long {
+            return None;
+        }
+        Self::from_descriptor(descriptor as c_int)
+    }
+
+    fn from_descriptor(descriptor: c_int) -> Option<Self> {
+        if descriptor < 0 {
+            return None;
+        }
+        let directory = NonNull::new(unsafe { fdopendir(descriptor) });
+        if directory.is_none() {
+            let _ = unsafe { close(descriptor) };
+        }
+        directory.map(|directory| Self(directory.as_ptr()))
+    }
+
+    pub fn metadata(&self) -> Option<NativeFileMetadata> {
+        let descriptor = unsafe { dirfd(self.0) };
+        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
+        if descriptor < 0 || unsafe { fstat(descriptor, status.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        let status = unsafe { status.assume_init() };
+        Some(NativeFileMetadata {
+            inode: status.inode,
+            mode: status.mode,
+            uid: status.uid,
+            gid: status.gid,
+            links: status.links,
+            device: status.device,
+        })
     }
 
     pub fn next<'a>(&mut self, name: &'a mut [u8; 256]) -> Option<(&'a [u8], bool, bool)> {

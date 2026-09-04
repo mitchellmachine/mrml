@@ -17,6 +17,78 @@ pub enum FileError {
     RenameFailed,
 }
 
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectoryMetadata {
+    pub inode: u64,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub links: u64,
+    pub device: u64,
+}
+
+/// A retained Linux directory authority. Descendants are resolved by the
+/// kernel beneath this descriptor and never converted back into ambient paths.
+#[cfg(target_os = "linux")]
+pub struct DirectoryCapability {
+    inner: mrml_linux::NativeDirectory,
+}
+
+#[cfg(target_os = "linux")]
+impl DirectoryCapability {
+    pub fn open_root(path: &str) -> Result<Self, FileError> {
+        if !path_is_absolute(path) {
+            return Err(FileError::InvalidPath);
+        }
+        let encoded = encode_unix_path(path).ok_or(FileError::InvalidPath)?;
+        let path =
+            core::ffi::CStr::from_bytes_with_nul(&encoded).map_err(|_| FileError::InvalidPath)?;
+        let inner = mrml_linux::NativeDirectory::open_root(path).ok_or(FileError::OpenFailed)?;
+        Ok(Self { inner })
+    }
+
+    pub fn open_directory(&self, relative: &str) -> Result<Self, FileError> {
+        validate_relative_capability_path(relative)?;
+        let encoded = encode_unix_path(relative).ok_or(FileError::InvalidPath)?;
+        let relative =
+            core::ffi::CStr::from_bytes_with_nul(&encoded).map_err(|_| FileError::InvalidPath)?;
+        let inner = self
+            .inner
+            .open_beneath(relative)
+            .ok_or(FileError::OpenFailed)?;
+        Ok(Self { inner })
+    }
+
+    pub fn metadata(&self) -> Result<DirectoryMetadata, FileError> {
+        let metadata = self.inner.metadata().ok_or(FileError::MetadataFailed)?;
+        Ok(DirectoryMetadata {
+            inode: metadata.inode,
+            mode: metadata.mode,
+            uid: metadata.uid,
+            gid: metadata.gid,
+            links: metadata.links,
+            device: metadata.device,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn validate_relative_capability_path(path: &str) -> Result<(), FileError> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.ends_with('/')
+        || path.contains('\0')
+        || path.contains('\\')
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(FileError::InvalidPath);
+    }
+    Ok(())
+}
+
 pub struct DirectoryEntry {
     pub name: Text,
     pub is_directory: bool,
@@ -853,5 +925,115 @@ mod tests {
         assert!(create_dir_all(&file).is_err());
         remove_dir_all(&root).unwrap();
         assert!(!path_exists(&root));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn retained_directory_capability_rejects_escape_links_and_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_path("mrml-directory-capability");
+        let owner = join_path(&root, "owner");
+        let repository = join_path(&owner, "repository");
+        let replacement = join_path(&owner, "replacement");
+        create_dir_all(&repository).unwrap();
+        create_dir_all(&replacement).unwrap();
+        symlink(
+            repository.as_str(),
+            join_path(&root, "repository-link").as_str(),
+        )
+        .unwrap();
+        symlink("/proc/self/fd", join_path(&root, "magic-link").as_str()).unwrap();
+
+        let root_capability = DirectoryCapability::open_root(&root).unwrap();
+        let retained = root_capability.open_directory("owner/repository").unwrap();
+        let retained_metadata = retained.metadata().unwrap();
+        assert_eq!(retained_metadata.mode & 0o170000, 0o040000);
+        assert!(retained_metadata.links >= 2);
+        for invalid in [
+            "",
+            "/owner/repository",
+            "../repository",
+            "owner/../repository",
+            "owner//repository",
+            "owner/repository/",
+            "owner\\repository",
+            "repository-link",
+            "magic-link/0",
+        ] {
+            assert!(
+                root_capability.open_directory(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+
+        let displaced = join_path(&owner, "displaced");
+        rename_file(&repository, &displaced).unwrap();
+        rename_file(&replacement, &repository).unwrap();
+        assert_eq!(retained.metadata().unwrap().inode, retained_metadata.inode);
+        assert_ne!(
+            root_capability
+                .open_directory("owner/repository")
+                .unwrap()
+                .metadata()
+                .unwrap()
+                .inode,
+            retained_metadata.inode
+        );
+        remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn directory_resolution_under_rename_race_never_escapes_retained_root() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let root = test_path("mrml-directory-capability-race");
+        let owner = join_path(&root, "owner");
+        let repository = join_path(&owner, "repository");
+        let alternate = join_path(&owner, "alternate");
+        create_dir_all(&repository).unwrap();
+        create_dir_all(&alternate).unwrap();
+        let expected = DirectoryCapability::open_root(&root)
+            .unwrap()
+            .open_directory("owner/repository")
+            .unwrap()
+            .metadata()
+            .unwrap();
+        let alternate_expected = DirectoryCapability::open_root(&root)
+            .unwrap()
+            .open_directory("owner/alternate")
+            .unwrap()
+            .metadata()
+            .unwrap();
+        let running = Arc::new(AtomicBool::new(true));
+        let worker_running = running.clone();
+        let worker_owner = std::string::String::from(owner.as_str());
+        let worker = std::thread::spawn(move || {
+            let repository = std::format!("{worker_owner}/repository");
+            let alternate = std::format!("{worker_owner}/alternate");
+            while worker_running.load(Ordering::Acquire) {
+                let _ = std::fs::rename(&repository, std::format!("{worker_owner}/moving"));
+                let _ = std::fs::rename(&alternate, &repository);
+                let _ = std::fs::rename(std::format!("{worker_owner}/moving"), &alternate);
+            }
+        });
+        let root_capability = DirectoryCapability::open_root(&root).unwrap();
+        let mut observed = 0usize;
+        for _ in 0..10_000 {
+            if let Ok(capability) = root_capability.open_directory("owner/repository") {
+                let metadata = capability.metadata().unwrap();
+                assert!(
+                    metadata.inode == expected.inode || metadata.inode == alternate_expected.inode
+                );
+                assert_eq!(metadata.mode & 0o170000, 0o040000);
+                observed += 1;
+            }
+        }
+        running.store(false, Ordering::Release);
+        worker.join().unwrap();
+        assert!(observed > 0);
+        remove_dir_all(&root).unwrap();
     }
 }

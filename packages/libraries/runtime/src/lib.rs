@@ -25,6 +25,8 @@ pub use channel::{
 pub use env::environment_variable;
 #[cfg(unix)]
 pub use file::sync_directory;
+#[cfg(target_os = "linux")]
+pub use file::{DirectoryCapability, DirectoryMetadata};
 pub use file::{
     DirectoryEntry, File, FileError, MappedFile, canonical_path, create_dir_all, join_path,
     parent_path, path_exists, path_is_absolute, path_is_directory, path_is_file, read_directory,
