@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-09-04 — Scope-bound local Git credential agent
+
+- **Scope:** a purpose-limited Unix credential daemon using peer credentials,
+  a channel-capability HMAC, a fresh short-lived session, and exact HTTPS
+  host/port/repository/action/generation binding.
+- **Result:** **NOT_TRIGGERED**.
+- **Reason:** this composes conventional authenticated local IPC, bearer-token
+  custody, and scope attenuation. It introduces no new cryptographic primitive
+  or patent-sensitive protocol mechanism.
+
 ## 2026-09-04 — Production-profile exclusion for experimental native SSH
 
 - **Scope:** require an exact, explicit experimental environment switch before

@@ -16,6 +16,8 @@ mod cache_pack;
 mod cache_pack_file;
 mod compaction;
 mod compaction_file;
+#[cfg(target_os = "linux")]
+mod credential_agent_unix;
 mod deflate;
 mod detached_commit_proof;
 mod detached_commit_proof_file;
@@ -131,6 +133,14 @@ pub use detached_commit_proof::{
 };
 pub use detached_commit_proof_file::{
     DetachedCommitProofFileError, DurableDetachedCommitProofDirectory,
+};
+#[cfg(target_os = "linux")]
+pub use credential_agent_unix::{
+    CredentialAgentCapability, CredentialAgentError, CredentialAgentPeer,
+    CredentialAgentRequest, CredentialAgentSession, UnixHttpsCredentialProvider,
+    decode_credential_agent_hello, decode_credential_agent_request,
+    encode_credential_agent_hello, encode_credential_agent_request,
+    encode_credential_agent_response,
 };
 pub use diff::FileDiff;
 pub use gitd_core::{

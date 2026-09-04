@@ -43,8 +43,33 @@ stores neither token nor token path in repository configuration, and erases its
 input and retained token buffers. Clone selects it with the non-secret
 `MRML_GIT_CREDENTIAL_PROVIDER=standard-input`; an existing repository selects
 it with `http.credentialProvider=standard-input`. Token plaintext is supplied
-only on standard input. An OS credential service remains a future provider
-behind the same interface; it is not claimed by this bridge.
+only on standard input.
+
+Linux also implements the production-shaped `unix-v1` credential provider and
+the separate `mrml-git-credential-agent` daemon. The client sends an exact
+validated host, port, repository path, and read/write action over a bounded Unix
+frame. A separately owned 256-bit channel capability authenticates a fresh
+agent-generated five-second session challenge, the complete request, and the
+response. The client verifies the daemon's exact UID/GID with Unix peer
+credentials. The daemon independently verifies the client's exact UID/GID and
+will return its single configured token only for its fixed scope, allowed
+action, and exact nonzero credential generation. It has no operation to list a
+credential database, return a different token, change policy, or accept a path
+from the client.
+
+Repository configuration selects `http.credentialProvider=unix-v1` and records
+only the socket, the client-owned capability-file path, expected agent UID/GID,
+and credential generation. Clone can receive those same non-secret routing
+values through `MRML_GIT_CREDENTIAL_SOCKET`,
+`MRML_GIT_CREDENTIAL_CAPABILITY_FILE`, `MRML_GIT_CREDENTIAL_UID`,
+`MRML_GIT_CREDENTIAL_GID`, and `MRML_GIT_CREDENTIAL_GENERATION`; token plaintext
+is never accepted in configuration, an environment variable, or an argument.
+Rotating or revoking the server-side token requires a matching Gitd token-store
+transition and a recreated agent at a higher generation; clients pinned to the
+old generation fail closed. Returned token and frame buffers are erased after
+their one immediate HTTP authorization use. This is hosted implementation
+evidence; container confinement and complete deployment lifecycle evidence are
+recorded separately.
 
 ## Protected hybrid signer
 

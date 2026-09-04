@@ -14,8 +14,9 @@ use mrml_git::{
 };
 #[cfg(target_os = "linux")]
 use mrml_git::{
-    AuthorizedHybridPair, CapabilityVerifiedProofSigner, HistoryVerificationLimits,
-    LinuxDurableTrustPolicyStore, ProtectedSignerCapability, ProtectedSignerPeer,
+    AuthorizedHybridPair, CapabilityVerifiedProofSigner, CredentialAgentCapability,
+    CredentialAgentPeer, HistoryVerificationLimits, LinuxDurableTrustPolicyStore,
+    ProtectedSignerCapability, ProtectedSignerPeer, UnixHttpsCredentialProvider,
     UnixProtectedCommitSigningProvider, push_https_protected_authenticated,
 };
 use mrml_interface_detached_signing_v1::{
@@ -272,9 +273,50 @@ fn repository_https_provider(repository: &Repository) -> Result<Option<Text>> {
         .map_err(|error| anyhow!("{}", error))?;
     match provider.as_deref() {
         None => Ok(None),
-        Some("standard-input") => Ok(provider),
+        Some("standard-input" | "unix-v1") => Ok(provider),
         Some(_) => Err(anyhow!("HTTPS credential provider is unavailable")),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn credential_agent(repository: &Repository) -> Result<UnixHttpsCredentialProvider> {
+    let required = |name: &str| {
+        repository
+            .config_value("http", name)
+            .map_err(|error| anyhow!("{}", error))?
+            .ok_or_else(|| anyhow!("HTTPS credential agent configuration is incomplete"))
+    };
+    let socket = required("credentialSocket")?;
+    let capability_path = required("credentialCapabilityFile")?;
+    let uid = required("credentialUid")?
+        .parse()
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or_else(|| anyhow!("HTTPS credential agent UID is invalid"))?;
+    let gid = required("credentialGid")?
+        .parse()
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or_else(|| anyhow!("HTTPS credential agent GID is invalid"))?;
+    let generation = required("credentialGeneration")?
+        .parse()
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or_else(|| anyhow!("HTTPS credential generation is invalid"))?;
+    let mut bytes = load_protected_secret(&capability_path, 32)?;
+    let mut capability = [0; 32];
+    capability.copy_from_slice(&bytes);
+    erase_secret(&mut bytes);
+    let provider = UnixHttpsCredentialProvider::new(
+        &socket,
+        CredentialAgentPeer { uid, gid },
+        CredentialAgentCapability::new(capability)
+            .map_err(|_| anyhow!("HTTPS credential agent capability is invalid"))?,
+        generation,
+    )
+    .map_err(|_| anyhow!("HTTPS credential agent configuration is invalid"));
+    erase_secret(&mut capability);
+    provider
 }
 
 #[cfg(target_os = "linux")]
@@ -378,6 +420,18 @@ fn fetch_configured_https(
             .map_err(|error| anyhow!("{}", error)),
         Some("standard-input") => {
             let mut provider = StandardInputBearerProvider::read()?;
+            fetch_https_authenticated(
+                repository,
+                remote_name,
+                remote,
+                MAX_HTTPS_PACK_BYTES,
+                &mut provider,
+            )
+            .map_err(|error| anyhow!("{}", error))
+        }
+        #[cfg(target_os = "linux")]
+        Some("unix-v1") => {
+            let mut provider = credential_agent(repository)?;
             fetch_https_authenticated(
                 repository,
                 remote_name,
@@ -1023,9 +1077,9 @@ fn native_clone(url: &str, explicit_target: Option<&str>) -> Result<()> {
                 .into()
         });
         let provider = mrml_runtime::environment_variable("MRML_GIT_CREDENTIAL_PROVIDER");
-        if provider
-            .as_deref()
-            .is_some_and(|value| value != "standard-input")
+        if provider.as_deref().is_some_and(|value| {
+            value != "standard-input" && value != "unix-v1"
+        })
         {
             return Err(anyhow!("HTTPS credential provider is unavailable"));
         }
@@ -1044,6 +1098,23 @@ fn native_clone(url: &str, explicit_target: Option<&str>) -> Result<()> {
         .map_err(|error| anyhow!("{}", error))?;
         if provider.as_deref() == Some("standard-input") {
             repo.set_config_value("http", "credentialProvider", "standard-input")
+                .map_err(|error| anyhow!("{}", error))?;
+        }
+        #[cfg(target_os = "linux")]
+        if provider.as_deref() == Some("unix-v1") {
+            for (key, environment) in [
+                ("credentialSocket", "MRML_GIT_CREDENTIAL_SOCKET"),
+                ("credentialCapabilityFile", "MRML_GIT_CREDENTIAL_CAPABILITY_FILE"),
+                ("credentialUid", "MRML_GIT_CREDENTIAL_UID"),
+                ("credentialGid", "MRML_GIT_CREDENTIAL_GID"),
+                ("credentialGeneration", "MRML_GIT_CREDENTIAL_GENERATION"),
+            ] {
+                let value = mrml_runtime::environment_variable(environment)
+                    .ok_or_else(|| anyhow!("HTTPS credential agent configuration is incomplete"))?;
+                repo.set_config_value("http", key, &value)
+                    .map_err(|error| anyhow!("{}", error))?;
+            }
+            repo.set_config_value("http", "credentialProvider", "unix-v1")
                 .map_err(|error| anyhow!("{}", error))?;
         }
         let result = fetch_configured_https(&repo, "origin", &remote)?;
@@ -1119,6 +1190,25 @@ fn native_push(repository: Option<&str>, name: &str, branch: Option<&str>) -> Re
                 #[cfg(not(target_os = "linux"))]
                 mrml_git::push_https_authenticated(&repo, name, &branch, &remote, &mut provider)
                     .map_err(|error| anyhow!("{}", error))?
+            }
+            #[cfg(target_os = "linux")]
+            Some("unix-v1") => {
+                let mut provider = credential_agent(&repo)?;
+                if let Some((transport, policy, openpgp, ml_dsa)) = protected_push_signer(&repo)? {
+                    let mut scratch = [0; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
+                    let mut signer = CapabilityVerifiedProofSigner::new(
+                        transport, policy, &openpgp, &ml_dsa, &mut scratch,
+                    )
+                    .map_err(|_| anyhow!("protected signer policy is invalid"))?;
+                    push_https_protected_authenticated(
+                        &repo, name, &branch, &remote, &mut provider, &mut signer,
+                        HistoryVerificationLimits::default(),
+                    )
+                    .map_err(|error| anyhow!("{}", error))?
+                } else {
+                    mrml_git::push_https_authenticated(&repo, name, &branch, &remote, &mut provider)
+                        .map_err(|error| anyhow!("{}", error))?
+                }
             }
             _ => {
                 return Err(anyhow!(
