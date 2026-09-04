@@ -4,7 +4,9 @@ set -eu
 directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 environment=${MRML_ENV_FILE:-$directory/.env.production}
 runtime=${MRML_CONTAINER_RUNTIME:-docker}
-[ "$#" -eq 0 ] || { echo "usage: $0" >&2; exit 64; }
+[ "$#" -eq 1 ] || { echo "usage: $0 overlap|retirement" >&2; exit 64; }
+mode=$1
+case $mode in overlap|retirement) ;; *) echo "trust staging mode must be overlap or retirement" >&2; exit 64 ;; esac
 [ "$(id -u)" -eq 0 ] || { echo "trust transition staging must run as root" >&2; exit 1; }
 [ -f "$environment" ] && [ ! -L "$environment" ] && [ "$(stat -c %a "$environment")" = 600 ] || exit 1
 read_environment_value() {
@@ -47,6 +49,9 @@ construction=$(volume_path "$volume_prefix-git-trust-construction")
 signatures=$(volume_path "$volume_prefix-git-trust-signatures")
 current_keys=$(volume_path "$selected_volume")
 next_keys=$(volume_path "$candidate_volume")
+if [ "$mode" = retirement ]; then
+  next_keys=$current_keys
+fi
 
 MRML_CONTAINER_RUNTIME=$runtime MRML_VOLUME_PREFIX=$volume_prefix "$directory/install-volume-inputs.sh" authority-transition \
   "$construction/previous-policy.bin" "$construction/next-policy.bin" \

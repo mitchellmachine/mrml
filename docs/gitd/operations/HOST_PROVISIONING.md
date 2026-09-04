@@ -85,10 +85,13 @@ services are read-only, networkless, and mount only their own private-key
 volume, the public construction volume, and the signer-owned public signature
 output volume. The policy input may be owned by UID 21001 while keys and
 outputs remain owned by UID 21006; those ownership domains are checked
-independently. `stage-git-trust-transition.sh` then copies the exact canonical
-policies, both public pairs, and four signatures between managed named volumes
-using the no-overwrite installer. No private key is copied or mounted into the
-authority transition service.
+independently. `stage-git-trust-transition.sh overlap` then copies the exact
+canonical policies, both distinct public pairs, and four signatures between
+managed named volumes using the no-overwrite installer. Retirement uses
+`stage-git-trust-transition.sh retirement`, which sources the successor
+ML-DSA public key from the current surviving slot to match the successor
+OpenPGP public key emitted by retirement signing. No private key is copied or
+mounted into the authority transition service.
 
 After selecting and exercising the overlap generation, stop all three daemons
 and run `select-git-signer-key-slot.sh next OPENPGP_CREATED_AT

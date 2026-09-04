@@ -241,6 +241,15 @@ starts no container. This closes an implementation/documentation mismatch found
 before attempting the next hosted retirement; it is not itself retirement-push
 evidence.
 
+The first hosted generation-5 selection attempt exposed the corresponding
+staging defect before policy mutation: retirement signing emitted the surviving
+OpenPGP key, but staging still sourced the successor ML-DSA public key from the
+inactive candidate slot, producing a hybrid-inconsistent pair. Authority
+selection rejected it with exit 78 and retained generation 4. Staging now also
+requires explicit `overlap|retirement`; retirement sources the successor
+ML-DSA public key from the current surviving slot. The rejected mixed public
+inputs are discarded and regenerated; they are not transition evidence.
+
 All client, Gitd, authority, signer, certificate, policy, key, state, and
 runtime container mounts in this exercise were named volumes. Older Podman
 rejected its `subpath=socket` option, so the signer runtime named volume was

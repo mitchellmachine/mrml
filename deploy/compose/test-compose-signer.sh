@@ -132,6 +132,9 @@ require 'git-signer-key-slot-' deploy/compose/stage-git-trust-transition.sh
 require 'org.mrml.managed' deploy/compose/select-git-signer-key-slot.sh
 require 'sync -f "$temporary"' deploy/compose/select-git-signer-key-slot.sh
 require 'signer key volume is outside the managed key slots' deploy/compose/stage-git-trust-transition.sh
+require 'case $mode in overlap|retirement)' deploy/compose/stage-git-trust-transition.sh
+require 'if [ "$mode" = retirement ]' deploy/compose/stage-git-trust-transition.sh
+require 'next_keys=$current_keys' deploy/compose/stage-git-trust-transition.sh
 require 'install-volume-inputs.sh" authority-transition' deploy/compose/stage-git-trust-transition.sh
 require 'git-trust-signatures' deploy/compose/stage-git-trust-transition.sh
 deploy/compose/test-transition-git-trust-resume.sh
