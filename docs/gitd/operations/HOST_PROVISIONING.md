@@ -72,8 +72,10 @@ asking either signer pair to authorize the bytes.
 
 The protected signer image authorizes the reviewed `next-policy.bin` twice via
 `sign-git-trust-policy.sh`: once through the currently selected key volume at
-the current trust generation and once through the separately provisioned
-`mrml-git-signer-next-keys` volume at the successor generation. Both one-shot
+the current trust generation and once through the separately selected inactive
+key volume at the successor generation. `MRML_GIT_SIGNER_KEYS_VOLUME` and
+`MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME` must name the two distinct provisioned
+slots; selection swaps their roles without overwriting either volume. Both one-shot
 services are read-only, networkless, and mount only their own private-key
 volume, the public construction volume, and the signer-owned public signature
 output volume. The policy input may be owned by UID 21001 while keys and
@@ -87,7 +89,8 @@ After selecting and exercising the overlap generation, stop all three daemons
 and run `select-git-signer-key-slot.sh next OPENPGP_CREATED_AT
 TRUST_GENERATION REVOCATION_GENERATION`. It atomically updates the mode-0600
 environment file so the ordinary signer and the “current” rotation job resolve
-the logical signer-key volume to the candidate named volume. Selection is
+the logical signer-key volume to the candidate named volume and the retired slot
+becomes the next inactive candidate. Selection is
 limited to the two provisioned managed slots and is refused while a consumer is
 running. Restart and validate a protected push with the candidate signer before
 constructing retirement. For retirement, stage the old public pair as the
@@ -97,6 +100,10 @@ the same transition command. On complete signer advancement, the transition,
 construction, and signature volumes are synchronized after their exact public
 one-operation artifacts are consumed, allowing the next rotation without
 deleting either private-key volume.
+The signer generation state is format-versioned and binds the exact active
+OpenPGP/ML-DSA public pair. A dual-authorized trust transition upgrades legacy
+generation-only state to the key-bound format; ordinary startup never performs
+that migration and rejects a key pair different from the persisted binding.
 The networkless admin-profile container receives only the read-only current-key
 and transition-input volumes plus a writable policy volume. It reopens the exact
 expected generation, independently verifies both hybrid authorizations against

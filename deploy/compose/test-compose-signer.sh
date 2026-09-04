@@ -39,7 +39,7 @@ require 'cap_drop: [ALL]' "$compose"
 require 'security_opt: [no-new-privileges:true]' "$compose"
 require 'source: mrml-git-signer-state' "$compose"
 require 'source: mrml-git-signer-keys' "$compose"
-require 'name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-next-keys"' "$compose"
+require 'name: "${MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME:?set MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME}"' "$compose"
 require 'name: "${MRML_VOLUME_PREFIX:-mrml}-git-trust-signatures"' "$compose"
 require 'source: mrml-git-signer-channel' "$compose"
 require 'source: mrml-runtime-git-signer' "$compose"
@@ -118,6 +118,8 @@ require 'sign-key-rotation 21006 21001' deploy/compose/sign-git-trust-policy.sh
 require 'trust policy signing requires stopped Gitd, authority, and signer' deploy/compose/sign-git-trust-policy.sh
 require 'signer key selection requires stopped Gitd, authority, and signer' deploy/compose/select-git-signer-key-slot.sh
 require 'MRML_GIT_SIGNER_KEYS_VOLUME' deploy/compose/select-git-signer-key-slot.sh
+require 'MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME' deploy/compose/select-git-signer-key-slot.sh
+require 'selected and candidate signer key volumes must differ' deploy/compose/stage-git-trust-transition.sh
 require 'sync -f "$temporary"' deploy/compose/select-git-signer-key-slot.sh
 require 'selected signer key volume is outside the managed key slots' deploy/compose/stage-git-trust-transition.sh
 require 'install-volume-inputs.sh" authority-transition' deploy/compose/stage-git-trust-transition.sh

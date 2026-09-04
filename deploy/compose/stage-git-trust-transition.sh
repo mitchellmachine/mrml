@@ -19,11 +19,16 @@ volume_prefix=$(read_environment_value MRML_VOLUME_PREFIX)
 case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
 case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
 selected_volume=$(read_environment_value MRML_GIT_SIGNER_KEYS_VOLUME)
-[ -n "$selected_volume" ] || selected_volume=$volume_prefix-git-signer-keys
+candidate_volume=$(read_environment_value MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME)
 case $selected_volume in
   "$volume_prefix-git-signer-keys"|"$volume_prefix-git-signer-next-keys") ;;
   *) echo "selected signer key volume is outside the managed key slots" >&2; exit 1 ;;
 esac
+case $candidate_volume in
+  "$volume_prefix-git-signer-keys"|"$volume_prefix-git-signer-next-keys") ;;
+  *) echo "candidate signer key volume is outside the managed key slots" >&2; exit 1 ;;
+esac
+[ "$candidate_volume" != "$selected_volume" ] || { echo "selected and candidate signer key volumes must differ" >&2; exit 1; }
 
 volume_path() {
   [ -z "$("$runtime" ps -q --filter volume="$1")" ] || { echo "volume is in use: $1" >&2; exit 1; }
@@ -35,7 +40,7 @@ volume_path() {
 construction=$(volume_path "$volume_prefix-git-trust-construction")
 signatures=$(volume_path "$volume_prefix-git-trust-signatures")
 current_keys=$(volume_path "$selected_volume")
-next_keys=$(volume_path "$volume_prefix-git-signer-next-keys")
+next_keys=$(volume_path "$candidate_volume")
 
 MRML_CONTAINER_RUNTIME=$runtime MRML_VOLUME_PREFIX=$volume_prefix "$directory/install-volume-inputs.sh" authority-transition \
   "$construction/previous-policy.bin" "$construction/next-policy.bin" \

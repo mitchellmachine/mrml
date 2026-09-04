@@ -130,7 +130,7 @@ volumes:
   mrml-git-signer-keys:
     name: "${MRML_GIT_SIGNER_KEYS_VOLUME:?set MRML_GIT_SIGNER_KEYS_VOLUME}"
   mrml-git-signer-next-keys:
-    name: "${MRML_VOLUME_PREFIX:-mrml}-git-signer-next-keys"
+    name: "${MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME:?set MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME}"
   mrml-git-trust-construction:
     name: "${MRML_VOLUME_PREFIX:-mrml}-git-trust-construction"
     external: true

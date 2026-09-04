@@ -22,7 +22,11 @@ volume_prefix=$(read_environment_value MRML_VOLUME_PREFIX)
 }
 case $volume_prefix in ''|*[!a-z0-9-]*|-*|*-|*--*) echo "invalid MRML_VOLUME_PREFIX" >&2; exit 2 ;; esac
 case $runtime in docker|podman) ;; *) echo "container runtime must be docker or podman" >&2; exit 2 ;; esac
-case $1 in current) selected_volume=$volume_prefix-git-signer-keys ;; next) selected_volume=$volume_prefix-git-signer-next-keys ;; *) exit 64 ;; esac
+case $1 in
+  current) selected_volume=$volume_prefix-git-signer-keys; candidate_volume=$volume_prefix-git-signer-next-keys ;;
+  next) selected_volume=$volume_prefix-git-signer-next-keys; candidate_volume=$volume_prefix-git-signer-keys ;;
+  *) exit 64 ;;
+esac
 case $2:$3:$4 in *[!0-9:]*|:*|*:) exit 64 ;; esac
 [ "$2" -gt 0 ] && [ "$3" -gt 0 ] && [ "$4" -gt 0 ] || exit 64
 if [ "$runtime" = podman ]; then
@@ -38,13 +42,14 @@ else
 fi
 "$runtime" volume inspect "$selected_volume" >/dev/null
 
-for name in MRML_GIT_SIGNER_KEYS_VOLUME MRML_OPENPGP_CREATED_AT MRML_TRUST_GENERATION MRML_REVOCATION_GENERATION; do
+for name in MRML_GIT_SIGNER_KEYS_VOLUME MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME MRML_OPENPGP_CREATED_AT MRML_TRUST_GENERATION MRML_REVOCATION_GENERATION; do
   [ "$(grep -c "^$name=" "$environment")" -eq 1 ] || { echo "environment must contain exactly one $name assignment" >&2; exit 1; }
 done
 temporary=$(mktemp "$environment.new.XXXXXX")
 trap 'rm -f "$temporary"' EXIT HUP INT TERM
 sed \
   -e "s|^MRML_GIT_SIGNER_KEYS_VOLUME=.*|MRML_GIT_SIGNER_KEYS_VOLUME=$selected_volume|" \
+  -e "s|^MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME=.*|MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME=$candidate_volume|" \
   -e "s|^MRML_OPENPGP_CREATED_AT=.*|MRML_OPENPGP_CREATED_AT=$2|" \
   -e "s|^MRML_TRUST_GENERATION=.*|MRML_TRUST_GENERATION=$3|" \
   -e "s|^MRML_REVOCATION_GENERATION=.*|MRML_REVOCATION_GENERATION=$4|" \
