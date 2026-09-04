@@ -119,6 +119,10 @@ require 'consumed public transition and workspace inputs removed' deploy/compose
 require '--profile admin run --rm --no-deps git-trust-sign-current' deploy/compose/sign-git-trust-policy.sh
 require '--profile admin run --rm --no-deps git-trust-sign-next' deploy/compose/sign-git-trust-policy.sh
 require 'sign-key-rotation 21006 21001' deploy/compose/sign-git-trust-policy.sh
+require 'case $mode in overlap|retirement)' deploy/compose/sign-git-trust-policy.sh
+require 'retirement must use the current key creation time for both authorizations' deploy/compose/sign-git-trust-policy.sh
+require 'next_keys_volume=$current_keys_volume' deploy/compose/sign-git-trust-policy.sh
+require 'MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME=$next_keys_volume' deploy/compose/sign-git-trust-policy.sh
 require 'trust policy signing requires stopped Gitd, authority, and signer' deploy/compose/sign-git-trust-policy.sh
 require 'signer key selection requires stopped Gitd, authority, and signer' deploy/compose/select-git-signer-key-slot.sh
 require 'MRML_GIT_SIGNER_KEYS_VOLUME' deploy/compose/select-git-signer-key-slot.sh
@@ -131,5 +135,6 @@ require 'signer key volume is outside the managed key slots' deploy/compose/stag
 require 'install-volume-inputs.sh" authority-transition' deploy/compose/stage-git-trust-transition.sh
 require 'git-trust-signatures' deploy/compose/stage-git-trust-transition.sh
 deploy/compose/test-transition-git-trust-resume.sh
+deploy/compose/test-sign-git-trust-policy-modes.sh
 
 echo "protected signer Compose and image isolation policy PASS"

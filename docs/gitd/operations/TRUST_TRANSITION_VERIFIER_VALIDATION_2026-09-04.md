@@ -230,6 +230,17 @@ deterministic fakes, so this is process-kill evidence for the operator recovery
 layer only, not daemon, container-runtime, filesystem power-loss, or
 physical-storage evidence.
 
+Retirement signing now has an explicit operator mode. `overlap` continues to
+require the distinct selected and candidate key volumes. `retirement` requires
+both creation-time arguments to match and routes both generation-bound
+authorizations through the current surviving key volume without changing the
+saved key-slot selection. An executable shell test captures the actual Compose
+environment for both signing jobs, proves current/candidate routing for overlap,
+current/current routing for retirement, and proves a mismatched retirement time
+starts no container. This closes an implementation/documentation mismatch found
+before attempting the next hosted retirement; it is not itself retirement-push
+evidence.
+
 All client, Gitd, authority, signer, certificate, policy, key, state, and
 runtime container mounts in this exercise were named volumes. Older Podman
 rejected its `subpath=socket` option, so the signer runtime named volume was

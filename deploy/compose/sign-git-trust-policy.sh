@@ -8,7 +8,10 @@ acme_compose=${MRML_ACME_COMPOSE_FILE:-$directory/compose.acme.yaml}
 signer_compose=${MRML_SIGNER_COMPOSE_FILE:-$directory/compose.signer.yaml}
 runtime=${MRML_CONTAINER_RUNTIME:-docker}
 
-[ "$#" -eq 5 ] || { echo "usage: $0 OWNER/REPOSITORY CURRENT_TRUST_GENERATION NEXT_TRUST_GENERATION CURRENT_OPENPGP_CREATED_AT NEXT_OPENPGP_CREATED_AT" >&2; exit 64; }
+[ "$#" -eq 6 ] || { echo "usage: $0 overlap|retirement OWNER/REPOSITORY CURRENT_TRUST_GENERATION NEXT_TRUST_GENERATION CURRENT_OPENPGP_CREATED_AT NEXT_OPENPGP_CREATED_AT" >&2; exit 64; }
+mode=$1
+shift
+case $mode in overlap|retirement) ;; *) echo "trust signing mode must be overlap or retirement" >&2; exit 64 ;; esac
 [ "$(id -u)" -eq 0 ] || { echo "trust policy signing must run as root" >&2; exit 1; }
 [ -f "$environment" ] && [ ! -L "$environment" ] && [ "$(stat -c %a "$environment")" = 600 ] || exit 1
 read_environment_value() {
@@ -27,6 +30,14 @@ case $2:$3:$4:$5 in *[!0-9:]*|:*|*:) echo "generations and creation times must b
 [ "$2" -gt 0 ] && [ "$3" -eq "$(( $2 + 1 ))" ] && [ "$4" -gt 0 ] && [ "$5" -gt 0 ] || exit 64
 selected_repository=$(read_environment_value MRML_PROTECTED_REPOSITORY)
 [ "$selected_repository" = "$1" ] || exit 1
+current_keys_volume=$(read_environment_value MRML_GIT_SIGNER_KEYS_VOLUME)
+candidate_keys_volume=$(read_environment_value MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME)
+[ "$current_keys_volume" != "$candidate_keys_volume" ] || { echo "selected and candidate signer key volumes must differ" >&2; exit 1; }
+next_keys_volume=$candidate_keys_volume
+if [ "$mode" = retirement ]; then
+  [ "$4" = "$5" ] || { echo "retirement must use the current key creation time for both authorizations" >&2; exit 64; }
+  next_keys_volume=$current_keys_volume
+fi
 if [ "$runtime" = podman ]; then
   for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
     running=$(podman ps -q --filter volume="$volume") || exit 1
@@ -39,10 +50,14 @@ else
   done
 fi
 
+MRML_GIT_SIGNER_KEYS_VOLUME=$current_keys_volume \
+MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME=$candidate_keys_volume \
 "$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" \
   --profile admin run --rm --no-deps git-trust-sign-current \
   sign-key-rotation 21006 21001 "$1" "$2" /keys/openpgp.seed "$4" /keys/ml-dsa-public.bin /keys/ml-dsa-secret.bin \
   /policies/next-policy.bin /signatures/previous-openpgp-public.asc /signatures/previous-openpgp.sig /signatures/previous-ml-dsa.sig
+MRML_GIT_SIGNER_KEYS_VOLUME=$current_keys_volume \
+MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME=$next_keys_volume \
 "$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" \
   --profile admin run --rm --no-deps git-trust-sign-next \
   sign-key-rotation 21006 21001 "$1" "$3" /keys/openpgp.seed "$5" /keys/ml-dsa-public.bin /keys/ml-dsa-secret.bin \

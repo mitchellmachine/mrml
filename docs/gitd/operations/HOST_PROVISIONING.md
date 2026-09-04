@@ -71,9 +71,12 @@ validity, active/retired pairs, previous digest, and printed next digest before
 asking either signer pair to authorize the bytes.
 
 The protected signer image authorizes the reviewed `next-policy.bin` twice via
-`sign-git-trust-policy.sh`: once through the currently selected key volume at
-the current trust generation and once through the separately selected inactive
-key volume at the successor generation. `MRML_GIT_SIGNER_KEYS_VOLUME` and
+`sign-git-trust-policy.sh overlap`: once through the currently selected key
+volume at the current trust generation and once through the separately selected
+inactive key volume at the successor generation. Retirement instead uses
+`sign-git-trust-policy.sh retirement` and the current surviving key for both
+generation-bound authorizations; both creation-time arguments must therefore be
+the current key's exact creation time. `MRML_GIT_SIGNER_KEYS_VOLUME` and
 `MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME` must name the two distinct provisioned
 slots. Additional slots use the prefix-scoped
 `mrml-git-signer-key-slot-NAME` form and must carry the MRML-managed volume
