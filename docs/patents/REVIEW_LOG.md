@@ -12504,3 +12504,11 @@ Patent review: **NOT_TRIGGERED**. This increment enables the conventional
 TCP_NODELAY socket option for TLS streams so small protocol-control records are
 not held behind delayed acknowledgements. It adds no transport protocol,
 congestion algorithm, cryptographic mechanism, or adaptive selection policy.
+
+# 2026-09-04 — Indexed full-buffer delta resolution
+
+Patent review: **NOT_TRIGGERED**. This increment replaces repeated pending-list
+rescans and linear object-ID searches with conventional exact hash lookup,
+sorted offset lookup, reverse-dependency ranges, and a ready queue. It adds no
+compression format, delta encoding, content-selection heuristic, cryptographic
+mechanism, or adaptive ranking method.

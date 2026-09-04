@@ -1,6 +1,7 @@
 use crate::deflate::encode_zlib;
 use crate::inflate::inflate_zlib_prefix;
 use crate::pack_delta::select_deltas;
+use crate::object_id_set::ObjectIdMap;
 use crate::{
     ObjectFormat, ObjectId, ObjectKind, PackIndexEntry, Sha1, encode_loose_object_with_format,
 };
@@ -228,6 +229,7 @@ struct Decoded {
     object: PackObject,
 }
 
+#[derive(Clone, Copy)]
 enum Base {
     None,
     Offset(usize),
@@ -347,57 +349,107 @@ pub fn parse_pack_with_index(
     if cursor != data_end {
         return Err(PackError::TrailingData);
     }
-    let mut decoded: Vector<Decoded> = Vector::new();
-    let mut remaining = packed;
-    while !remaining.is_empty() {
-        let before = remaining.len();
-        let mut deferred = Vector::new();
-        for entry in remaining {
-            let base = match &entry.base {
-                Base::None => None,
-                Base::Offset(offset) => decoded
-                    .binary_search_by_key(offset, |decoded| decoded.offset)
-                    .ok()
-                    .map(|index| &decoded[index]),
-                Base::Id(id) => decoded.iter().find(|decoded| decoded.object.id == *id),
-            };
-            if !matches!(&entry.base, Base::None) && base.is_none() {
-                deferred.push(entry);
-                continue;
-            }
-            let (kind, contents) = if let Some(base) = base {
-                (
-                    base.object.kind,
-                    apply_delta(&base.object.contents, &entry.inflated)?,
-                )
-            } else {
-                let kind = match entry.object_type {
-                    1 => ObjectKind::Commit,
-                    2 => ObjectKind::Tree,
-                    3 => ObjectKind::Blob,
-                    4 => ObjectKind::Tag,
-                    _ => return Err(PackError::ObjectType),
-                };
-                (kind, entry.inflated)
-            };
-            let (id, _) = encode_loose_object_with_format(format, kind, &contents);
-            let decoded_object = Decoded {
-                offset: entry.offset,
-                end: entry.end,
-                object: PackObject { id, kind, contents },
-            };
-            let insertion = decoded
-                .binary_search_by_key(&entry.offset, |candidate| candidate.offset)
-                .unwrap_or_else(|index| index);
-            decoded
-                .try_insert(insertion, decoded_object)
-                .map_err(|_| PackError::TooLarge)?;
+    let mut object_offsets = Vector::new();
+    object_offsets
+        .try_reserve_exact(packed.len())
+        .map_err(|_| PackError::TooLarge)?;
+    object_offsets.extend(packed.iter().map(|entry| entry.offset));
+    let mut resolved_by_offset: Vector<Option<usize>> = Vector::new();
+    resolved_by_offset
+        .try_reserve_exact(packed.len())
+        .map_err(|_| PackError::TooLarge)?;
+    resolved_by_offset.resize(packed.len(), None);
+    let mut resolved_by_id: ObjectIdMap<usize> =
+        ObjectIdMap::new(packed.len().max(1)).map_err(|_| PackError::TooLarge)?;
+    let mut waiting_ids = Vector::new();
+    let mut waiting_offsets = Vector::new();
+    let mut ready = Vector::new();
+    waiting_ids
+        .try_reserve_exact(packed.len())
+        .map_err(|_| PackError::TooLarge)?;
+    waiting_offsets
+        .try_reserve_exact(packed.len())
+        .map_err(|_| PackError::TooLarge)?;
+    ready
+        .try_reserve_exact(packed.len())
+        .map_err(|_| PackError::TooLarge)?;
+    for (index, entry) in packed.iter().enumerate() {
+        match entry.base {
+            Base::None => {}
+            Base::Offset(offset) => waiting_offsets.push((offset, index)),
+            Base::Id(id) => waiting_ids.push((id, index)),
         }
-        if deferred.len() == before {
-            return Err(PackError::MissingBase);
-        }
-        remaining = deferred;
+        ready.push(index);
     }
+    waiting_ids.sort_unstable_by_key(|entry| entry.0);
+    waiting_offsets.sort_unstable_by_key(|entry| entry.0);
+    let mut pending: Vector<Option<Packed>> = packed.into_iter().map(Some).collect();
+    let mut decoded: Vector<Decoded> = Vector::new();
+    decoded
+        .try_reserve_exact(pending.len())
+        .map_err(|_| PackError::TooLarge)?;
+    while let Some(index) = ready.pop() {
+        let Some(entry) = pending[index].take() else {
+            continue;
+        };
+        let base_index = match entry.base {
+            Base::None => None,
+            Base::Offset(offset) => {
+                let Some(resolved) = object_offsets
+                    .binary_search(&offset)
+                    .ok()
+                    .and_then(|slot| resolved_by_offset[slot])
+                else {
+                    pending[index] = Some(entry);
+                    continue;
+                };
+                Some(resolved)
+            }
+            Base::Id(id) => {
+                let Some(resolved) = resolved_by_id.get(&id) else {
+                    pending[index] = Some(entry);
+                    continue;
+                };
+                Some(resolved)
+            }
+        };
+        let (kind, contents) = if let Some(base_index) = base_index {
+            let base = &decoded[base_index];
+            (
+                base.object.kind,
+                apply_delta(&base.object.contents, &entry.inflated)?,
+            )
+        } else {
+            let kind = match entry.object_type {
+                1 => ObjectKind::Commit,
+                2 => ObjectKind::Tree,
+                3 => ObjectKind::Blob,
+                4 => ObjectKind::Tag,
+                _ => return Err(PackError::ObjectType),
+            };
+            (kind, entry.inflated)
+        };
+        let (id, _) = encode_loose_object_with_format(format, kind, &contents);
+        let decoded_index = decoded.len();
+        decoded.push(Decoded {
+            offset: entry.offset,
+            end: entry.end,
+            object: PackObject { id, kind, contents },
+        });
+        let offset_slot = object_offsets
+            .binary_search(&entry.offset)
+            .map_err(|_| PackError::Delta)?;
+        resolved_by_offset[offset_slot] = Some(decoded_index);
+        resolved_by_id
+            .try_insert(id, decoded_index)
+            .map_err(|_| PackError::ObjectId)?;
+        enqueue_waiting(&waiting_offsets, &entry.offset, &mut ready);
+        enqueue_waiting(&waiting_ids, &id, &mut ready);
+    }
+    if pending.iter().any(Option::is_some) {
+        return Err(PackError::MissingBase);
+    }
+    decoded.sort_unstable_by_key(|entry| entry.offset);
     let mut objects = Vector::new();
     let mut index = Vector::new();
     objects
@@ -420,6 +472,12 @@ pub fn parse_pack_with_index(
         objects.push(entry.object);
     }
     Ok((objects, index))
+}
+
+fn enqueue_waiting<K: Ord>(waiting: &[(K, usize)], key: &K, ready: &mut Vector<usize>) {
+    let start = waiting.partition_point(|(candidate, _)| candidate < key);
+    let end = waiting.partition_point(|(candidate, _)| candidate <= key);
+    ready.extend(waiting[start..end].iter().map(|(_, index)| *index));
 }
 
 fn crc32(bytes: &[u8]) -> u32 {
@@ -747,6 +805,75 @@ mod tests {
             |object| &*object.contents == b"natXYZ!" && object.id == ObjectId::blob(b"natXYZ!")
         ));
     }
+
+    fn parse_reverse_ordered_ref_delta_chain(count: usize) {
+        fn append_delta_varint(mut value: usize, output: &mut Vector<u8>) {
+            loop {
+                let mut byte = (value & 0x7f) as u8;
+                value >>= 7;
+                if value != 0 {
+                    byte |= 0x80;
+                }
+                output.push(byte);
+                if value == 0 {
+                    break;
+                }
+            }
+        }
+        let format = ObjectFormat::Sha256;
+        let mut contents = Vector::new();
+        contents.push(Vector::from([b'a']));
+        for index in 1..=count {
+            let mut next = contents[index - 1].clone();
+            next.push((index as u8).wrapping_add(31));
+            contents.push(next);
+        }
+        let mut pack = Vector::from(*b"PACK");
+        pack.extend(2u32.to_be_bytes());
+        pack.extend(((count + 1) as u32).to_be_bytes());
+        for index in (1..=count).rev() {
+            let base = &contents[index - 1];
+            let result = &contents[index];
+            let mut delta = Vector::new();
+            append_delta_varint(base.len(), &mut delta);
+            append_delta_varint(result.len(), &mut delta);
+            delta.extend([0x90, base.len() as u8, 1, result[result.len() - 1]]);
+            encode_object_header(7, delta.len(), &mut pack);
+            pack.extend(
+                ObjectId::blob_with_format(format, base)
+                    .as_bytes()
+                    .iter()
+                    .copied(),
+            );
+            pack.extend(raw_stored(&delta));
+        }
+        encode_object_header(3, 1, &mut pack);
+        pack.extend(raw_stored(&contents[0]));
+        let sum = format.hash_bytes(&pack);
+        pack.extend(sum.as_bytes().iter().copied());
+        let objects = parse_pack_with_format(&pack, format).unwrap();
+        assert_eq!(objects.len(), count + 1);
+        assert!(objects.iter().any(|object| {
+            object.id == ObjectId::blob_with_format(format, &contents[count])
+                && object.contents == contents[count]
+        }));
+    }
+
+    #[test]
+    fn full_buffer_reverse_ref_delta_scale_50() {
+        parse_reverse_ordered_ref_delta_chain(50);
+    }
+
+    #[test]
+    fn full_buffer_reverse_ref_delta_scale_100() {
+        parse_reverse_ordered_ref_delta_chain(100);
+    }
+
+    #[test]
+    fn full_buffer_reverse_ref_delta_scale_200() {
+        parse_reverse_ordered_ref_delta_chain(200);
+    }
+
     #[test]
     fn generated_pack_round_trips_large_and_empty_objects() {
         let inputs = Vector::from([
