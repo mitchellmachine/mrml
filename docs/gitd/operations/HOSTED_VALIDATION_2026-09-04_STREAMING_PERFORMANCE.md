@@ -134,6 +134,69 @@ diagnostic evidence and are not counted as successful runs. Their named volumes
 were retained. The final and repeat clones exited zero and printed their normal
 completion line.
 
+## Incremental and no-change fetch regression
+
+The destructive-restore exercise later exposed a separate client negotiation
+defect. A fresh clone followed by `fetch origin` sent no `have` lines, so the
+server streamed all 29 reachable objects and the four 64 MiB blobs again. The
+native client remained near 59 MiB RSS but consumed about 85% of one CPU for
+approximately 14 minutes. This did not invalidate the 10 MiB/s fresh-clone
+result above; it showed that incremental fetch was incorrectly behaving like a
+full clone.
+
+Signed commit `0049cfbb` now derives at most the protocol's fixed 16 `have`
+entries from the prior remote's atomic authenticated ref manifest. A tip is
+advertised as a `have` only when its exact local object reopens successfully;
+missing or unreadable local state therefore takes the network repair path. The
+server's existing exact-set graph subtraction remains authoritative. A focused
+test proves deduplication, remote isolation, and use of the durable manifest.
+
+The exact clean-worktree release binary at `0049cfbb` had SHA-256
+`b927c1b7c1512b9c69600adf63f41680fc4c7af35afbac230e18408adca2f59f`.
+Its controlled test image was `62b51d12cd301b2f91d04709eadf24736fc853a4fd132c410c84ddb8b6bef2a9`;
+the uploaded offline image archive had SHA-256
+`227f0de68668cd1b2830074b74312f915ae672b38be4ce0a500d7e2930893347`.
+Against the still-running generation-9200 restored target, it fetched only the
+three objects introduced after the client's prior tip:
+
+```text
+Fetched 3 object(s) and 1 branch ref(s) from origin
+real 31.177 s
+```
+
+That run exposed a second edge case: when `want == have`, the server's valid
+empty pack reached an import path that required the wanted commit to be newly
+present and failed authentication. Signed commit `003e1e3c` adds a narrower
+no-change fast path before requesting a pack. It applies only when the complete
+authenticated advertised branch set exactly equals the durable prior remote
+manifest and every referenced object reopens locally. Any ref difference or
+unreadable object continues through normal authenticated negotiation and pack
+validation.
+
+The exact clean-worktree release binary at `003e1e3c` had SHA-256
+`8010cc96a613f28013ed80e89dd4470ca0b6c950117f933b343ddf7ac853a65f`.
+The controlled test image was
+`4999e166cd0b19e2608f5a37ecee9c40fe68c2b23a71ca6f4aa379f9be2d8e39`;
+its uploaded offline archive had SHA-256
+`9b76dccb3fd87f26517110e1c3b5b357f545e864467452b48ea163989dfbef04`.
+The same restored target and named client volume then reported:
+
+```text
+Fetched 0 object(s) and 1 branch ref(s) from origin
+real 2.542 s
+user 0.078 s
+sys 0.054 s
+```
+
+Both tokens were generated in one-shot unprivileged Gitd containers, checked
+for canonical lower-hex length, piped only on standard input, and unset without
+being printed or persisted. The target remained loopback-only and used the
+explicit certd test fixture. These runs are controlled hosted incremental-fetch
+evidence, not production-certificate or public-network evidence. The test
+images reuse the already inspected client base with only the exact clean-built
+native executable replaced; they are not substitutes for the final coherent
+signed offline deployment bundle.
+
 ## Delta and graph scaling continuation
 
 Signed commit `638514a4` removes the remaining repeated deferred-list scan and
