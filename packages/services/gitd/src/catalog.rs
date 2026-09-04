@@ -1,6 +1,3 @@
-use std::fs::OpenOptions;
-use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 use mrml_crypto::Sha256;
@@ -8,13 +5,13 @@ use mrml_git::{
     FilesystemRepositoryView, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
     TrustGeneration,
 };
+use mrml_runtime::DirectoryCapability;
 
 use crate::GitdConfig;
 
 const MAX_CATALOG_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PROFILES: usize = 4_096;
 const MAX_REPOSITORIES: usize = 100_000;
-const O_NOFOLLOW: i32 = 0x20_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeploymentRepositoryProfile {
@@ -109,26 +106,46 @@ fn read_authenticated(
     gitd_uid: u32,
     expected_digest: [u8; 32],
 ) -> Result<Vec<u8>, DeploymentCatalogError> {
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(O_NOFOLLOW)
-        .open(path)
+    if !path.is_absolute() {
+        return Err(DeploymentCatalogError::Open);
+    }
+    let parent = path.parent().ok_or(DeploymentCatalogError::Open)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(DeploymentCatalogError::Open)?;
+    let directory = DirectoryCapability::open_root(
+        parent.to_str().ok_or(DeploymentCatalogError::Open)?,
+    )
+    .map_err(|_| DeploymentCatalogError::Open)?;
+    read_authenticated_capability(&directory, name, gitd_uid, expected_digest)
+}
+
+fn read_authenticated_capability(
+    directory: &DirectoryCapability,
+    name: &str,
+    gitd_uid: u32,
+    expected_digest: [u8; 32],
+) -> Result<Vec<u8>, DeploymentCatalogError> {
+    let mut file = directory
+        .open_regular(name)
         .map_err(|_| DeploymentCatalogError::Open)?;
     let metadata = file
         .metadata()
         .map_err(|_| DeploymentCatalogError::Metadata)?;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.nlink() != 1
-        || (metadata.uid() != 0 && metadata.uid() != gitd_uid)
-        || metadata.mode() & 0o022 != 0
-        || metadata.mode() & 0o444 == 0
-        || metadata.len() == 0
-        || metadata.len() > MAX_CATALOG_BYTES as u64
+    let length = file
+        .len()
+        .map_err(|_| DeploymentCatalogError::Metadata)?;
+    if metadata.links != 1
+        || (metadata.uid != 0 && metadata.uid != gitd_uid)
+        || metadata.mode & 0o022 != 0
+        || metadata.mode & 0o444 == 0
+        || length == 0
+        || length > MAX_CATALOG_BYTES as u64
     {
         return Err(DeploymentCatalogError::Permissions);
     }
-    let length = usize::try_from(metadata.len()).map_err(|_| DeploymentCatalogError::Size)?;
+    let length = usize::try_from(length).map_err(|_| DeploymentCatalogError::Size)?;
     let mut bytes = vec![0u8; length];
     file.read_exact(&mut bytes)
         .map_err(|_| DeploymentCatalogError::Read)?;
@@ -398,6 +415,39 @@ mod tests {
             Err(DeploymentCatalogError::Permissions)
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn catalog_read_remains_bound_to_retained_parent_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-gitd-catalog-retained-{}",
+            std::process::id()
+        ));
+        let displaced = root.with_extension("displaced");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&displaced);
+        fs::create_dir(&root).unwrap();
+        let catalog = root.join("profiles.v1");
+        fs::write(&catalog, PROFILES).unwrap();
+        fs::set_permissions(&catalog, fs::Permissions::from_mode(0o600)).unwrap();
+        let uid = fs::metadata(&catalog).unwrap().uid();
+        let retained = DirectoryCapability::open_root(root.to_str().unwrap()).unwrap();
+        fs::rename(&root, &displaced).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("profiles.v1"), b"attacker-controlled").unwrap();
+
+        assert_eq!(
+            read_authenticated_capability(
+                &retained,
+                "profiles.v1",
+                uid,
+                Sha256::digest(PROFILES)
+            ),
+            Ok(PROFILES.to_vec())
+        );
+
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(displaced).unwrap();
     }
 
     #[test]
