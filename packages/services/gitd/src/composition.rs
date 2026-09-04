@@ -1,5 +1,7 @@
 use mrml_git::{ProtectedReceiveAuthority, RepositoryIdentity};
-use mrml_http::{BackendError, GitdAuthentication, GitdHttp3Server, GitdOperationalHealth};
+use mrml_http::{
+    BackendError, GitdAuthentication, GitdHttp3Server, GitdOperationLimits, GitdOperationalHealth,
+};
 use mrml_runtime::Shared;
 
 use crate::{
@@ -24,6 +26,7 @@ pub struct GitdComposedService {
     backend: SharedGitdRepositorySet,
     authentication: Shared<GitdAuthentication>,
     health: Shared<GitdOperationalHealth>,
+    operation_limits: Shared<GitdOperationLimits>,
 }
 
 impl GitdComposedService {
@@ -34,6 +37,7 @@ impl GitdComposedService {
         let mut edge = GitdHttp3Server::new(self.backend.clone(), cache_bytes)?;
         edge.configure_shared_authentication(self.authentication.clone());
         edge.configure_operational_health(self.health.clone());
+        edge.configure_operation_limits(self.operation_limits.clone());
         Ok(edge)
     }
 
@@ -43,6 +47,10 @@ impl GitdComposedService {
 
     pub fn authentication(&self) -> Shared<GitdAuthentication> {
         self.authentication.clone()
+    }
+
+    pub fn operation_limits(&self) -> Shared<GitdOperationLimits> {
+        self.operation_limits.clone()
     }
 }
 
@@ -90,15 +98,21 @@ pub fn compose_gitd_service<A: ProtectedReceiveAuthority + Send + Clone + 'stati
         .map_err(|_| GitdCompositionError::Backend)?;
     let authentication = Shared::new(authentication);
     let health = Shared::new(GitdOperationalHealth::starting());
+    let operation_limits = Shared::new(
+        GitdOperationLimits::new(config.max_uploads, config.max_receives)
+            .map_err(|_| GitdCompositionError::Backend)?,
+    );
     let mut edge = GitdHttp3Server::new(shared.clone(), cache_bytes)
         .map_err(|_| GitdCompositionError::Cache)?;
     edge.configure_shared_authentication(authentication.clone());
     edge.configure_operational_health(health.clone());
+    edge.configure_operation_limits(operation_limits.clone());
     Ok(GitdComposedService {
         edge,
         recovery,
         backend: shared,
         authentication,
         health,
+        operation_limits,
     })
 }

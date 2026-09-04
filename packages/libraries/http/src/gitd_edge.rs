@@ -1,7 +1,7 @@
 use mrml_crypto::Sha256;
 use mrml_runtime::{Shared, Text, Vector};
 use mrml_zstd::{HttpEncodingProfile, encode_http};
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use crate::{GitdAuthentication, Header, RepositoryAction, RequestHead};
 
@@ -276,6 +276,141 @@ pub struct SmartGitRequest {
 pub struct PreparedSmartGitRequest {
     request: SmartGitRequest,
     budget: WorkBudget,
+    _operation_permit: Option<GitdOperationPermit>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GitdOperationLimitMetrics {
+    pub configured_maximum: u32,
+    pub current_usage: u32,
+    pub rejections: u64,
+    pub wait_nanoseconds: u64,
+    pub permit_leak_assertion_failures: u64,
+}
+
+struct GitdOperationClass {
+    configured_maximum: u32,
+    current_usage: AtomicU32,
+    rejections: AtomicU64,
+    permit_leak_assertion_failures: AtomicU64,
+}
+
+impl GitdOperationClass {
+    const fn new(configured_maximum: u32) -> Self {
+        Self {
+            configured_maximum,
+            current_usage: AtomicU32::new(0),
+            rejections: AtomicU64::new(0),
+            permit_leak_assertion_failures: AtomicU64::new(0),
+        }
+    }
+
+    fn try_acquire(&self) -> bool {
+        let acquired =
+            self.current_usage
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    (current < self.configured_maximum).then_some(current + 1)
+                });
+        if acquired.is_err() {
+            self.rejections.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    fn release(&self) {
+        if self
+            .current_usage
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_sub(1)
+            })
+            .is_err()
+        {
+            self.permit_leak_assertion_failures
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn metrics(&self) -> GitdOperationLimitMetrics {
+        GitdOperationLimitMetrics {
+            configured_maximum: self.configured_maximum,
+            current_usage: self.current_usage.load(Ordering::Acquire),
+            rejections: self.rejections.load(Ordering::Relaxed),
+            // Admission is deliberately nonblocking, so there is no waiting
+            // interval to accumulate and overload fails immediately.
+            wait_nanoseconds: 0,
+            permit_leak_assertion_failures: self
+                .permit_leak_assertion_failures
+                .load(Ordering::Relaxed),
+        }
+    }
+}
+
+pub struct GitdOperationLimits {
+    uploads: GitdOperationClass,
+    receives: GitdOperationClass,
+}
+
+impl GitdOperationLimits {
+    pub fn new(max_uploads: u32, max_receives: u32) -> Result<Self, BackendError> {
+        if max_uploads == 0 || max_receives == 0 {
+            return Err(BackendError::ResourceLimit);
+        }
+        Ok(Self {
+            uploads: GitdOperationClass::new(max_uploads),
+            receives: GitdOperationClass::new(max_receives),
+        })
+    }
+
+    pub fn upload_metrics(&self) -> GitdOperationLimitMetrics {
+        self.uploads.metrics()
+    }
+
+    pub fn receive_metrics(&self) -> GitdOperationLimitMetrics {
+        self.receives.metrics()
+    }
+
+    fn try_acquire(
+        limits: &Shared<Self>,
+        operation: SmartGitOperation,
+    ) -> Result<Option<GitdOperationPermit>, BackendError> {
+        let class = match operation {
+            SmartGitOperation::UploadPack => GitdOperationClassKind::Upload,
+            SmartGitOperation::ReceivePack => GitdOperationClassKind::Receive,
+            SmartGitOperation::Discovery | SmartGitOperation::ReceiveDiscovery => return Ok(None),
+        };
+        let acquired = match class {
+            GitdOperationClassKind::Upload => limits.uploads.try_acquire(),
+            GitdOperationClassKind::Receive => limits.receives.try_acquire(),
+        };
+        if !acquired {
+            return Err(BackendError::ResourceLimit);
+        }
+        Ok(Some(GitdOperationPermit {
+            limits: limits.clone(),
+            class,
+        }))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GitdOperationClassKind {
+    Upload,
+    Receive,
+}
+
+struct GitdOperationPermit {
+    limits: Shared<GitdOperationLimits>,
+    class: GitdOperationClassKind,
+}
+
+impl Drop for GitdOperationPermit {
+    fn drop(&mut self) {
+        match self.class {
+            GitdOperationClassKind::Upload => self.limits.uploads.release(),
+            GitdOperationClassKind::Receive => self.limits.receives.release(),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SmartGitResponse {
@@ -927,6 +1062,7 @@ pub struct GitdHttp3Server<B: GitdBackend> {
     revocations: RevocationGeneration,
     authentication: Option<Shared<GitdAuthentication>>,
     operational_health: Option<Shared<GitdOperationalHealth>>,
+    operation_limits: Option<Shared<GitdOperationLimits>>,
 }
 
 impl<B: GitdBackend> GitdHttp3Server<B> {
@@ -939,6 +1075,7 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             revocations: RevocationGeneration(0),
             authentication: None,
             operational_health: None,
+            operation_limits: None,
         })
     }
     pub fn configure_authentication(&mut self, authentication: GitdAuthentication) {
@@ -949,6 +1086,9 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
     }
     pub fn configure_operational_health(&mut self, health: Shared<GitdOperationalHealth>) {
         self.operational_health = Some(health);
+    }
+    pub fn configure_operation_limits(&mut self, limits: Shared<GitdOperationLimits>) {
+        self.operation_limits = Some(limits);
     }
     pub fn set_verification_generations(
         &mut self,
@@ -1069,6 +1209,10 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
             .authorize(&request.headers, &repository, action, now)
             .map_err(|_| BackendError::Private)?;
         let generation = self.backend.repository_generation(&repository)?;
+        let operation_permit = match self.operation_limits.as_ref() {
+            Some(limits) => GitdOperationLimits::try_acquire(limits, operation)?,
+            None => None,
+        };
         let prepared = PreparedSmartGitRequest {
             request: SmartGitRequest {
                 repository,
@@ -1081,6 +1225,7 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
                 max_memory_bytes: SMART_GIT_MEMORY_LIMIT,
                 max_work_units: SMART_GIT_WORK_LIMIT,
             },
+            _operation_permit: operation_permit,
         };
         let mut response = self.text(200, response_type, b"", true)?;
         if let Some(index) = response
@@ -3003,5 +3148,120 @@ mod tests {
         assert_ne!(first_key, second_key);
         assert!(first_key.starts_with("gitd-v3-"));
         assert_eq!(first_key.len(), 72);
+    }
+
+    #[test]
+    fn configured_operation_limits_are_shared_independent_and_release_on_drop() {
+        let limits = Shared::new(GitdOperationLimits::new(2, 1).unwrap());
+        assert!(
+            GitdOperationLimits::try_acquire(&limits, SmartGitOperation::Discovery)
+                .unwrap()
+                .is_none()
+        );
+
+        let upload_one = GitdOperationLimits::try_acquire(&limits, SmartGitOperation::UploadPack)
+            .unwrap()
+            .unwrap();
+        let upload_two = GitdOperationLimits::try_acquire(&limits, SmartGitOperation::UploadPack)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            GitdOperationLimits::try_acquire(&limits, SmartGitOperation::UploadPack),
+            Err(BackendError::ResourceLimit)
+        ));
+
+        let receive = GitdOperationLimits::try_acquire(&limits, SmartGitOperation::ReceivePack)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            GitdOperationLimits::try_acquire(&limits, SmartGitOperation::ReceivePack),
+            Err(BackendError::ResourceLimit)
+        ));
+        assert_eq!(limits.upload_metrics().current_usage, 2);
+        assert_eq!(limits.receive_metrics().current_usage, 1);
+
+        drop(upload_one);
+        let replacement = GitdOperationLimits::try_acquire(&limits, SmartGitOperation::UploadPack)
+            .unwrap()
+            .unwrap();
+        drop(upload_two);
+        drop(replacement);
+        drop(receive);
+
+        assert_eq!(
+            limits.upload_metrics(),
+            GitdOperationLimitMetrics {
+                configured_maximum: 2,
+                current_usage: 0,
+                rejections: 1,
+                wait_nanoseconds: 0,
+                permit_leak_assertion_failures: 0,
+            }
+        );
+        assert_eq!(
+            limits.receive_metrics(),
+            GitdOperationLimitMetrics {
+                configured_maximum: 1,
+                current_usage: 0,
+                rejections: 1,
+                wait_nanoseconds: 0,
+                permit_leak_assertion_failures: 0,
+            }
+        );
+
+        let cancellation_permit =
+            GitdOperationLimits::try_acquire(&limits, SmartGitOperation::UploadPack).unwrap();
+        let cancelled = PreparedSmartGitRequest {
+            request: SmartGitRequest {
+                repository: RepositoryIdentity::parse("mitchellrenouf/mrml").unwrap(),
+                generation: RepositoryGeneration(7),
+                operation: SmartGitOperation::UploadPack,
+            },
+            budget: WorkBudget {
+                max_input_bytes: 0,
+                max_output_bytes: 0,
+                max_memory_bytes: 1,
+                max_work_units: 1,
+            },
+            _operation_permit: cancellation_permit,
+        };
+        assert_eq!(limits.upload_metrics().current_usage, 1);
+        drop(cancelled);
+        assert_eq!(limits.upload_metrics().current_usage, 0);
+
+        let failure_permit =
+            GitdOperationLimits::try_acquire(&limits, SmartGitOperation::UploadPack).unwrap();
+        let failed = PreparedSmartGitRequest {
+            request: SmartGitRequest {
+                repository: RepositoryIdentity::parse("mitchellrenouf/mrml").unwrap(),
+                generation: RepositoryGeneration(7),
+                operation: SmartGitOperation::UploadPack,
+            },
+            budget: WorkBudget {
+                max_input_bytes: 0,
+                max_output_bytes: 0,
+                max_memory_bytes: 1,
+                max_work_units: 1,
+            },
+            _operation_permit: failure_permit,
+        };
+        let mut server = GitdHttp3Server::new(
+            MockBackend {
+                generation: RepositoryGeneration(7),
+            },
+            1024,
+        )
+        .unwrap();
+        let mut input = EmptySmartGitInput;
+        let mut output = BufferedSmartGitOutput::new(0);
+        assert_eq!(
+            server.execute_prepared_smart_git(failed, &mut input, &mut output),
+            Err(BackendError::ResourceLimit)
+        );
+        assert_eq!(limits.upload_metrics().current_usage, 0);
+
+        limits.uploads.release();
+        assert_eq!(limits.upload_metrics().permit_leak_assertion_failures, 1);
+        assert_eq!(limits.upload_metrics().current_usage, 0);
     }
 }
