@@ -243,6 +243,7 @@ pub fn refresh_certd_tls_config(
     route: &GitdCertdSigningRoute,
     store: &GitdTlsConfigStore,
     timeout_milliseconds: u32,
+    enable_http3: bool,
 ) -> Result<bool, GitdTlsRefreshError> {
     saturating_increment(&store.refresh_attempts);
     let result = refresh_certd_tls_config_inner(
@@ -250,6 +251,7 @@ pub fn refresh_certd_tls_config(
         route,
         store,
         timeout_milliseconds,
+        enable_http3,
     );
     match result {
         Ok(true) => saturating_increment(&store.refresh_activations),
@@ -267,6 +269,7 @@ fn refresh_certd_tls_config_inner(
     route: &GitdCertdSigningRoute,
     store: &GitdTlsConfigStore,
     timeout_milliseconds: u32,
+    enable_http3: bool,
 ) -> Result<bool, GitdTlsRefreshError> {
     let current_generation = store
         .current_generation()
@@ -299,11 +302,20 @@ fn refresh_certd_tls_config_inner(
         .map_err(GitdTlsRefreshError::Identity)?;
     drop(certd);
     let config = build_certd_tls_server_config_with_route(identity, route)
+        .and_then(|config| config.with_protocols(gitd_alpn_protocols(enable_http3)))
         .map_err(|_| GitdTlsRefreshError::Tls)?;
     store
         .install(observed_generation, config)
         .map_err(|_| GitdTlsRefreshError::Generation)?;
     Ok(true)
+}
+
+pub const fn gitd_alpn_protocols(enable_http3: bool) -> &'static [&'static str] {
+    if enable_http3 {
+        &["h2", "h3"]
+    } else {
+        &["h2"]
+    }
 }
 
 fn saturating_increment(counter: &AtomicU64) {
@@ -315,6 +327,12 @@ fn saturating_increment(counter: &AtomicU64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_alpn_matches_the_explicit_listener_mode() {
+        assert_eq!(gitd_alpn_protocols(false), &["h2"]);
+        assert_eq!(gitd_alpn_protocols(true), &["h2", "h3"]);
+    }
 
     #[test]
     fn tls_config_store_rejects_zero_and_rollback_generations() {

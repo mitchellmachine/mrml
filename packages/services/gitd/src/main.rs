@@ -15,7 +15,7 @@ use mrml_gitd::{
     build_certd_tls_server_config_with_route, compose_gitd_service, initialize_catalog_repository,
     initialize_empty_token_store, inspect_admitted_repository_recovery, issue_access_token,
     load_deployment_catalog, load_gitd_authentication, load_gitd_config, load_quic_retry_key,
-    prove_identity_signing_route, recover_admitted_protected_repository,
+    gitd_alpn_protocols, prove_identity_signing_route, recover_admitted_protected_repository,
     recover_admitted_repository, refresh_certd_tls_config, revoke_access_token,
     validate_identity_snapshot, validate_storage_layout,
 };
@@ -510,8 +510,9 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
         eprintln!("component=mrml-gitd event=startup_signing_route_failed category={error:?}");
     })?;
     let identity_generation = identity.snapshot().identity_generation;
-    let tls_config =
-        build_certd_tls_server_config_with_route(identity, &signing_route).map_err(|error| {
+    let tls_config = build_certd_tls_server_config_with_route(identity, &signing_route)
+        .and_then(|config| config.with_protocols(gitd_alpn_protocols(enable_http3)))
+        .map_err(|error| {
             eprintln!(
                 "component=mrml-gitd event=startup_tls_configuration_failed category={error:?}"
             );
@@ -636,6 +637,7 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
                 &rotation_route,
                 &rotation_tls,
                 1_000,
+                enable_http3,
             ) {
                 Ok(changed) => {
                     consecutive_failures = 0;

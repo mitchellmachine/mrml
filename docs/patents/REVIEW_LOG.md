@@ -12546,3 +12546,10 @@ replacement, bounded counters, and jittered capped exponential retry after
 certificate-service failures. It adds no cryptographic primitive, certificate
 protocol, congestion algorithm, adaptive identity policy, or patent-sensitive
 mechanism.
+
+# 2026-09-04 — Listener-bound Gitd ALPN
+
+Patent review: **NOT_TRIGGERED**. This increment binds the existing standard
+HTTP ALPN identifiers to the explicitly selected TCP-only or TCP-plus-QUIC
+listener mode at startup and certificate refresh. It adds no protocol,
+selection heuristic, cryptographic mechanism, or patent-sensitive mechanism.

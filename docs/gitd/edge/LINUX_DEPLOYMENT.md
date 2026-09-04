@@ -51,6 +51,13 @@ socket using the authority-side channel capability. The listener admits that
 exact authority UID only for `Health`; Gitd remains the sole peer admitted for
 receive, ref, proof, and receipt operations.
 
+The base production Compose file publishes TCP 443 only and starts Gitd without
+the HTTP/3 flag. Both startup and every later certd identity refresh install
+only `h2` ALPN in that mode. The explicit HTTP/3 mode installs `h2` plus `h3`
+and owns the paired UDP listener, but it is not enabled by the base production
+candidate. Thus certificate rotation cannot silently turn an H2-only process
+into an H3-advertising process.
+
 The authority's selected protected policy is not a second deployment copy.
 Compose mounts Gitd's policy root read-only into the networkless authority and
 passes the exact `MRML_PROTECTED_REPOSITORY` separately. The authority validates
