@@ -39,10 +39,7 @@ impl AuthorityCandidateStatus {
         next == Self::Aborted
             && matches!(
                 self,
-                Self::Receiving
-                    | Self::ProofsSealed
-                    | Self::Authorized
-                    | Self::ActivationStarted
+                Self::Receiving | Self::ProofsSealed | Self::Authorized | Self::ActivationStarted
             )
             || matches!(
                 (self, next),
@@ -205,9 +202,9 @@ fn hash_optional_object(
 mod tests {
     use super::*;
     use crate::{
-        build_verified_fast_forward_transaction, CandidateRefTransaction, CandidateRefUpdate,
-        FullRefName, HistoryVerificationLimits, ProtectedHistoryContext, RevocationGeneration,
-        SignaturePurpose, TrustGeneration, VerifiedCommitProof,
+        CandidateRefTransaction, CandidateRefUpdate, FullRefName, HistoryVerificationLimits,
+        ProtectedHistoryContext, RevocationGeneration, SignaturePurpose, TrustGeneration,
+        VerifiedCommitProof, build_verified_fast_forward_transaction,
         verify_protected_introduced_history,
     };
     use mrml_runtime::Vector;
@@ -278,16 +275,9 @@ mod tests {
         .unwrap();
         let proof_digest = candidate_proof_set_digest(core::slice::from_ref(&proof)).unwrap();
         assert_ne!(proof_digest, ref_digest);
-        let arrival = candidate_arrival_pack_digest(
-            ObjectFormat::Sha256,
-            id(9),
-            id(10),
-            100,
-            80,
-            1,
-            40,
-        )
-        .unwrap();
+        let arrival =
+            candidate_arrival_pack_digest(ObjectFormat::Sha256, id(9), id(10), 100, 80, 1, 40)
+                .unwrap();
         assert_ne!(arrival, proof_digest);
         assert_ne!(candidate_activation_digest(b"receipt"), arrival);
     }

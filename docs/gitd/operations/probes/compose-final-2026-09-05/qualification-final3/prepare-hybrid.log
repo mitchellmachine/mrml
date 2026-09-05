@@ -1,0 +1,13 @@
+mrml-git-restore-clean-20260905-gitd-1
+mrml-git-restore-clean-20260905-git-authority-1
+mrml-completion-final3-20260905-signer-git-protected-signer-1
+mrml-completion-final3-20260905-credential-git-credential-agent-1
+protected signer named volumes and split channel copies verified
+credential-agent named volumes and split channel copies verified
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+cp: warning: behavior of -n is non-portable and may change in future; use --update=none instead
+exact cold client custody copied into fresh restored namespace; original custody retained stopped

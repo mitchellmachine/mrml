@@ -1,0 +1,15 @@
+time="2026-09-05T10:21:08Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:08Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-certificate-exchange\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:08Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:08Z" level=warning msg="volume \"mrml-completion-final3-20260905-acmed-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:08Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-certd-enroll-run-1ac86f7457e3 Creating
+ Container mrml-completion-final3-20260905-git-certd-enroll-run-1ac86f7457e3 Created
+/usr/bin/mrml-gitd-certd-test-probe: /lib/x86_64-linux-gnu/libc.so.6: weak version `GLIBC_2.39' not found (required by /usr/bin/mrml-gitd-certd-test-probe)
+real-certd activated identity_generation=2 next_request_id=103
+time="2026-09-05T10:21:11Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:11Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:11Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-1e4264735637 Creating
+ Container mrml-completion-final3-20260905-git-client-run-1e4264735637 Created
+error: mrml-git: native HTTPS transport failed: HTTPS transport failed: TLS socket transport failed

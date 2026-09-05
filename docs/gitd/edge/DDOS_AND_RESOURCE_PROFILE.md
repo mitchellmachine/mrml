@@ -38,3 +38,30 @@ Distributed-source tests, sustained soak, TCP slow-client process tests, the
 socket-independent encrypted reactor, and production CPU/RSS/latency measurements remain open gates. These
 deterministic unit tests establish exact bounds, not DDoS resistance or host
 capacity.
+
+## Fixed HTTP/2 deployment profile
+
+For base `serve-h2`, let `N = max_connections` from validated Gitd configuration.
+The production constructor derives `W = max(1, min(16, N / 2))` workers and
+`N - W` queue slots (a nonempty queue is required). Source buckets are bounded
+by `min(N, 65_536)`, global connections by N, and one IPv4 source by
+`min(N, 32)`. Concurrent TLS handshakes are bounded by W. Each source has a
+fixed burst of 64 admission tokens and refills at 8 per second; inactive buckets
+may be retained for 300 seconds. `drain_seconds` controls both queued admission
+expiry and the TLS handshake timeout. These are the actual fixed derivations,
+not separately exposed administrator controls. `max_uploads` and `max_receives`
+remain the independently configured application operation ceilings.
+
+The runtime listener binds IPv4 `0.0.0.0`, and `SocketAddress` exposes four IP
+bytes. `TcpSourceIdentity::Ipv6Prefix64` is a pure-controller representation;
+no live IPv6 admission is claimed or accepted through this listener. A proxy
+would become the observed source; untrusted forwarded headers do not replace
+kernel peer identity.
+
+`GitdHttp2WorkerPool::submit` currently blocks on its bounded channel when full.
+This applies backpressure to the accept worker until a slot opens; it does not
+promise immediate queue-full rejection. Queued entries are checked for expiry
+before beginning TLS, and their admission permits remain held while queued.
+The per-I/O established HTTP/2 server timeout is five minutes, distinct from
+the configured handshake/drain interval. No uniform process shutdown latency
+for active established traffic is established by those bounds alone.

@@ -2,8 +2,8 @@ use std::path::Path;
 
 use mrml_crypto::erase_secret_bytes;
 use mrml_http::{
-    AccessScopes, GitdAuthentication, MAX_TOKEN_STORE_BYTES, OneTimeAccessToken,
-    RepositoryAccessPolicy, RepositoryIdentity, RepositoryProfile, TokenAuthority, TokenRecord,
+    AccessScopes, GitdAuthentication, OneTimeAccessToken, RepositoryAccessPolicy,
+    RepositoryIdentity, RepositoryProfile, TokenAuthority, TokenRecord, MAX_TOKEN_STORE_BYTES,
 };
 use mrml_runtime::{DirectoryCapability, Text, Vector};
 
@@ -608,7 +608,7 @@ fn secure_file(
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
     #[test]
     fn hosted_store_requires_exact_private_files_and_authenticated_bytes() {

@@ -38,17 +38,12 @@ if [ "$mode" = retirement ]; then
   [ "$4" = "$5" ] || { echo "retirement must use the current key creation time for both authorizations" >&2; exit 64; }
   next_keys_volume=$current_keys_volume
 fi
-if [ "$runtime" = podman ]; then
-  for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
-    running=$(podman ps -q --filter volume="$volume") || exit 1
-    [ -z "$running" ] || { echo "trust policy signing requires stopped Gitd, authority, and signer" >&2; exit 1; }
-  done
-else
-  for service in gitd git-authority git-protected-signer; do
-    running=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || { echo "cannot query service state for $service" >&2; exit 1; }
-    [ -z "$running" ] || { echo "trust policy signing requires stopped Gitd, authority, and signer" >&2; exit 1; }
-  done
-fi
+# Client signer containers may belong to a separate Compose project.
+# Check every running consumer of the selected state volumes in this engine.
+for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
+  running=$("$runtime" ps -q --filter volume="$volume") || exit 1
+  [ -z "$running" ] || { echo "trust policy signing requires stopped Gitd, authority, and signer" >&2; exit 1; }
+done
 
 MRML_GIT_SIGNER_KEYS_VOLUME=$current_keys_volume \
 MRML_GIT_SIGNER_CANDIDATE_KEYS_VOLUME=$candidate_keys_volume \

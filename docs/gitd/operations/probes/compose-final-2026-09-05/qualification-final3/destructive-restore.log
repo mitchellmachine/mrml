@@ -1,0 +1,22 @@
+ Container deploy-git-backup-run-bf16539e03f8 Creating
+ Container deploy-git-backup-run-bf16539e03f8 Created
+mrml-completion-final3-20260905-gitd-1
+mrml-completion-final3-20260905-git-authority-1
+mrml-completion-final3-20260905-gitd-repos
+mrml-completion-final3-20260905-gitd-state
+mrml-completion-final3-20260905-gitd-quarantine
+mrml-completion-final3-20260905-gitd-cache
+mrml-completion-final3-20260905-gitd-receipts
+mrml-completion-final3-20260905-gitd-policies
+mrml-completion-final3-20260905-gitd-secrets
+mrml-completion-final3-20260905-gitd-config
+mrml-completion-final3-20260905-authority-state
+mrml-completion-final3-20260905-git-authority-secrets
+mrml-completion-final3-20260905-git-authority-config
+eleven disposable source volumes absent; verified encrypted archive and independent custody retained
+ Container deploy-git-restore-run-1d324df4559d Creating
+ Container deploy-git-restore-run-1d324df4559d Created
+ Container deploy-git-restore-run-bd1ab87b8313 Creating
+ Container deploy-git-restore-run-bd1ab87b8313 Created
+authenticated generation 2026090501 restored to disposable named-volume namespace mrml-git-restore-clean-20260905
+services remain disabled; run recovery and validation before any explicit activation

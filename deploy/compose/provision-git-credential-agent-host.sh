@@ -32,7 +32,8 @@ ensure_volume() {
   if [ "$created" = true ]; then
     chown "$uid:$gid" "$path"
     chmod "$mode" "$path"
-    install -o "$uid" -g "$gid" -m 0400 /dev/null "$path/.mrml-volume"
+    install -m 0400 /dev/null "$path/.mrml-volume"
+    chown "$uid:$gid" "$path/.mrml-volume"
   fi
   [ "$(stat -c '%u:%g %a' "$path")" = "$uid:$gid $mode" ]
 }
@@ -55,8 +56,10 @@ if [ ! -e "$agent_channel" ]; then
   chmod 0700 "$temporary_directory"
   dd if=/dev/urandom of="$temporary_directory/channel" bs=32 count=1 status=none
   chmod 0600 "$temporary_directory/channel"
-  install -o "$agent_uid" -g "$agent_gid" -m 0400 "$temporary_directory/channel" "$agent_channel"
-  install -o "$client_uid" -g "$client_gid" -m 0400 "$temporary_directory/channel" "$client_channel"
+  install -m 0400 "$temporary_directory/channel" "$agent_channel"
+  chown "$agent_uid:$agent_gid" "$agent_channel"
+  install -m 0400 "$temporary_directory/channel" "$client_channel"
+  chown "$client_uid:$client_gid" "$client_channel"
   rm -rf "$temporary_directory"
   trap - EXIT HUP INT TERM
 fi

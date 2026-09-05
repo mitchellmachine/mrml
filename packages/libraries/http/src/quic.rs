@@ -1760,10 +1760,9 @@ impl RetryPacket {
         if input.len() < 1 + 4 + 1 + 1 + 16 || original_destination_id.len() > 20 {
             return Err(QuicError::Truncated);
         }
-        let version = QuicVersion::from_wire(u32::from_be_bytes([
-            input[1], input[2], input[3], input[4],
-        ]))
-        .ok_or(QuicError::InvalidPacket)?;
+        let version =
+            QuicVersion::from_wire(u32::from_be_bytes([input[1], input[2], input[3], input[4]]))
+                .ok_or(QuicError::InvalidPacket)?;
         if input[0] & 0xf0 != version.retry_type() {
             return Err(QuicError::InvalidPacket);
         }
@@ -2277,9 +2276,7 @@ mod tests {
     }
     #[test]
     fn rfc9001_retry_integrity_authenticates_original_destination() {
-        let wire = hex(
-            "ff000000010008f067a5502a4262b5746f6b656e04a265ba2eff4d829058fb3f0f2496ba",
-        );
+        let wire = hex("ff000000010008f067a5502a4262b5746f6b656e04a265ba2eff4d829058fb3f0f2496ba");
         let original_destination_id = hex("8394c8f03e515708");
         let (version, packet) = RetryPacket::open(&wire, &original_destination_id).unwrap();
         assert_eq!(version, QuicVersion::V1);

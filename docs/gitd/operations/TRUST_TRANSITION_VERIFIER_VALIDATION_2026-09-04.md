@@ -27,11 +27,14 @@ policy never depends on transition-upload files that the wrapper subsequently
 removes.
 
 Authority startup retains one descriptor-relative policy-directory capability.
-It uses the configured bootstrap pair only while the exact current policy
-authorizes that pair at trusted validation time. If the bootstrap pair is no
-longer active, startup opens only the exact current trust generation's retained
-files beneath that capability, parses both keys, binds their complete hybrid
-identity, and rechecks policy authorization. Missing, stale-generation,
+The original implementation preferred the bootstrap pair while it remained
+active. The 2026-09-05 real Docker overlap regression exposed that this shadows
+the authenticated successor selected by signer advancement. Current startup
+uses the bootstrap pair only at generation 1; every later generation requires
+its exact retained verifier files beneath that capability, parses both keys,
+binds their complete hybrid identity, and rechecks policy authorization. The
+current authority has one selected proof verifier; this does not claim arbitrary
+simultaneous proof-signer multiplexing during overlap. Missing, stale-generation,
 substituted, malformed, wrongly owned, writable, linked, or inactive keys fail
 closed.
 

@@ -50,17 +50,12 @@ case $operation in
 esac
 selected_repository=$(read_environment_value MRML_PROTECTED_REPOSITORY)
 [ "$selected_repository" = "$repository" ] || { echo "repository does not match MRML_PROTECTED_REPOSITORY" >&2; exit 1; }
-if [ "$runtime" = podman ]; then
-  for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
-    running=$(podman ps -q --filter volume="$volume") || exit 1
-    [ -z "$running" ] || { echo "trust policy construction requires stopped Gitd, authority, and signer" >&2; exit 1; }
-  done
-else
-  for service in gitd git-authority git-protected-signer; do
-    running=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || { echo "cannot query service state for $service" >&2; exit 1; }
-    [ -z "$running" ] || { echo "trust policy construction requires stopped Gitd, authority, and signer" >&2; exit 1; }
-  done
-fi
+# Client signer containers may belong to a separate Compose project.
+# Check every running consumer of the selected state volumes in this engine.
+for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
+  running=$("$runtime" ps -q --filter volume="$volume") || exit 1
+  [ -z "$running" ] || { echo "trust policy construction requires stopped Gitd, authority, and signer" >&2; exit 1; }
+done
 
 "$runtime" compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
   --profile admin run --rm --no-deps git-trust-policy-construct "$@"

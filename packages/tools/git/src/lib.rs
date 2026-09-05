@@ -16,6 +16,8 @@ mod cache_pack;
 mod cache_pack_file;
 mod compaction;
 mod compaction_file;
+#[cfg(test)]
+mod compression_oracle_tests;
 #[cfg(target_os = "linux")]
 mod credential_agent_unix;
 mod deflate;
@@ -529,3 +531,6 @@ mod tests {
         assert!(validate_positional(&Vector::from([Text::from("key\ncommand")])).is_err());
     }
 }
+
+#[cfg(target_os = "linux")]
+pub mod offline_release;

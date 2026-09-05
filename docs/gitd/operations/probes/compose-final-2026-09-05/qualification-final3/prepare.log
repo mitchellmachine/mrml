@@ -1,0 +1,21 @@
+provision-git-host: verified /mnt/mrml-completion-final3-20260905
+Cloudflare token not created; install it at /var/lib/mrml-docker-ce/volumes/mrml-completion-final3-20260905-acmed-secrets/_data/cloudflare-api-token as 21004:21004 mode 0400
+configuration not installed: /var/lib/mrml-docker-ce/volumes/mrml-completion-final3-20260905-certd-config/_data/config.json
+configuration not installed: /var/lib/mrml-docker-ce/volumes/mrml-completion-final3-20260905-certd-config/_data/acme-trust-roots.pem
+configuration not installed: /var/lib/mrml-docker-ce/volumes/mrml-completion-final3-20260905-acmed-config/_data/config.json
+MRML ACME host files and managed volumes verified at /mnt/mrml-completion-final3-20260905
+protected signer named volumes and split channel copies verified
+credential-agent named volumes and split channel copies verified
+disposable acceptance scratch volume ownership verified
+installed immutable input into its scoped managed volume
+time="2026-09-05T10:12:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-gitd\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:12:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:12:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:12:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:12:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:12:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-publications\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-certd-1 Creating
+ Container mrml-completion-final3-20260905-certd-1 Created
+ Container mrml-completion-final3-20260905-certd-1 Starting
+ Container mrml-completion-final3-20260905-certd-1 Started
+mrml-certd: certd lifecycle channel unavailable

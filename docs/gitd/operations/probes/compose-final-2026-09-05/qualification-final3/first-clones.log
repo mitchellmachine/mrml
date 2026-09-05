@@ -1,0 +1,15 @@
+time="2026-09-05T10:18:51Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:51Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-git-client-run-5472385faf81 Creating
+ Container mrml-completion-final3-20260905-git-client-run-5472385faf81 Created
+Cloned https://git.example:8443/owner/first.git into /work/first on branch main
+time="2026-09-05T10:18:56Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:56Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-git-client-run-01686ad9790f Creating
+ Container mrml-completion-final3-20260905-git-client-run-01686ad9790f Created
+Cloned https://git.example:8443/owner/first.git into /work/first-before-three on branch main
+time="2026-09-05T10:19:01Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:19:01Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-git-client-run-90c2d1701835 Creating
+ Container mrml-completion-final3-20260905-git-client-run-90c2d1701835 Created
+Fetched 0 object(s) and 1 branch ref(s) from origin

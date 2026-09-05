@@ -1,12 +1,12 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use mrml_http::{Http3ServerConnection, QuicAdmittedHandshake, QuicConnectionHandle};
 use mrml_runtime::{
-    JoinHandle, Receiver, Sender, TryRecvError, Vector, blocking_channel, spawn_joinable,
+    blocking_channel, spawn_joinable, JoinHandle, Receiver, Sender, TryRecvError, Vector,
 };
 
-use crate::{GitdComposedService, GitdTlsConfigStore, serve_gitd_http3_connection_with_drain};
+use crate::{serve_gitd_http3_connection_with_drain, GitdComposedService, GitdTlsConfigStore};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitdHttp3WorkerError {
@@ -71,8 +71,7 @@ impl GitdHttp3WorkerPool {
         let event_capacity = maximum_connections
             .checked_mul(2)
             .ok_or(GitdHttp3WorkerError::Limit)?;
-        let (event_sender, events) =
-            blocking_channel::<GitdHttp3LifecycleEvent>(event_capacity);
+        let (event_sender, events) = blocking_channel::<GitdHttp3LifecycleEvent>(event_capacity);
         let counters = Arc::new(WorkerCounters::default());
         let draining = Arc::new(AtomicBool::new(false));
         let mut workers =
@@ -113,7 +112,8 @@ impl GitdHttp3WorkerPool {
                             continue;
                         }
                     };
-                    let mut connection = match Http3ServerConnection::accept(job.listener, &config) {
+                    let mut connection = match Http3ServerConnection::accept(job.listener, &config)
+                    {
                         Ok(connection) => connection,
                         Err(_) => {
                             increment(&worker_counters.handshake_failures);
@@ -174,10 +174,7 @@ impl GitdHttp3WorkerPool {
         })
     }
 
-    pub fn submit(
-        &self,
-        job: QuicAdmittedHandshake,
-    ) -> Result<(), QuicAdmittedHandshake> {
+    pub fn submit(&self, job: QuicAdmittedHandshake) -> Result<(), QuicAdmittedHandshake> {
         let Some(jobs) = &self.jobs else {
             return Err(job);
         };
@@ -186,9 +183,7 @@ impl GitdHttp3WorkerPool {
         Ok(())
     }
 
-    pub fn try_event(
-        &self,
-    ) -> Result<Option<GitdHttp3LifecycleEvent>, GitdHttp3WorkerError> {
+    pub fn try_event(&self) -> Result<Option<GitdHttp3LifecycleEvent>, GitdHttp3WorkerError> {
         match self.events.try_recv() {
             Ok(event) => Ok(Some(event)),
             Err(TryRecvError::Empty) => Ok(None),

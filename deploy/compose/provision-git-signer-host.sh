@@ -34,7 +34,8 @@ ensure_volume() {
     chmod "$mode" "$path"
     # Suppress image-directory copy-up, which otherwise replaces metadata on
     # an empty named volume during its first Docker or Podman mount.
-    install -o "$uid" -g "$gid" -m 0400 /dev/null "$path/.mrml-volume"
+    install -m 0400 /dev/null "$path/.mrml-volume"
+    chown "$uid:$gid" "$path/.mrml-volume"
   fi
   [ "$(stat -c '%u:%g %a' "$path")" = "$uid:$gid $mode" ]
 }
@@ -58,8 +59,10 @@ if [ ! -e "$signer_channel" ]; then
   temporary=$(mktemp)
   trap 'rm -f "$temporary"' EXIT HUP INT TERM
   dd if=/dev/urandom of="$temporary" bs=32 count=1 status=none
-  install -o "$signer_uid" -g "$signer_gid" -m 0400 "$temporary" "$signer_channel"
-  install -o "$client_uid" -g "$client_gid" -m 0400 "$temporary" "$client_channel"
+  install -m 0400 "$temporary" "$signer_channel"
+  chown "$signer_uid:$signer_gid" "$signer_channel"
+  install -m 0400 "$temporary" "$client_channel"
+  chown "$client_uid:$client_gid" "$client_channel"
   rm -f "$temporary"
   trap - EXIT HUP INT TERM
 fi

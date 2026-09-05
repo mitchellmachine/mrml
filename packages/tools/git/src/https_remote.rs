@@ -214,9 +214,7 @@ impl HttpsRemote {
         parse_protected_receive_discovery(&body)
     }
 
-    pub fn discover_receive_pack_authenticated<
-        P: crate::HttpsCredentialProvider + ?Sized,
-    >(
+    pub fn discover_receive_pack_authenticated<P: crate::HttpsCredentialProvider + ?Sized>(
         &self,
         provider: &mut P,
     ) -> Result<ProtectedReceiveDiscovery, HttpsRemoteError> {
@@ -250,10 +248,7 @@ impl HttpsRemote {
             use core::fmt::Write;
             write!(&mut id, "{byte:02x}").map_err(|_| HttpsRemoteError::Protocol)?;
         }
-        let target = mrml_runtime::mrml_format!(
-            "{}/mrml-candidate-v1/{id}",
-            self.repository_path
-        );
+        let target = mrml_runtime::mrml_format!("{}/mrml-candidate-v1/{id}", self.repository_path);
         let authority = self.authority();
         let headers = request_headers(
             "application/vnd.mrml.git-candidate-status-v1",
@@ -482,19 +477,11 @@ impl HttpsRemote {
         self.discover_receive_pack_with_authorization(authorization)?;
         let prefix = crate::protected_push_command_prefix(old, new, reference)
             .map_err(|_| HttpsRemoteError::Protocol)?;
-        self.push_pack_file_with_authorization(
-            reference,
-            pack_path,
-            authorization,
-            prefix,
-            false,
-        )
-        .map(|_| ())
+        self.push_pack_file_with_authorization(reference, pack_path, authorization, prefix, false)
+            .map(|_| ())
     }
 
-    pub fn push_protected_pack_file_authenticated<
-        P: crate::HttpsCredentialProvider + ?Sized,
-    >(
+    pub fn push_protected_pack_file_authenticated<P: crate::HttpsCredentialProvider + ?Sized>(
         &self,
         old: crate::ObjectId,
         new: crate::ObjectId,
@@ -515,22 +502,11 @@ impl HttpsRemote {
         if self.discover_receive_pack_with_authorization(authorization)? != expected {
             return Err(HttpsRemoteError::Protocol);
         }
-        let prefix = crate::protected_push_command_with_proofs(
-            old,
-            new,
-            reference,
-            candidate_id,
-            proofs,
-        )
-        .map_err(|_| HttpsRemoteError::Protocol)?;
-        self.push_pack_file_with_authorization(
-            reference,
-            pack_path,
-            authorization,
-            prefix,
-            true,
-        )
-        .and_then(|receipt| receipt.ok_or(HttpsRemoteError::Protocol))
+        let prefix =
+            crate::protected_push_command_with_proofs(old, new, reference, candidate_id, proofs)
+                .map_err(|_| HttpsRemoteError::Protocol)?;
+        self.push_pack_file_with_authorization(reference, pack_path, authorization, prefix, true)
+            .and_then(|receipt| receipt.ok_or(HttpsRemoteError::Protocol))
     }
 
     fn push_pack_file_with_authorization(
@@ -1264,7 +1240,11 @@ mod tests {
                     .any(|window| window == required.as_bytes())
             );
         }
-        assert!(!request.windows(13).any(|window| window == b"sideband-all\n"));
+        assert!(
+            !request
+                .windows(13)
+                .any(|window| window == b"sideband-all\n")
+        );
         assert!(request.windows(4).any(|window| window == b"0001"));
         assert!(request.ends_with(b"0000"));
         assert!(request.len() <= 4096);

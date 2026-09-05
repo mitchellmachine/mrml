@@ -1,0 +1,73 @@
+ Container mrml-completion-final3-20260905-git-authority-1 Restarting
+ Container mrml-completion-final3-20260905-git-authority-1 Started
+time="2026-09-05T10:20:40Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:40Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:40Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-d051c7429425 Creating
+ Container mrml-completion-final3-20260905-git-client-run-d051c7429425 Created
+Fetched 0 object(s) and 1 branch ref(s) from origin
+ Container mrml-completion-final3-20260905-signer-git-protected-signer-1 Restarting
+ Container mrml-completion-final3-20260905-signer-git-protected-signer-1 Started
+time="2026-09-05T10:20:43Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:43Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:43Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-82fe5cc5121a Creating
+ Container mrml-completion-final3-20260905-git-client-run-82fe5cc5121a Created
+Fetched 0 object(s) and 1 branch ref(s) from origin
+ Container mrml-completion-final3-20260905-credential-git-credential-agent-1 Restarting
+ Container mrml-completion-final3-20260905-credential-git-credential-agent-1 Started
+time="2026-09-05T10:20:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:46Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-85c48eae42d9 Creating
+ Container mrml-completion-final3-20260905-git-client-run-85c48eae42d9 Created
+Fetched 0 object(s) and 1 branch ref(s) from origin
+ Container mrml-completion-final3-20260905-certd-1 Stopping
+ Container mrml-completion-final3-20260905-certd-1 Stopped
+time="2026-09-05T10:20:49Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:49Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:49Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-dd398c3afa7c Creating
+ Container mrml-completion-final3-20260905-git-client-run-dd398c3afa7c Created
+error: mrml-git: native HTTPS transport failed: HTTPS transport failed: TLS socket transport failed
+
+time="2026-09-05T10:20:49Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:49Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:49Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-publications\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:49Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-gitd\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:49Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:49Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:49Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-certd-1 Starting
+ Container mrml-completion-final3-20260905-certd-1 Started
+mrml-certd ready generation=1
+time="2026-09-05T10:20:57Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:57Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:57Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-9a4e8f028194 Creating
+ Container mrml-completion-final3-20260905-git-client-run-9a4e8f028194 Created
+Fetched 0 object(s) and 1 branch ref(s) from origin
+time="2026-09-05T10:20:59Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:59Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:20:59Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-7e63d39bd0fd Creating
+ Container mrml-completion-final3-20260905-git-client-run-7e63d39bd0fd Created
+MRML GIT · NATIVE STATUS
+  root   /work/first
+  branch main
+  head   e3ddff4c7ef695eeacf09a8392dbbe6350ed9a2d98c9293ea41e1980a7884b0b
+  track origin/main  0 ahead  0 behind
+  modified staged acceptance.txt
+time="2026-09-05T10:21:00Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:00Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:00Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-d79fb0eb8429 Creating
+ Container mrml-completion-final3-20260905-git-client-run-d79fb0eb8429 Created
+[c29284eb367a] Independent daemon restart recovery
+time="2026-09-05T10:21:00Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:00Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:21:00Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-f88c5e05f0f0 Creating
+ Container mrml-completion-final3-20260905-git-client-run-f88c5e05f0f0 Created
+Pushed c29284eb367a to origin/main
+authority, signer, credential and real-certd restart recovery PASS; Gitd process unchanged

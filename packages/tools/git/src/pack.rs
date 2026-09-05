@@ -1,7 +1,7 @@
-use crate::deflate::encode_zlib;
+use crate::deflate::{DeflateOutput, encode_zlib, stream_zlib};
 use crate::inflate::inflate_zlib_prefix;
-use crate::pack_delta::select_deltas;
 use crate::object_id_set::ObjectIdMap;
+use crate::pack_delta::select_deltas;
 use crate::{
     ObjectFormat, ObjectId, ObjectKind, PackIndexEntry, Sha1, encode_loose_object_with_format,
 };
@@ -21,12 +21,18 @@ pub struct PackObject {
 
 pub trait PackStreamOutput {
     fn write(&mut self, bytes: &[u8]) -> Result<(), PackError>;
+    /// External service budgets may deny the next bounded compression block.
+    /// Local callers still use the encoder's fixed per-block work ceiling.
+    fn charge_compression(&mut self, _units: u64) -> Result<(), PackError> {
+        Ok(())
+    }
 }
 
 pub struct PackStreamEncoder<'a> {
     format: ObjectFormat,
     expected_objects: usize,
     written_objects: usize,
+    failed: bool,
     writer: AuthenticatedPackWriter<'a>,
 }
 
@@ -51,11 +57,15 @@ impl<'a> PackStreamEncoder<'a> {
             format,
             expected_objects: object_count,
             written_objects: 0,
+            failed: false,
             writer,
         })
     }
 
     pub fn write_object(&mut self, object: &PackObject) -> Result<(), PackError> {
+        if self.failed {
+            return Err(PackError::Compression);
+        }
         if self.written_objects >= self.expected_objects {
             return Err(PackError::TooManyObjects);
         }
@@ -75,13 +85,22 @@ impl<'a> PackStreamEncoder<'a> {
         };
         let mut header = Vector::new();
         encode_object_header(kind, object.contents.len(), &mut header);
-        self.writer.write(&header)?;
-        write_stored_zlib(&object.contents, &mut self.writer)?;
+        let result = self
+            .writer
+            .write(&header)
+            .and_then(|()| stream_zlib(&[&object.contents], &mut self.writer));
+        if let Err(error) = result {
+            self.failed = true;
+            return Err(error);
+        }
         self.written_objects += 1;
         Ok(())
     }
 
     pub fn finish(self) -> Result<(), PackError> {
+        if self.failed {
+            return Err(PackError::Compression);
+        }
         if self.written_objects != self.expected_objects {
             return Err(PackError::Truncated);
         }
@@ -155,7 +174,7 @@ impl<'a> AuthenticatedPackWriter<'a> {
     }
 }
 
-fn hash_object(format: ObjectFormat, kind: ObjectKind, contents: &[u8]) -> ObjectId {
+pub(crate) fn hash_object(format: ObjectFormat, kind: ObjectKind, contents: &[u8]) -> ObjectId {
     let header = mrml_runtime::mrml_format!("{} {}\0", kind.name(), contents.len());
     match format {
         ObjectFormat::Sha1 => {
@@ -173,38 +192,14 @@ fn hash_object(format: ObjectFormat, kind: ObjectKind, contents: &[u8]) -> Objec
     }
 }
 
-fn write_stored_zlib(
-    source: &[u8],
-    output: &mut AuthenticatedPackWriter<'_>,
-) -> Result<(), PackError> {
-    output.write(&[0x78, 0x01])?;
-    let mut offset = 0usize;
-    loop {
-        let length = (source.len() - offset).min(u16::MAX as usize);
-        let final_block = offset + length == source.len();
-        output.write(&[u8::from(final_block)])?;
-        output.write(&(length as u16).to_le_bytes())?;
-        output.write(&(!(length as u16)).to_le_bytes())?;
-        output.write(&source[offset..offset + length])?;
-        offset += length;
-        if final_block {
-            break;
-        }
+impl DeflateOutput for AuthenticatedPackWriter<'_> {
+    type Error = PackError;
+    fn charge(&mut self, units: u64) -> Result<(), PackError> {
+        self.output.charge_compression(units)
     }
-    output.write(&adler32_stream(source).to_be_bytes())
-}
-
-fn adler32_stream(source: &[u8]) -> u32 {
-    let (mut a, mut b) = (1u32, 0u32);
-    for chunk in source.chunks(5552) {
-        for byte in chunk {
-            a += u32::from(*byte);
-            b += a;
-        }
-        a %= 65_521;
-        b %= 65_521;
+    fn write(&mut self, bytes: &[u8]) -> Result<(), PackError> {
+        AuthenticatedPackWriter::write(self, bytes)
     }
-    b << 16 | a
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1051,6 +1046,26 @@ mod tests {
         assert_eq!(
             trailer,
             Sha256::digest(&sink.bytes[..sink.bytes.len() - 32])
+        );
+    }
+
+    #[test]
+    fn streaming_large_compressible_object_preserves_hash_and_compresses() {
+        let contents: Vector<u8> = core::iter::repeat_n(b'x', 1024 * 1024 + 1).collect();
+        let object = PackObject {
+            id: ObjectId::blob_with_format(ObjectFormat::Sha256, &contents),
+            kind: ObjectKind::Blob,
+            contents,
+        };
+        let mut sink = MeasuringSink {
+            bytes: Vector::new(),
+            maximum_write: 0,
+        };
+        write_pack_without_deltas(&[object.clone()], ObjectFormat::Sha256, &mut sink).unwrap();
+        assert!(sink.bytes.len() < object.contents.len() / 10);
+        assert_eq!(
+            parse_pack_with_format(&sink.bytes, ObjectFormat::Sha256).unwrap(),
+            &[object][..]
         );
     }
 

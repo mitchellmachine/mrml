@@ -1,0 +1,71 @@
+time="2026-09-05T10:43:20Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-channel\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:20Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-runtime-git-signer\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:20Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:20Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-keys\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-retired-exact-git-protected-signer-run-f898a8a19bbb Creating
+ Container mrml-git-restore-clean-20260905-retired-exact-git-protected-signer-run-f898a8a19bbb Created
+mrml-git-protected-signer: operation failed closed
+
+exact retired private pair and original creation time rejected with exit 78; state unchanged
+time="2026-09-05T10:43:21Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-authority-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:21Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:21Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-runtime-git-authority\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:21Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-authority-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:21Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-authority-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-git-authority-1 Starting
+ Container mrml-git-restore-clean-20260905-git-authority-1 Started
+time="2026-09-05T10:43:21Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:21Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-next-keys\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:21Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-channel\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:21Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-runtime-git-signer\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-signer-git-protected-signer-1 Recreate
+ Container mrml-git-restore-clean-20260905-signer-git-protected-signer-1 Recreated
+ Container mrml-git-restore-clean-20260905-signer-git-protected-signer-1 Starting
+ Container mrml-git-restore-clean-20260905-signer-git-protected-signer-1 Started
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-runtime-git-authority\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-receipts\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-authority-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-authority-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-cache\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-authority-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-repos\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-quarantine\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:43:22Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-git-authority-1 Running
+ Container mrml-git-restore-clean-20260905-git-authority-1 Waiting
+ Container mrml-git-restore-clean-20260905-git-authority-1 Healthy
+ Container mrml-git-restore-clean-20260905-gitd-1 Starting
+ Container mrml-git-restore-clean-20260905-gitd-1 Started
+time="2026-09-05T10:43:39Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-git-client-run-2221631718f8 Creating
+ Container mrml-git-restore-clean-20260905-git-client-run-2221631718f8 Created
+MRML GIT · NATIVE STATUS
+  root   /work/restored-first
+  branch main
+  head   0aee46a8f7561357afcd18f11cebc2c4db9c9600117e39503e0984ca0e6596af
+  track origin/main  1 ahead  0 behind
+  modified staged acceptance.txt
+time="2026-09-05T10:43:47Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-git-client-run-68242803e85a Creating
+ Container mrml-git-restore-clean-20260905-git-client-run-68242803e85a Created
+[e084f579d909] Compose surviving hybrid key after retirement
+time="2026-09-05T10:43:47Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-git-client-run-5f089768f47b Creating
+ Container mrml-git-restore-clean-20260905-git-client-run-5f089768f47b Created
+Pushed e084f579d909 to origin/main
+time="2026-09-05T10:44:00Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-git-client-run-62a4d0461d25 Creating
+ Container mrml-git-restore-clean-20260905-git-client-run-62a4d0461d25 Created
+Fetched 6 object(s) and 1 branch ref(s) from origin
+time="2026-09-05T10:44:14Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-git-client-run-ed42eb60f22a Creating
+ Container mrml-git-restore-clean-20260905-git-client-run-ed42eb60f22a Created
+MRML GIT · NATIVE STATUS
+  root   /work/restored-first
+  branch main
+  head   e084f579d909be228b57ae9e4ee2b6012bd4f8f1d95da154990a86f5b48c8be9
+  track origin/main  0 ahead  0 behind
+  clean — index matches working tree

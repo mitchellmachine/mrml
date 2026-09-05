@@ -128,11 +128,9 @@ require 'volume_mount "$volume_prefix-gitd-repos"' tools/containers/measure-git-
 reject '$deploy_root/gitd/' tools/containers/measure-git-streaming.sh
 require '--no-build --pull never git-authority gitd' deploy/compose/switch-git-version.sh
 require 'repository data was not rolled back' deploy/compose/switch-git-version.sh
-require 'docker load < "$bundle/images/$image.tar"' deploy/compose/load-offline-git-images.sh
-reject 'docker load -i' deploy/compose/load-offline-git-images.sh
-require 'loaded image runtime identity does not match images.git.lock' deploy/compose/load-offline-git-images.sh
+# Offline authentication and exact image identity now have behavioral Rust
+# regressions in release_cli_tests.rs, rather than shell-source assertions.
 require 'archive_sha256=' deploy/compose/build-offline-git-bundle.sh
-require 'localhost/mrml/$image:$version' deploy/compose/load-offline-git-images.sh
 require 'compose.git-backup.yaml' deploy/compose/backup-git.sh
 require 'git-backup ensure-key' deploy/compose/backup-git.sh
 require 'git-backup create' deploy/compose/backup-git.sh
@@ -184,8 +182,10 @@ require 'repository initialization requires stopped Gitd' deploy/compose/initial
 require 'initialize-repository /etc/mrml/gitd.conf' deploy/compose/initialize-git-repository.sh
 require 'protected policy initialization requires stopped Gitd and authority' deploy/compose/initialize-git-protected-policy.sh
 require 'initialize-protected-policy /etc/mrml/gitd.conf' deploy/compose/initialize-git-protected-policy.sh
-require '$volume_prefix-gitd-policies:/mnt/mrml/gitd/policies:rw' deploy/compose/initialize-git-protected-policy.sh
-require '$volume_prefix-git-authority-config:/run/mrml-bootstrap:ro' deploy/compose/initialize-git-protected-policy.sh
+require '$directory/compose.git-policy-init.yaml' deploy/compose/initialize-git-protected-policy.sh
+require 'source: mrml-gitd-policies' deploy/compose/compose.git-policy-init.yaml
+require 'read_only: false' deploy/compose/compose.git-policy-init.yaml
+require 'target: /run/mrml-bootstrap' deploy/compose/compose.git-policy-init.yaml
 reject '$deployment_root/gitd/policies' deploy/compose/initialize-git-protected-policy.sh
 require 'trust transition requires stopped Gitd, authority, and signer' deploy/compose/transition-git-trust.sh
 require 'trust policy construction requires stopped Gitd, authority, and signer' deploy/compose/construct-git-trust-policy.sh
@@ -217,11 +217,11 @@ require 'run -T --rm --no-deps' deploy/compose/token-git.sh
 require 'recovery administration requires stopped Gitd' deploy/compose/recovery-git.sh
 require 'recover-safe' deploy/compose/recovery-git.sh
 require 'GIT_STREAMING_EVIDENCE' deploy/compose/build-offline-git-bundle.sh
-require 'docker-archive:$payload/images/$image.tar' deploy/compose/build-offline-git-bundle.sh
+require 'oci-archive:$archive' deploy/compose/build-offline-git-bundle.sh
+require 'podman save --format oci-archive' deploy/compose/build-offline-git-bundle.sh
+require '.mediaType == "application/vnd.oci.image.manifest.v1+json"' deploy/compose/build-offline-git-bundle.sh
 require 'offline-signing-config.json' deploy/compose/build-offline-git-bundle.sh
-require 'git archive --format=tar HEAD deploy/compose tools/containers/measure-git-streaming.sh' deploy/compose/build-offline-git-bundle.sh
-require '--insecure-ignore-tlog' deploy/compose/verify-offline-git-bundle.sh
-require 'evidence/streaming' deploy/compose/verify-offline-git-bundle.sh
-require 'policy-source/deploy/compose' deploy/compose/verify-offline-git-bundle.sh
+reject '$payload/policy-source' deploy/compose/build-offline-git-bundle.sh
+reject '$payload/deploy/tests' deploy/compose/build-offline-git-bundle.sh
 
 echo "Git Compose static invariants PASS"

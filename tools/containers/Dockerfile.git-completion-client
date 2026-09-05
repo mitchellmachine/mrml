@@ -1,0 +1,20 @@
+# Test-only native client and real-certd enrollment probe. No fixture daemon.
+# syntax=docker/dockerfile:1.7
+FROM docker.io/library/debian@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867 AS verify
+COPY target/mrml-native/linux/release/mrml-git /payload/mrml-git
+COPY target/mrml-native/linux/release/mrml-gitd-certd-test-probe /payload/mrml-gitd-certd-test-probe
+RUN test -x /payload/mrml-git && test -x /payload/mrml-gitd-certd-test-probe && \
+    ! ldd /payload/mrml-git | grep -q 'not found' && \
+    ! ldd /payload/mrml-gitd-certd-test-probe | grep -q '=> not found' && \
+    install -d -m 0700 /work && \
+    install -m 0555 /payload/mrml-git /usr/bin/mrml-git && \
+    /payload/mrml-gitd-certd-test-probe measure-native /work/build-accounting /usr/bin/mrml-git --version && \
+    install -d -o 21005 -g 21005 -m 0700 /payload/work
+
+FROM gcr.io/distroless/cc-debian12@sha256:777e96cf322c46bc32aca926c263624c4dc8d7cf37e2fa65ba2c7e697318ebbb
+COPY --from=verify /payload/mrml-git /usr/bin/mrml-git
+COPY --from=verify /payload/mrml-gitd-certd-test-probe /usr/bin/mrml-gitd-certd-test-probe
+COPY --from=verify /payload/work /work
+WORKDIR /work
+USER 21005:21005
+ENTRYPOINT ["/usr/bin/mrml-git"]

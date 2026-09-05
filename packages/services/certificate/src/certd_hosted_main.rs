@@ -1,26 +1,28 @@
-use mrml_acme::{write_key_change_inner_jws, AcmeIdentifier, CaClass};
+mod certd_hosted_lifecycle;
+
+use mrml_acme::{AcmeIdentifier, CaClass, write_key_change_inner_jws};
 use mrml_certificate::{
-    create_hosted_backup_manifest, create_hosted_component_backup,
+    AccountP256SigningKey, AcmeJwsOperation, CERTD_CHANNEL_HEADER_BYTES, CertdAccountKeyRequest,
+    CertdActivationRequest, CertdCandidateStage, CertdCandidateState, CertdChannelCapability,
+    CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest, CertdChannelRole, CertdConfig,
+    CertdDirectoryClass, CertdPeerIdentity, CertdReplayWindow, CertdTlsKeyRequest,
+    CertificateChainVerifier, CertificateP256SigningKey, CertificateValidationPolicy,
+    ConstrainedAcmeJwsPolicy, DurableNamespace, DurableObjectId, DurableRecord, DurableRecordKind,
+    DurableStateStore, HmacSha256DurableAuthenticator, HostedBackupRole, HostedBackupSource,
+    HostedCertificateChainVerifier, HostedDurableStateStore, HostedP256KeyDescriptor,
+    HostedP256KeyError, HostedP256KeyRole, HostedP256KeyStore, HostedSecret,
+    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES, MAX_CERTIFICATE_CHAIN_BYTES,
+    MAX_CERTIFICATES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, PRODUCTION_SECRET_MODE,
+    PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId, TlsKeyIdentity, TlsSigningRoute,
+    UnixCertdListener, create_hosted_backup_manifest, create_hosted_component_backup,
     decode_certd_account_key_request, decode_certd_candidate_request, decode_certd_channel_request,
     decode_certd_jws_request, decode_certd_tls_key_request, encode_certd_candidate_request,
     encode_certd_channel_request, encode_certd_tls_key_response, parse_certd_config,
     restore_hosted_component_backup, verify_hosted_backup_manifest, verify_hosted_component_backup,
-    write_constrained_acme_jws, write_pkcs10_csr, AccountP256SigningKey, AcmeJwsOperation,
-    CertdAccountKeyRequest, CertdActivationRequest, CertdCandidateStage, CertdCandidateState,
-    CertdChannelCapability, CertdChannelOperation, CertdChannelPolicy, CertdChannelRequest,
-    CertdChannelRole, CertdConfig, CertdDirectoryClass, CertdPeerIdentity, CertdReplayWindow,
-    CertdTlsKeyRequest, CertificateChainVerifier, CertificateP256SigningKey,
-    CertificateValidationPolicy, ConstrainedAcmeJwsPolicy, DurableNamespace, DurableObjectId,
-    DurableRecord, DurableRecordKind, DurableStateStore, HmacSha256DurableAuthenticator,
-    HostedBackupRole, HostedBackupSource, HostedCertificateChainVerifier, HostedDurableStateStore,
-    HostedP256KeyDescriptor, HostedP256KeyError, HostedP256KeyRole, HostedP256KeyStore,
-    HostedSecret, PemCertificateChain, TlsCertificateSigningKey, TlsIdentityId, TlsKeyIdentity,
-    TlsSigningRoute, UnixCertdListener, CERTD_CHANNEL_HEADER_BYTES,
-    MAX_CERTD_CHANNEL_PAYLOAD_BYTES, MAX_CERTD_CONFIG_BYTES, MAX_CERTIFICATES,
-    MAX_CERTIFICATE_CHAIN_BYTES, MAX_CSR_BYTES, MAX_CSR_IDENTIFIERS, PRODUCTION_SECRET_MODE,
+    write_constrained_acme_jws,
 };
+use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 use mrml_crypto::{ecdsa_p256_digest_verify_raw, encode_der_signature};
-use mrml_crypto::{erase_secret_bytes, hmac_sha256, Sha256};
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
@@ -122,9 +124,10 @@ fn application_main() -> Result<(), &'static str> {
             check_hosted_identity(config)
         }
         "health" => check_hosted_health(config),
+        "lifecycle-health" => check_hosted_lifecycle_health(config),
         "serve" => serve(config),
         _ => Err(
-            "usage: mrml-certd [serve|check-config|config-status|health|restore-check|backup-create GENERATION|backup-verify GENERATION|backup-restore GENERATION|backup-manifest-create GENERATION|backup-manifest-verify GENERATION]",
+            "usage: mrml-certd [serve|check-config|config-status|health|lifecycle-health|restore-check|backup-create GENERATION|backup-verify GENERATION|backup-restore GENERATION|backup-manifest-create GENERATION|backup-manifest-verify GENERATION]",
         ),
     }
 }
@@ -291,11 +294,44 @@ fn hex(value: &[u8]) -> String {
 }
 
 fn check_hosted_health(config: CertdConfig) -> Result<(), &'static str> {
+    check_hosted_process()?;
+    check_hosted_identity(config)
+}
+
+fn check_hosted_process() -> Result<(), &'static str> {
     let executable = std::fs::read_link("/proc/1/exe").map_err(|_| "cannot inspect certd pid 1")?;
     if executable.file_name().and_then(|name| name.to_str()) != Some("mrml-certd") {
         return Err("mrml-certd is not container pid 1");
     }
-    check_hosted_identity(config)
+    Ok(())
+}
+
+fn check_hosted_lifecycle_health(config: CertdConfig) -> Result<(), &'static str> {
+    check_hosted_process()?;
+    let (_authenticator, key_store) = load_certd_storage()?;
+    let _trust_roots = load_trust_roots(config)?;
+    key_store
+        .load_account(HostedP256KeyDescriptor {
+            role: HostedP256KeyRole::AcmeAccount,
+            object_id: config.account_identity,
+            key_generation: config.account_generation,
+            binding_generation: config.directory_generation,
+            binding_digest: directory_binding(config),
+        })
+        .map_err(|_| "ACME enrollment key is unavailable")?;
+    // Lifecycle health proves initialization and live exact-UID listeners.
+    // It neither requires a certificate nor grants any channel operation.
+    // The server rejects this health process as an application peer and keeps
+    // accepting; no request/capability is sent on either connection.
+    for path in [GITD_SOCKET, ACMED_SOCKET] {
+        let session = mrml_certificate::UnixCertdSession::connect(Path::new(path))
+            .map_err(|_| "certd lifecycle channel unavailable")?;
+        if session.observed_peer() != CERTD_PEER {
+            return Err("certd lifecycle peer mismatch");
+        }
+    }
+    println!("mrml-certd lifecycle ready");
+    Ok(())
 }
 
 fn require_offline_restore_context() -> Result<(), &'static str> {
@@ -389,6 +425,7 @@ fn check_hosted_identity(config: CertdConfig) -> Result<(), &'static str> {
 }
 
 fn serve(config: CertdConfig) -> Result<(), &'static str> {
+    certd_hosted_lifecycle::install_termination_handlers()?;
     let (durable_authenticator, key_store) = load_certd_storage()?;
     let trust_roots = load_trust_roots(config)?;
     let durable_state = HostedDurableStateStore::open(Path::new(CANDIDATE_STATE_ROOT))
@@ -423,7 +460,7 @@ fn serve(config: CertdConfig) -> Result<(), &'static str> {
 
     std::thread::scope(|scope| {
         let gitd_state = Arc::clone(&state);
-        scope.spawn(move || {
+        let gitd_worker = scope.spawn(move || {
             serve_channel(
                 gitd,
                 gitd_capability,
@@ -432,7 +469,7 @@ fn serve(config: CertdConfig) -> Result<(), &'static str> {
                 gitd_state,
             )
         });
-        scope.spawn(move || {
+        let acmed_worker = scope.spawn(move || {
             serve_channel(
                 acmed,
                 acmed_capability,
@@ -441,8 +478,15 @@ fn serve(config: CertdConfig) -> Result<(), &'static str> {
                 state,
             )
         });
-    });
-    Err("certd channel worker terminated")
+        let gitd_result = gitd_worker
+            .join()
+            .map_err(|_| "Gitd channel worker panicked")?;
+        let acmed_result = acmed_worker
+            .join()
+            .map_err(|_| "ACME channel worker panicked")?;
+        gitd_result?;
+        acmed_result
+    })
 }
 
 fn serve_channel(
@@ -451,11 +495,14 @@ fn serve_channel(
     role: CertdChannelRole,
     expected_peer: CertdPeerIdentity,
     state: Arc<CertdHostedState>,
-) {
+) -> Result<(), &'static str> {
+    let _stop_on_exit = certd_hosted_lifecycle::StopOnWorkerExit;
     let mut replay = CertdReplayWindow::new();
     loop {
-        let Ok(mut session) = listener.accept() else {
-            break;
+        let Some(mut session) =
+            certd_hosted_lifecycle::next_session(&listener, &certd_hosted_lifecycle::STOPPING)?
+        else {
+            return Ok(());
         };
         let mut frame = [0u8; MAX_FRAME_BYTES];
         let Ok(length) = session.read_frame(&mut frame) else {
@@ -668,17 +715,13 @@ fn dispatch_channel_request(
                 .iter_mut()
                 .find(|key| key.key_generation() == state.config.key_generation)
                 .ok_or(())?;
-            let public = certificate.public_jwk().map_err(|_| ())?;
-            let csr = write_pkcs10_csr(
-                &public,
-                &identifiers[..count],
-                state.config.wildcard_enabled,
-                request.key_generation,
-                request.policy_generation,
-                &mut *certificate,
-                output.get_mut(..MAX_CSR_BYTES).ok_or(())?,
-            )
-            .map_err(|_| ())?;
+            let csr = certificate
+                .write_configured_dns_csr(
+                    &identifiers[..count],
+                    state.config.wildcard_enabled,
+                    output.get_mut(..MAX_CSR_BYTES).ok_or(())?,
+                )
+                .map_err(|_| ())?;
             Ok(csr.len())
         }
         CertdChannelOperation::StageCertificateCandidate => {
@@ -768,45 +811,47 @@ fn dispatch_channel_request(
             {
                 return Err(());
             }
-            let mut candidate = state.candidate.lock().map_err(|_| ())?;
-            if let Some(existing) = candidate.as_ref() {
-                if existing.chain.chain_digest() != verified.chain_digest
-                    || existing.identity_generation != request.identity_generation
-                    || existing.order_url_digest != request.order_url_digest
-                    || existing.leaf_spki_digest != verified.leaf_spki_digest
-                    || existing.not_before != verified.not_before
-                    || existing.not_after != verified.not_after
-                {
+            publish_after_certificate_validation(certificates, || {
+                let mut candidate = state.candidate.lock().map_err(|_| ())?;
+                if let Some(existing) = candidate.as_ref() {
+                    if existing.chain.chain_digest() != verified.chain_digest
+                        || existing.identity_generation != request.identity_generation
+                        || existing.order_url_digest != request.order_url_digest
+                        || existing.leaf_spki_digest != verified.leaf_spki_digest
+                        || existing.not_before != verified.not_before
+                        || existing.not_after != verified.not_after
+                    {
+                        return Err(());
+                    }
+                } else {
+                    persist_staged_candidate(
+                        state,
+                        payload,
+                        verified.chain_digest,
+                        verified.leaf_spki_digest,
+                        verified.not_before,
+                        verified.not_after,
+                        request.order_url_digest,
+                        request.identity_generation,
+                        verified.ari_certificate_id,
+                        now_unix,
+                    )
+                    .map_err(|_| ())?;
+                    *candidate = Some(StagedCandidate {
+                        chain: request.chain,
+                        identity_generation: request.identity_generation,
+                        order_url_digest: request.order_url_digest,
+                        leaf_spki_digest: verified.leaf_spki_digest,
+                        not_before: verified.not_before,
+                        not_after: verified.not_after,
+                    });
+                }
+                if output.len() < 32 {
                     return Err(());
                 }
-            } else {
-                persist_staged_candidate(
-                    state,
-                    payload,
-                    verified.chain_digest,
-                    verified.leaf_spki_digest,
-                    verified.not_before,
-                    verified.not_after,
-                    request.order_url_digest,
-                    request.identity_generation,
-                    verified.ari_certificate_id,
-                    now_unix,
-                )
-                .map_err(|_| ())?;
-                *candidate = Some(StagedCandidate {
-                    chain: request.chain,
-                    identity_generation: request.identity_generation,
-                    order_url_digest: request.order_url_digest,
-                    leaf_spki_digest: verified.leaf_spki_digest,
-                    not_before: verified.not_before,
-                    not_after: verified.not_after,
-                });
-            }
-            if output.len() < 32 {
-                return Err(());
-            }
-            output[..32].copy_from_slice(&verified.chain_digest);
-            Ok(32)
+                output[..32].copy_from_slice(&verified.chain_digest);
+                Ok(32)
+            })
         }
         CertdChannelOperation::ActivateCertificateGeneration => {
             let request = CertdActivationRequest::decode(payload).map_err(|_| ())?;
@@ -841,6 +886,17 @@ fn dispatch_channel_request(
         }
         _ => Err(()),
     }
+}
+
+fn publish_after_certificate_validation<T>(
+    certificates: std::sync::MutexGuard<'_, Vec<CertificateP256SigningKey>>,
+    publish: impl FnOnce() -> Result<T, ()>,
+) -> Result<T, ()> {
+    // Key membership is fixed at daemon initialization. Verification and its
+    // signing proof are complete; publication must not retain the key mutex
+    // while waiting for durable state used by the concurrent Gitd reader.
+    drop(certificates);
+    publish()
 }
 
 fn write_identity_snapshot(
@@ -884,9 +940,32 @@ fn write_identity_snapshot(
     append(output, &mut offset, &candidate.not_after.to_be_bytes())?;
     append(output, &mut offset, &[1])?;
     append(output, &mut offset, &ECDSA_SECP256R1_SHA256.to_be_bytes())?;
-    append(output, &mut offset, &candidate.chain_digest)?;
+    let publication_digest = identity_snapshot_publication_digest(&output[..offset])?;
+    append(output, &mut offset, &publication_digest)?;
     append(output, &mut offset, &[1])?;
     Ok(offset)
+}
+
+// Gitd authenticates the complete published identity, independently of the
+// durable candidate's certificate-chain digest. Hash the exact encoded fields
+// in the protocol's canonical order before appending this digest and readiness.
+fn identity_snapshot_publication_digest(encoded: &[u8]) -> Result<[u8; 32], ()> {
+    if encoded.len() < 18 || encoded.get(..8) != Some(IDENTITY_SNAPSHOT_MAGIC) {
+        return Err(());
+    }
+    let name_length = usize::from(u16::from_be_bytes(
+        encoded[16..18].try_into().map_err(|_| ())?,
+    ));
+    let body_start = 18usize.checked_add(name_length).ok_or(())?;
+    if name_length == 0 || body_start >= encoded.len() {
+        return Err(());
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"MRML-GITD-TLS-IDENTITY-PUBLICATION-V1\0");
+    digest.update(&encoded[16..body_start]);
+    digest.update(&encoded[8..16]);
+    digest.update(&encoded[body_start..]);
+    Ok(digest.finalize())
 }
 
 fn sign_gitd_certificate_verify(
@@ -1011,6 +1090,10 @@ fn load_active_candidate(
     {
         return Err("active publication binding mismatch");
     }
+    // The owned snapshot and publication bytes are fully authenticated above.
+    // Do not carry durable locks into key use on the independently served role.
+    drop(authenticator);
+    drop(durable_state);
     let keys = state
         .certificate_keys
         .lock()
@@ -1359,6 +1442,9 @@ fn activate_staged_candidate(
     durable_state
         .commit(prepared)
         .map_err(|_| "active candidate state commit uncertain")?;
+    // Stage and activate execute serially on the single ACME-role worker.
+    // This candidate-memory cleanup must not become a parallel RPC without
+    // revisiting the candidate/durable ordering and transition serialization.
     *state
         .candidate
         .lock()
@@ -1434,17 +1520,66 @@ fn write_publication_file(
 }
 
 fn load_trust_roots(config: CertdConfig) -> Result<PemCertificateChain, &'static str> {
-    let roots = HostedSecret::open(
-        Path::new(TRUST_ROOTS_PATH),
-        0,
-        0o444,
-        MAX_CERTIFICATE_CHAIN_BYTES,
-    )
-    .map_err(|_| "unsafe certd trust roots")?;
-    if Sha256::digest(roots.expose()) != config.trust_store_sha256 {
+    load_trust_roots_at(Path::new(TRUST_ROOTS_PATH), 0, config.trust_store_sha256)
+}
+
+// Public CA material uses the certificate-chain bound, not the smaller secret
+// custody buffer. Retain the opened file and authenticate exactly the bytes read.
+fn load_trust_roots_at(
+    path: &Path,
+    expected_uid: u32,
+    expected_digest: [u8; 32],
+) -> Result<PemCertificateChain, &'static str> {
+    const UNSAFE_ROOTS: &str = "unsafe certd trust roots";
+    if !path.is_absolute()
+        || path.components().any(|part| {
+            matches!(
+                part,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return Err(UNSAFE_ROOTS);
+    }
+    let before = std::fs::symlink_metadata(path).map_err(|_| UNSAFE_ROOTS)?;
+    let parent = path.parent().and_then(Path::to_str).ok_or(UNSAFE_ROOTS)?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(UNSAFE_ROOTS)?;
+    let directory =
+        mrml_runtime::DirectoryCapability::open_root(parent).map_err(|_| UNSAFE_ROOTS)?;
+    let mut file = directory.open_regular(name).map_err(|_| UNSAFE_ROOTS)?;
+    let metadata = file.metadata().map_err(|_| UNSAFE_ROOTS)?;
+    if !before.is_file()
+        || metadata.device != before.dev()
+        || metadata.inode != before.ino()
+        || metadata.mode & 0o170000 != 0o100000
+        || metadata.mode & 0o7777 != 0o444
+        || metadata.uid != expected_uid
+        || metadata.links != 1
+    {
+        return Err(UNSAFE_ROOTS);
+    }
+    let length = file.len().map_err(|_| UNSAFE_ROOTS)?;
+    if length == 0 || length > MAX_CERTIFICATE_CHAIN_BYTES as u64 {
+        return Err(UNSAFE_ROOTS);
+    }
+    let mut roots = mrml_runtime::Vector::new();
+    roots
+        .try_resize(length as usize, 0u8)
+        .map_err(|_| UNSAFE_ROOTS)?;
+    file.read_exact(&mut roots).map_err(|_| UNSAFE_ROOTS)?;
+    let mut trailing = [0u8; 1];
+    if file.read(&mut trailing).map_err(|_| UNSAFE_ROOTS)? != 0
+        || file.metadata().map_err(|_| UNSAFE_ROOTS)? != metadata
+    {
+        return Err(UNSAFE_ROOTS);
+    }
+    if Sha256::digest(&roots) != expected_digest {
         return Err("certd trust root digest mismatch");
     }
-    PemCertificateChain::parse(roots.expose()).map_err(|_| "invalid certd trust roots")
+    PemCertificateChain::parse(&roots).map_err(|_| "invalid certd trust roots")
 }
 
 fn fill_entropy(output: &mut [u8]) -> Result<(), mrml_crypto::P256Error> {
@@ -1509,3 +1644,12 @@ fn load_channel_capability(path: &'static str) -> Result<CertdChannelCapability,
         .map_err(|_| "invalid channel capability")?;
     CertdChannelCapability::new(key).map_err(|_| "invalid channel capability")
 }
+
+#[cfg(test)]
+mod certd_trust_roots_tests;
+
+#[cfg(test)]
+mod certd_publication_tests;
+
+#[cfg(test)]
+mod certd_lock_order_tests;

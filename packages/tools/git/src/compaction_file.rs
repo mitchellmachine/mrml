@@ -290,37 +290,107 @@ mod tests {
     fn activation_reopens_exact_state_and_retains_old_pack_and_manifest() {
         let (root, refs_root, store, original, old_transaction) = fixture("success");
         let old_manifest_path = join_path(&refs_root, &manifest_name(original.pack_set_digest));
-        let replacement = object(b"replacement");
-        let replacement_id = replacement.id;
-        let result = CompactionResult {
-            selected: CompactionSnapshot {
-                repository_generation: original.repository_generation,
-                pack_generation: original.pack_generation,
-            },
-            replacement_pack_generation: PackGeneration(2),
-            retained_object_ids: [replacement_id].into(),
-            pack: encode_pack_with_format(&[replacement], ObjectFormat::Sha256).unwrap(),
+        let old_manifest =
+            mrml_runtime::read_file_bounded(&old_manifest_path, 1024 * 1024).unwrap();
+        let old_selected = store.refs.load_selected_pack_set(limits()).unwrap();
+        let old_summary = store
+            .arrivals
+            .authenticated_installed_summary(old_transaction, 1)
+            .unwrap();
+        let old_ids: Vector<_> = old_selected.entries()[0]
+            .object_ids()
+            .iter()
+            .copied()
+            .collect();
+        let retained = object(b"old reachable");
+        assert_eq!(&old_ids[..], &[retained.id]);
+        let before = store
+            .arrivals
+            .read_selected_object(&old_selected, retained.id, 1024)
+            .unwrap();
+        assert_eq!(before.kind, retained.kind);
+        assert_eq!(before.contents, retained.contents);
+        assert_eq!(original.refs[0].1, retained.id);
+        let snapshot = CompactionSnapshot {
+            repository_generation: original.repository_generation,
+            pack_generation: original.pack_generation,
         };
+        // Use the real planner with the exact old object set. A different blob
+        // would leave unchanged refs dangling and would not prove preservation.
+        let result = crate::compact_reachable(
+            snapshot,
+            snapshot,
+            crate::CompactionResources {
+                free_bytes: crate::COMPACTION_FREE_RESERVE_BYTES + 1024 * 1024,
+                estimated_output_bytes: 1024 * 1024,
+                estimated_memory_bytes: 1024 * 1024,
+                push_active: false,
+                core_pressure: false,
+            },
+            ObjectFormat::Sha256,
+            &old_ids,
+            &[retained.clone()],
+        )
+        .unwrap();
+        assert_eq!(result.retained_object_ids, old_ids);
         let next = store.compact(&result, limits()).unwrap();
         assert_eq!(next.repository_generation, RepositoryGeneration(2));
         assert_eq!(next.pack_generation, PackGeneration(2));
         assert_eq!(next.refs, original.refs);
+        assert_eq!(next.default_branch, original.default_branch);
+        assert_eq!(next.repository, original.repository);
+        assert_eq!(next.object_format, original.object_format);
         assert_eq!(next.trust_generation, original.trust_generation);
         assert_eq!(next.revocation_generation, original.revocation_generation);
-        assert_eq!(store.refs.load().unwrap(), next);
-        let selected = store.refs.load_selected_pack_set(limits()).unwrap();
+        drop(store);
+        let reopened = LinuxCompactionStore::open(
+            &join_path(&root, "packs"),
+            &refs_root,
+            ObjectFormat::Sha256,
+            1024 * 1024,
+        )
+        .unwrap();
+        assert_eq!(reopened.refs.load().unwrap(), next);
+        let selected = reopened.refs.load_selected_pack_set(limits()).unwrap();
         assert_eq!(selected.entries().len(), 1);
-        assert_eq!(selected.entries()[0].object_ids(), &[replacement_id]);
-        assert_eq!(
-            store
+        assert_eq!(selected.entries()[0].object_ids(), &old_ids[..]);
+        for (_, id) in &next.refs {
+            let after = reopened
                 .arrivals
-                .read_selected_object(&selected, replacement_id, 1024)
-                .unwrap()
-                .contents,
-            b"replacement"[..]
+                .read_selected_object(&selected, *id, 1024)
+                .unwrap();
+            assert_eq!(after.kind, before.kind);
+            assert_eq!(after.contents, before.contents);
+        }
+        reopened
+            .arrivals
+            .verify_installed(old_transaction, 1)
+            .unwrap();
+        // Retained files remain independently verifiable, but selecting the new
+        // snapshot must not permit this reader to roll back to the old one.
+        assert!(matches!(
+            reopened
+                .arrivals
+                .read_selected_object(&old_selected, retained.id, 1024),
+            Err(crate::GitdCoreError::StaleGeneration)
+        ));
+        assert!(reopened.arrivals.selected_snapshot_matches(
+            next.repository_generation,
+            next.pack_generation,
+            next.pack_set_digest,
+        ));
+        assert_eq!(
+            reopened
+                .arrivals
+                .authenticated_installed_summary(old_transaction, 1)
+                .unwrap(),
+            old_summary
         );
-        store.arrivals.verify_installed(old_transaction, 1).unwrap();
         assert!(path_exists(&old_manifest_path));
+        assert_eq!(
+            mrml_runtime::read_file_bounded(&old_manifest_path, 1024 * 1024).unwrap(),
+            old_manifest
+        );
         mrml_runtime::remove_dir_all(&root).unwrap();
     }
 }

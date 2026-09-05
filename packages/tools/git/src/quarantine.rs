@@ -164,10 +164,7 @@ pub trait DurableReceiveStore {
         &mut self,
         receipt: &AuditReceipt,
     ) -> Result<(), DurableFailure>;
-    fn authenticated_audit_receipt(
-        &self,
-        _transaction: QuarantineTransactionId,
-    ) -> Option<&[u8]> {
+    fn authenticated_audit_receipt(&self, _transaction: QuarantineTransactionId) -> Option<&[u8]> {
         None
     }
     fn mark_complete_and_fsync(

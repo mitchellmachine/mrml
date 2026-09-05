@@ -301,9 +301,7 @@ mod tests {
             (1, 1, 2, 1024 * 1024, 1, 300_001),
         ] {
             assert_eq!(
-                validate_limits(
-                    invalid.0, invalid.1, invalid.2, invalid.3, invalid.4, invalid.5,
-                ),
+                validate_limits(invalid.0, invalid.1, invalid.2, invalid.3, invalid.4, invalid.5,),
                 Err(GitdHttp2WorkerError::Limit)
             );
         }

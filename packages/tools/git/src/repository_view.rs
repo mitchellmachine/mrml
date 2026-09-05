@@ -788,6 +788,9 @@ impl FilesystemRepositoryView {
         protocol: &mut ProtocolBudget,
         max_object_memory: u64,
     ) -> Result<(), GitdCoreError> {
+        let max_object_memory = max_object_memory
+            .checked_sub(crate::deflate::STREAM_SCRATCH_BYTES)
+            .ok_or(GitdCoreError::Resource)?;
         let ids = self.negotiated_object_ids(state, wants, haves)?;
         self.ensure_exact_generation(state)?;
         write_data_line(output, b"packfile\n", protocol)?;
@@ -2058,6 +2061,17 @@ impl<'a, 'b> SidebandPackWriter<'a, 'b> {
 }
 
 impl PackStreamOutput for SidebandPackWriter<'_, '_> {
+    fn charge_compression(&mut self, units: u64) -> Result<(), PackError> {
+        if self.failure.is_some() {
+            return Err(PackError::TooLarge);
+        }
+        if let Err(error) = self.protocol.consume_external_work(units) {
+            self.failure = Some(error);
+            return Err(PackError::TooLarge);
+        }
+        Ok(())
+    }
+
     fn write(&mut self, bytes: &[u8]) -> Result<(), PackError> {
         if self.failure.is_some() {
             return Err(PackError::TooLarge);

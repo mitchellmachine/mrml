@@ -147,8 +147,10 @@ ensure_volume "$(volume_name gitd-cache)" "$gitd_uid" "$gitd_gid" 700
 ensure_volume "$(volume_name gitd-receipts)" "$gitd_uid" "$gitd_gid" 700
 ensure_volume "$(volume_name gitd-policies)" "$gitd_uid" "$gitd_gid" 755
 ensure_volume "$(volume_name authority-state)" "$authority_uid" "$authority_gid" 700
+authority_state=$(docker volume inspect --format '{{.Mountpoint}}' "$(volume_name authority-state)")
+ensure_dir "$authority_state/proofs" "$authority_uid" "$authority_gid" 700
 ensure_volume "$(volume_name runtime-git-authority)" "$authority_uid" "$authority_socket_gid" 2770
-ensure_volume "$(volume_name runtime-certd-gitd)" "$certd_uid" "$certd_socket_gid" 2770
+ensure_volume "$(volume_name runtime-certd-gitd)" "$certd_uid" "$certd_socket_gid" 2750
 ensure_volume "$(volume_name git-authority-secrets)" "$authority_uid" "$authority_gid" 700
 ensure_volume "$(volume_name git-authority-config)" 0 0 755
 ensure_volume "$(volume_name git-authority-transition)" "$authority_uid" "$authority_gid" 755

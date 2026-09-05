@@ -9,7 +9,12 @@ and initial protected-policy creation, token administration, and bounded recover
 operations exist. Authenticated normal trust-transition administration is
 implemented; emergency trust-transition administration remains incomplete.
 
-Run `deploy/compose/provision-git-host.sh` as root with Docker available. The
+Run `deploy/compose/provision-git-host.sh` as root with Docker available. On a
+fresh combined Git/ACME host, run Git provisioning before
+`provision-acme-host.sh`: Git creates the shared socket volume with its required
+copy-up sentinel, and ACME preserves that existing volume. Wait for certd
+lifecycle readiness before enrollment; Compose process start alone is not
+readiness. The
 deployment root defaults to `/mnt/mrml` and now contains only operator inputs,
 deployment metadata, and backup outputs; it is not mounted into a production
 container. Durable data, secrets, configuration, and Unix-socket directories

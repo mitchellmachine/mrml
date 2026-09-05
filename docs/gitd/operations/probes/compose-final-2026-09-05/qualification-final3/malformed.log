@@ -1,0 +1,27 @@
+time="2026-09-05T10:19:45Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:19:45Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-git-client-run-815a8a39dc19 Creating
+ Container mrml-completion-final3-20260905-git-client-run-815a8a39dc19 Created
+MRML GIT · NATIVE STATUS
+  root   /work/first
+  branch main
+  head   c6f6412230eb2f73da3ceba6d2d87bbfea0f08895d522419690a6e9df4ca548a
+  track origin/main  0 ahead  0 behind
+  modified staged acceptance.txt
+time="2026-09-05T10:19:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:19:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-git-client-run-f7d134b7f3c0 Creating
+ Container mrml-completion-final3-20260905-git-client-run-f7d134b7f3c0 Created
+[78a8efb89365] Compose malformed proof recovery
+time="2026-09-05T10:19:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:19:46Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-git-client-run-97bb0fdb04e8 Creating
+ Container mrml-completion-final3-20260905-git-client-run-97bb0fdb04e8 Created
+/usr/bin/mrml-gitd-certd-test-probe: /lib/x86_64-linux-gnu/libc.so.6: weak version `GLIBC_2.39' not found (required by /usr/bin/mrml-gitd-certd-test-probe)
+receive connection closed; require matching server authority_proof_verify_denied evidence
+malformed attempt not activated; exact refs and authority generation unchanged
+time="2026-09-05T10:19:56Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:19:56Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-git-client-run-ea3230cf874e Creating
+ Container mrml-completion-final3-20260905-git-client-run-ea3230cf874e Created
+Pushed 78a8efb89365 to origin/main

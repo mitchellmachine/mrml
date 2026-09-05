@@ -171,6 +171,13 @@ fn restore(generation: u64, key: &[u8; 32]) -> Result<(), ()> {
 
 fn initialize_restore_cache(inventory: &BackupInventory) -> Result<(), ()> {
     let root = DirectoryCapability::open_root(RESTORE_CACHE).map_err(|_| ())?;
+    initialize_restore_cache_root(&root, inventory)
+}
+
+fn initialize_restore_cache_root(
+    root: &DirectoryCapability,
+    inventory: &BackupInventory,
+) -> Result<(), ()> {
     let metadata = root.metadata().map_err(|_| ())?;
     if metadata.mode & 0o170000 != 0o040000
         || root
@@ -188,6 +195,16 @@ fn initialize_restore_cache(inventory: &BackupInventory) -> Result<(), ()> {
         .find(|entry| entry.volume == BackupVolume::GitdRepositories && entry.path.as_str() == ".")
         .ok_or(())?;
     root.set_owner_mode(repository_root.uid, repository_root.gid, 0o700)
+        .map_err(|_| ())?;
+    // Cache contents are intentionally excluded from the archive, but a newly
+    // reconstructed cache is still a managed Docker volume. Recreate its
+    // owner-bound copy-up sentinel before any service can mount it.
+    let sentinel = root
+        .create_new_file(".mrml-volume", 0o400)
+        .map_err(|_| ())?;
+    sentinel
+        .set_owner_mode(repository_root.uid, repository_root.gid, 0o400)
+        .and_then(|()| sentinel.sync())
         .map_err(|_| ())?;
     let mut previous_owner = "";
     let mut owner_directory = None;
@@ -358,6 +375,67 @@ impl Seek for RuntimeFile<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restored_cache_satisfies_managed_volume_contract_and_rejects_reuse() {
+        use mrml_git::{
+            BackupInventoryEntry, BackupInventoryFileKind, BackupRepositoryGeneration,
+            PackGeneration, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
+            TrustGeneration,
+        };
+        use mrml_runtime::Vector;
+        use std::os::unix::fs::MetadataExt;
+        let path = std::env::temp_dir().join(format!("mrml-restored-cache-{}", std::process::id()));
+        std::fs::create_dir(&path).unwrap();
+        let metadata = std::fs::metadata(&path).unwrap();
+        let root = DirectoryCapability::open_root(path.to_str().unwrap()).unwrap();
+        let inventory = BackupInventory {
+            backup_generation: 1,
+            repositories: Vector::from(["owner/first", "owner/second"].map(|name| {
+                BackupRepositoryGeneration {
+                    repository: RepositoryIdentity::parse(name).unwrap(),
+                    repository_generation: RepositoryGeneration(1),
+                    pack_generation: PackGeneration(1),
+                    trust_generation: TrustGeneration(1),
+                    revocation_generation: RevocationGeneration(1),
+                    authority_generation: 1,
+                }
+            })),
+            entries: Vector::from([BackupInventoryEntry {
+                volume: BackupVolume::GitdRepositories,
+                path: ".".into(),
+                kind: BackupInventoryFileKind::Directory,
+                mode: 0o700,
+                uid: metadata.uid(),
+                gid: metadata.gid(),
+                size: 0,
+                digest: [0; 32],
+            }]),
+        };
+        initialize_restore_cache_root(&root, &inventory).unwrap();
+        for name in [".", "owner", "owner/first", "owner/second"] {
+            let actual = std::fs::metadata(path.join(name)).unwrap();
+            assert!(actual.is_dir());
+            assert_eq!(
+                (actual.uid(), actual.gid()),
+                (metadata.uid(), metadata.gid())
+            );
+            assert_eq!(actual.mode() & 0o7777, 0o700);
+        }
+        let marker = std::fs::symlink_metadata(path.join(".mrml-volume"));
+        // Clean up even the red fixture so a failure cannot poison the retry.
+        assert!(initialize_restore_cache_root(&root, &inventory).is_err());
+        drop(root);
+        std::fs::remove_dir_all(&path).unwrap();
+        let marker = marker.expect("restored cache needs the managed-volume sentinel");
+        assert!(marker.is_file());
+        assert_eq!(
+            (marker.uid(), marker.gid()),
+            (metadata.uid(), metadata.gid())
+        );
+        assert_eq!(marker.mode() & 0o7777, 0o400);
+        assert_eq!((marker.len(), marker.nlink()), (0, 1));
+    }
 
     #[test]
     fn generation_and_archive_names_are_canonical() {

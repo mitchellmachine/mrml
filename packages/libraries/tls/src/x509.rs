@@ -14,6 +14,7 @@ pub enum CertificateError {
     TrustStoreUnavailable,
     UntrustedIssuer,
     UnsupportedCriticalExtension,
+    UnsupportedTlsFeature,
     PathLengthExceeded,
     OcspMissing,
     OcspMalformed,
@@ -492,6 +493,49 @@ impl<'a> Certificate<'a> {
             }
         }
         Ok(None)
+    }
+
+    /// Admit a server profile that supplies no certificate-required TLS
+    /// features. In particular, a Must-Staple certificate cannot silently use
+    /// an unstapled signing route. This does not require OCSP for ordinary certs.
+    pub fn require_no_tls_features(&self) -> Result<(), CertificateError> {
+        const TLS_FEATURE: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x18];
+        let Some(value) = self.extension(TLS_FEATURE)? else {
+            return Ok(());
+        };
+        let mut outer = Reader::new(value);
+        let sequence = outer.next()?;
+        outer.finish()?;
+        if sequence.tag != 0x30 {
+            return Err(CertificateError::Malformed);
+        }
+        if sequence.value.is_empty() {
+            return Ok(());
+        }
+        let mut features = Reader::new(sequence.value);
+        let feature = features.next()?;
+        if feature.tag != 0x02
+            || feature.value.is_empty()
+            || feature.value.len() > 3
+            || feature.value[0] & 0x80 != 0
+            || (feature.value.len() > 1 && feature.value[0] == 0 && feature.value[1] & 0x80 == 0)
+        {
+            return Err(CertificateError::Malformed);
+        }
+        let number = feature
+            .value
+            .iter()
+            .fold(0u32, |value, byte| (value << 8) | u32::from(*byte));
+        if number > u16::MAX as u32 {
+            return Err(CertificateError::Malformed);
+        }
+        // Any nonempty requirement set is unsupported by this profile, so
+        // rejection needs no unbounded enumeration of the remaining entries.
+        if matches!(number, 5 | 17) {
+            Err(CertificateError::OcspMissing)
+        } else {
+            Err(CertificateError::UnsupportedTlsFeature)
+        }
     }
 
     pub fn require_tls_alpn01(
@@ -998,6 +1042,42 @@ mod tests {
             serial: &[1],
         }
     }
+    #[test]
+    fn unstapled_profile_rejects_certificate_required_tls_features() {
+        assert_eq!(
+            certificate_with_extensions(&[]).require_no_tls_features(),
+            Ok(())
+        );
+        let mut encoded = [
+            0x30, 0x13, 0x30, 0x11, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x18,
+            0x04, 0x05, 0x30, 0x03, 0x02, 0x01, 5,
+        ];
+        assert_eq!(
+            certificate_with_extensions(&encoded).require_no_tls_features(),
+            Err(CertificateError::OcspMissing)
+        );
+        encoded[20] = 17;
+        assert_eq!(
+            certificate_with_extensions(&encoded).require_no_tls_features(),
+            Err(CertificateError::OcspMissing)
+        );
+        encoded[20] = 0;
+        assert_eq!(
+            certificate_with_extensions(&encoded).require_no_tls_features(),
+            Err(CertificateError::UnsupportedTlsFeature)
+        );
+        encoded[20] = 0x80;
+        assert_eq!(
+            certificate_with_extensions(&encoded).require_no_tls_features(),
+            Err(CertificateError::Malformed)
+        );
+        encoded[18] = 0x04;
+        assert_eq!(
+            certificate_with_extensions(&encoded).require_no_tls_features(),
+            Err(CertificateError::Malformed)
+        );
+    }
+
     #[test]
     fn external_certificate_parses_when_configured() {
         let Some(path) = mrml_runtime::environment_variable("MRML_X509_TEST_CERT") else {

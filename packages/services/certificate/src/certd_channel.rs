@@ -1,4 +1,4 @@
-use mrml_crypto::{erase_secret_bytes, hmac_sha256, Sha256};
+use mrml_crypto::{Sha256, erase_secret_bytes, hmac_sha256};
 
 pub const CERTD_CHANNEL_HEADER_BYTES: usize = 96;
 pub const MAX_CERTD_CHANNEL_PAYLOAD_BYTES: usize = 16 * 1024;
@@ -144,19 +144,39 @@ impl Drop for CertdChannelCapability {
 }
 
 pub struct CertdReplayWindow {
-    last_request_id: u64,
+    highest_request_id: u64,
+    seen: u64,
 }
 
 impl CertdReplayWindow {
     pub const fn new() -> Self {
-        Self { last_request_id: 0 }
+        Self {
+            highest_request_id: 0,
+            seen: 0,
+        }
     }
 
     pub fn accept(&mut self, request_id: u64) -> Result<(), CertdChannelError> {
-        if request_id == 0 || request_id <= self.last_request_id {
+        if request_id == 0 {
             return Err(CertdChannelError::Replay);
         }
-        self.last_request_id = request_id;
+        // Allocation order need not match arrival order across authenticated
+        // Unix sessions. Retain exactly 64 sequence positions, not connections.
+        if request_id > self.highest_request_id {
+            let distance = request_id - self.highest_request_id;
+            self.seen = if distance >= 64 {
+                1
+            } else {
+                (self.seen << distance) | 1
+            };
+            self.highest_request_id = request_id;
+        } else {
+            let age = self.highest_request_id - request_id;
+            if age >= 64 || self.seen & (1u64 << age) != 0 {
+                return Err(CertdChannelError::Replay);
+            }
+            self.seen |= 1u64 << age;
+        }
         Ok(())
     }
 }
@@ -387,5 +407,129 @@ mod tests {
             encode_certd_channel_request(gitd_request, &capability, &mut encoded),
             Err(CertdChannelError::UnauthorizedOperation)
         );
+    }
+    #[test]
+    fn concurrent_authenticated_frames_may_arrive_out_of_order_once() {
+        let peer = CertdPeerIdentity {
+            uid: 21001,
+            gid: 21001,
+        };
+        let policy = CertdChannelPolicy {
+            role: CertdChannelRole::Gitd,
+            peer,
+        };
+        let capability = make_capability(0x63);
+        let mut replay = CertdReplayWindow::new();
+        for id in [102, 100, 101] {
+            let request = CertdChannelRequest {
+                role: CertdChannelRole::Gitd,
+                operation: CertdChannelOperation::Health,
+                request_id: id,
+                peer,
+                payload: &[],
+            };
+            let mut frame = [0; 256];
+            let n = encode_certd_channel_request(request, &capability, &mut frame).unwrap();
+            assert_eq!(
+                decode_certd_channel_request(&frame[..n], peer, policy, &capability, &mut replay),
+                Ok(request)
+            );
+            assert_eq!(
+                decode_certd_channel_request(&frame[..n], peer, policy, &capability, &mut replay),
+                Err(CertdChannelError::Replay)
+            );
+        }
+    }
+
+    #[test]
+    fn replay_window_edges_large_jumps_and_exhaustion_are_bounded() {
+        let mut replay = CertdReplayWindow::new();
+        assert_eq!(replay.accept(0), Err(CertdChannelError::Replay));
+        assert_eq!(replay.accept(100), Ok(()));
+        assert_eq!(replay.accept(37), Ok(()));
+        assert_eq!(replay.accept(36), Err(CertdChannelError::Replay));
+        assert_eq!(replay.accept(164), Ok(()));
+        assert_eq!(replay.accept(100), Err(CertdChannelError::Replay));
+        assert_eq!(replay.accept(101), Ok(()));
+        assert_eq!(replay.accept(u64::MAX), Ok(()));
+        assert_eq!(replay.accept(u64::MAX - 63), Ok(()));
+        assert_eq!(replay.accept(u64::MAX - 64), Err(CertdChannelError::Replay));
+        assert_eq!(replay.accept(u64::MAX), Err(CertdChannelError::Replay));
+        assert_eq!(replay.accept(1), Err(CertdChannelError::Replay));
+    }
+
+    #[test]
+    fn unauthenticated_high_ids_do_not_advance_replay_window() {
+        let peer = CertdPeerIdentity {
+            uid: 21001,
+            gid: 21001,
+        };
+        let policy = CertdChannelPolicy {
+            role: CertdChannelRole::Gitd,
+            peer,
+        };
+        let capability = make_capability(0x64);
+        let mut replay = CertdReplayWindow::new();
+        let request = CertdChannelRequest {
+            role: CertdChannelRole::Gitd,
+            operation: CertdChannelOperation::Health,
+            request_id: u64::MAX,
+            peer,
+            payload: &[],
+        };
+        let mut frame = [0; 256];
+        let n = encode_certd_channel_request(request, &capability, &mut frame).unwrap();
+        assert!(
+            decode_certd_channel_request(
+                &frame[..n],
+                peer,
+                policy,
+                &make_capability(0x65),
+                &mut replay
+            )
+            .is_err()
+        );
+        assert!(
+            decode_certd_channel_request(
+                &frame[..n],
+                CertdPeerIdentity { uid: 21002, ..peer },
+                policy,
+                &capability,
+                &mut replay
+            )
+            .is_err()
+        );
+        assert!(
+            decode_certd_channel_request(
+                &frame[..n],
+                peer,
+                CertdChannelPolicy {
+                    role: CertdChannelRole::Acmed,
+                    peer
+                },
+                &capability,
+                &mut replay
+            )
+            .is_err()
+        );
+        assert_eq!(replay.accept(1), Ok(()));
+        assert_eq!(replay.accept(1), Err(CertdChannelError::Replay));
+    }
+
+    #[test]
+    fn replay_bitmap_retains_every_position_across_small_advances() {
+        let mut replay = CertdReplayWindow::new();
+        for id in (1..=64).rev() {
+            assert_eq!(replay.accept(id), Ok(()));
+        }
+        for id in 1..=64 {
+            assert_eq!(replay.accept(id), Err(CertdChannelError::Replay));
+        }
+        assert_eq!(replay.accept(127), Ok(()));
+        assert_eq!(replay.accept(64), Err(CertdChannelError::Replay));
+        assert_eq!(replay.accept(65), Ok(()));
+        assert_eq!(replay.accept(128), Ok(()));
+        assert_eq!(replay.accept(65), Err(CertdChannelError::Replay));
+        assert_eq!(replay.accept(66), Ok(()));
     }
 }

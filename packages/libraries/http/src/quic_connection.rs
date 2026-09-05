@@ -1,6 +1,4 @@
-use mrml_runtime::{
-    Instant, Receiver, Shared, SocketAddress, TcpStream, UdpSocket, Vector,
-};
+use mrml_runtime::{Instant, Receiver, Shared, SocketAddress, TcpStream, UdpSocket, Vector};
 use mrml_tls::{QuicTlsClientHandshake, QuicTlsServerHandshake, TlsError, TlsServerConfig};
 
 use crate::quic::{
@@ -158,11 +156,7 @@ impl QuicDatagramTransport {
         self.socket().local_port()
     }
 
-    fn send_to(
-        &self,
-        bytes: &[u8],
-        peer: SocketAddress,
-    ) -> Result<usize, mrml_runtime::NetError> {
+    fn send_to(&self, bytes: &[u8], peer: SocketAddress) -> Result<usize, mrml_runtime::NetError> {
         self.socket().send_to(bytes, peer)
     }
 
@@ -173,7 +167,9 @@ impl QuicDatagramTransport {
         match self {
             Self::Direct(socket) => socket.receive_from(buffer),
             Self::Routed { inbound, .. } => {
-                let datagram = inbound.recv().map_err(|_| mrml_runtime::NetError::ReadFailed)?;
+                let datagram = inbound
+                    .recv()
+                    .map_err(|_| mrml_runtime::NetError::ReadFailed)?;
                 if datagram.bytes.len() > buffer.len() {
                     return Err(mrml_runtime::NetError::ReadFailed);
                 }
@@ -615,9 +611,7 @@ impl QuicClientConnection {
         } else {
             [0, 0, 0, 0]
         };
-        let socket = Shared::new(
-            UdpSocket::bind(bind_ip, 0).map_err(|_| QuicError::SocketBind)?,
-        );
+        let socket = Shared::new(UdpSocket::bind(bind_ip, 0).map_err(|_| QuicError::SocketBind)?);
         socket
             .set_read_timeout_millis(30_000)
             .map_err(|_| QuicError::SocketTimeout)?;
@@ -676,16 +670,10 @@ impl QuicClientConnection {
                     return Err(QuicError::ProtocolViolation);
                 }
                 destination_id = retry.source_id;
-                client_initial = QuicInitialKeys::derive_for(
-                    version,
-                    &destination_id,
-                    QuicRole::Client,
-                )?;
-                server_initial = QuicInitialKeys::derive_for(
-                    version,
-                    &destination_id,
-                    QuicRole::Server,
-                )?;
+                client_initial =
+                    QuicInitialKeys::derive_for(version, &destination_id, QuicRole::Client)?;
+                server_initial =
+                    QuicInitialKeys::derive_for(version, &destination_id, QuicRole::Server)?;
                 server_initial_crypto = QuicStreamAssembler::new(64 * 1024);
                 server_initial_packets = PacketReceiveState::new();
                 server_id = None;
@@ -696,7 +684,11 @@ impl QuicClientConnection {
                         packet_number: packet_number as u64,
                         payload: crypto_payload(packet_number * CRYPTO_CHUNK, chunk)?,
                     }
-                    .seal_padded_for_with_token(version, &client_initial, &retry.token)?;
+                    .seal_padded_for_with_token(
+                        version,
+                        &client_initial,
+                        &retry.token,
+                    )?;
                     socket
                         .send_to(&packet, peer)
                         .map_err(|_| QuicError::SocketWrite)?;
@@ -1189,7 +1181,10 @@ mod tests {
                 }
                 assert_eq!(destination_id, original_destination_id);
             };
-            assert_eq!(crate::initial_token(&datagram[..amount]).unwrap(), b"retry-token");
+            assert_eq!(
+                crate::initial_token(&datagram[..amount]).unwrap(),
+                b"retry-token"
+            );
             worker_socket.send_to(&retry, client_peer).unwrap();
         }) else {
             panic!("failed to start Retry peer");

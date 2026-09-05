@@ -2,22 +2,22 @@
 
 use mrml_runtime::Vector;
 
+use crate::pack_set::AuthenticatedPackIndexSummary;
 use crate::{
-    authenticated_audit_receipt_transcript, build_verified_fast_forward_transaction,
+    ActiveRefState, AuditReceipt, AuthenticatedReceiveStore, AuthorityCandidateContext,
+    BoundedWrite, DurableReceiveError, DurableReceiveStore, GitdCoreError,
+    HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore, Object,
+    ObjectFormat, ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
+    QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, ReceiveRefStatus,
+    Repository, SignaturePurpose, SmartGitOperation, SmartGitRequest, SmartGitResponse,
+    TrustPolicyState, VerifiedCommitProof, VerifiedLegacyCommitProof, VerifiedRefTransaction,
+    WorkBudget, authenticated_audit_receipt_transcript, build_verified_fast_forward_transaction,
     candidate_activation_digest, candidate_arrival_pack_digest, candidate_proof_set_digest,
     candidate_ref_update_digest, durably_activate_verified_receive, encode_audit_receipt,
     expected_audit_receipt, read_receive_pack_commands, reserve_push_disk_before_body,
     verify_conventional_introduced_history, verify_policy_classified_history,
-    verify_protected_introduced_history, write_receive_pack_report, ActiveRefState, AuditReceipt,
-    AuthenticatedReceiveStore, BoundedWrite, DurableReceiveError, DurableReceiveStore,
-    GitdCoreError, HistoryVerificationError, HistoryVerificationLimits, LinuxDurableReceiveStore,
-    Object, ObjectFormat, ObjectId, ObjectKind, ProtectedHistoryContext, ProtocolBudget, QuarantineLimits,
-    QuarantineTransaction, QuarantineTransactionId, ReceivePackRequest, ReceiveRefStatus,
-    Repository, SignaturePurpose, SmartGitOperation, SmartGitRequest, SmartGitResponse,
-    TrustPolicyState, VerifiedCommitProof, VerifiedLegacyCommitProof, VerifiedRefTransaction,
-    AuthorityCandidateContext, WorkBudget,
+    verify_protected_introduced_history, write_receive_pack_report,
 };
-use crate::pack_set::AuthenticatedPackIndexSummary;
 
 /// Verification-only authority. Implementations receive public policy/key state
 /// and exact commit bytes; no signing key belongs at this boundary.
@@ -103,8 +103,7 @@ impl PreparedProtectedReceive {
             .ok_or(GitdCoreError::ObjectValidation)?;
         let receipt = expected_audit_receipt(self.transaction.id(), &self.verified)
             .map_err(map_durable_error)?;
-        let receipt_bytes =
-            encode_audit_receipt(&receipt).map_err(|_| GitdCoreError::Policy)?;
+        let receipt_bytes = encode_audit_receipt(&receipt).map_err(|_| GitdCoreError::Policy)?;
         let receipt_transcript = authenticated_audit_receipt_transcript(&receipt_bytes)
             .map_err(|_| GitdCoreError::Policy)?;
         Ok(AuthorityCandidateContext {
@@ -142,8 +141,7 @@ impl PreparedProtectedReceive {
         authority: &mut dyn crate::ProtectedReceiveAuthority,
         candidate: &AuthorityCandidateContext,
     ) -> Result<(), GitdCoreError> {
-        if candidate.introduced_commit_set_digest
-            != self.verified.introduced_commit_set_digest()
+        if candidate.introduced_commit_set_digest != self.verified.introduced_commit_set_digest()
             || candidate.proof_set_digest != candidate_proof_set_digest(&self.request.proofs)?
         {
             return Err(GitdCoreError::Authorization);
@@ -158,7 +156,12 @@ impl PreparedProtectedReceive {
         };
         for proof in &self.request.proofs {
             let commit = proof.commit();
-            if self.verified.introduced_commits().binary_search(&commit).is_err() {
+            if self
+                .verified
+                .introduced_commits()
+                .binary_search(&commit)
+                .is_err()
+            {
                 return Err(GitdCoreError::Authorization);
             }
             let object = received_or_active(store, self.transaction.id(), active_objects, commit)
@@ -251,7 +254,7 @@ fn finish_prepared_receive(
         authenticated_receipt,
         &mut protocol,
     )
-        .map_err(|_| GitdCoreError::UncertainCommit)?;
+    .map_err(|_| GitdCoreError::UncertainCommit)?;
     Ok(SmartGitResponse {
         repository_generation: receipt.activated_repository_generation,
         bytes_read: initial_budget
@@ -675,13 +678,13 @@ fn map_durable_error(error: DurableReceiveError) -> GitdCoreError {
 mod tests {
     use core::sync::atomic::{AtomicUsize, Ordering};
     use mrml_crypto::Sha256;
-    use mrml_runtime::{join_path, Shared, Text, Vector};
+    use mrml_runtime::{Shared, Text, Vector, join_path};
 
     use super::*;
     use crate::{
-        encode_pack_with_format, ActiveRefFile, FullRefName, ObjectFormat, PackGeneration,
-        PackObject, PackSetLimits, RepositoryGeneration, RepositoryIdentity, RevocationGeneration,
-        TrustGeneration,
+        ActiveRefFile, FullRefName, ObjectFormat, PackGeneration, PackObject, PackSetLimits,
+        RepositoryGeneration, RepositoryIdentity, RevocationGeneration, TrustGeneration,
+        encode_pack_with_format,
     };
 
     struct Reader {

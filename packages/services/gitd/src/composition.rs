@@ -163,3 +163,39 @@ fn verify_protected_live_generations<A: ProtectedReceiveAuthority>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+pub(crate) fn empty_private_listener_test_service() -> GitdComposedService {
+    use mrml_http::{
+        RepositoryAccessPolicy, RepositoryIdentity as HttpRepositoryIdentity, RepositoryProfile,
+        TokenAuthority,
+    };
+    let backend = GitdRepositorySet::new().into_shared().unwrap();
+    let authentication = Shared::new(
+        GitdAuthentication::new(
+            TokenAuthority::new([0x67; 32]).unwrap(),
+            [RepositoryAccessPolicy {
+                repository: HttpRepositoryIdentity::parse("owner/private").unwrap(),
+                profile: RepositoryProfile::Private,
+                revocation_generation: 1,
+            }]
+            .into(),
+            mrml_runtime::Vector::new(),
+        )
+        .unwrap(),
+    );
+    let health = Shared::new(GitdOperationalHealth::starting());
+    let operation_limits = Shared::new(GitdOperationLimits::new(1, 1).unwrap());
+    let mut edge = GitdHttp3Server::new(backend.clone(), 1024 * 1024).unwrap();
+    edge.configure_shared_authentication(authentication.clone());
+    edge.configure_operational_health(health.clone());
+    edge.configure_operation_limits(operation_limits.clone());
+    GitdComposedService {
+        edge,
+        recovery: Vec::new(),
+        backend,
+        authentication,
+        health,
+        operation_limits,
+    }
+}

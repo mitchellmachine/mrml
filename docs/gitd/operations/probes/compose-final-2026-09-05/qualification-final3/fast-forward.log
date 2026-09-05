@@ -1,0 +1,7 @@
+time="2026-09-05T10:19:38Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:19:38Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-git-client-run-9890ec51241d Creating
+ Container mrml-completion-final3-20260905-git-client-run-9890ec51241d Created
+Fetched 9 object(s) and 1 branch ref(s) from origin
+Fast-forward to c6f6412230eb
+native fast-forward pull preserved exact file bytes

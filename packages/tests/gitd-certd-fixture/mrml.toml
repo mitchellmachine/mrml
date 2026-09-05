@@ -69,6 +69,12 @@ compile_name = "mrml-gitd"
 package = "org.mrml.service.gitd"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_git"
+compile_name = "mrml-git"
+package = "org.mrml.tool.git"
+scope = "compile"
+
 [[host_test]]
 targets = ["LINUX"]
 

@@ -1,0 +1,27 @@
+# Disposable fault injection only. TLS stays end-to-end with the real Gitd.
+# Merge after compose.git.acceptance.yaml for exactly one tiny protected push.
+services:
+  git-client:
+    networks: !override [git-fault]
+  git-response-loss:
+    profiles: [acceptance]
+    image: "mrml/git:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21005:21005"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 16
+    mem_limit: 64m
+    cpus: 1.0
+    restart: "no"
+    entrypoint: [/usr/bin/mrml-gitd-certd-test-probe]
+    command: [response-loss-proxy, "0.0.0.0:8443", "gitd:8443"]
+    networks:
+      git-public: {}
+      git-fault:
+        aliases: [git.example]
+networks:
+  git-fault:
+    internal: true

@@ -19,7 +19,10 @@ trailing bytes. Gitd then independently verifies the system-trusted chain,
 server-auth purpose, exact hostname, current certificate validity, snapshot
 validity interval, leaf SPKI digest, exact P-256/SHA-256 scheme policy, and
 canonical publication digest. A previous published generation must be strictly
-lower.
+lower for a changed publication. An unchanged refresh must exactly match the
+already installed generation and publication digest after full validation.
+The presented chain's intersected validity interval is retained with the TLS
+configuration and checked whenever a new handshake acquires a snapshot.
 
 The CertificateVerify client operation is purpose-limited to the active
 identity generation, TLS `ecdsa_secp256r1_sha256`, one exact 32-byte transcript
@@ -58,14 +61,47 @@ the certificate dependency, blocks acquisition of new TLS configuration
 snapshots, and leaves already validated connections available to drain. The
 worker retries channel failures with interruptible jittered exponential backoff
 starting at 250 ms and hard identity/generation/TLS failures starting at five
-seconds; both cap at 30 seconds. A successful authenticated generation wait
-re-enables the current validated identity, while a strictly newer validated
-identity is installed atomically and re-enables handshakes. Authentication and
+seconds; both cap at 30 seconds. An unchanged authenticated generation wait
+does not itself re-enable handshakes: Gitd fetches and validates the current
+identity, checks its exact installed binding, and proves the actual signing
+channel before resuming. A strictly newer validated identity is installed
+atomically with its publication and validity interval. Authentication and
 certificate degradation use separate readiness bits, so recovery of one cannot
 hide continued failure of the other. Diagnostics expose only the failure class,
 bounded consecutive count, and delay. Refresh metrics count attempts, genuine
 wait timeouts, activations, channel failures, and validation failures without
-containing identity or key material.
+containing identity or key material. Successful unchanged metrics now mean a
+validated unchanged refresh, not proof that certd actually waited. The rotation
+worker enforces a one-second monotonic minimum attempt interval and checks stop
+within 100 ms sleep slices; a real wait consumes that interval. Initial startup
+also waits with bounded interruptible backoff for identity readiness rather than
+depending on Compose ordering. It opens no Git listener before validation and
+signing proof succeed.
+
+## H2 revocation policy and limits
+
+The base release keeps H3 disabled. H2 does **not** universally require an OCSP
+staple. Let's Encrypt ended its OCSP service on August 6, 2025 and provides
+CRLs instead; an invented staple is not an acceptable substitute. See the
+[CA's announcement](https://letsencrypt.org/2025/08/06/ocsp-service-has-reached-end-of-life).
+
+Gitd verifies chain trust, exact hostname, certificate and snapshot validity,
+SPKI/publication binding, and constrained signing. Its current signing route
+does not carry certificate status responses. Certificates with a nonempty
+TLS Feature requirement are therefore rejected, including status_request /
+status_request_v2 (Must-Staple), instead of silently ignoring their requirements.
+This is a conservative profile limit, not full support for every TLS Feature.
+See [RFC 7633](https://www.rfc-editor.org/rfc/rfc7633.html).
+
+The native H2 TLS client validates a received OCSP staple through its existing
+verifier. This pass does not add online CRL retrieval, a general revocation
+subsystem, or a configurable CA-policy engine; those are not claimed. An owner
+policy requiring unavailable revocation evidence needs that evidence path
+before deployment, not an insecure-TLS escape hatch. H3's separate existing
+OCSP requirement is not qualification of H3 or changed by this H2 work.
+
+The written readiness, real-custody test and certificate-owner lifecycle handoff
+is [CERTD_CONSUMER_HANDOFF_2026-09-04.md](CERTD_CONSUMER_HANDOFF_2026-09-04.md).
 
 There is no PEM, embedded-key, self-signed, plaintext, or development-identity
 fallback. Production-process outage/recovery testing with the deployed certd

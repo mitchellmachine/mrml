@@ -114,18 +114,18 @@ case ${1:-} in
     ;;
   certd)
     [ "$#" -eq 3 ] || usage
-    destination=$(volume_path mrml-certd-config)
+    destination=$(volume_path "$(git_volume certd-config)")
     install_file "$2" "$destination/config.json" 0 0 0444 16384
-    install_file "$3" "$destination/acme-trust-roots.pem" 0 0 0444 1048576
+    install_file "$3" "$destination/acme-trust-roots.pem" 0 0 0444 65536
     ;;
   acmed)
     [ "$#" -eq 2 ] || usage
-    destination=$(volume_path mrml-acmed-config)
+    destination=$(volume_path "$(git_volume acmed-config)")
     install_file "$2" "$destination/config.json" 0 0 0444 16384
     ;;
   cloudflare-token)
     [ "$#" -eq 2 ] || usage
-    destination=$(volume_path mrml-acmed-secrets)
+    destination=$(volume_path "$(git_volume acmed-secrets)")
     install_file "$2" "$destination/cloudflare-api-token" 21004 21004 0400 4096
     ;;
   *) usage ;;

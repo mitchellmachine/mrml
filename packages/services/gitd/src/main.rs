@@ -488,27 +488,16 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
     authority.health().map_err(|error| {
         eprintln!("component=mrml-gitd event=startup_authority_health_failed category={error:?}");
     })?;
-    certd.health().map_err(|error| {
-        eprintln!("component=mrml-gitd event=startup_certd_health_failed category={error:?}");
-    })?;
+    let (identity, next_logical_request) =
+        wait_for_initial_certd_identity(&mut certd, &config.server_name)?;
     operational_event("startup_dependencies_authenticated");
-    let identity = certd
-        .get_identity_snapshot(&config.server_name)
-        .map_err(|error| {
-            eprintln!("component=mrml-gitd event=startup_identity_fetch_failed category={error:?}");
+    let signing_route =
+        GitdCertdSigningRoute::new(certd, next_logical_request).map_err(|error| {
+            eprintln!("component=mrml-gitd event=startup_signing_route_failed category={error:?}");
         })?;
-    let identity = validate_identity_snapshot(identity, None).map_err(|error| {
-        eprintln!(
-            "component=mrml-gitd event=startup_identity_validation_failed category={error:?}"
-        );
-    })?;
-    prove_identity_signing_route(&mut certd, &identity, 1).map_err(|error| {
-        eprintln!("component=mrml-gitd event=startup_signing_probe_failed category={error:?}");
-    })?;
-    let signing_route = GitdCertdSigningRoute::new(certd, 2).map_err(|error| {
-        eprintln!("component=mrml-gitd event=startup_signing_route_failed category={error:?}");
-    })?;
     let identity_generation = identity.snapshot().identity_generation;
+    let identity_publication = identity.snapshot().publication_digest;
+    let identity_validity = identity.validity_interval();
     let tls_config = build_certd_tls_server_config_with_route(identity, &signing_route)
         .and_then(|config| config.with_protocols(gitd_alpn_protocols(enable_http3)))
         .map_err(|error| {
@@ -516,7 +505,15 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
                 "component=mrml-gitd event=startup_tls_configuration_failed category={error:?}"
             );
         })?;
-    let tls = Arc::new(GitdTlsConfigStore::new(identity_generation, tls_config).map_err(|_| ())?);
+    let tls = Arc::new(
+        GitdTlsConfigStore::new(
+            identity_generation,
+            identity_publication,
+            identity_validity,
+            tls_config,
+        )
+        .map_err(|_| ())?,
+    );
     operational_event("startup_identity_authenticated");
 
     let receipt_authority = RemoteProtectedReceiveAuthority::new(authority);
@@ -635,6 +632,7 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
     let rotation_worker = mrml_runtime::spawn_joinable(move || {
         let mut consecutive_failures = 0u32;
         while !worker_rotation_stop.load(Ordering::Acquire) {
+            let attempt_started = std::time::Instant::now();
             match refresh_certd_tls_config(
                 &rotation_server_name,
                 &rotation_route,
@@ -651,6 +649,7 @@ fn serve(config_path: &Path, signer_identity: &str, enable_http3: bool) -> Resul
                     if changed {
                         operational_event("certificate_generation_activated");
                     }
+                    mrml_gitd::wait_for_certificate_poll(&worker_rotation_stop, attempt_started);
                 }
                 Err(error) => {
                     let _ = rotation_tls.block_new_handshakes();
@@ -820,6 +819,51 @@ fn sleep_interruptibly(stop: &AtomicBool, milliseconds: u64) {
         let interval = remaining.min(100);
         std::thread::sleep(std::time::Duration::from_millis(interval));
         remaining -= interval;
+    }
+}
+
+fn wait_for_initial_certd_identity(
+    certd: &mut GitdCertdChannelClient,
+    server_name: &str,
+) -> Result<(mrml_gitd::ValidatedGitdIdentity, u64), ()> {
+    let mut failures = 0u32;
+    let mut next_logical_request = 1u64;
+    loop {
+        if TERMINATION_SIGNALLED.load(Ordering::Acquire) {
+            return Err(());
+        }
+        let result = (|| {
+            certd
+                .health()
+                .map_err(|_| mrml_gitd::GitdTlsRefreshError::Channel)?;
+            let snapshot = certd
+                .get_identity_snapshot(server_name)
+                .map_err(|_| mrml_gitd::GitdTlsRefreshError::Channel)?;
+            let identity = validate_identity_snapshot(snapshot, None)
+                .map_err(mrml_gitd::GitdTlsRefreshError::Identity)?;
+            let request = next_logical_request;
+            next_logical_request = next_logical_request
+                .checked_add(1)
+                .ok_or(mrml_gitd::GitdTlsRefreshError::Tls)?;
+            prove_identity_signing_route(certd, &identity, request)
+                .map_err(mrml_gitd::GitdTlsRefreshError::Identity)?;
+            Ok(identity)
+        })();
+        match result {
+            Ok(identity) => return Ok((identity, next_logical_request)),
+            Err(error) => {
+                failures = failures.saturating_add(1);
+                let hard = !matches!(error, mrml_gitd::GitdTlsRefreshError::Channel);
+                let delay = certd_retry_delay_millis(failures, hard);
+                eprintln!(
+                    "component=mrml-gitd event=startup_identity_wait category={} consecutive_failures={} backoff_millis={}",
+                    if hard { "invalid_identity" } else { "channel" },
+                    failures,
+                    delay
+                );
+                sleep_interruptibly(&TERMINATION_SIGNALLED, delay);
+            }
+        }
     }
 }
 
@@ -1103,6 +1147,18 @@ fn load_certd_capability(path: &Path, expected_owner: u32) -> Result<CertdChanne
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn certificate_poll_interval_subtracts_real_wait_and_is_interruptible() {
+        use std::time::{Duration, Instant};
+        let stop = super::AtomicBool::new(false);
+        let start = Instant::now();
+        mrml_gitd::wait_for_certificate_poll(&stop, start - Duration::from_secs(1));
+        assert!(start.elapsed() < Duration::from_millis(500));
+        stop.store(true, super::Ordering::Release);
+        mrml_gitd::wait_for_certificate_poll(&stop, Instant::now());
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
 

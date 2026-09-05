@@ -1,0 +1,9 @@
+time="2026-09-05T10:18:29Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-certificate-exchange\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:29Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:29Z" level=warning msg="volume \"mrml-completion-final3-20260905-acmed-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:29Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-git-certd-enroll-run-152838ac381f Creating
+ Container mrml-completion-final3-20260905-git-certd-enroll-run-152838ac381f Created
+/usr/bin/mrml-gitd-certd-test-probe: /lib/x86_64-linux-gnu/libc.so.6: weak version `GLIBC_2.39' not found (required by /usr/bin/mrml-gitd-certd-test-probe)
+real-certd activated identity_generation=1 next_request_id=5
+mrml-certd ready generation=1

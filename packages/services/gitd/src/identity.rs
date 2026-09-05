@@ -20,6 +20,7 @@ pub enum GitdIdentityValidationError {
 
 pub struct ValidatedGitdIdentity {
     snapshot: GitdIdentitySnapshot,
+    validity: (u64, u64),
 }
 
 impl ValidatedGitdIdentity {
@@ -29,6 +30,11 @@ impl ValidatedGitdIdentity {
 
     pub fn into_snapshot(self) -> GitdIdentitySnapshot {
         self.snapshot
+    }
+
+    /// Intersection of all presented certificate validity intervals.
+    pub fn validity_interval(&self) -> (u64, u64) {
+        self.validity
     }
 }
 
@@ -46,14 +52,19 @@ pub fn validate_identity_snapshot(
         .collect();
     verify_server_chain(&snapshot.server_name, &chain)
         .map_err(GitdIdentityValidationError::Certificate)?;
-    let leaf = Certificate::parse(
-        snapshot
-            .certificate_chain
-            .first()
-            .ok_or(GitdIdentityValidationError::Certificate(
-                mrml_tls::CertificateError::Malformed,
-            ))?,
-    )
+    let mut validity = (0, u64::MAX);
+    for encoded in &chain {
+        let certificate =
+            Certificate::parse(encoded).map_err(GitdIdentityValidationError::Certificate)?;
+        certificate
+            .require_no_tls_features()
+            .map_err(GitdIdentityValidationError::Certificate)?;
+        validity.0 = validity.0.max(certificate.not_before());
+        validity.1 = validity.1.min(certificate.not_after());
+    }
+    let leaf = Certificate::parse(snapshot.certificate_chain.first().ok_or(
+        GitdIdentityValidationError::Certificate(mrml_tls::CertificateError::Malformed),
+    )?)
     .map_err(GitdIdentityValidationError::Certificate)?;
     leaf.verify_hostname(&snapshot.server_name)
         .map_err(|_| GitdIdentityValidationError::Hostname)?;
@@ -71,7 +82,7 @@ pub fn validate_identity_snapshot(
     if publication_digest(&snapshot)? != snapshot.publication_digest {
         return Err(GitdIdentityValidationError::Publication);
     }
-    Ok(ValidatedGitdIdentity { snapshot })
+    Ok(ValidatedGitdIdentity { snapshot, validity })
 }
 
 pub fn prove_identity_signing_route(

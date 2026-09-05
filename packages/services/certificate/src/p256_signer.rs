@@ -120,6 +120,50 @@ impl CertificateP256SigningKey {
         )
     }
 
+    /// Adapt the retained certd policy binding to the CSR protocol's distinct
+    /// digest domain without changing sealed descriptors or broadening names.
+    pub fn write_configured_dns_csr<'a>(
+        &mut self,
+        identifiers: &[mrml_acme::DnsIdentifier],
+        wildcard_authorized: bool,
+        output: &'a mut [u8],
+    ) -> Result<&'a [u8], CsrError> {
+        if identifiers.is_empty() || identifiers.len() > mrml_acme::MAX_CSR_IDENTIFIERS {
+            return Err(CsrError::SigningUnavailable);
+        }
+        let mut configured = [None; mrml_acme::MAX_CSR_IDENTIFIERS];
+        let mut csr_binding = Sha256::new();
+        csr_binding.update(b"mrml-acme-csr-identifiers-v1\0");
+        for (index, identifier) in identifiers.iter().enumerate() {
+            configured[index] = Some(*identifier);
+            csr_binding.update(&(identifier.as_str().len() as u16).to_be_bytes());
+            csr_binding.update(identifier.as_str().as_bytes());
+        }
+        if crate::certd_identifier_set_digest(&configured[..identifiers.len()])
+            != self.identifier_set_digest
+        {
+            return Err(CsrError::SigningUnavailable);
+        }
+        let public = self
+            .public_jwk()
+            .map_err(|_| CsrError::SigningUnavailable)?;
+        let generation = self.key_generation;
+        let policy = self.policy_generation;
+        let mut signer = ConfiguredCsrSigner {
+            key: self,
+            csr_binding: csr_binding.finalize(),
+        };
+        mrml_acme::write_pkcs10_csr(
+            &public,
+            identifiers,
+            wildcard_authorized,
+            generation,
+            policy,
+            &mut signer,
+            output,
+        )
+    }
+
     pub fn route(&self) -> TlsSigningRoute {
         self.route
     }
@@ -135,6 +179,28 @@ impl CertificateP256SigningKey {
         x.copy_from_slice(&public[1..33]);
         y.copy_from_slice(&public[33..]);
         P256Jwk::from_coordinates(x, y).map_err(|_| P256Error::InvalidKey)
+    }
+}
+
+struct ConfiguredCsrSigner<'a> {
+    key: &'a mut CertificateP256SigningKey,
+    csr_binding: [u8; 32],
+}
+
+impl Pkcs10Signer for ConfiguredCsrSigner<'_> {
+    fn sign_pkcs10(&mut self, approved: &ApprovedCsrDigest) -> Result<Es256Signature, CsrError> {
+        if approved.key_generation != self.key.key_generation
+            || approved.policy_generation != self.key.policy_generation
+            || approved.identifier_set_digest != self.csr_binding
+        {
+            return Err(CsrError::SigningUnavailable);
+        }
+        let raw = self
+            .key
+            .key
+            .sign_digest_raw(approved.digest())
+            .map_err(|_| CsrError::SigningUnavailable)?;
+        Es256Signature::from_raw(raw).map_err(|_| CsrError::InvalidSignature)
     }
 }
 
@@ -205,8 +271,8 @@ mod tests {
     use super::*;
     use crate::TlsIdentityId;
     use mrml_acme::{
-        fetch_directory, post_jws, write_pkcs10_csr, AcmeExchange, DeterministicAcmeAuthority,
-        FirstPartyP256JwsVerifier, ProtectedKey, LOCAL_DIRECTORY_URL,
+        AcmeExchange, DeterministicAcmeAuthority, FirstPartyP256JwsVerifier, LOCAL_DIRECTORY_URL,
+        ProtectedKey, fetch_directory, post_jws, write_pkcs10_csr,
     };
     use mrml_crypto::ecdsa_p256_digest_verify_raw;
 
@@ -240,12 +306,14 @@ mod tests {
         let signature = certificate
             .sign_tls13_certificate_verify(&approved)
             .unwrap();
-        assert!(ecdsa_p256_digest_verify_raw(
-            &certificate_public,
-            approved.digest(),
-            signature.as_bytes()
-        )
-        .is_ok());
+        assert!(
+            ecdsa_p256_digest_verify_raw(
+                &certificate_public,
+                approved.digest(),
+                signature.as_bytes()
+            )
+            .is_ok()
+        );
         let mut wrong = certificate.route();
         wrong.identity_generation += 1;
         let wrong = ApprovedTls13CertificateVerify::new([4; 32], wrong);
@@ -323,5 +391,49 @@ mod tests {
         );
         assert!(written.is_ok());
         assert_eq!(csr[0], 0x30);
+    }
+    #[test]
+    fn configured_certd_binding_can_sign_only_its_exact_dns_csr() {
+        let name = mrml_acme::DnsIdentifier::parse("git.example", false).unwrap();
+        let binding = crate::certd_identifier_set_digest(&[Some(name)]);
+        let route = TlsSigningRoute {
+            identity: TlsIdentityId([4; 16]),
+            identity_generation: 1,
+            key_identity: TlsKeyIdentity([0; 32]),
+            route_generation: 9,
+            capability_id: [5; 16],
+        };
+        let mut key = CertificateP256SigningKey::generate(7, 9, binding, route, |output| {
+            output.copy_from_slice(&[4; 32]);
+            Ok(())
+        })
+        .unwrap();
+        let mut output = [0u8; mrml_acme::MAX_CSR_BYTES];
+        assert!(
+            key.write_configured_dns_csr(&[name], false, &mut output)
+                .is_ok()
+        );
+        let other = mrml_acme::DnsIdentifier::parse("other.example", false).unwrap();
+        assert!(
+            key.write_configured_dns_csr(&[other], false, &mut output)
+                .is_err()
+        );
+        assert!(
+            key.write_configured_dns_csr(&[name, other], false, &mut output)
+                .is_err()
+        );
+        assert!(
+            key.write_configured_dns_csr(&[], false, &mut output)
+                .is_err()
+        );
+        assert!(
+            key.write_configured_dns_csr(&[name, name], false, &mut output)
+                .is_err()
+        );
+        assert_eq!(key.identifier_set_digest, binding);
+        assert!(
+            key.write_configured_dns_csr(&[name], false, &mut output)
+                .is_ok()
+        );
     }
 }

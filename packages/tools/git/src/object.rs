@@ -54,9 +54,8 @@ impl ObjectKind {
     }
 }
 
-/// Produces a Git loose object using a standards-compatible zlib stream whose
-/// DEFLATE blocks are deliberately uncompressed. This keeps the implementation
-/// small and auditable while remaining readable by other Git implementations.
+/// Produces a Git loose object with bounded incremental DEFLATE. Canonical
+/// headers and content determine identity independently of storage compression.
 pub fn encode_loose_object(kind: ObjectKind, contents: &[u8]) -> (ObjectId, Vector<u8>) {
     encode_loose_object_with_format(ObjectFormat::Sha1, kind, contents)
 }
@@ -67,28 +66,12 @@ pub fn encode_loose_object_with_format(
     contents: &[u8],
 ) -> (ObjectId, Vector<u8>) {
     let header = mrml_runtime::mrml_format!("{} {}\0", kind.name(), contents.len());
-    let total = header.len() + contents.len();
-    let mut plain = Vector::new();
-    plain.extend(header.as_bytes().iter().copied());
-    plain.extend(contents.iter().copied());
-    let id = format.hash_bytes(&plain);
+    let id = crate::pack::hash_object(format, kind, contents);
     let mut output = Vector::new();
-    output.extend([0x78, 0x01]);
-    let mut offset = 0;
-    while offset < total || (total == 0 && offset == 0) {
-        let length = (total - offset).min(65_535);
-        let final_block = offset + length == total;
-        output.push(if final_block { 1 } else { 0 });
-        output.extend((length as u16).to_le_bytes());
-        output.extend((!(length as u16)).to_le_bytes());
-        output.extend(plain[offset..offset + length].iter().copied());
-        offset += length;
-        if final_block {
-            break;
-        }
+    match crate::deflate::stream_zlib(&[header.as_bytes(), contents], &mut output) {
+        Ok(()) => (id, output),
+        Err(never) => match never {},
     }
-    output.extend(adler32(&plain).to_be_bytes());
-    (id, output)
 }
 
 pub fn decode_loose_object(source: &[u8]) -> Result<Object, ObjectError> {
@@ -226,23 +209,19 @@ pub fn parse_tree_with_format(
     Ok(entries)
 }
 
-fn adler32(bytes: &[u8]) -> u32 {
-    const MODULUS: u32 = 65_521;
-    let (mut a, mut b) = (1u32, 0u32);
-    for chunk in bytes.chunks(5_552) {
-        for byte in chunk {
-            a += *byte as u32;
-            b += a;
-        }
-        a %= MODULUS;
-        b %= MODULUS;
-    }
-    (b << 16) | a
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_loose_object_compresses_without_changing_identity() {
+        let input: Vector<u8> = core::iter::repeat_n(b'x', 1024 * 1024 + 1).collect();
+        let (id, encoded) =
+            encode_loose_object_with_format(ObjectFormat::Sha256, ObjectKind::Blob, &input);
+        assert_eq!(id, ObjectId::blob_with_format(ObjectFormat::Sha256, &input));
+        assert!(encoded.len() < input.len() / 10);
+        assert_eq!(decode_loose_object(&encoded).unwrap().contents, input);
+    }
 
     #[test]
     fn loose_blob_has_git_id_and_valid_stored_stream() {
@@ -255,9 +234,11 @@ mod tests {
     #[test]
     fn splits_large_objects_into_deflate_blocks() {
         let (_, bytes) = encode_loose_object(ObjectKind::Blob, &[42; 70_000]);
-        assert_eq!(bytes[2], 0);
-        let second = 2 + 5 + 65_535;
-        assert_eq!(bytes[second], 1);
+        assert!(bytes.len() < 7000);
+        assert_eq!(
+            &*decode_loose_object(&bytes).unwrap().contents,
+            &[42; 70_000]
+        );
     }
 
     #[test]

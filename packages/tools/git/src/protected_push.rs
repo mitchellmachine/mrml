@@ -7,8 +7,8 @@ use mrml_runtime::Vector;
 use crate::{
     DetachedCommitProofRecord, GitObjectType, HistoryVerificationError, HistoryVerificationLimits,
     HybridTrustPolicy, HybridVerificationRequest, ObjectId, ObjectKind, ProtectedHistoryContext,
-    Repository, VerifiedCommitProof, bind_verified_commit_proof,
-    verify_hybrid_signature, verify_protected_introduced_history,
+    Repository, VerifiedCommitProof, bind_verified_commit_proof, verify_hybrid_signature,
+    verify_protected_introduced_history,
 };
 
 pub struct ProtectedCommitSigningRequest<'a> {
@@ -116,11 +116,13 @@ impl<P: HybridCommitSigningProvider + ProtectedSignerGenerationAdvancer> Protect
         {
             return Err(HistoryVerificationError::Signature);
         }
-        let signatures = self.provider.sign_git_commit(ProtectedCommitSigningRequest {
-            context,
-            commit,
-            exact_contents,
-        })?;
+        let signatures = self
+            .provider
+            .sign_git_commit(ProtectedCommitSigningRequest {
+                context,
+                commit,
+                exact_contents,
+            })?;
         let request = HybridVerificationRequest {
             repository: context.repository,
             object_format: context.object_format,
@@ -152,7 +154,8 @@ impl<P: HybridCommitSigningProvider + ProtectedSignerGenerationAdvancer> Protect
         &mut self,
         authenticated_receipt: &[u8],
     ) -> Result<(), HistoryVerificationError> {
-        self.provider.advance_repository_generation(authenticated_receipt)
+        self.provider
+            .advance_repository_generation(authenticated_receipt)
     }
 }
 
@@ -262,10 +265,7 @@ mod tests {
             &mut self,
             _: ProtectedCommitSigningRequest<'_>,
         ) -> Result<HybridCommitSignatures, HistoryVerificationError> {
-            HybridCommitSignatures::new(
-                &[3; 64],
-                &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES],
-            )
+            HybridCommitSignatures::new(&[3; 64], &[4; mrml_crypto::ML_DSA_65_SIGNATURE_BYTES])
         }
     }
 
@@ -314,7 +314,6 @@ mod tests {
             .write_object(ObjectKind::Commit, contents.as_bytes())
             .unwrap()
     }
-
 
     #[test]
     fn signs_every_merge_side_commit_once_and_returns_canonical_order() {

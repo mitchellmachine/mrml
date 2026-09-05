@@ -61,17 +61,12 @@ if [ -e "$completion_marker" ] || [ -L "$completion_marker" ]; then
     || { echo "invalid or stale signer trust-advance completion marker" >&2; exit 1; }
   advance_complete=true
 fi
-if [ "$runtime" = podman ]; then
-  for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
-    running=$(podman ps -q --filter volume="$volume") || exit 1
-    [ -z "$running" ] || { echo "trust transition requires stopped Gitd, authority, and signer" >&2; exit 1; }
-  done
-else
-  for service in gitd git-authority git-protected-signer; do
-    running=$(docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" -f "$signer_compose" ps --status running -q "$service") || { echo "cannot query service state for $service" >&2; exit 1; }
-    [ -z "$running" ] || { echo "trust transition requires stopped Gitd, authority, and signer" >&2; exit 1; }
-  done
-fi
+# Client signer containers may belong to a separate Compose project.
+# Check every running consumer of the selected state volumes in this engine.
+for volume in "$volume_prefix-gitd-policies" "$volume_prefix-authority-state" "$volume_prefix-git-signer-state"; do
+  running=$("$runtime" ps -q --filter volume="$volume") || exit 1
+  [ -z "$running" ] || { echo "trust transition requires stopped Gitd, authority, and signer" >&2; exit 1; }
+done
 
 if [ "$advance_complete" = false ]; then
   if [ "$phase" = select-and-advance ]; then

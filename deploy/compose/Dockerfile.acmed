@@ -3,7 +3,7 @@ FROM docker.io/library/debian@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41f
 COPY target/mrml-native/linux/release/mrml-acmed /payload/mrml-acmed
 RUN test -x /payload/mrml-acmed && ! ldd /payload/mrml-acmed | grep -q 'not found' && \
     install -d -o 21004 -g 21004 -m 0700 /payload/dirs/state /payload/dirs/challenges && \
-    install -d -o 21003 -g 21903 -m 2770 /payload/dirs/certd-acmed
+    install -d -o 21003 -g 21903 -m 2750 /payload/dirs/certd-acmed
 
 FROM gcr.io/distroless/cc-debian12@sha256:777e96cf322c46bc32aca926c263624c4dc8d7cf37e2fa65ba2c7e697318ebbb
 COPY --from=verify --chown=21004:21004 /payload/mrml-acmed /usr/bin/mrml-acmed

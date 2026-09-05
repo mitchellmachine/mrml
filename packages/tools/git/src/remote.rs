@@ -552,10 +552,9 @@ pub fn push_https_protected_authenticated(
     let identity = remote
         .repository_identity()
         .map_err(|_| PushError::Protocol)?;
-    if let Some(pending) = crate::pending_protected_push::PendingProtectedPush::load(
-        &repository.git_dir,
-    )
-    .map_err(|_| PushError::Repository)?
+    if let Some(pending) =
+        crate::pending_protected_push::PendingProtectedPush::load(&repository.git_dir)
+            .map_err(|_| PushError::Repository)?
     {
         if pending.repository != identity || pending.reference != reference {
             return Err(PushError::Https);
@@ -678,29 +677,24 @@ pub fn push_https_protected_authenticated(
             trust_generation: discovery.trust_generation,
             revocation_generation: discovery.revocation_generation,
         };
-        crate::pending_protected_push::PendingProtectedPush::create(
-            &repository.git_dir,
-            &pending,
-        )
-        .map_err(|_| PushError::Repository)?;
+        crate::pending_protected_push::PendingProtectedPush::create(&repository.git_dir, &pending)
+            .map_err(|_| PushError::Repository)?;
         let authenticated_receipt = match remote.push_protected_pack_file_authenticated(
-                old,
-                new,
-                &reference,
-                &pack_path,
-                discovery,
-                candidate_id,
-                &proofs,
-                credential_provider,
-            )
-        {
+            old,
+            new,
+            &reference,
+            &pack_path,
+            discovery,
+            candidate_id,
+            &proofs,
+            credential_provider,
+        ) {
             Ok(receipt) => receipt,
             Err(_) => {
                 let status = remote
                     .candidate_status_authenticated(candidate_id, credential_provider)
                     .map_err(|_| PushError::Https)?;
-                if status.record.context.current_generation
-                    != discovery.repository_generation
+                if status.record.context.current_generation != discovery.repository_generation
                     || status.record.context.next_generation.0
                         != discovery
                             .repository_generation
@@ -715,9 +709,9 @@ pub fn push_https_protected_authenticated(
                 }
                 match status.record.status {
                     crate::AuthorityCandidateStatus::ReceiptPersisted
-                    | crate::AuthorityCandidateStatus::Completed => status
-                        .authenticated_receipt
-                        .ok_or(PushError::Protocol)?,
+                    | crate::AuthorityCandidateStatus::Completed => {
+                        status.authenticated_receipt.ok_or(PushError::Protocol)?
+                    }
                     crate::AuthorityCandidateStatus::Aborted => {
                         crate::pending_protected_push::PendingProtectedPush::remove(
                             &repository.git_dir,

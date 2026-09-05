@@ -1275,18 +1275,17 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         let result = self
             .backend
             .smart_git(prepared.request, input, output, prepared.budget)?;
-        let expected_generation = if operation == SmartGitOperation::ReceivePack
-            && result.refs_activated
-        {
-            RepositoryGeneration(
+        let expected_generation =
+            if operation == SmartGitOperation::ReceivePack && result.refs_activated {
+                RepositoryGeneration(
+                    generation
+                        .0
+                        .checked_add(1)
+                        .ok_or(BackendError::StaleGeneration)?,
+                )
+            } else {
                 generation
-                    .0
-                    .checked_add(1)
-                    .ok_or(BackendError::StaleGeneration)?,
-            )
-        } else {
-            generation
-        };
+            };
         if result.generation != expected_generation
             || (operation != SmartGitOperation::ReceivePack && result.refs_activated)
         {
@@ -1358,10 +1357,7 @@ impl<B: GitdBackend> GitdHttp3Server<B> {
         let repo_name = pieces[1].strip_suffix(".git").unwrap_or(pieces[1]);
         let repository =
             RepositoryIdentity::parse(&mrml_runtime::mrml_format!("{}/{}", pieces[0], repo_name))?;
-        if pieces[1].ends_with(".git")
-            && pieces.len() == 4
-            && pieces[2] == "mrml-candidate-v1"
-        {
+        if pieces[1].ends_with(".git") && pieces.len() == 4 && pieces[2] == "mrml-candidate-v1" {
             if request.method != "GET"
                 || request.scheme != "https"
                 || request.target.as_str() != target
@@ -2624,7 +2620,12 @@ mod tests {
             header.name == "content-type"
                 && header.value == "application/vnd.mrml.git-candidate-status-v1"
         }));
-        assert_eq!(server.handle(&request("GET", candidate_target, false)).status, 404);
+        assert_eq!(
+            server
+                .handle(&request("GET", candidate_target, false))
+                .status,
+            404
+        );
         for malformed in [
             "/mitchellrenouf/mrml.git/mrml-candidate-v1/00000000000000000000000000000000",
             "/mitchellrenouf/mrml.git/mrml-candidate-v1/1111111111111111111111111111111",

@@ -1,0 +1,15 @@
+# Only for the stopped-service initialize-git-protected-policy.sh operation.
+# The ordinary Gitd service retains its read-only policy mount.
+services:
+  gitd:
+    volumes:
+      - type: volume
+        source: mrml-gitd-policies
+        target: /mnt/mrml/gitd/policies
+        read_only: false
+        volume: {nocopy: true}
+      - type: volume
+        source: mrml-git-authority-config
+        target: /run/mrml-bootstrap
+        read_only: true
+        volume: {nocopy: true}

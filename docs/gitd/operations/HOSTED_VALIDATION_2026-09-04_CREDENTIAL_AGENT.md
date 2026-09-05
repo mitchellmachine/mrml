@@ -133,3 +133,21 @@ authenticated local IPC, peer-credential enforcement, bearer-token custody, and
 container confinement and conventional signal-driven daemon shutdown using
 existing primitives. See
 [`docs/patents/REVIEW_LOG.md`](../../patents/REVIEW_LOG.md).
+
+## Real Docker replacement follow-up — 2026-09-05
+
+The real Compose diagnostic run confirmed that `native_clone` persists the
+credential provider's generation in the clone's `[http] credentialGeneration`
+configuration. Environment variables configure a new clone; they do not
+silently override an existing clone's pinned generation. After stopping the
+agent, installing the replacement token with the documented owner/mode, and
+recreating it with a higher generation, explicitly advance each authorized
+client's non-secret `credentialGeneration` configuration. Stale clients must
+continue to fail. Do not edit authority generations, receipts, or repository
+refs as part of this credential update.
+
+Generation-1 clients were rejected by the real generation-2 agent, then native
+fetch passed after this explicit configuration update. The serving Gitd kept
+its original process throughout revocation and replacement. Exact diagnostic
+logs are recorded in `CURRENT_COMPLETION.md`; this is not a production-token
+or final coherent-release claim.

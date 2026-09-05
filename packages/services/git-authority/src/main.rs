@@ -9,7 +9,7 @@ use mrml_git_authority::{
     AUTHORITY_CAPABILITY_BYTES, AUTHORITY_HEADER_BYTES, AuthorityCapability,
     AuthorityDispatchError, AuthorityFrame, AuthorityFrameKind, AuthorityListener,
     AuthorityOperation, AuthorityPeer, AuthorityReplayWindow, AuthoritySession,
-    LinuxAuthorityCandidateStore, LinuxAuthorityGenerationStore, MAX_AUTHORITY_PAYLOAD_BYTES,
+    LinuxAuthorityCandidateStore, LinuxAuthorityGenerationCatalog, MAX_AUTHORITY_PAYLOAD_BYTES,
     ProductionAuthority, ProductionAuthorityCatalog, decode_frame, encode_frame,
 };
 use mrml_openpgp::{
@@ -900,12 +900,18 @@ fn load_production_authority_catalog(
     authorities
         .try_reserve_exact(repositories.len())
         .map_err(|_| ())?;
+    let (generation_directory, candidate_directory) =
+        open_authority_state_directories(generation_path, authority_uid)?;
+    let mut generations =
+        LinuxAuthorityGenerationCatalog::open_capability(generation_directory, authority_uid)
+            .map_err(|_| authority_startup_failure("generation_catalog"))?;
     for entry in repositories {
-        let authority = load_authority(
+        let authority = load_authority_with_state(
             authority_uid,
             policy_path,
             proof_path,
-            generation_path,
+            &mut generations,
+            candidate_directory.try_clone().map_err(|_| ())?,
             entry.repository.as_str(),
             openpgp_path,
             ml_dsa_path,
@@ -1106,6 +1112,40 @@ fn load_authority(
     validation_time: u64,
     repository_generation: u64,
 ) -> Result<ProductionAuthority, ()> {
+    let (generation_directory, candidate_directory) =
+        open_authority_state_directories(generation_path, authority_uid)?;
+    let mut generations =
+        LinuxAuthorityGenerationCatalog::open_capability(generation_directory, authority_uid)
+            .map_err(|_| authority_startup_failure("generation_catalog"))?;
+    load_authority_with_state(
+        authority_uid,
+        policy_path,
+        proof_path,
+        &mut generations,
+        candidate_directory,
+        repository,
+        openpgp_path,
+        ml_dsa_path,
+        receipt_key_path,
+        validation_time,
+        repository_generation,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_authority_with_state(
+    authority_uid: u32,
+    policy_path: &str,
+    proof_path: &str,
+    generations: &mut LinuxAuthorityGenerationCatalog,
+    candidate_directory: DirectoryCapability,
+    repository: &str,
+    openpgp_path: &str,
+    ml_dsa_path: &str,
+    receipt_key_path: &str,
+    validation_time: u64,
+    repository_generation: u64,
+) -> Result<ProductionAuthority, ()> {
     let repository_identity = RepositoryIdentity::parse(repository)
         .map_err(|_| authority_startup_failure("repository"))?;
     let policy_root = DirectoryCapability::open_root(policy_path)
@@ -1142,19 +1182,18 @@ fn load_authority(
     let mut receipt_key = [0u8; 32];
     receipt_key.copy_from_slice(&receipt_bytes);
     erase_secret_bytes(&mut receipt_bytes);
-    let (generation_directory, candidate_directory) =
-        open_authority_state_directories(generation_path, authority_uid)
-            .map_err(|_| authority_startup_failure("state_directories"))?;
-    let generations = LinuxAuthorityGenerationStore::open_capability(
-        generation_directory,
+    let generations = generations
+        .open_repository(
+            &repository_identity,
+            mrml_git::RepositoryGeneration(repository_generation),
+        )
+        .map_err(|_| authority_startup_failure("generation_store"))?;
+    let candidates = LinuxAuthorityCandidateStore::open_repository_capability(
+        candidate_directory,
         authority_uid,
-        &repository_identity,
-        mrml_git::RepositoryGeneration(repository_generation),
+        repository_identity,
     )
-    .map_err(|_| authority_startup_failure("generation_store"))?;
-    let candidates =
-        LinuxAuthorityCandidateStore::open_capability(candidate_directory, authority_uid)
-            .map_err(|_| authority_startup_failure("candidate_store"))?;
+    .map_err(|_| authority_startup_failure("candidate_store"))?;
     let authority = ProductionAuthority::new_with_stores(
         policy,
         proofs,
@@ -1189,11 +1228,15 @@ fn select_authority_verifier(
     ),
     (),
 > {
-    let bootstrap_pair = AuthorizedHybridPair::bind(&bootstrap.0, &bootstrap.1);
-    if policy
-        .active_verification_policy_at(bootstrap_pair, validation_time, true)
-        .is_ok()
-    {
+    // Bootstrap material describes only the initial selected verifier. Every
+    // normal transition durably binds its successor verifier to that exact
+    // generation before selecting the policy. During overlap the bootstrap
+    // pair can remain active, but must not shadow the selected successor.
+    if policy.generation() == TrustGeneration(1) {
+        let bootstrap_pair = AuthorizedHybridPair::bind(&bootstrap.0, &bootstrap.1);
+        policy
+            .active_verification_policy_at(bootstrap_pair, validation_time, true)
+            .map_err(|_| ())?;
         return Ok(bootstrap);
     }
     let selected = read_transition_verifier(policy_directory, policy.generation())?;
@@ -1542,6 +1585,401 @@ mod tests {
     use mrml_runtime::Vector;
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
+
+    include!("production_receive_test.rs");
+
+    #[test]
+    fn production_catalog_loads_two_repositories_with_one_generation_root() {
+        let root = std::env::temp_dir().join(format!(
+            "mrml-authority-two-repository-loader-{}",
+            std::process::id()
+        ));
+        // Do not reuse or remove state left by an earlier failed run.
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let uid = std::fs::metadata(&root).unwrap().uid();
+        let policy_root = root.join("policies");
+        let proof_root = root.join("proofs");
+        std::fs::create_dir(&proof_root).unwrap();
+        std::fs::set_permissions(&proof_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let generation_root = root.join("generations");
+        let openpgp = SigningKeyV6::from_seed([37; 32], 1_700_000_000).unwrap();
+        let mut ml_public = [0; ML_DSA_65_PUBLIC_KEY_BYTES];
+        let mut ml_secret = [0; ML_DSA_65_SECRET_KEY_BYTES];
+        ml_dsa_65_keygen(&[38; 32], &mut ml_public, &mut ml_secret).unwrap();
+        let pair = AuthorizedHybridPair::bind(&openpgp.public_key(), &ml_public);
+        for repository in ["owner/first", "owner/second"] {
+            let policy = TrustPolicyState::establish(TrustPolicyCandidate {
+                repository: RepositoryIdentity::parse(repository).unwrap(),
+                generation: TrustGeneration(1),
+                previous_policy_digest: [0; 64],
+                revocation_generation: RevocationGeneration(1),
+                protected_refs: [FullRefName::parse("refs/heads/main").unwrap()].into(),
+                allow_sha1: false,
+                allow_sha256: true,
+                hybrid_required: true,
+                legacy_checkpoint: None,
+                hybrid_cutover: Some(catalog_receive_initial_tip()),
+                emergency_policy_digest: Some([39; 64]),
+                active_pairs: [pair].into(),
+                pair_statuses: [
+                    PolicyPairStatus::new(pair, 1_700_000_000, 1_800_000_000, None).unwrap(),
+                ]
+                .into(),
+                legacy_v4_statuses: Vector::new(),
+                revoked_legacy_v4: Vector::new(),
+                revoked_openpgp: Vector::new(),
+                revoked_ml_dsa: Vector::new(),
+            })
+            .unwrap();
+            LinuxDurableTrustPolicyStore::create(path(&policy_root.join(repository)), &policy)
+                .unwrap();
+        }
+        let catalog_path = root.join("catalog");
+        write_public(
+            &catalog_path,
+            b"version=1\nrepository=owner/first generation=3\nrepository=owner/second generation=9\n",
+        );
+        let openpgp_path = root.join("openpgp.asc");
+        let ml_path = root.join("ml-dsa.bin");
+        let receipt_path = root.join("receipt.key");
+        write_openpgp_public(&openpgp_path, &openpgp);
+        write_public(&ml_path, &ml_public);
+        write_public(&receipt_path, &[40; 32]);
+        // Each entry must load on its own with the exact same configured root;
+        // otherwise a fixture error could masquerade as the catalog lock bug.
+        for entry in ["owner/first generation=3", "owner/second generation=9"] {
+            let single_catalog = root.join("single-catalog");
+            write_public(
+                &single_catalog,
+                format!("version=1\nrepository={entry}\n").as_bytes(),
+            );
+            let single = load_production_authority_catalog(
+                uid,
+                path(&policy_root),
+                path(&proof_root),
+                path(&generation_root),
+                path(&single_catalog),
+                path(&openpgp_path),
+                path(&ml_path),
+                path(&receipt_path),
+                1_700_000_010,
+            );
+            assert!(
+                single.is_ok(),
+                "single repository fixture must load: {entry}"
+            );
+            drop(single);
+        }
+        let loaded = load_production_authority_catalog(
+            uid,
+            path(&policy_root),
+            path(&proof_root),
+            path(&generation_root),
+            path(&catalog_path),
+            path(&openpgp_path),
+            path(&ml_path),
+            path(&receipt_path),
+            1_700_000_010,
+        );
+        assert!(
+            loaded.is_ok(),
+            "two repositories must share the configured generation root"
+        );
+        let loaded = loaded.unwrap();
+        // This exercises the loaded daemon authority state machine with real hybrid
+        // signatures; it does not claim a network push or filesystem ref activation.
+        use mrml_git::{
+            AuditReceipt, AuthorityCandidateContext, AuthorityCandidateStatus,
+            DetachedCommitProofRecord, ObjectId, ObjectKind, ProtectedHistoryContext,
+            ProtectedReceiveAuthorization, QuarantineTransactionId, RepositoryGeneration,
+            authenticated_audit_receipt_transcript, candidate_activation_digest,
+            candidate_proof_set_digest, encode_audit_receipt, encode_authority_candidate,
+            encode_authority_candidate_proof, encode_authority_generation_query,
+            encode_authority_receipt, encode_authority_receive, encode_loose_object_with_format,
+            parse_authority_candidate_record, parse_authority_generation_result,
+        };
+        let now = 1_700_000_010;
+        let contents =
+            b"tree 0123456789012345678901234567890123456789012345678901234567890123\n\nmessage\n";
+        let commit =
+            encode_loose_object_with_format(ObjectFormat::Sha256, ObjectKind::Commit, contents).0;
+        let mut fixtures = Vec::new();
+        for (name, generation) in [("owner/first", 3), ("owner/second", 9)] {
+            let repository = RepositoryIdentity::parse(name).unwrap();
+            let policy = LinuxDurableTrustPolicyStore::open(path(&policy_root.join(name)))
+                .unwrap()
+                .load()
+                .unwrap();
+            let transcript = canonical_hybrid_transcript(
+                &repository,
+                ObjectFormat::Sha256,
+                GitObjectType::Commit,
+                SignaturePurpose::GitCommit,
+                TrustGeneration(1),
+                pair,
+                contents,
+            )
+            .unwrap();
+            let mut pgp_signature = [0; mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES];
+            let length = sign_detached_v6_ascii_with_salt(
+                &openpgp,
+                &transcript,
+                DigestAlgorithm::Sha512,
+                1_700_000_001,
+                &[47; 32],
+                &mut pgp_signature,
+            )
+            .unwrap();
+            let mut ml_signature = [0; ML_DSA_65_SIGNATURE_BYTES];
+            ml_dsa_65_sign(
+                &ml_secret,
+                b"mrml.git.hybrid.v1",
+                &transcript,
+                &[48; 32],
+                &mut ml_signature,
+            )
+            .unwrap();
+            let proof =
+                DetachedCommitProofRecord::new(commit, &pgp_signature[..length], &ml_signature)
+                    .unwrap();
+            let receive = ProtectedReceiveAuthorization {
+                repository: repository.clone(),
+                repository_generation: RepositoryGeneration(generation),
+                trust_generation: TrustGeneration(1),
+                revocation_generation: RevocationGeneration(1),
+                policy_digest: policy.digest(),
+            };
+            let receipt = AuditReceipt {
+                transaction: QuarantineTransactionId([41; 16]),
+                repository: repository.clone(),
+                repository_generation: RepositoryGeneration(generation),
+                activated_repository_generation: RepositoryGeneration(generation + 1),
+                trust_generation: TrustGeneration(1),
+                revocation_generation: RevocationGeneration(1),
+                updates: [(
+                    FullRefName::parse("refs/heads/main").unwrap(),
+                    ObjectId::from_bytes(ObjectFormat::Sha256, &[6; 32]).unwrap(),
+                    commit,
+                )]
+                .into(),
+            };
+            let receipt_transcript =
+                authenticated_audit_receipt_transcript(&encode_audit_receipt(&receipt).unwrap())
+                    .unwrap();
+            let candidate = AuthorityCandidateContext {
+                id: receipt.transaction,
+                repository,
+                current_generation: receipt.repository_generation,
+                next_generation: receipt.activated_repository_generation,
+                trust_generation: TrustGeneration(1),
+                revocation_generation: RevocationGeneration(1),
+                policy_digest: policy.digest(),
+                ref_update_digest: [42; 64],
+                introduced_commit_set_digest: [43; 64],
+                arrival_pack_digest: [44; 64],
+                proof_set_digest: candidate_proof_set_digest(core::slice::from_ref(&proof))
+                    .unwrap(),
+                activation_digest: candidate_activation_digest(&receipt_transcript),
+            };
+            assert_eq!(
+                loaded.dispatch(
+                    AuthorityOperation::AuthorizeReceive,
+                    &encode_authority_receive(&receive).unwrap(),
+                    now
+                ),
+                Ok(Vector::new())
+            );
+            assert_eq!(
+                loaded.dispatch(
+                    AuthorityOperation::BeginCandidate,
+                    &encode_authority_candidate(&candidate).unwrap(),
+                    now
+                ),
+                Ok(Vector::new())
+            );
+            fixtures.push((candidate, receive, proof, receipt_transcript));
+        }
+        erase_secret_bytes(&mut ml_secret);
+        assert_ne!(
+            fixtures[0].2, fixtures[1].2,
+            "signatures must bind their repository"
+        );
+        for (index, (candidate, receive, proof, receipt_transcript)) in fixtures.iter().enumerate()
+        {
+            let request = encode_authority_candidate(candidate).unwrap();
+            let context = ProtectedHistoryContext {
+                repository: &candidate.repository,
+                repository_generation: candidate.current_generation,
+                trust_generation: candidate.trust_generation,
+                revocation_generation: candidate.revocation_generation,
+                purpose: SignaturePurpose::GitCommit,
+                object_format: ObjectFormat::Sha256,
+            };
+            assert_eq!(
+                loaded.dispatch(
+                    AuthorityOperation::InstallCandidateProof,
+                    &encode_authority_candidate_proof(candidate, context, commit, contents, proof)
+                        .unwrap(),
+                    now
+                ),
+                Ok(Vector::new())
+            );
+            for operation in [
+                AuthorityOperation::SealCandidateProofSet,
+                AuthorityOperation::AuthorizeCandidate,
+                AuthorityOperation::StartCandidateActivation,
+                AuthorityOperation::CommitCandidate,
+                AuthorityOperation::CommitCandidate,
+            ] {
+                assert_eq!(
+                    loaded.dispatch(operation, &request, now),
+                    Ok(Vector::new()),
+                    "{operation:?}"
+                );
+            }
+            let signature = loaded
+                .dispatch(
+                    AuthorityOperation::SignReceipt,
+                    &encode_authority_receipt(receipt_transcript, &[]).unwrap(),
+                    now,
+                )
+                .unwrap();
+            assert_eq!(
+                loaded.dispatch(
+                    AuthorityOperation::VerifyReceipt,
+                    &encode_authority_receipt(receipt_transcript, &signature).unwrap(),
+                    now
+                ),
+                Ok(Vector::new())
+            );
+            assert_eq!(
+                loaded.dispatch(AuthorityOperation::CompleteCandidate, &request, now),
+                Ok(Vector::new())
+            );
+            assert_eq!(
+                loaded.dispatch(
+                    AuthorityOperation::AuthorizeReceive,
+                    &encode_authority_receive(receive).unwrap(),
+                    now
+                ),
+                Err(AuthorityDispatchError::Unauthorized)
+            );
+            for (other_index, (other, _, _, _)) in fixtures.iter().enumerate() {
+                let expected = if other_index <= index {
+                    other.next_generation
+                } else {
+                    other.current_generation
+                };
+                assert_eq!(
+                    parse_authority_generation_result(
+                        &loaded
+                            .dispatch(
+                                AuthorityOperation::QueryGenerations,
+                                &encode_authority_generation_query(&other.repository).unwrap(),
+                                now
+                            )
+                            .unwrap()
+                    )
+                    .unwrap(),
+                    (expected, TrustGeneration(1), RevocationGeneration(1))
+                );
+            }
+        }
+        drop(loaded);
+        let reopened = load_production_authority_catalog(
+            uid,
+            path(&policy_root),
+            path(&proof_root),
+            path(&generation_root),
+            path(&catalog_path),
+            path(&openpgp_path),
+            path(&ml_path),
+            path(&receipt_path),
+            now,
+        )
+        .unwrap();
+        for (candidate, _, _, _) in &fixtures {
+            assert_eq!(
+                parse_authority_generation_result(
+                    &reopened
+                        .dispatch(
+                            AuthorityOperation::QueryGenerations,
+                            &encode_authority_generation_query(&candidate.repository).unwrap(),
+                            now
+                        )
+                        .unwrap()
+                )
+                .unwrap(),
+                (
+                    candidate.next_generation,
+                    TrustGeneration(1),
+                    RevocationGeneration(1)
+                )
+            );
+            let record = parse_authority_candidate_record(
+                &reopened
+                    .dispatch(
+                        AuthorityOperation::QueryCandidate,
+                        &encode_authority_candidate(candidate).unwrap(),
+                        now,
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(record.context, *candidate);
+            assert_eq!(record.status, AuthorityCandidateStatus::Completed);
+        }
+        catalog_receive_pack_integration(&root, &reopened);
+        drop(reopened);
+        let restarted = load_production_authority_catalog(
+            uid,
+            path(&policy_root),
+            path(&proof_root),
+            path(&generation_root),
+            path(&catalog_path),
+            path(&openpgp_path),
+            path(&ml_path),
+            path(&receipt_path),
+            now,
+        )
+        .unwrap();
+        for (name, generation) in [("owner/first", 5), ("owner/second", 11)] {
+            let repository = RepositoryIdentity::parse(name).unwrap();
+            assert_eq!(
+                parse_authority_generation_result(
+                    &restarted
+                        .dispatch(
+                            AuthorityOperation::QueryGenerations,
+                            &encode_authority_generation_query(&repository).unwrap(),
+                            now,
+                        )
+                        .unwrap()
+                )
+                .unwrap()
+                .0,
+                RepositoryGeneration(generation)
+            );
+            let record = parse_authority_candidate_record(
+                &restarted
+                    .dispatch(
+                        AuthorityOperation::QueryCandidateById,
+                        &mrml_git::encode_authority_candidate_lookup(
+                            &repository,
+                            QuarantineTransactionId([49; 16]),
+                        )
+                        .unwrap(),
+                        now,
+                    )
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(record.status, AuthorityCandidateStatus::Completed);
+            assert_eq!(record.context.repository, repository);
+        }
+        drop(restarted);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn repository_catalog_is_exact_ordered_and_bounded() {
@@ -1926,6 +2364,41 @@ mod tests {
             assert_eq!(metadata.uid(), uid);
             assert_eq!(metadata.nlink(), 1);
         }
+
+        // The selected generation's successor must be used even while the
+        // configured bootstrap pair is still active during overlap.
+        assert!(
+            expected_next
+                .active_verification_policy_at(old_pair, 1_700_000_020, true)
+                .is_ok()
+        );
+        let overlapping = select_authority_verifier(
+            &expected_next,
+            &DirectoryCapability::open_root(path(&policy_directory)).unwrap(),
+            1_700_000_020,
+            (old_openpgp.public_key(), old_ml_public),
+        )
+        .unwrap();
+        assert_eq!(
+            AuthorizedHybridPair::bind(&overlapping.0, &overlapping.1),
+            next_pair
+        );
+
+        // Missing selected-generation material must not silently fall back to
+        // the still-active bootstrap key.
+        let selected_ml_path = keyring.join("trust-2.ml-dsa.bin");
+        let retained_ml_bytes = std::fs::read(&selected_ml_path).unwrap();
+        std::fs::remove_file(&selected_ml_path).unwrap();
+        assert!(
+            select_authority_verifier(
+                &expected_next,
+                &DirectoryCapability::open_root(path(&policy_directory)).unwrap(),
+                1_700_000_020,
+                (old_openpgp.public_key(), old_ml_public),
+            )
+            .is_err()
+        );
+        write_public(&selected_ml_path, &retained_ml_bytes);
 
         let retirement_time = 1_700_000_030;
         let retirement_policy = expected_next

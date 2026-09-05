@@ -1,0 +1,139 @@
+time="2026-09-05T10:32:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:32:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:32:34Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-4e58dca529dd Creating
+ Container mrml-completion-final3-20260905-git-client-run-4e58dca529dd Created
+/usr/bin/mrml-gitd-certd-test-probe: /lib/x86_64-linux-gnu/libc.so.6: weak version `GLIBC_2.39' not found (required by /usr/bin/mrml-gitd-certd-test-probe)
+object-00.bin: OK
+object-01.bin: OK
+object-02.bin: OK
+object-03.bin: OK
+object-04.bin: OK
+object-05.bin: OK
+object-06.bin: OK
+object-07.bin: OK
+time="2026-09-05T10:32:39Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:32:39Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:32:39Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-8935f9a1779e Creating
+ Container mrml-completion-final3-20260905-git-client-run-8935f9a1779e Created
+MRML GIT · NATIVE STATUS
+  root   /work/second
+  branch main
+  head   eff5a40ef7f3b72a26c9ea5d203f87c71896c68cab1938f6bff65c7f90f43380
+  track origin/main  0 ahead  0 behind
+  modified staged random256/object-00.bin
+  modified staged random256/object-01.bin
+  modified staged random256/object-02.bin
+  modified staged random256/object-03.bin
+  modified staged random256/object-04.bin
+  modified staged random256/object-05.bin
+  modified staged random256/object-06.bin
+  modified staged random256/object-07.bin
+time="2026-09-05T10:33:04Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:33:04Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:33:04Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-151f234f423b Creating
+ Container mrml-completion-final3-20260905-git-client-run-151f234f423b Created
+[18626c67a11e] Compose 256 MiB random transfer fixture
+time="2026-09-05T10:33:04Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:33:04Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:33:04Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-measure-random-push Creating
+ Container mrml-completion-final3-20260905-measure-random-push Created
+/usr/bin/mrml-gitd-certd-test-probe: /lib/x86_64-linux-gnu/libc.so.6: weak version `GLIBC_2.39' not found (required by /usr/bin/mrml-gitd-certd-test-probe)
+Pushed 18626c67a11e to origin/main
+native transfer accounting saved
+time="2026-09-05T10:34:15Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:34:15Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:34:15Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-measure-random-clone Creating
+ Container mrml-completion-final3-20260905-measure-random-clone Created
+/usr/bin/mrml-gitd-certd-test-probe: /lib/x86_64-linux-gnu/libc.so.6: weak version `GLIBC_2.39' not found (required by /usr/bin/mrml-gitd-certd-test-probe)
+Cloned https://git.example:8443/owner/second.git into /work/clone-random256 on branch main
+native transfer accounting saved
+object-00.bin: OK
+object-01.bin: OK
+object-02.bin: OK
+object-03.bin: OK
+object-04.bin: OK
+object-05.bin: OK
+object-06.bin: OK
+object-07.bin: OK
+time="2026-09-05T10:35:38Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:35:38Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:35:38Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-measure-random-fetch Creating
+ Container mrml-completion-final3-20260905-measure-random-fetch Created
+/usr/bin/mrml-gitd-certd-test-probe: /lib/x86_64-linux-gnu/libc.so.6: weak version `GLIBC_2.39' not found (required by /usr/bin/mrml-gitd-certd-test-probe)
+Fetched 11 object(s) and 1 branch ref(s) from origin
+native transfer accounting saved
+time="2026-09-05T10:36:31Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:36:31Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:36:31Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-0dabe07a2d2b Creating
+ Container mrml-completion-final3-20260905-git-client-run-0dabe07a2d2b Created
+Fetched 0 object(s) and 1 branch ref(s) from origin
+Fast-forward to 18626c67a11e
+object-00.bin: OK
+object-01.bin: OK
+object-02.bin: OK
+object-03.bin: OK
+object-04.bin: OK
+object-05.bin: OK
+object-06.bin: OK
+object-07.bin: OK
+observer_state=zombie
+child_namespace_pid=7
+network_received_bytes=2308762
+network_sent_bytes=271610558
+format=mrml-native-transfer-accounting-v1
+elapsed_microseconds=69041946
+user_cpu_microseconds=35405144
+system_cpu_microseconds=2997046
+peak_rss_kib=118584
+exit_status=0
+samples=690
+rchar: 807063197
+wchar: 537838637
+syscr: 42877
+syscw: 65651
+read_bytes: 8192
+write_bytes: 268488704
+observer_state=zombie
+child_namespace_pid=7
+network_received_bytes=271767729
+network_sent_bytes=2752015
+format=mrml-native-transfer-accounting-v1
+elapsed_microseconds=77557790
+user_cpu_microseconds=50414382
+system_cpu_microseconds=5567607
+peak_rss_kib=363900
+exit_status=0
+samples=775
+rchar: 2149769190
+wchar: 1074413594
+syscr: 74002
+syscw: 49321
+read_bytes: 4096
+write_bytes: 1073991680
+observer_state=zombie
+child_namespace_pid=7
+network_received_bytes=271767985
+network_sent_bytes=2751270
+format=mrml-native-transfer-accounting-v1
+elapsed_microseconds=50890043
+user_cpu_microseconds=30115435
+system_cpu_microseconds=3569656
+peak_rss_kib=199740
+exit_status=0
+samples=509
+rchar: 1612812412
+wchar: 805973152
+syscr: 73944
+syscw: 49280
+read_bytes: 16384
+write_bytes: 805478400
+780	/var/lib/mrml-docker-ce/volumes/mrml-completion-final3-20260905-gitd-repos/_data
+268479878	/var/lib/mrml-docker-ce/volumes/mrml-completion-final3-20260905-git-client-work/_data/second/.git
+268479406	/var/lib/mrml-docker-ce/volumes/mrml-completion-final3-20260905-git-client-work/_data/clone-random256/.git

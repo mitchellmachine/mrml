@@ -1,0 +1,46 @@
+time="2026-09-05T10:42:13Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-next-keys\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:42:13Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-trust-signatures\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-hybrid-admin-git-trust-sign-next-run-52f3fba6da00 Creating
+ Container mrml-git-restore-clean-20260905-hybrid-admin-git-trust-sign-next-run-52f3fba6da00 Created
+signer key material generated
+installed immutable input into its scoped managed volume
+time="2026-09-05T10:42:14Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:42:14Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-trust-construction\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-acme-git-trust-policy-construct-run-e60f46a9d11b Creating
+ Container mrml-git-restore-clean-20260905-acme-git-trust-policy-construct-run-e60f46a9d11b Created
+previous_generation=1 previous_digest=ea5daf4fffb3f4fd693310953d18bc442ac75bd19162f06f16e5c20a9e0d774aa91704a3e392d3ae8b276abd908cf552ee72bdb3032355075c1e56d1da7574bd generation=2 digest=1121b6ada6b4c2c0bb55cd73b21a1fd846188321cb6a07c341a1080428c64237d1ffdec9b7a66edb1c1f755376f1eaf29b4213a12e37b94b87ea9f31dc76bd94
+canonical trust policies written to named volume mrml-git-restore-clean-20260905-git-trust-construction
+time="2026-09-05T10:42:14Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-keys\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:42:14Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-trust-signatures\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-acme-git-trust-sign-current-run-fc00db436a7c Creating
+ Container mrml-git-restore-clean-20260905-acme-git-trust-sign-current-run-fc00db436a7c Created
+key-rotation authorization written
+time="2026-09-05T10:42:15Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-trust-signatures\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:42:15Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-next-keys\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-acme-git-trust-sign-next-run-2af872e320cf Creating
+ Container mrml-git-restore-clean-20260905-acme-git-trust-sign-next-run-2af872e320cf Created
+key-rotation authorization written
+hybrid transition authorizations written to named volume mrml-git-restore-clean-20260905-git-trust-signatures
+installed immutable input into its scoped managed volume
+staged exact public trust-transition inputs in named volume mrml-git-restore-clean-20260905-git-authority-transition
+time="2026-09-05T10:42:16Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:42:16Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-authority-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:42:16Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-authority-transition\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-acme-git-trust-transition-run-71af1a9b36a6 Creating
+ Container mrml-git-restore-clean-20260905-acme-git-trust-transition-run-71af1a9b36a6 Created
+generation=2 digest=1121b6ada6b4c2c0bb55cd73b21a1fd846188321cb6a07c341a1080428c64237d1ffdec9b7a66edb1c1f755376f1eaf29b4213a12e37b94b87ea9f31dc76bd94
+time="2026-09-05T10:42:16Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-authority-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:42:16Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-authority-transition\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:42:16Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-acme-git-trust-transition-run-0ae02ab6dfa3 Creating
+ Container mrml-git-restore-clean-20260905-acme-git-trust-transition-run-0ae02ab6dfa3 Created
+generation=2 digest=1121b6ada6b4c2c0bb55cd73b21a1fd846188321cb6a07c341a1080428c64237d1ffdec9b7a66edb1c1f755376f1eaf29b4213a12e37b94b87ea9f31dc76bd94
+time="2026-09-05T10:42:16Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:42:16Z" level=warning msg="volume \"mrml-git-restore-clean-20260905-git-signer-keys\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-git-restore-clean-20260905-acme-git-signer-trust-advance-run-0b7efd4562da Creating
+ Container mrml-git-restore-clean-20260905-acme-git-signer-trust-advance-run-0b7efd4562da Created
+trust-generation=2 revocation-generation=1
+trust transition selected; consumed public transition and workspace inputs removed
+selected protected signer key volume mrml-git-restore-clean-20260905-git-signer-next-keys at trust generation 2
+Gitd catalog selected trust generation 2 revocation generation 1
+native dual-authorized overlap selected and signer/catalog advanced

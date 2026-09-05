@@ -1276,7 +1276,8 @@ impl TrustPolicyState {
         new_authorization: &VerifiedHybridSignature,
     ) -> Result<Self, HybridPolicyError> {
         validate_candidate(&candidate)?;
-        let candidate_payload_digest = Sha3_512::digest(&encode_trust_policy_candidate(&candidate)?);
+        let candidate_payload_digest =
+            Sha3_512::digest(&encode_trust_policy_candidate(&candidate)?);
         if candidate.repository != self.repository {
             return Err(HybridPolicyError::TrustRootBroadened);
         }
@@ -1428,7 +1429,10 @@ impl TrustPolicyState {
         valid_from: u64,
         valid_until: u64,
     ) -> Result<Vector<u8>, HybridPolicyError> {
-        if self.pair_statuses.iter().any(|status| status.pair == next_pair)
+        if self
+            .pair_statuses
+            .iter()
+            .any(|status| status.pair == next_pair)
             || self.active_pairs.len() >= MAX_POLICY_PAIRS
         {
             return Err(HybridPolicyError::InvalidPolicy);
@@ -2787,15 +2791,20 @@ mod tests {
         assert_eq!(overlap.previous_policy_digest, initial.digest());
         assert!(overlap.active_pairs().contains(&old_pair));
         assert!(overlap.active_pairs().contains(&new_pair));
-        assert!(initial.encode_overlap_successor(old_pair, 200, 400).is_err());
-        assert!(initial.encode_overlap_successor(new_pair, 400, 200).is_err());
+        assert!(
+            initial
+                .encode_overlap_successor(old_pair, 200, 400)
+                .is_err()
+        );
+        assert!(
+            initial
+                .encode_overlap_successor(new_pair, 400, 200)
+                .is_err()
+        );
         assert!(overlap.encode_retirement_successor(old_pair, 99).is_err());
-        let retired = parse_trust_policy(
-            &overlap
-                .encode_retirement_successor(old_pair, 200)
-                .unwrap(),
-        )
-        .unwrap();
+        let retired =
+            parse_trust_policy(&overlap.encode_retirement_successor(old_pair, 200).unwrap())
+                .unwrap();
         assert_eq!(retired.generation(), TrustGeneration(3));
         assert_eq!(retired.previous_policy_digest, overlap.digest());
         assert_eq!(retired.active_pairs(), &[new_pair]);
@@ -2841,24 +2850,9 @@ mod tests {
         let payload_digest = Sha3_512::digest(
             &encode_trust_policy(&TrustPolicyState::from_candidate(candidate.clone())).unwrap(),
         );
-        let old_proof = rotation_proof(
-            &repository,
-            TrustGeneration(1),
-            old_pair,
-            payload_digest,
-        );
-        let new_proof = rotation_proof(
-            &repository,
-            TrustGeneration(2),
-            new_pair,
-            payload_digest,
-        );
-        let substituted = rotation_proof(
-            &repository,
-            TrustGeneration(1),
-            old_pair,
-            [0x55; 64],
-        );
+        let old_proof = rotation_proof(&repository, TrustGeneration(1), old_pair, payload_digest);
+        let new_proof = rotation_proof(&repository, TrustGeneration(2), new_pair, payload_digest);
+        let substituted = rotation_proof(&repository, TrustGeneration(1), old_pair, [0x55; 64]);
         assert_eq!(
             initial.transition(candidate.clone(), &substituted, &new_proof),
             Err(HybridPolicyError::MissingPreviousAuthorization)
@@ -2975,28 +2969,19 @@ mod tests {
             ),
             Err(HybridPolicyError::PolicyRollback)
         );
-        let narrowed_candidate =
-            candidate(PolicyPairStatus::new(pair, 10, 90, None).unwrap());
+        let narrowed_candidate = candidate(PolicyPairStatus::new(pair, 10, 90, None).unwrap());
         let narrowed_digest = Sha3_512::digest(
-            &encode_trust_policy(&TrustPolicyState::from_candidate(narrowed_candidate.clone()))
-                .unwrap(),
+            &encode_trust_policy(&TrustPolicyState::from_candidate(
+                narrowed_candidate.clone(),
+            ))
+            .unwrap(),
         );
         assert!(
             initial
                 .transition(
                     narrowed_candidate,
-                    &rotation_proof(
-                        &repository,
-                        TrustGeneration(1),
-                        pair,
-                        narrowed_digest,
-                    ),
-                    &rotation_proof(
-                        &repository,
-                        TrustGeneration(2),
-                        pair,
-                        narrowed_digest,
-                    ),
+                    &rotation_proof(&repository, TrustGeneration(1), pair, narrowed_digest,),
+                    &rotation_proof(&repository, TrustGeneration(2), pair, narrowed_digest,),
                 )
                 .is_ok()
         );
@@ -3343,8 +3328,10 @@ mod tests {
             [first].into(),
         );
         let narrowed_digest = Sha3_512::digest(
-            &encode_trust_policy(&TrustPolicyState::from_candidate(narrowed_candidate.clone()))
-                .unwrap(),
+            &encode_trust_policy(&TrustPolicyState::from_candidate(
+                narrowed_candidate.clone(),
+            ))
+            .unwrap(),
         );
         let narrowed = initial
             .transition(

@@ -91,9 +91,8 @@ pub fn write_receive_pack_report(
     if unpack_error.is_some() && successes != 0 {
         return Err(GitdCoreError::Policy);
     }
-    let receipt_required = request.mrml_receipt_v1
-        && unpack_error.is_none()
-        && successes == statuses.len();
+    let receipt_required =
+        request.mrml_receipt_v1 && unpack_error.is_none() && successes == statuses.len();
     if receipt_required != authenticated_receipt.is_some() {
         return Err(GitdCoreError::Policy);
     }
@@ -535,7 +534,11 @@ pub fn write_v2_protected_receive_capability_advertisement(
         trust_generation.0,
         revocation_generation.0
     );
-    write_pkt_line(output, &PktLine::Data(copy_bytes(context.as_bytes())?), budget)?;
+    write_pkt_line(
+        output,
+        &PktLine::Data(copy_bytes(context.as_bytes())?),
+        budget,
+    )?;
     write_pkt_line(output, &PktLine::Flush, budget)
 }
 
@@ -1300,10 +1303,7 @@ mod tests {
         };
         let parsed = receive(&mut reader).unwrap();
         assert_eq!(&parsed.proofs[..], &[proof]);
-        assert_eq!(
-            parsed.candidate_id,
-            Some(QuarantineTransactionId([7; 16]))
-        );
+        assert_eq!(parsed.candidate_id, Some(QuarantineTransactionId([7; 16])));
         assert_eq!(&reader.bytes[reader.offset..], b"PACKtrailing");
     }
 
@@ -1362,10 +1362,7 @@ mod tests {
             ObjectFormat::Sha256,
         )
         .unwrap();
-        assert_eq!(
-            valid.candidate_id,
-            Some(QuarantineTransactionId([7; 16]))
-        );
+        assert_eq!(valid.candidate_id, Some(QuarantineTransactionId([7; 16])));
         for invalid in [
             b"report-status-v2 atomic mrml-candidate-v1=00000000000000000000000000000000 object-format=sha256".as_slice(),
             b"report-status-v2 atomic mrml-candidate-v1=0707070707070707070707070707070 object-format=sha256",
@@ -1399,7 +1396,7 @@ mod tests {
             None,
             &mut budget(4096),
         )
-            .unwrap();
+        .unwrap();
         assert_eq!(
             crate::transport::parse_push_response_mode(&sideband.bytes, "refs/heads/main", true),
             Ok(())
@@ -1453,14 +1450,7 @@ mod tests {
             limit: 4096,
         };
         assert_eq!(
-            write_receive_pack_report(
-                &mut writer,
-                &parsed,
-                None,
-                &mixed,
-                None,
-                &mut budget(4096),
-            ),
+            write_receive_pack_report(&mut writer, &parsed, None, &mixed, None, &mut budget(4096),),
             Err(GitdCoreError::Policy)
         );
         let failed = [
@@ -1474,14 +1464,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            write_receive_pack_report(
-                &mut writer,
-                &parsed,
-                None,
-                &failed,
-                None,
-                &mut budget(4096),
-            ),
+            write_receive_pack_report(&mut writer, &parsed, None, &failed, None, &mut budget(4096),),
             Err(GitdCoreError::MalformedInput)
         );
         assert!(writer.bytes.is_empty());

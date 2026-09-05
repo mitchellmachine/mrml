@@ -35,6 +35,8 @@ pub struct LinuxAuthorityCandidateStore {
     root: DirectoryCapability,
     root_path: PathBuf,
     owner_uid: u32,
+    repository: Option<RepositoryIdentity>,
+    prefix: String,
 }
 
 impl LinuxAuthorityCandidateStore {
@@ -57,6 +59,18 @@ impl LinuxAuthorityCandidateStore {
         Self::from_capability(root, PathBuf::new(), owner_uid)
     }
 
+    /// Bind production storage to one repository. Legacy records remain in
+    /// place; a checked record selects one namespace for the entire operation.
+    pub fn open_repository_capability(
+        root: DirectoryCapability,
+        owner_uid: u32,
+        repository: RepositoryIdentity,
+    ) -> Result<Self, CandidateStoreError> {
+        let mut store = Self::from_capability(root, PathBuf::new(), owner_uid)?;
+        store.repository = Some(repository);
+        Ok(store)
+    }
+
     fn from_capability(
         root: DirectoryCapability,
         root_path: PathBuf,
@@ -70,13 +84,73 @@ impl LinuxAuthorityCandidateStore {
             root,
             root_path,
             owner_uid,
+            repository: None,
+            prefix: String::new(),
         })
+    }
+
+    fn check_repository(&self, repository: &RepositoryIdentity) -> Result<(), CandidateStoreError> {
+        if self
+            .repository
+            .as_ref()
+            .is_some_and(|bound| bound != repository)
+        {
+            return Err(CandidateStoreError::Invalid);
+        }
+        Ok(())
+    }
+
+    fn select_candidate(&self, id: QuarantineTransactionId) -> Result<Self, CandidateStoreError> {
+        let repository = self
+            .repository
+            .as_ref()
+            .ok_or(CandidateStoreError::Invalid)?;
+        if id.0 == [0; 16] {
+            return Err(CandidateStoreError::Invalid);
+        }
+        let mut selected = Self::from_capability(
+            self.root
+                .try_clone()
+                .map_err(|_| CandidateStoreError::Unavailable)?,
+            self.root_path.clone(),
+            self.owner_uid,
+        )?;
+        // The existing full repository digest supplies a stable bounded name;
+        // only the decoded exact repository binding authorizes record use.
+        selected.prefix = format!(
+            "{}-",
+            mrml_git::authority_generation_record_name(repository)
+        );
+        let current = selected.read_record(id)?;
+        if current
+            .as_ref()
+            .is_some_and(|record| &record.context.repository != repository)
+        {
+            return Err(CandidateStoreError::Invalid);
+        }
+        let legacy = self.read_record(id)?;
+        if legacy
+            .as_ref()
+            .is_some_and(|record| &record.context.repository == repository)
+        {
+            if current.is_some() {
+                return Err(CandidateStoreError::Invalid);
+            }
+            selected.prefix.clear();
+        }
+        // Never mix legacy proof or temporary files with namespaced journals.
+        // Selection is performed once before the internal operation below.
+        Ok(selected)
     }
 
     pub fn begin(
         &self,
         context: AuthorityCandidateContext,
     ) -> Result<AuthorityCandidateRecord, CandidateStoreError> {
+        self.check_repository(&context.repository)?;
+        if self.repository.is_some() {
+            return self.select_candidate(context.id)?.begin(context);
+        }
         validate_context(&context)?;
         let record = AuthorityCandidateRecord {
             context,
@@ -99,12 +173,24 @@ impl LinuxAuthorityCandidateStore {
         &self,
         id: QuarantineTransactionId,
     ) -> Result<AuthorityCandidateRecord, CandidateStoreError> {
+        if self.repository.is_some() {
+            let record = self.select_candidate(id)?.query(id)?;
+            self.check_repository(&record.context.repository)?;
+            return Ok(record);
+        }
+        self.read_record(id)?.ok_or(CandidateStoreError::Missing)
+    }
+
+    fn read_record(
+        &self,
+        id: QuarantineTransactionId,
+    ) -> Result<Option<AuthorityCandidateRecord>, CandidateStoreError> {
         if id.0 == [0; 16] {
             return Err(CandidateStoreError::Invalid);
         }
-        let mut file = self
-            .open_optional_file(&self.name(id))?
-            .ok_or(CandidateStoreError::Missing)?;
+        let Some(mut file) = self.open_optional_file(&self.name(id))? else {
+            return Ok(None);
+        };
         let length = usize::try_from(file.len().map_err(|_| CandidateStoreError::Unavailable)?)
             .map_err(|_| CandidateStoreError::Invalid)?;
         if length < FIXED_BYTES || length > FIXED_BYTES + MAX_REPOSITORY_BYTES {
@@ -113,7 +199,7 @@ impl LinuxAuthorityCandidateStore {
         let mut encoded = vec![0; length];
         file.read_exact(&mut encoded)
             .map_err(|_| CandidateStoreError::Unavailable)?;
-        decode(&encoded, id)
+        decode(&encoded, id).map(Some)
     }
 
     pub fn transition(
@@ -122,6 +208,12 @@ impl LinuxAuthorityCandidateStore {
         expected: AuthorityCandidateStatus,
         next: AuthorityCandidateStatus,
     ) -> Result<AuthorityCandidateRecord, CandidateStoreError> {
+        self.check_repository(&context.repository)?;
+        if self.repository.is_some() {
+            return self
+                .select_candidate(context.id)?
+                .transition(context, expected, next);
+        }
         validate_context(context)?;
         let current = self.query(context.id)?;
         if &current.context != context {
@@ -158,6 +250,12 @@ impl LinuxAuthorityCandidateStore {
         proof_context: ProtectedHistoryContext<'_>,
         proof: &DetachedCommitProofRecord,
     ) -> Result<(), CandidateStoreError> {
+        self.check_repository(&context.repository)?;
+        if self.repository.is_some() {
+            return self
+                .select_candidate(context.id)?
+                .install_proof(context, proof_context, proof);
+        }
         let record = self.query(context.id)?;
         if record.context != *context || record.status != AuthorityCandidateStatus::Receiving {
             return Err(CandidateStoreError::Stale);
@@ -211,6 +309,10 @@ impl LinuxAuthorityCandidateStore {
         &self,
         context: &AuthorityCandidateContext,
     ) -> Result<(), CandidateStoreError> {
+        self.check_repository(&context.repository)?;
+        if self.repository.is_some() {
+            return self.select_candidate(context.id)?.seal_proofs(context);
+        }
         let record = self.query(context.id)?;
         if record.context != *context || record.status != AuthorityCandidateStatus::Receiving {
             return Err(CandidateStoreError::Stale);
@@ -257,15 +359,15 @@ impl LinuxAuthorityCandidateStore {
     }
 
     fn proof_directory_name(&self, id: QuarantineTransactionId) -> String {
-        format!("{}.proofs", id_hex(id))
+        format!("{}{}.proofs", self.prefix, id_hex(id))
     }
 
     fn proof_set_name(&self, id: QuarantineTransactionId) -> String {
-        format!("{}.proof-set", id_hex(id))
+        format!("{}{}.proof-set", self.prefix, id_hex(id))
     }
 
     fn proof_set_temporary_name(&self, id: QuarantineTransactionId) -> String {
-        format!("{}.proof-set.next", id_hex(id))
+        format!("{}{}.proof-set.next", self.prefix, id_hex(id))
     }
 
     fn proof_directory(
@@ -340,11 +442,11 @@ impl LinuxAuthorityCandidateStore {
     }
 
     fn name(&self, id: QuarantineTransactionId) -> String {
-        format!("{}.candidate", id_hex(id))
+        format!("{}{}.candidate", self.prefix, id_hex(id))
     }
 
     fn temporary_name(&self, id: QuarantineTransactionId) -> String {
-        format!("{}.candidate.next", id_hex(id))
+        format!("{}{}.candidate.next", self.prefix, id_hex(id))
     }
 
     fn write_new(
@@ -853,6 +955,303 @@ mod tests {
             Err(CandidateStoreError::Invalid)
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    fn scoped_store(root: &std::path::Path, repository: &str) -> LinuxAuthorityCandidateStore {
+        LinuxAuthorityCandidateStore::open_repository_capability(
+            DirectoryCapability::open_root(root.to_str().unwrap()).unwrap(),
+            fs::metadata(root).unwrap().uid(),
+            RepositoryIdentity::parse(repository).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn proof_candidate(
+        repository: &str,
+        signature: u8,
+    ) -> (AuthorityCandidateContext, DetachedCommitProofRecord) {
+        let proof = DetachedCommitProofRecord::new(
+            ObjectId::from_bytes(ObjectFormat::Sha256, &[21; 32]).unwrap(),
+            &[signature; 64],
+            &[signature; ML_DSA_65_SIGNATURE_BYTES],
+        )
+        .unwrap();
+        let mut candidate = context(22, repository);
+        candidate.proof_set_digest =
+            candidate_proof_set_digest(core::slice::from_ref(&proof)).unwrap();
+        (candidate, proof)
+    }
+
+    fn install_candidate_proof(
+        store: &LinuxAuthorityCandidateStore,
+        candidate: &AuthorityCandidateContext,
+        proof: &DetachedCommitProofRecord,
+    ) {
+        store
+            .install_proof(
+                candidate,
+                ProtectedHistoryContext {
+                    repository: &candidate.repository,
+                    repository_generation: candidate.current_generation,
+                    trust_generation: candidate.trust_generation,
+                    revocation_generation: candidate.revocation_generation,
+                    purpose: SignaturePurpose::GitCommit,
+                    object_format: ObjectFormat::Sha256,
+                },
+                proof,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn scoped_same_id_candidates_recover_independent_proofs_and_lifecycles() {
+        let (root, legacy) = store("scoped-independent");
+        drop(legacy);
+        let a = scoped_store(&root, "owner/alpha");
+        let b = scoped_store(&root, "owner/beta");
+        let (ca, pa) = proof_candidate("owner/alpha", 31);
+        let (cb, pb) = proof_candidate("owner/beta", 32);
+        a.begin(ca.clone()).unwrap();
+        b.begin(cb.clone()).unwrap();
+        install_candidate_proof(&a, &ca, &pa);
+        install_candidate_proof(&b, &cb, &pb);
+        a.seal_proofs(&ca).unwrap();
+        b.seal_proofs(&cb).unwrap();
+        assert_eq!(a.begin(cb.clone()), Err(CandidateStoreError::Invalid));
+        assert_eq!(a.seal_proofs(&cb), Err(CandidateStoreError::Invalid));
+        assert_eq!(
+            a.install_proof(
+                &cb,
+                ProtectedHistoryContext {
+                    repository: &cb.repository,
+                    repository_generation: cb.current_generation,
+                    trust_generation: cb.trust_generation,
+                    revocation_generation: cb.revocation_generation,
+                    purpose: SignaturePurpose::GitCommit,
+                    object_format: ObjectFormat::Sha256,
+                },
+                &pb,
+            ),
+            Err(CandidateStoreError::Invalid)
+        );
+        assert_eq!(
+            a.transition(
+                &cb,
+                AuthorityCandidateStatus::Receiving,
+                AuthorityCandidateStatus::Aborted
+            ),
+            Err(CandidateStoreError::Invalid)
+        );
+        a.transition(
+            &ca,
+            AuthorityCandidateStatus::Receiving,
+            AuthorityCandidateStatus::ProofsSealed,
+        )
+        .unwrap();
+        drop(a);
+        drop(b);
+        let a = scoped_store(&root, "owner/alpha");
+        let b = scoped_store(&root, "owner/beta");
+        assert_eq!(
+            a.query(ca.id).unwrap().status,
+            AuthorityCandidateStatus::ProofsSealed
+        );
+        assert_eq!(
+            b.query(cb.id).unwrap().status,
+            AuthorityCandidateStatus::Receiving
+        );
+        b.seal_proofs(&cb).unwrap();
+        b.transition(
+            &cb,
+            AuthorityCandidateStatus::Receiving,
+            AuthorityCandidateStatus::Aborted,
+        )
+        .unwrap();
+        let statuses = [
+            AuthorityCandidateStatus::Authorized,
+            AuthorityCandidateStatus::ActivationStarted,
+            AuthorityCandidateStatus::Activated,
+            AuthorityCandidateStatus::ReceiptPersisted,
+            AuthorityCandidateStatus::Completed,
+        ];
+        let mut previous = AuthorityCandidateStatus::ProofsSealed;
+        for next in statuses {
+            a.transition(&ca, previous, next).unwrap();
+            previous = next;
+        }
+        assert_eq!(
+            a.query(ca.id).unwrap().status,
+            AuthorityCandidateStatus::Completed
+        );
+        assert_eq!(
+            b.query(cb.id).unwrap().status,
+            AuthorityCandidateStatus::Aborted
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scoped_recovery_preserves_legacy_artifacts_with_same_id_sibling() {
+        let (root, legacy) = store("scoped-legacy");
+        let (ca, pa) = proof_candidate("owner/alpha", 41);
+        let (cb, pb) = proof_candidate("owner/beta", 42);
+        legacy.begin(ca.clone()).unwrap();
+        install_candidate_proof(&legacy, &ca, &pa);
+        let original_proofs = fs::read(legacy.proof_set_path(ca.id)).unwrap();
+        let a = scoped_store(&root, "owner/alpha");
+        let b = scoped_store(&root, "owner/beta");
+        assert_eq!(b.query(ca.id), Err(CandidateStoreError::Missing));
+        b.begin(cb.clone()).unwrap();
+        install_candidate_proof(&b, &cb, &pb);
+        a.seal_proofs(&ca).unwrap();
+        b.seal_proofs(&cb).unwrap();
+        a.transition(
+            &ca,
+            AuthorityCandidateStatus::Receiving,
+            AuthorityCandidateStatus::ProofsSealed,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy.query(ca.id).unwrap().status,
+            AuthorityCandidateStatus::ProofsSealed
+        );
+        assert_eq!(
+            fs::read(legacy.proof_set_path(ca.id)).unwrap(),
+            original_proofs
+        );
+        assert!(root.join(legacy.proof_directory_name(ca.id)).is_dir());
+        drop(a);
+        drop(b);
+        let a = scoped_store(&root, "owner/alpha");
+        let b = scoped_store(&root, "owner/beta");
+        a.transition(
+            &ca,
+            AuthorityCandidateStatus::ProofsSealed,
+            AuthorityCandidateStatus::Authorized,
+        )
+        .unwrap();
+        b.seal_proofs(&cb).unwrap();
+        assert_eq!(
+            legacy.query(ca.id).unwrap().status,
+            AuthorityCandidateStatus::Authorized
+        );
+        assert_eq!(b.query(cb.id).unwrap().context, cb);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scoped_recovery_rejects_ambiguous_and_substituted_journals() {
+        let (root, legacy) = store("scoped-ambiguous");
+        let a = scoped_store(&root, "owner/alpha");
+        let (ca, _) = proof_candidate("owner/alpha", 51);
+        let (cb, _) = proof_candidate("owner/beta", 52);
+        a.begin(ca.clone()).unwrap();
+        let selected_name = a.select_candidate(ca.id).unwrap().name(ca.id);
+        legacy.begin(ca.clone()).unwrap();
+        assert_eq!(a.query(ca.id), Err(CandidateStoreError::Invalid));
+        assert_eq!(
+            a.transition(
+                &ca,
+                AuthorityCandidateStatus::Receiving,
+                AuthorityCandidateStatus::Aborted
+            ),
+            Err(CandidateStoreError::Invalid)
+        );
+        fs::remove_file(legacy.path(ca.id)).unwrap();
+        fs::write(
+            root.join(&selected_name),
+            encode(&AuthorityCandidateRecord {
+                context: cb,
+                status: AuthorityCandidateStatus::Receiving,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(a.query(ca.id), Err(CandidateStoreError::Invalid));
+        assert_eq!(a.begin(ca), Err(CandidateStoreError::Invalid));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scoped_journal_corruption_and_symlinks_fail_closed() {
+        let (root, legacy) = store("scoped-hostile-journal");
+        let a = scoped_store(&root, "owner/alpha");
+        let (ca, _) = proof_candidate("owner/alpha", 61);
+        a.begin(ca.clone()).unwrap();
+        let journal = root.join(a.select_candidate(ca.id).unwrap().name(ca.id));
+        let good = fs::read(&journal).unwrap();
+        fs::write(&journal, b"malformed").unwrap();
+        assert_eq!(a.query(ca.id), Err(CandidateStoreError::Invalid));
+        fs::write(&journal, &good).unwrap();
+        fs::write(legacy.path(ca.id), b"malformed legacy").unwrap();
+        fs::set_permissions(legacy.path(ca.id), fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(a.query(ca.id), Err(CandidateStoreError::Invalid));
+        fs::remove_file(legacy.path(ca.id)).unwrap();
+        std::os::unix::fs::symlink(&journal, legacy.path(ca.id)).unwrap();
+        assert_eq!(a.query(ca.id), Err(CandidateStoreError::Invalid));
+        fs::remove_file(legacy.path(ca.id)).unwrap();
+        let displaced = root.join("displaced-journal");
+        fs::rename(&journal, &displaced).unwrap();
+        std::os::unix::fs::symlink(&displaced, &journal).unwrap();
+        assert_eq!(a.query(ca.id), Err(CandidateStoreError::Invalid));
+        assert_eq!(fs::read(displaced).unwrap(), good);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scoped_incomplete_transition_and_corrupt_proofs_do_not_poison_sibling() {
+        let (root, legacy) = store("scoped-failure-isolation");
+        drop(legacy);
+        let a = scoped_store(&root, "owner/alpha");
+        let b = scoped_store(&root, "owner/beta");
+        let (ca, pa) = proof_candidate("owner/alpha", 71);
+        let (cb, pb) = proof_candidate("owner/beta", 72);
+        a.begin(ca.clone()).unwrap();
+        b.begin(cb.clone()).unwrap();
+        install_candidate_proof(&a, &ca, &pa);
+        install_candidate_proof(&b, &cb, &pb);
+        let selected = a.select_candidate(ca.id).unwrap();
+        selected
+            .write_new(
+                &selected.temporary_name(ca.id),
+                &AuthorityCandidateRecord {
+                    context: ca.clone(),
+                    status: AuthorityCandidateStatus::ProofsSealed,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            a.transition(
+                &ca,
+                AuthorityCandidateStatus::Receiving,
+                AuthorityCandidateStatus::ProofsSealed
+            ),
+            Err(CandidateStoreError::Unavailable)
+        );
+        fs::write(
+            root.join(selected.proof_set_name(ca.id)),
+            b"corrupt proof set",
+        )
+        .unwrap();
+        assert_eq!(a.seal_proofs(&ca), Err(CandidateStoreError::Invalid));
+        drop(b);
+        let b = scoped_store(&root, "owner/beta");
+        b.seal_proofs(&cb).unwrap();
+        b.transition(
+            &cb,
+            AuthorityCandidateStatus::Receiving,
+            AuthorityCandidateStatus::ProofsSealed,
+        )
+        .unwrap();
+        assert_eq!(
+            a.query(ca.id).unwrap().status,
+            AuthorityCandidateStatus::Receiving
+        );
+        assert_eq!(
+            b.query(cb.id).unwrap().status,
+            AuthorityCandidateStatus::ProofsSealed
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

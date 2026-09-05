@@ -10,7 +10,7 @@ RUN test -x /payload/mrml-gitd && ! ldd /payload/mrml-gitd | grep -q 'not found'
       /payload/rootfs/mnt/mrml/gitd/receipts && \
     install -d -o 21001 -g 21001 -m 0755 /payload/rootfs/mnt/mrml/gitd/policies && \
     install -d -o 21002 -g 21901 -m 2770 /payload/rootfs/run/mrml/git-authority && \
-    install -d -o 21003 -g 21902 -m 2770 /payload/rootfs/run/mrml/certd-gitd
+    install -d -o 21003 -g 21902 -m 2750 /payload/rootfs/run/mrml/certd-gitd
 
 FROM gcr.io/distroless/cc-debian12@sha256:777e96cf322c46bc32aca926c263624c4dc8d7cf37e2fa65ba2c7e697318ebbb
 COPY --from=verify /payload/rootfs/ /

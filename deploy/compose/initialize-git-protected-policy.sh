@@ -37,9 +37,8 @@ for service in gitd git-authority; do
 done
 
 docker compose --env-file "$environment" -f "$git_compose" -f "$acme_compose" \
+  -f "$directory/compose.git-policy-init.yaml" \
   run --rm --no-deps \
-  -v "$volume_prefix-gitd-policies:/mnt/mrml/gitd/policies:rw" \
-  -v "$volume_prefix-git-authority-config:/run/mrml-bootstrap:ro" \
   --entrypoint /usr/bin/mrml-gitd gitd \
   initialize-protected-policy /etc/mrml/gitd.conf "$1" \
   /run/mrml-bootstrap/openpgp-public.asc /run/mrml-bootstrap/ml-dsa-public.bin "$2" "$3"

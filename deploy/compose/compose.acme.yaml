@@ -1,4 +1,4 @@
-name: mrml-acme
+name: "${MRML_VOLUME_PREFIX:-mrml}-acme"
 
 services:
   certd:
@@ -28,11 +28,14 @@ services:
         source: mrml-runtime-certd-gitd
         target: /run/mrml/certd-gitd
         volume: {nocopy: true}
-      - "mrml-runtime-certd-acmed:/run/mrml/certd-acmed:rw"
+      - type: volume
+        source: mrml-runtime-certd-acmed
+        target: /run/mrml/certd-acmed
+        volume: {nocopy: true}
       - "mrml-certd-secrets:/run/secrets:ro"
       - "mrml-certd-config:/etc/mrml/certd:ro"
     healthcheck:
-      test: [CMD, /usr/bin/mrml-certd, health]
+      test: [CMD, /usr/bin/mrml-certd, lifecycle-health]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -63,7 +66,10 @@ services:
     volumes:
       - "mrml-acmed-state:/var/lib/mrml/acmed:rw"
       - "mrml-acmed-challenges:/var/lib/mrml/challenges:rw"
-      - "mrml-runtime-certd-acmed:/run/mrml/certd-acmed:rw"
+      - type: volume
+        source: mrml-runtime-certd-acmed
+        target: /run/mrml/certd-acmed
+        volume: {nocopy: true}
       - "mrml-acmed-secrets:/run/secrets:ro"
       - "mrml-acmed-config:/etc/mrml/acmed:ro"
     healthcheck:
@@ -80,22 +86,22 @@ networks:
 
 volumes:
   mrml-certd-state:
-    name: mrml-certd-state
+    name: "${MRML_VOLUME_PREFIX:-mrml}-certd-state"
   mrml-certd-publications:
-    name: mrml-certd-publications
+    name: "${MRML_VOLUME_PREFIX:-mrml}-certd-publications"
   mrml-acmed-state:
-    name: mrml-acmed-state
+    name: "${MRML_VOLUME_PREFIX:-mrml}-acmed-state"
   mrml-acmed-challenges:
-    name: mrml-acmed-challenges
+    name: "${MRML_VOLUME_PREFIX:-mrml}-acmed-challenges"
   mrml-runtime-certd-gitd:
     name: "${MRML_VOLUME_PREFIX:-mrml}-runtime-certd-gitd"
   mrml-runtime-certd-acmed:
-    name: mrml-runtime-certd-acmed
+    name: "${MRML_VOLUME_PREFIX:-mrml}-runtime-certd-acmed"
   mrml-certd-secrets:
-    name: mrml-certd-secrets
+    name: "${MRML_VOLUME_PREFIX:-mrml}-certd-secrets"
   mrml-certd-config:
-    name: mrml-certd-config
+    name: "${MRML_VOLUME_PREFIX:-mrml}-certd-config"
   mrml-acmed-secrets:
-    name: mrml-acmed-secrets
+    name: "${MRML_VOLUME_PREFIX:-mrml}-acmed-secrets"
   mrml-acmed-config:
-    name: mrml-acmed-config
+    name: "${MRML_VOLUME_PREFIX:-mrml}-acmed-config"

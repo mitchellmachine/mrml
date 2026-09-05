@@ -2,18 +2,18 @@ use mrml_runtime::{
     Sender, Shared, SocketAddress, TrySendError, UdpSocket, Vector, blocking_channel,
 };
 
+use crate::QuicServerListener;
 use crate::quic::{
     PacketReceiveState, ReceivedPacket, initial_source_id, initial_token,
     initial_version_and_destination_id,
 };
+use crate::quic_connection::QuicRoutedDatagram;
 use crate::quic_retry::{
     QuicAdmissionController, QuicAdmissionDecision, QuicRetryPurpose, QuicRetryTokenManager,
 };
-use crate::quic_connection::QuicRoutedDatagram;
 use crate::{
     GitdResourceController, GitdWorkClass, QuicError, QuicVersion, RetryPacket, SourceIdentity,
 };
-use crate::QuicServerListener;
 
 const MAX_DATAGRAM: usize = 65_527;
 const MAX_CONNECTION_ID: usize = 20;
@@ -72,7 +72,9 @@ pub enum QuicInitialAdmission {
         permit: u64,
         original_destination_id: Vector<u8>,
     },
-    Retry { token: Vector<u8> },
+    Retry {
+        token: Vector<u8>,
+    },
     Reject,
 }
 
@@ -332,12 +334,7 @@ impl QuicServerEndpoint {
         estimated_memory_bytes: u64,
         queue_capacity: usize,
     ) -> Result<Option<QuicAdmittedHandshake>, QuicError> {
-        match self.admit_initial(
-            &datagram.bytes,
-            datagram.peer,
-            now,
-            estimated_memory_bytes,
-        ) {
+        match self.admit_initial(&datagram.bytes, datagram.peer, now, estimated_memory_bytes) {
             QuicInitialAdmission::Retry { token } => {
                 self.send_retry(&datagram, &token)?;
                 Ok(None)
@@ -715,11 +712,8 @@ impl QuicServerEndpoint {
         };
         let socket = self.socket.as_ref().ok_or(QuicError::SocketBind)?.clone();
         let (inbound, receiver) = blocking_channel(queue_capacity);
-        let (listener, server_connection_id) = QuicServerListener::from_routed_datagrams(
-            socket,
-            receiver,
-            original_destination_id,
-        )?;
+        let (listener, server_connection_id) =
+            QuicServerListener::from_routed_datagrams(socket, receiver, original_destination_id)?;
         self.register_handshake(received_destination_id, connection, datagram.peer)?;
         if let Err(error) =
             self.register_handshake(&server_connection_id, connection, datagram.peer)
@@ -943,12 +937,9 @@ mod tests {
             packet_number: 0,
             payload: [0; 1150].into(),
         };
-        let keys = QuicInitialKeys::derive_for(
-            QuicVersion::V2,
-            &initial.destination_id,
-            QuicRole::Client,
-        )
-        .unwrap();
+        let keys =
+            QuicInitialKeys::derive_for(QuicVersion::V2, &initial.destination_id, QuicRole::Client)
+                .unwrap();
         initial.seal_padded_for(QuicVersion::V2, &keys).unwrap()
     }
 
@@ -1008,8 +999,7 @@ mod tests {
 
         let mut wire = [0; 512];
         let (amount, _) = client.receive_from(&mut wire).unwrap();
-        let (version, retry) =
-            RetryPacket::open(&wire[..amount], &[1, 2, 3, 4]).unwrap();
+        let (version, retry) = RetryPacket::open(&wire[..amount], &[1, 2, 3, 4]).unwrap();
         assert_eq!(version, QuicVersion::V2);
         assert_eq!(retry.destination_id, &[5, 6, 7, 8][..]);
         assert_eq!(retry.token, b"opaque-token".as_slice());
@@ -1061,12 +1051,9 @@ mod tests {
             packet_number: 0,
             payload: [0; 1150].into(),
         };
-        let keys = QuicInitialKeys::derive_for(
-            QuicVersion::V2,
-            &retried.destination_id,
-            QuicRole::Client,
-        )
-        .unwrap();
+        let keys =
+            QuicInitialKeys::derive_for(QuicVersion::V2, &retried.destination_id, QuicRole::Client)
+                .unwrap();
         let retried = retried
             .seal_padded_for_with_token(QuicVersion::V2, &keys, &retry.token)
             .unwrap();

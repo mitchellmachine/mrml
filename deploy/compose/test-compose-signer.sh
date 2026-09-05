@@ -85,9 +85,8 @@ for operator in deploy/compose/install-volume-inputs.sh deploy/compose/construct
   require 'case $runtime in docker|podman)' "$operator"
 done
 for operator in deploy/compose/construct-git-trust-policy.sh deploy/compose/sign-git-trust-policy.sh deploy/compose/select-git-signer-key-slot.sh deploy/compose/transition-git-trust.sh; do
-  require 'running=$(podman ps -q --filter volume="$volume")' "$operator"
-  require 'running=$(docker compose' "$operator"
-  require 'cannot query service state for $service' "$operator"
+  require 'running=$("$runtime" ps -q --filter volume="$volume") || exit 1' "$operator"
+  reject 'running=$(docker compose' "$operator"
 done
 for operator in deploy/compose/construct-git-trust-policy.sh deploy/compose/sign-git-trust-policy.sh deploy/compose/select-git-signer-key-slot.sh deploy/compose/stage-git-trust-transition.sh deploy/compose/transition-git-trust.sh; do
   require 'volume_prefix=$(read_environment_value MRML_VOLUME_PREFIX)' "$operator"
@@ -144,5 +143,13 @@ deploy/compose/test-transition-git-trust-resume.sh
 deploy/compose/test-construct-git-trust-policy-resume.sh
 deploy/compose/test-sign-git-trust-policy-modes.sh
 deploy/compose/test-select-git-signer-key-slot-resume.sh
+
+# Executable Rust regression for consumers in separately named Compose projects.
+guard_test=$(mktemp -d)
+trap 'rm -rf "$guard_test"' EXIT HUP INT TERM
+rustc --edition 2024 deploy/compose/tests/trust_cold_guard.rs -o "$guard_test/trust-cold-guard"
+"$guard_test/trust-cold-guard"
+rm -rf "$guard_test"
+trap - EXIT HUP INT TERM
 
 echo "protected signer Compose and image isolation policy PASS"

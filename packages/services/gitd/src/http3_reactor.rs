@@ -28,10 +28,7 @@ impl GitdHttp3Reactor {
         estimated_handshake_memory_bytes: u64,
         connection_queue_capacity: usize,
     ) -> Result<Self, GitdHttp3ReactorError> {
-        validate_reactor_limits(
-            estimated_handshake_memory_bytes,
-            connection_queue_capacity,
-        )?;
+        validate_reactor_limits(estimated_handshake_memory_bytes, connection_queue_capacity)?;
         Ok(Self {
             workers,
             estimated_handshake_memory_bytes,

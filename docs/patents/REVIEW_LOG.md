@@ -12595,3 +12595,41 @@ cryptographic primitive, compression method, adaptive policy, or protocol.
 Patent review: **NOT_TRIGGERED**. This increment maps existing bounded HTTP/TLS
 error variants to fixed nonsecret operational categories. It introduces no
 protocol, cryptographic primitive, classifier, or adaptive policy.
+
+# 2026-09-04 — Offline Git external release trust root
+
+Patent review: **NOT_TRIGGERED**. The completion fix composes conventional
+owner-selected external public keys, existing cosign blob signatures, SHA-256
+file inventories, bounded file-only USTAR, retained file capabilities and exact
+Docker image identity comparisons. It introduces no new cryptographic,
+compression, archive coding or adaptive selection algorithm. This is technical
+screening, not a patent-clearance claim. Design and limits are recorded in
+[OFFLINE_TRUST_ROOT.md](../gitd/operations/OFFLINE_TRUST_ROOT.md).
+
+## 2026-09-05 — Restored Git cache managed-volume sentinel
+
+Patent review: **NOT_TRIGGERED**. The fix recreates the existing zero-length
+Docker copy-up sentinel as part of already authenticated cache-directory
+reconstruction, with existing owner/mode and synchronization APIs. It adds no
+new compression, encryption, authority or recovery mechanism. Regression and
+real-Compose evidence are tracked in `../gitd/operations/CURRENT_COMPLETION.md`.
+
+### 2026-09-05 — Compose cross-project trust-operation cold checks
+
+Patent review: **NOT_TRIGGERED**. The existing engine volume-consumer query is
+applied consistently to Docker and Podman so separate Compose projects cannot
+hide active state consumers. This is an operator precondition correction, with
+no new cryptographic, storage, or authority mechanism.
+
+### 2026-09-05 — Selected trust-generation verifier during overlap
+
+Patent review: **NOT_TRIGGERED**. Startup selects the already-authenticated
+immutable verifier for the selected policy generation instead of an earlier
+bootstrap pair. Existing hybrid signatures and generation policy are unchanged;
+this corrects selection ordering, without a new cryptographic mechanism.
+
+### 2026-09-05 — Certd bounded authenticated replay reordering
+
+Patent review: **NOT_TRIGGERED**. A fixed integer bitmap corrects request
+arrival ordering in the existing authenticated channel. No new cryptographic
+primitive, protocol wire format or authority mechanism is introduced.

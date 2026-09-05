@@ -401,7 +401,7 @@ fn parse_server_name(value: &str) -> Result<String, GitdConfigError> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     const VALID: &str = "version=1\nserver_name=git.example.invalid\nlisten_port=8443\nrepository_root=/mnt/mrml/gitd/repos\nstate_root=/mnt/mrml/gitd/state\nquarantine_root=/mnt/mrml/gitd/quarantine\ncache_root=/mnt/mrml/gitd/cache\nreceipt_root=/mnt/mrml/gitd/receipts\npolicy_root=/mnt/mrml/gitd/policies\nrepository_catalog=/mnt/mrml/gitd/policies/repositories.v1\nrepository_catalog_sha256=1111111111111111111111111111111111111111111111111111111111111111\nprofile_catalog=/mnt/mrml/gitd/policies/profiles.v1\nprofile_catalog_sha256=2222222222222222222222222222222222222222222222222222222222222222\ntoken_records=/mnt/mrml/gitd/state/tokens.v1\ntoken_pepper=/run/secrets/gitd-token-pepper\nquic_retry_key=/run/secrets/gitd-quic-retry-key\nquic_retry_generation=1\nauthority_socket=/run/mrml/git-authority/authority.sock\ncertd_socket=/run/mrml/certd-gitd/certd.sock\nauthority_capability=/run/secrets/git-authority-channel\ncertd_capability=/run/secrets/certd-gitd-channel\ngitd_uid=21001\ngitd_gid=21001\nauthority_uid=21002\nauthority_gid=21002\ncertd_uid=21003\ncertd_gid=21003\nnext_authority_request_id=7\nnext_certd_request_id=11\nmax_connections=4096\nmax_uploads=128\nmax_receives=16\nmax_body_bytes=8589934592\nminimum_free_space_bytes=42949672960\ndrain_seconds=30\n";
 

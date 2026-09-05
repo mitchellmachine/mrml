@@ -1,0 +1,23 @@
+# The second protected repository uses distinct signer/credential state and
+# channels while talking to the same real multi-repository authority and Gitd.
+# Merge after compose.git.acceptance.yaml; only the test client is selected.
+services:
+  git-client:
+    volumes:
+      - "second-runtime-signer:/run/mrml/git-protected-signer:ro"
+      - "second-client-signer:/run/mrml/client-signer:ro"
+      - "second-runtime-credential:/run/mrml/git-credential-agent:ro"
+      - "second-client-credential:/run/mrml/client-credential:ro"
+volumes:
+  second-runtime-signer:
+    name: "${MRML_SECOND_CLIENT_PREFIX:?set MRML_SECOND_CLIENT_PREFIX}-runtime-git-signer"
+    external: true
+  second-client-signer:
+    name: "${MRML_SECOND_CLIENT_PREFIX:?set MRML_SECOND_CLIENT_PREFIX}-git-client-signer-channel"
+    external: true
+  second-runtime-credential:
+    name: "${MRML_SECOND_CLIENT_PREFIX:?set MRML_SECOND_CLIENT_PREFIX}-runtime-git-credential-agent"
+    external: true
+  second-client-credential:
+    name: "${MRML_SECOND_CLIENT_PREFIX:?set MRML_SECOND_CLIENT_PREFIX}-git-client-credential-agent-channel"
+    external: true

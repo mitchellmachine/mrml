@@ -111,7 +111,10 @@ fn decode(input: &[u8]) -> Result<PendingProtectedPush, GitdCoreError> {
     if Sha256::digest(&input[..body_length]) != input[body_length..] {
         return Err(GitdCoreError::Authorization);
     }
-    let mut cursor = Cursor { input: &input[..body_length], offset: 0 };
+    let mut cursor = Cursor {
+        input: &input[..body_length],
+        offset: 0,
+    };
     if cursor.take(8)? != MAGIC {
         return Err(GitdCoreError::Authorization);
     }
@@ -166,14 +169,22 @@ struct Cursor<'a> {
 
 impl<'a> Cursor<'a> {
     fn take(&mut self, length: usize) -> Result<&'a [u8], GitdCoreError> {
-        let end = self.offset.checked_add(length).ok_or(GitdCoreError::Resource)?;
-        let output = self.input.get(self.offset..end).ok_or(GitdCoreError::Authorization)?;
+        let end = self
+            .offset
+            .checked_add(length)
+            .ok_or(GitdCoreError::Resource)?;
+        let output = self
+            .input
+            .get(self.offset..end)
+            .ok_or(GitdCoreError::Authorization)?;
         self.offset = end;
         Ok(output)
     }
     fn text(&mut self) -> Result<&'a str, GitdCoreError> {
         let length = u16::from_be_bytes(
-            self.take(2)?.try_into().map_err(|_| GitdCoreError::Authorization)?,
+            self.take(2)?
+                .try_into()
+                .map_err(|_| GitdCoreError::Authorization)?,
         ) as usize;
         if length == 0 || length > MAX_TEXT_BYTES {
             return Err(GitdCoreError::Resource);
@@ -182,7 +193,9 @@ impl<'a> Cursor<'a> {
     }
     fn u64(&mut self) -> Result<u64, GitdCoreError> {
         Ok(u64::from_be_bytes(
-            self.take(8)?.try_into().map_err(|_| GitdCoreError::Authorization)?,
+            self.take(8)?
+                .try_into()
+                .map_err(|_| GitdCoreError::Authorization)?,
         ))
     }
 }

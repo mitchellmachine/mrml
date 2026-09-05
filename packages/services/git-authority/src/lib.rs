@@ -8,20 +8,16 @@ mod generation;
 mod unix;
 
 pub use authority::{AuthorityDispatchError, ProductionAuthority, ProductionAuthorityCatalog};
-pub use candidate::{
-    CandidateStoreError, LinuxAuthorityCandidateStore,
-};
-pub use mrml_git::{
-    AuthorityCandidateContext, AuthorityCandidateRecord, AuthorityCandidateStatus,
-};
+pub use candidate::{CandidateStoreError, LinuxAuthorityCandidateStore};
 pub use channel::{
-    decode_frame, encode_frame, AuthorityCapability, AuthorityError, AuthorityFrame,
-    AuthorityFrameKind, AuthorityOperation, AuthorityPeer, AuthorityReplayWindow,
-    AUTHORITY_CAPABILITY_BYTES, AUTHORITY_HEADER_BYTES, MAX_AUTHORITY_PAYLOAD_BYTES,
+    AUTHORITY_CAPABILITY_BYTES, AUTHORITY_HEADER_BYTES, AuthorityCapability, AuthorityError,
+    AuthorityFrame, AuthorityFrameKind, AuthorityOperation, AuthorityPeer, AuthorityReplayWindow,
+    MAX_AUTHORITY_PAYLOAD_BYTES, decode_frame, encode_frame,
 };
 pub use generation::{
-    AuthorityGenerationStore, GenerationStoreError, LinuxAuthorityGenerationStore,
-    MemoryAuthorityGenerationStore,
+    AuthorityGenerationStore, GenerationStoreError, LinuxAuthorityGenerationCatalog,
+    LinuxAuthorityGenerationStore, MemoryAuthorityGenerationStore,
 };
+pub use mrml_git::{AuthorityCandidateContext, AuthorityCandidateRecord, AuthorityCandidateStatus};
 #[cfg(target_os = "linux")]
 pub use unix::{AuthorityListener, AuthoritySession, UnixAuthorityError};

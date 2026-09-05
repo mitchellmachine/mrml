@@ -1,0 +1,29 @@
+# Fresh restored Git/authority volumes with independently retained certd and
+# client custody. Merge after compose.git.acceptance.yaml. Start only Gitd and
+# authority; the retained real certd already serves its authenticated socket.
+services:
+  gitd:
+    depends_on: !override
+      git-authority: {condition: service_healthy}
+volumes:
+  mrml-runtime-certd-gitd:
+    name: "${MRML_RETAINED_CUSTODY_PREFIX:?set MRML_RETAINED_CUSTODY_PREFIX}-runtime-certd-gitd"
+    external: true
+  mrml-certd-publications:
+    name: "${MRML_RETAINED_CUSTODY_PREFIX:?set MRML_RETAINED_CUSTODY_PREFIX}-certd-publications"
+    external: true
+  mrml-certd-config:
+    name: "${MRML_RETAINED_CUSTODY_PREFIX:?set MRML_RETAINED_CUSTODY_PREFIX}-certd-config"
+    external: true
+  mrml-runtime-git-signer:
+    name: "${MRML_RETAINED_CUSTODY_PREFIX:?set MRML_RETAINED_CUSTODY_PREFIX}-runtime-git-signer"
+    external: true
+  mrml-git-client-signer-channel:
+    name: "${MRML_RETAINED_CUSTODY_PREFIX:?set MRML_RETAINED_CUSTODY_PREFIX}-git-client-signer-channel"
+    external: true
+  mrml-runtime-git-credential-agent:
+    name: "${MRML_RETAINED_CUSTODY_PREFIX:?set MRML_RETAINED_CUSTODY_PREFIX}-runtime-git-credential-agent"
+    external: true
+  mrml-git-client-credential-agent-channel:
+    name: "${MRML_RETAINED_CUSTODY_PREFIX:?set MRML_RETAINED_CUSTODY_PREFIX}-git-client-credential-agent-channel"
+    external: true

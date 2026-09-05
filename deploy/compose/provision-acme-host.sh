@@ -66,6 +66,7 @@ make_secret() {
 
 make_dir "$root" 0 0 0755
 make_dir "$root/secrets" 0 0 0700
+make_dir "$root/secrets/channels" 0 0 0700
 make_dir "$root/secrets/admin" 21005 21005 0700
 make_dir "$root/config" 0 0 0750
 make_dir "$root/backups" 21005 21005 0711
@@ -93,22 +94,22 @@ make_volume() {
   [ "$(stat -c %a "$mountpoint")" = "$displayed_mode" ] || exit 1
 }
 
-make_volume mrml-certd-state 21003 21003 0700
-make_volume mrml-certd-publications 21003 21003 0750
-make_volume mrml-acmed-state 21004 21004 0700
-make_volume mrml-acmed-challenges 21004 21004 0700
-make_volume "$volume_prefix-runtime-certd-gitd" 21003 21902 2770
-make_volume mrml-runtime-certd-acmed 21003 21903 2770
-make_volume mrml-certd-secrets 21003 21003 0700
-make_volume mrml-certd-config 0 0 0755
-make_volume mrml-acmed-secrets 21004 21004 0700
-make_volume mrml-acmed-config 0 0 0755
+make_volume "$volume_prefix-certd-state" 21003 21003 0700
+make_volume "$volume_prefix-certd-publications" 21003 21003 0750
+make_volume "$volume_prefix-acmed-state" 21004 21004 0700
+make_volume "$volume_prefix-acmed-challenges" 21004 21004 0700
+make_volume "$volume_prefix-runtime-certd-gitd" 21003 21902 2750
+make_volume "$volume_prefix-runtime-certd-acmed" 21003 21903 2750
+make_volume "$volume_prefix-certd-secrets" 21003 21003 0700
+make_volume "$volume_prefix-certd-config" 0 0 0755
+make_volume "$volume_prefix-acmed-secrets" 21004 21004 0700
+make_volume "$volume_prefix-acmed-config" 0 0 0755
 make_volume "$volume_prefix-gitd-secrets" 21001 21001 0700
 
-certd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-certd-secrets)
-acmed_secrets=$(docker volume inspect --format '{{.Mountpoint}}' mrml-acmed-secrets)
-certd_config=$(docker volume inspect --format '{{.Mountpoint}}' mrml-certd-config)
-acmed_config=$(docker volume inspect --format '{{.Mountpoint}}' mrml-acmed-config)
+certd_secrets=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-certd-secrets")
+acmed_secrets=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-acmed-secrets")
+certd_config=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-certd-config")
+acmed_config=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-acmed-config")
 
 make_secret "$certd_secrets/certd-unlock.key" 21003 21003
 make_secret "$acmed_secrets/acmed-state.key" 21004 21004
@@ -201,7 +202,7 @@ else
 fi
 
 verify_config() {
-  path=$1
+  path=$1 maximum=$2
   if [ ! -e "$path" ]; then
     echo "configuration not installed: $path" >&2
     return
@@ -212,17 +213,17 @@ verify_config() {
   [ "$(stat -c %a "$path")" = 444 ] || exit 1
   [ "$(stat -c %h "$path")" = 1 ] || exit 1
   size=$(stat -c %s "$path")
-  [ "$size" -gt 0 ] && [ "$size" -le 16384 ] || exit 1
+  [ "$size" -gt 0 ] && [ "$size" -le "$maximum" ] || exit 1
 }
 
-verify_config "$certd_config/config.json"
-verify_config "$certd_config/acme-trust-roots.pem"
-verify_config "$acmed_config/config.json"
+verify_config "$certd_config/config.json" 16384
+verify_config "$certd_config/acme-trust-roots.pem" 65536
+verify_config "$acmed_config/config.json" 16384
 
 available_kib=$(df -Pk "$root" | awk 'NR==2 {print $4}')
 [ "$available_kib" -ge "$minimum_kib" ] || { echo "insufficient free space" >&2; exit 1; }
 
-certd_state=$(docker volume inspect --format '{{.Mountpoint}}' mrml-certd-state)
+certd_state=$(docker volume inspect --format '{{.Mountpoint}}' "$volume_prefix-certd-state")
 probe=$certd_state/.fs-probe.$$
 printf x > "$probe"
 sync "$probe"

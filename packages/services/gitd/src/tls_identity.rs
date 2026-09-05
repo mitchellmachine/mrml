@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use mrml_tls::{
@@ -17,6 +17,17 @@ pub enum GitdTlsRefreshError {
     Generation,
     Identity(GitdIdentityValidationError),
     Tls,
+}
+
+/// A completed real wait consumes the interval; immediate replies cannot spin.
+pub fn wait_for_certificate_poll(stop: &AtomicBool, attempt_started: std::time::Instant) {
+    while !stop.load(Ordering::Acquire) {
+        let remaining = std::time::Duration::from_secs(1).saturating_sub(attempt_started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        std::thread::sleep(remaining.min(std::time::Duration::from_millis(100)));
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -42,6 +53,8 @@ pub struct GitdCertdSigningRoute {
 
 struct GitdTlsConfigState {
     generation: u64,
+    publication_digest: [u8; 32],
+    validity: (u64, u64),
     config: Arc<TlsServerConfig>,
     accepting_handshakes: bool,
 }
@@ -56,13 +69,20 @@ pub struct GitdTlsConfigStore {
 }
 
 impl GitdTlsConfigStore {
-    pub fn new(generation: u64, config: TlsServerConfig) -> Result<Self, TlsError> {
-        if generation == 0 {
+    pub fn new(
+        generation: u64,
+        publication_digest: [u8; 32],
+        validity: (u64, u64),
+        config: TlsServerConfig,
+    ) -> Result<Self, TlsError> {
+        if generation == 0 || publication_digest == [0; 32] || validity.0 > validity.1 {
             return Err(TlsError::Certificate);
         }
         Ok(Self {
             state: RwLock::new(GitdTlsConfigState {
                 generation,
+                publication_digest,
+                validity,
                 config: Arc::new(config),
                 accepting_handshakes: true,
             }),
@@ -75,11 +95,15 @@ impl GitdTlsConfigStore {
     }
 
     pub fn snapshot(&self) -> Result<(u64, Arc<TlsServerConfig>), TlsError> {
+        self.snapshot_at(mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?)
+    }
+
+    fn snapshot_at(&self, now: u64) -> Result<(u64, Arc<TlsServerConfig>), TlsError> {
         let state = self
             .state
             .read()
             .map_err(|_| TlsError::AuthenticationFailed)?;
-        if !state.accepting_handshakes {
+        if !state.accepting_handshakes || now < state.validity.0 || now > state.validity.1 {
             return Err(TlsError::Certificate);
         }
         Ok((state.generation, state.config.clone()))
@@ -103,31 +127,58 @@ impl GitdTlsConfigStore {
         }
     }
 
-    fn current_generation(&self) -> Result<u64, TlsError> {
+    fn current_identity(&self) -> Result<(u64, [u8; 32]), TlsError> {
         self.state
             .read()
-            .map(|state| state.generation)
+            .map(|state| (state.generation, state.publication_digest))
             .map_err(|_| TlsError::AuthenticationFailed)
     }
 
-    fn allow_current_handshakes(&self) -> Result<(), TlsError> {
-        self.state
-            .write()
-            .map_err(|_| TlsError::AuthenticationFailed)?
-            .accepting_handshakes = true;
-        Ok(())
-    }
-
-    pub fn install(&self, generation: u64, config: TlsServerConfig) -> Result<(), TlsError> {
+    fn allow_current_handshakes(
+        &self,
+        generation: u64,
+        publication_digest: [u8; 32],
+    ) -> Result<(), TlsError> {
         let mut state = self
             .state
             .write()
             .map_err(|_| TlsError::AuthenticationFailed)?;
-        if generation <= state.generation {
+        let now = mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?;
+        if state.generation != generation
+            || state.publication_digest != publication_digest
+            || now < state.validity.0
+            || now > state.validity.1
+        {
+            return Err(TlsError::Certificate);
+        }
+        state.accepting_handshakes = true;
+        Ok(())
+    }
+
+    pub fn install(
+        &self,
+        generation: u64,
+        publication_digest: [u8; 32],
+        validity: (u64, u64),
+        config: TlsServerConfig,
+    ) -> Result<(), TlsError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| TlsError::AuthenticationFailed)?;
+        let now = mrml_runtime::unix_time_seconds().ok_or(TlsError::Certificate)?;
+        if generation <= state.generation
+            || publication_digest == [0; 32]
+            || validity.0 > validity.1
+            || now < validity.0
+            || now > validity.1
+        {
             return Err(TlsError::Certificate);
         }
         *state = GitdTlsConfigState {
             generation,
+            publication_digest,
+            validity,
             config: Arc::new(config),
             accepting_handshakes: true,
         };
@@ -256,9 +307,7 @@ pub fn refresh_certd_tls_config(
     match result {
         Ok(true) => saturating_increment(&store.refresh_activations),
         Ok(false) => saturating_increment(&store.refresh_timeouts),
-        Err(GitdTlsRefreshError::Channel) => {
-            saturating_increment(&store.refresh_channel_failures)
-        }
+        Err(GitdTlsRefreshError::Channel) => saturating_increment(&store.refresh_channel_failures),
         Err(_) => saturating_increment(&store.refresh_validation_failures),
     }
     result
@@ -271,51 +320,58 @@ fn refresh_certd_tls_config_inner(
     timeout_milliseconds: u32,
     enable_http3: bool,
 ) -> Result<bool, GitdTlsRefreshError> {
-    let current_generation = store
-        .current_generation()
+    let (current_generation, current_publication) = store
+        .current_identity()
         .map_err(|_| GitdTlsRefreshError::Tls)?;
     let mut certd = route
         .refresh_certd
         .lock()
         .map_err(|_| GitdTlsRefreshError::Channel)?;
-    let Some(observed_generation) = certd
+    let observed_generation = certd
         .wait_for_identity_generation(current_generation, timeout_milliseconds)
-        .map_err(|_| GitdTlsRefreshError::Channel)?
-    else {
-        store
-            .allow_current_handshakes()
-            .map_err(|_| GitdTlsRefreshError::Tls)?;
-        return Ok(false);
-    };
+        .map_err(|_| GitdTlsRefreshError::Channel)?;
     let identity = certd
         .get_identity_snapshot(server_name)
         .map_err(|_| GitdTlsRefreshError::Channel)?;
-    let identity = validate_identity_snapshot(identity, Some(current_generation))
-        .map_err(GitdTlsRefreshError::Identity)?;
-    if identity.snapshot().identity_generation != observed_generation {
+    drop(certd);
+    let identity =
+        validate_identity_snapshot(identity, observed_generation.map(|_| current_generation))
+            .map_err(GitdTlsRefreshError::Identity)?;
+    let expected_generation = observed_generation.unwrap_or(current_generation);
+    let publication_digest = identity.snapshot().publication_digest;
+    if identity.snapshot().identity_generation != expected_generation
+        || (observed_generation.is_none() && publication_digest != current_publication)
+    {
         return Err(GitdTlsRefreshError::Generation);
     }
     let logical_request_id = route
         .allocate_logical_request_id()
         .map_err(|_| GitdTlsRefreshError::Tls)?;
-    prove_identity_signing_route(&mut certd, &identity, logical_request_id)
+    let mut signing_certd = route
+        .signing_certd
+        .lock()
+        .map_err(|_| GitdTlsRefreshError::Channel)?;
+    prove_identity_signing_route(&mut signing_certd, &identity, logical_request_id)
         .map_err(GitdTlsRefreshError::Identity)?;
-    drop(certd);
+    drop(signing_certd);
+    if observed_generation.is_none() {
+        store
+            .allow_current_handshakes(current_generation, publication_digest)
+            .map_err(|_| GitdTlsRefreshError::Generation)?;
+        return Ok(false);
+    }
+    let validity = identity.validity_interval();
     let config = build_certd_tls_server_config_with_route(identity, route)
         .and_then(|config| config.with_protocols(gitd_alpn_protocols(enable_http3)))
         .map_err(|_| GitdTlsRefreshError::Tls)?;
     store
-        .install(observed_generation, config)
+        .install(expected_generation, publication_digest, validity, config)
         .map_err(|_| GitdTlsRefreshError::Generation)?;
     Ok(true)
 }
 
 pub const fn gitd_alpn_protocols(enable_http3: bool) -> &'static [&'static str] {
-    if enable_http3 {
-        &["h2", "h3"]
-    } else {
-        &["h2"]
-    }
+    if enable_http3 { &["h2", "h3"] } else { &["h2"] }
 }
 
 fn saturating_increment(counter: &AtomicU64) {
@@ -337,18 +393,38 @@ mod tests {
     #[test]
     fn tls_config_store_rejects_zero_and_rollback_generations() {
         let config = TlsServerConfig::from_der_chain(&[b"certificate"]).unwrap();
-        assert!(GitdTlsConfigStore::new(0, config).is_err());
+        assert!(GitdTlsConfigStore::new(0, [1; 32], (0, u64::MAX), config).is_err());
         let config = TlsServerConfig::from_der_chain(&[b"certificate"]).unwrap();
-        let store = GitdTlsConfigStore::new(7, config).unwrap();
+        let store = GitdTlsConfigStore::new(7, [1; 32], (0, u64::MAX), config).unwrap();
         assert_eq!(store.snapshot().unwrap().0, 7);
         assert_eq!(store.refresh_metrics(), GitdTlsRefreshMetrics::default());
         store.block_new_handshakes().unwrap();
         assert!(store.snapshot().is_err());
         let rollback = TlsServerConfig::from_der_chain(&[b"certificate"]).unwrap();
-        assert!(store.install(7, rollback).is_err());
+        assert!(store.install(7, [1; 32], (0, u64::MAX), rollback).is_err());
         assert!(store.snapshot().is_err());
         let replacement = TlsServerConfig::from_der_chain(&[b"certificate"]).unwrap();
-        store.install(8, replacement).unwrap();
+        store
+            .install(8, [2; 32], (0, u64::MAX), replacement)
+            .unwrap();
         assert_eq!(store.snapshot().unwrap().0, 8);
+        store.block_new_handshakes().unwrap();
+        assert!(store.allow_current_handshakes(7, [1; 32]).is_err());
+        assert!(store.allow_current_handshakes(8, [1; 32]).is_err());
+        assert!(store.snapshot().is_err());
+        store.allow_current_handshakes(8, [2; 32]).unwrap();
+        assert_eq!(store.snapshot().unwrap().0, 8);
+    }
+
+    #[test]
+    fn handshake_snapshot_checks_validity_between_refreshes() {
+        let config = TlsServerConfig::from_der_chain(&[b"certificate"]).unwrap();
+        let store = GitdTlsConfigStore::new(7, [1; 32], (100, 200), config).unwrap();
+        assert!(store.snapshot_at(99).is_err());
+        assert!(store.snapshot_at(100).is_ok());
+        assert!(store.snapshot_at(200).is_ok());
+        assert!(store.snapshot_at(201).is_err());
+        store.block_new_handshakes().unwrap();
+        assert!(store.snapshot_at(150).is_err());
     }
 }

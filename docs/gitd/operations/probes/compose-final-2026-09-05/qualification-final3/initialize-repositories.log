@@ -1,0 +1,114 @@
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-signer-keys\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-trust-signatures\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-signer-git-trust-sign-current-run-05a182537402 Creating
+ Container mrml-completion-final3-20260905-signer-git-trust-sign-current-run-05a182537402 Created
+signer key material generated
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-repos\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-publications\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-authority-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-quarantine\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-cache\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-receipts\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-gitd\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-git-authority\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:32Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Network mrml-completion-final3-20260905_git-public Creating
+ Network mrml-completion-final3-20260905_git-public Creating
+ Network mrml-completion-final3-20260905_git-public Created
+ Network mrml-completion-final3-20260905_git-public Created
+ Container mrml-completion-final3-20260905-gitd-run-9d127046c77c Creating
+ Container mrml-completion-final3-20260905-gitd-run-9d127046c77c Created
+initialized
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-gitd\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-git-authority\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-receipts\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-publications\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-cache\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-authority-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-quarantine\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-repos\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-gitd-run-222d0f0a1be7 Creating
+ Container mrml-completion-final3-20260905-gitd-run-222d0f0a1be7 Created
+repository=owner/first initial_tip=eff5a40ef7f3b72a26c9ea5d203f87c71896c68cab1938f6bff65c7f90f43380 repository_generation=1 trust_generation=1 revocation_generation=1
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-quarantine\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-gitd\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-repos\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-receipts\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-git-authority\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-cache\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-publications\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-authority-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:33Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-gitd-run-918dcdf3661a Creating
+ Container mrml-completion-final3-20260905-gitd-run-918dcdf3661a Created
+repository=owner/first protected_tip=eff5a40ef7f3b72a26c9ea5d203f87c71896c68cab1938f6bff65c7f90f43380 trust_generation=1 revocation_generation=1
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-gitd\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-authority-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-git-authority\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-receipts\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-repos\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-cache\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-publications\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-quarantine\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-gitd-run-ad926ac28d29 Creating
+ Container mrml-completion-final3-20260905-gitd-run-ad926ac28d29 Created
+repository=owner/second initial_tip=eff5a40ef7f3b72a26c9ea5d203f87c71896c68cab1938f6bff65c7f90f43380 repository_generation=1 trust_generation=1 revocation_generation=1
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-policies\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-gitd\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-cache\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-publications\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-authority-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-git-authority\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-receipts\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-quarantine\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-authority-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-repos\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:18:34Z" level=warning msg="volume \"mrml-completion-final3-20260905-gitd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Container mrml-completion-final3-20260905-gitd-run-f2384921b22f Creating
+ Container mrml-completion-final3-20260905-gitd-run-f2384921b22f Created
+repository=owner/second protected_tip=eff5a40ef7f3b72a26c9ea5d203f87c71896c68cab1938f6bff65c7f90f43380 trust_generation=1 revocation_generation=1

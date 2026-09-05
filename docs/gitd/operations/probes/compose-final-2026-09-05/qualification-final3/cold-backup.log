@@ -1,0 +1,80 @@
+established_transfer_received_before_outage=24699007
+ Container mrml-completion-final3-20260905-certd-1 Stopping
+ Container mrml-completion-final3-20260905-certd-1 Stopped
+mrml-gitd: health check failed closed
+time="2026-09-05T10:37:06Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:37:06Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:37:06Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-established-clone Creating
+ Container mrml-completion-final3-20260905-established-clone Created
+Cloned https://git.example:8443/owner/second.git into /work/established-random on branch main
+object-00.bin: OK
+object-01.bin: OK
+object-02.bin: OK
+object-03.bin: OK
+object-04.bin: OK
+object-05.bin: OK
+object-06.bin: OK
+object-07.bin: OK
+established native 256 MiB clone completed and verified while real certd remained stopped
+time="2026-09-05T10:38:21Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:38:21Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:38:21Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-publications\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:38:21Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-gitd\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:38:21Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:38:21Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:38:21Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-certd-1 Starting
+ Container mrml-completion-final3-20260905-certd-1 Started
+time="2026-09-05T10:38:30Z" level=warning msg="volume \"mrml-completion-final3-20260905-git-client-work\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:38:30Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:38:30Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-git-client-run-535d5a8682a8 Creating
+ Container mrml-completion-final3-20260905-git-client-run-535d5a8682a8 Created
+Fetched 11 object(s) and 1 branch ref(s) from origin
+unchanged_observation_nanoseconds=15038043179
+certd_successful_connects=42
+gitd_ticks_before=90424 1044
+gitd_ticks_after=91483 1047
+fds_before=37
+fds_after=38
+real-certd established-work preservation, recovery and bounded unchanged polling PASS
+ Container mrml-completion-final3-20260905-signer-git-protected-signer-1 Stopping
+ Container mrml-completion-final3-20260905-signer-git-protected-signer-1 Stopped
+ Container mrml-completion-final3-second-20260905-signer-git-protected-signer-1 Stopping
+ Container mrml-completion-final3-second-20260905-signer-git-protected-signer-1 Stopped
+ Container mrml-completion-final3-20260905-credential-git-credential-agent-1 Stopping
+ Container mrml-completion-final3-20260905-credential-git-credential-agent-1 Stopped
+ Container mrml-completion-final3-second-20260905-credential-git-credential-agent-1 Stopping
+ Container mrml-completion-final3-second-20260905-credential-git-credential-agent-1 Stopped
+ Container mrml-completion-final3-20260905-gitd-1 Stopping
+ Container mrml-completion-final3-20260905-gitd-1 Stopped
+ Container mrml-completion-final3-20260905-git-authority-1 Stopping
+ Container mrml-completion-final3-20260905-git-authority-1 Stopped
+ Container mrml-completion-final3-20260905-certd-1 Stopping
+ Container mrml-completion-final3-20260905-certd-1 Stopped
+/mrml-completion-final3-20260905-signer-git-protected-signer-1 exit=0 finished=2026-09-05T10:39:10.058148435Z
+/mrml-completion-final3-second-20260905-signer-git-protected-signer-1 exit=0 finished=2026-09-05T10:39:10.225068945Z
+/mrml-completion-final3-20260905-credential-git-credential-agent-1 exit=0 finished=2026-09-05T10:39:10.35859863Z
+/mrml-completion-final3-second-20260905-credential-git-credential-agent-1 exit=0 finished=2026-09-05T10:39:10.495142492Z
+/mrml-completion-final3-20260905-gitd-1 exit=0 finished=2026-09-05T10:39:11.104561477Z
+/mrml-completion-final3-20260905-git-authority-1 exit=0 finished=2026-09-05T10:39:11.26069936Z
+/mrml-completion-final3-20260905-certd-1 exit=0 finished=2026-09-05T10:39:11.440742803Z
+seven clean stops elapsed_seconds=2
+time="2026-09-05T10:39:11Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-secrets\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:39:11Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-config\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:39:11Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-state\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:39:11Z" level=warning msg="volume \"mrml-completion-final3-20260905-certd-publications\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:39:11Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-gitd\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:39:11Z" level=warning msg="volume \"mrml-completion-final3-20260905-runtime-certd-acmed\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+time="2026-09-05T10:39:11Z" level=warning msg="Found orphan containers (mrml-completion-final3-20260905-git-response-loss-1, mrml-completion-final3-20260905-gitd-1, mrml-completion-final3-20260905-git-authority-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
+ Container mrml-completion-final3-20260905-certd-1 Starting
+ Container mrml-completion-final3-20260905-certd-1 Started
+mrml-certd ready generation=2
+ Container deploy-git-backup-run-1e07b4ef15b7 Creating
+ Container deploy-git-backup-run-1e07b4ef15b7 Created
+ Container deploy-git-backup-run-3d6cead1f144 Creating
+ Container deploy-git-backup-run-3d6cead1f144 Created
+ Container deploy-git-backup-run-7f5f66dda023 Creating
+ Container deploy-git-backup-run-7f5f66dda023 Created
+authenticated encrypted named-volume backup generation 2026090501 created and verified

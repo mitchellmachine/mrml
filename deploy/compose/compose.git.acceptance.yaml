@@ -1,0 +1,124 @@
+# Disposable acceptance overlay, merged after compose.acme.yaml and
+# compose.git.yaml. All daemons remain the real production programs.
+# Explicit acceptance-profile one-shots provide a native client and a client
+# for real certd enrollment; no certificate fixture server is included.
+services:
+  gitd:
+    environment:
+      MRML_CA_BUNDLE: /run/mrml-test-ca.pem
+    volumes:
+      - type: volume
+        source: mrml-certd-config
+        target: /run/mrml-test-ca.pem
+        read_only: true
+        volume: {subpath: acme-trust-roots.pem}
+    ports: !override
+      - "127.0.0.1:32443:8443/tcp"
+    networks:
+      git-public:
+        aliases: [git.example]
+
+  git-client:
+    profiles: [acceptance]
+    image: "mrml/git:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21005:21005"
+    group_add: ["21906", "21909"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 32
+    mem_limit: 2g
+    cpus: 2.0
+    restart: "no"
+    networks: [git-public]
+    environment:
+      MRML_CA_BUNDLE: /run/mrml-test-ca.pem
+      MRML_GIT_HTTPS_TRANSPORT: h2
+      MRML_GIT_CREDENTIAL_PROVIDER: unix-v1
+      MRML_GIT_CREDENTIAL_SOCKET: /run/mrml/git-credential-agent/agent.sock
+      MRML_GIT_CREDENTIAL_CAPABILITY_FILE: /run/mrml/client-credential/channel
+      MRML_GIT_CREDENTIAL_UID: "21009"
+      MRML_GIT_CREDENTIAL_GID: "21009"
+      MRML_GIT_CREDENTIAL_GENERATION: "${MRML_GIT_CREDENTIAL_GENERATION:?set MRML_GIT_CREDENTIAL_GENERATION}"
+    working_dir: /work
+    volumes:
+      - type: volume
+        source: mrml-git-client-work
+        target: /work
+        volume: {nocopy: true}
+      - type: volume
+        source: mrml-certd-config
+        target: /run/mrml-test-ca.pem
+        read_only: true
+        volume: {subpath: acme-trust-roots.pem}
+      - "mrml-runtime-git-signer:/run/mrml/git-protected-signer:ro"
+      - "mrml-git-client-signer-channel:/run/mrml/client-signer:ro"
+      - "mrml-runtime-git-credential-agent:/run/mrml/git-credential-agent:ro"
+      - "mrml-git-client-credential-agent-channel:/run/mrml/client-credential:ro"
+
+  git-certd-enroll:
+    profiles: [acceptance]
+    image: "mrml/git:${MRML_GIT_VERSION:?set MRML_GIT_VERSION}"
+    platform: linux/amd64
+    pull_policy: never
+    user: "21004:21004"
+    group_add: ["21903"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 16
+    mem_limit: 256m
+    cpus: 1.0
+    restart: "no"
+    entrypoint: [/usr/bin/mrml-gitd-certd-test-probe]
+    volumes:
+      - "mrml-runtime-certd-acmed:/run/mrml/certd-acmed:ro"
+      - type: volume
+        source: mrml-acmed-secrets
+        target: /run/secrets/certd-acmed.cap
+        read_only: true
+        volume: {subpath: certd-acmed.cap}
+      - "mrml-certd-config:/config:ro"
+      - type: volume
+        source: mrml-git-certificate-exchange
+        target: /enrollment
+        volume: {nocopy: true}
+
+volumes:
+  mrml-git-client-work:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-git-client-work"
+  mrml-git-certificate-exchange:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-git-certificate-exchange"
+  mrml-runtime-git-signer:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-runtime-git-signer"
+    external: true
+  mrml-git-client-signer-channel:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-git-client-signer-channel"
+    external: true
+  mrml-runtime-git-credential-agent:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-runtime-git-credential-agent"
+    external: true
+  mrml-git-client-credential-agent-channel:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-git-client-credential-agent-channel"
+    external: true
+  mrml-certd-state:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-certd-state"
+  mrml-certd-publications:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-certd-publications"
+  mrml-acmed-state:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-acmed-state"
+  mrml-acmed-challenges:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-acmed-challenges"
+  mrml-runtime-certd-acmed:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-runtime-certd-acmed"
+  mrml-certd-secrets:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-certd-secrets"
+  mrml-certd-config:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-certd-config"
+  mrml-acmed-secrets:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-acmed-secrets"
+  mrml-acmed-config:
+    name: "${MRML_VOLUME_PREFIX:?set a disposable MRML_VOLUME_PREFIX}-acmed-config"

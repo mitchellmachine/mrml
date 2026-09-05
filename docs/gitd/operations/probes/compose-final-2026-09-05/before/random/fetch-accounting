@@ -1,0 +1,17 @@
+observer_state=zombie
+child_namespace_pid=7
+network_received_bytes=271856257
+network_sent_bytes=2400071
+format=mrml-native-transfer-accounting-v1
+elapsed_microseconds=29868591
+user_cpu_microseconds=16227841
+system_cpu_microseconds=3582609
+peak_rss_kib=215880
+exit_status=0
+samples=299
+rchar: 1612687074
+wchar: 805836682
+syscr: 76674
+syscw: 34294
+read_bytes: 20480
+write_bytes: 805490688

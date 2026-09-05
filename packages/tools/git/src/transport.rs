@@ -556,9 +556,7 @@ pub fn parse_protected_push_response_mode(
     for packet in decode_packets(&report)? {
         let Some(bytes) = packet else { continue };
         if let Some(encoded) = bytes.strip_prefix(b"mrml-receipt-v1 ") {
-            if receipt.is_some()
-                || crate::parse_authenticated_audit_receipt(encoded).is_err()
-            {
+            if receipt.is_some() || crate::parse_authenticated_audit_receipt(encoded).is_err() {
                 return Err(TransportError::RemoteError);
             }
             receipt = Some(encoded.iter().copied().collect());

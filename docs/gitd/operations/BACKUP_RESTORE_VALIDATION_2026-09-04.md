@@ -207,3 +207,38 @@ network, power-loss, or physical-hardware evidence.
 Patent review: **NOT_TRIGGERED**. The changes use conventional container image
 layout, filesystem metadata validation, encrypted streaming backup, and cache
 directory reconstruction. See `docs/patents/REVIEW_LOG.md`.
+
+## Real Docker cache/provisioning regression — 2026-09-05
+
+A real Docker CE/Compose diagnostic backup contained both independently advanced
+protected repositories. Native encrypted generation 2026090501 was created and
+verified; all eleven disposable source server volumes were then removed, and
+native verification/restore succeeded into a fresh namespace. The independently
+retained real certd and client signer/credential custody were not part of that
+server-data destruction. The archive was 809,619,705 bytes, SHA-256
+`a91fd03a092df6fca9aea60a13476d56d20258650c7b3317fa94fc6bafee69e8`.
+
+Subsequent first-party provisioning correctly refused the derived cache because
+its reconstruction lacked the `.mrml-volume` copy-up sentinel. The native
+restore path now recreates and syncs that zero-length mode-0400 file using the
+UID/GID of the authenticated repository-root inventory entry. It still requires
+an empty cache destination. The focused regression checks two derived repository
+paths, root/directory/marker ownership and modes, one link, zero bytes, and
+rejection of destination reuse. It first failed on the missing marker, then the
+canonical Gitd suite passed 58 library, 8 daemon and 2 backup tests after the fix.
+Sanitizer and rebuilt-image restore activation remain pending at this checkpoint.
+Exact logs and continuation state are in `CURRENT_COMPLETION.md`.
+
+### Corrected Docker restore activation — 2026-09-05
+
+Native F5 restore of generation 2026090501 into the second fresh namespace
+`mrml-git-restore-g-20260905` passed and created the required cache sentinel.
+Configuration validation, authenticated recovery, real authority/Gitd startup,
+and independently retained real certd/client custody all passed. The fresh
+`restored-first-attempt3` clone matched eight 32 MiB text-file hashes and a
+protected push selected `f9449afa6fcb`. All eleven original server volumes
+remained absent after that push. Exact signer-state bytes were retained; no
+manual generation edit was used. The first two clone attempts failed during TLS
+socket transport and remain recorded; an independent CA/SNI-valid TLS 1.3/H2
+oracle and the subsequent native clone passed. This diagnostic sequence is not
+yet the required final uninterrupted coherent-source release run.

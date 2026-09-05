@@ -10,6 +10,8 @@ pub const HTTP2_CLIENT_PREFACE: &[u8; 24] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 const MAX_FRAME: usize = 16 * 1024;
 const MAX_HEADER_BLOCK: usize = 64 * 1024;
 const MAX_HEADER_FIELDS: usize = 256;
+const MAX_HEADER_FRAGMENTS: usize = 64;
+const MAX_CONSECUTIVE_CONTROL_FRAMES: usize = 1024;
 const WINDOW_UPDATE_THRESHOLD: u32 = 32 * 1024;
 const ESTABLISHED_HTTP2_IO_TIMEOUT_MILLIS: u64 = 15 * 60 * 1_000;
 const ESTABLISHED_HTTP2_SERVER_IO_TIMEOUT_MILLIS: u64 = 5 * 60 * 1_000;
@@ -153,10 +155,10 @@ impl Http2Frame {
             return Err(HttpError::InvalidResponse);
         }
         let n = ((input[0] as usize) << 16) | ((input[1] as usize) << 8) | input[2] as usize;
-        if n > MAX_FRAME || input.len() < 9 + n || input[5] & 0x80 != 0 {
+        if n > MAX_FRAME || input.len() < 9 + n {
             return Err(HttpError::InvalidResponse);
         }
-        let stream_id = u32::from_be_bytes([input[5], input[6], input[7], input[8]]);
+        let stream_id = u32::from_be_bytes([input[5], input[6], input[7], input[8]]) & 0x7fff_ffff;
         let kind = match input[3] {
             0 => Http2FrameKind::Data,
             1 => Http2FrameKind::Headers,
@@ -214,6 +216,46 @@ impl Http2Frame {
     }
 }
 
+fn debit_receive_window(window: &mut i64, bytes: usize) -> Result<(), HttpError> {
+    let bytes = i64::try_from(bytes).map_err(|_| HttpError::InvalidResponse)?;
+    let next = window
+        .checked_sub(bytes)
+        .filter(|n| *n >= 0)
+        .ok_or(HttpError::InvalidResponse)?;
+    *window = next;
+    Ok(())
+}
+fn account_control_frame(count: &mut usize) -> Result<(), HttpError> {
+    if *count >= MAX_CONSECUTIVE_CONTROL_FRAMES {
+        return Err(HttpError::InvalidResponse);
+    }
+    *count += 1;
+    Ok(())
+}
+
+fn frame_content(frame: &Http2Frame) -> Result<&[u8], HttpError> {
+    let padded = matches!(frame.kind, Http2FrameKind::Data | Http2FrameKind::Headers)
+        && frame.flags & 8 != 0;
+    let mut start = usize::from(padded);
+    let padding = if padded {
+        usize::from(*frame.payload.first().ok_or(HttpError::InvalidResponse)?)
+    } else {
+        0
+    };
+    let end = frame
+        .payload
+        .len()
+        .checked_sub(padding)
+        .ok_or(HttpError::InvalidResponse)?;
+    if frame.kind == Http2FrameKind::Headers && frame.flags & 0x20 != 0 {
+        start += 5;
+    }
+    frame
+        .payload
+        .get(start..end)
+        .ok_or(HttpError::InvalidResponse)
+}
+
 pub struct Http2ConnectionState {
     settings_received: bool,
     settings_acknowledged: bool,
@@ -247,9 +289,6 @@ impl Http2ConnectionState {
         }
         match frame.kind {
             Http2FrameKind::Settings => {
-                if frame.flags & !1 != 0 {
-                    return Err(HttpError::InvalidResponse);
-                }
                 if frame.flags & 1 == 0 {
                     validate_settings(&frame.payload)?;
                     self.settings_received = true;
@@ -263,11 +302,11 @@ impl Http2ConnectionState {
                 }
             }
             Http2FrameKind::Headers => {
+                frame_content(frame)?;
                 if self.goaway_received
                     || frame.stream_id % 2 == 0
                     || frame.stream_id <= self.last_peer_stream
                     || self.active_stream.is_some()
-                    || frame.flags & !(1 | 4) != 0
                 {
                     return Err(HttpError::InvalidResponse);
                 }
@@ -280,19 +319,11 @@ impl Http2ConnectionState {
                 self.local_stream_ended = false;
             }
             Http2FrameKind::Continuation if frame.flags & 4 != 0 => {
-                if frame.flags & !4 != 0 {
-                    return Err(HttpError::InvalidResponse);
-                }
                 self.continuation_stream = None;
             }
-            Http2FrameKind::Continuation if frame.flags != 0 => {
-                return Err(HttpError::InvalidResponse);
-            }
             Http2FrameKind::Data => {
-                if frame.flags & !1 != 0
-                    || self.active_stream != Some(frame.stream_id)
-                    || self.remote_stream_ended
-                {
+                frame_content(frame)?;
+                if self.active_stream != Some(frame.stream_id) || self.remote_stream_ended {
                     return Err(HttpError::InvalidResponse);
                 }
                 self.remote_stream_ended = frame.flags & 1 != 0;
@@ -301,7 +332,7 @@ impl Http2ConnectionState {
                 }
             }
             Http2FrameKind::RstStream => {
-                if frame.flags != 0 || self.active_stream != Some(frame.stream_id) {
+                if self.active_stream != Some(frame.stream_id) {
                     return Err(HttpError::InvalidResponse);
                 }
                 self.active_stream = None;
@@ -310,14 +341,8 @@ impl Http2ConnectionState {
             Http2FrameKind::PushPromise => {
                 return Err(HttpError::InvalidResponse);
             }
-            Http2FrameKind::Priority if frame.flags != 0 => {
-                return Err(HttpError::InvalidResponse);
-            }
-            Http2FrameKind::Ping if frame.flags & !1 != 0 => {
-                return Err(HttpError::InvalidResponse);
-            }
             Http2FrameKind::GoAway => {
-                if frame.flags != 0 || frame.payload.len() < 8 {
+                if frame.payload.len() < 8 {
                     return Err(HttpError::InvalidResponse);
                 }
                 self.goaway_received = true;
@@ -354,15 +379,9 @@ fn validate_settings(payload: &[u8]) -> Result<(), HttpError> {
     if payload.len() % 6 != 0 {
         return Err(HttpError::InvalidResponse);
     }
-    let mut seen = Vector::new();
     for setting in payload.chunks_exact(6) {
         let identifier = u16::from_be_bytes([setting[0], setting[1]]);
         let value = u32::from_be_bytes([setting[2], setting[3], setting[4], setting[5]]);
-        if seen.contains(&identifier) {
-            return Err(HttpError::InvalidResponse);
-        }
-        seen.try_push(identifier)
-            .map_err(|_| HttpError::Allocation)?;
         match identifier {
             2 if value > 1 => return Err(HttpError::InvalidResponse),
             4 if value > 0x7fff_ffff => return Err(HttpError::InvalidResponse),
@@ -389,8 +408,31 @@ fn peer_send_settings(payload: &[u8]) -> Result<(Option<i64>, Option<usize>), Ht
     Ok((window, maximum_frame))
 }
 
+fn apply_initial_windows_in_order(
+    payload: &[u8],
+    window: &mut i64,
+    initial: &mut i64,
+) -> Result<(), HttpError> {
+    validate_settings(payload)?;
+    for setting in payload.chunks_exact(6) {
+        if u16::from_be_bytes([setting[0], setting[1]]) != 4 {
+            continue;
+        }
+        let next = i64::from(u32::from_be_bytes([
+            setting[2], setting[3], setting[4], setting[5],
+        ]));
+        let updated = window
+            .checked_add(next - *initial)
+            .filter(|n| *n >= -0x7fff_ffff && *n <= 0x7fff_ffff)
+            .ok_or(HttpError::InvalidResponse)?;
+        *window = updated;
+        *initial = next;
+    }
+    Ok(())
+}
+
 fn validate_window_update(frame: &Http2Frame) -> Result<(), HttpError> {
-    if frame.flags != 0 || frame.payload.len() != 4 {
+    if frame.payload.len() != 4 {
         return Err(HttpError::InvalidResponse);
     }
     let increment = u32::from_be_bytes([
@@ -504,59 +546,128 @@ fn decode_string(input: &[u8], at: &mut usize) -> Result<Text, HttpError> {
     *at = end;
     Text::try_from_str(s).map_err(|_| HttpError::Allocation)
 }
-fn decode_block(input: &[u8]) -> Result<Vector<Header>, HttpError> {
-    if input.len() > MAX_HEADER_BLOCK {
-        return Err(HttpError::InvalidResponse);
+// RFC 7541 connection state: bounded by the initial 4096-byte peer allowance.
+// Advertising zero does not retroactively constrain blocks sent before its ACK.
+struct HpackDecoder {
+    entries: Vector<Header>, // oldest first
+    bytes: usize,
+    capacity: usize,
+    limit: usize,
+}
+impl HpackDecoder {
+    fn new() -> Self {
+        Self {
+            entries: Vector::new(),
+            bytes: 0,
+            capacity: 4096,
+            limit: 4096,
+        }
     }
-    let mut at = 0;
-    let mut out = Vector::new();
-    let mut decoded_bytes = 0usize;
-    let mut allow_size_update = true;
-    while at < input.len() {
-        let first = input[at];
-        if first & 0xe0 == 0x20 {
-            if !allow_size_update || decode_int(input, &mut at, 5)? != 0 {
-                return Err(HttpError::InvalidResponse);
-            }
-            continue;
+    fn acknowledge_zero_limit(&mut self) {
+        self.limit = 0;
+    }
+    fn evict_to(&mut self, target: usize) {
+        while self.bytes > target {
+            let old = self.entries.remove(0);
+            self.bytes -= 32 + old.name.len() + old.value.len();
         }
-        allow_size_update = false;
-        if first & 0x80 != 0 {
-            let index = decode_int(input, &mut at, 7)?;
-            let (name, value) = *HPACK_STATIC
-                .get(index.checked_sub(1).ok_or(HttpError::InvalidResponse)?)
-                .ok_or(HttpError::InvalidResponse)?;
-            account_header_field(&mut decoded_bytes, out.len(), name.len(), value.len())?;
-            out.try_push(Header {
-                name: name.into(),
-                value: value.into(),
-            })
-            .map_err(|_| HttpError::Allocation)?;
-            continue;
-        }
-        let bits = if first & 0x40 != 0 { 6 } else { 4 };
-        let index = decode_int(input, &mut at, bits)?;
-        let name = if index == 0 {
-            decode_string(input, &mut at)?
-        } else {
-            HPACK_STATIC
-                .get(index - 1)
-                .ok_or(HttpError::InvalidResponse)?
-                .0
-                .into()
-        };
-        let value = decode_string(input, &mut at)?;
-        if !valid_field_name(&name)
-            || name.bytes().any(|b| b.is_ascii_uppercase())
-            || !valid_value(&value)
-        {
+    }
+    fn indexed(&self, index: usize) -> Result<Header, HttpError> {
+        if index == 0 {
             return Err(HttpError::InvalidResponse);
         }
-        account_header_field(&mut decoded_bytes, out.len(), name.len(), value.len())?;
-        out.try_push(Header { name, value })
-            .map_err(|_| HttpError::Allocation)?;
+        if let Some(&(name, value)) = HPACK_STATIC.get(index - 1) {
+            return Ok(Header {
+                name: name.into(),
+                value: value.into(),
+            });
+        }
+        let offset = index - HPACK_STATIC.len();
+        let position = self
+            .entries
+            .len()
+            .checked_sub(offset)
+            .ok_or(HttpError::InvalidResponse)?;
+        self.entries
+            .get(position)
+            .cloned()
+            .ok_or(HttpError::InvalidResponse)
     }
-    Ok(out)
+    fn decode(&mut self, input: &[u8]) -> Result<Vector<Header>, HttpError> {
+        if input.len() > MAX_HEADER_BLOCK {
+            return Err(HttpError::InvalidResponse);
+        }
+        let mut at = 0;
+        let mut out = Vector::new();
+        let mut decoded_bytes = 0usize;
+        let mut allow_size_update = true;
+        while at < input.len() {
+            let first = input[at];
+            if first & 0xe0 == 0x20 {
+                if !allow_size_update {
+                    return Err(HttpError::InvalidResponse);
+                }
+                let capacity = decode_int(input, &mut at, 5)?;
+                if capacity > self.limit {
+                    return Err(HttpError::InvalidResponse);
+                }
+                self.capacity = capacity;
+                self.evict_to(capacity);
+                continue;
+            }
+            // A reduction must be acknowledged in the compressed block before fields.
+            if self.capacity > self.limit {
+                return Err(HttpError::InvalidResponse);
+            }
+            allow_size_update = false;
+            let indexed = first & 0x80 != 0;
+            let incremental = !indexed && first & 0x40 != 0;
+            let header = if indexed {
+                self.indexed(decode_int(input, &mut at, 7)?)?
+            } else {
+                let index = decode_int(input, &mut at, if incremental { 6 } else { 4 })?;
+                let name = if index == 0 {
+                    decode_string(input, &mut at)?
+                } else {
+                    self.indexed(index)?.name
+                };
+                let value = decode_string(input, &mut at)?;
+                Header { name, value }
+            };
+            if !valid_field_name(&header.name)
+                || header.name.bytes().any(|b| b.is_ascii_uppercase())
+                || !valid_value(&header.value)
+            {
+                return Err(HttpError::InvalidResponse);
+            }
+            account_header_field(
+                &mut decoded_bytes,
+                out.len(),
+                header.name.len(),
+                header.value.len(),
+            )?;
+            if incremental {
+                let size = 32 + header.name.len() + header.value.len();
+                if size > self.capacity {
+                    self.evict_to(0);
+                } else {
+                    self.evict_to(self.capacity - size);
+                    self.entries
+                        .try_push(header.clone())
+                        .map_err(|_| HttpError::Allocation)?;
+                    self.bytes += size;
+                }
+            }
+            out.try_push(header).map_err(|_| HttpError::Allocation)?;
+        }
+        if self.capacity > self.limit {
+            return Err(HttpError::InvalidResponse);
+        }
+        Ok(out)
+    }
+}
+fn decode_block(input: &[u8]) -> Result<Vector<Header>, HttpError> {
+    HpackDecoder::new().decode(input)
 }
 
 fn account_header_field(
@@ -577,7 +688,8 @@ fn account_header_field(
     Ok(())
 }
 fn block(fields: &[(&str, &str)]) -> Result<Vector<u8>, HttpError> {
-    let mut out = Vector::new();
+    // This encoder never retains fields, including before SETTINGS arrives.
+    let mut out: Vector<u8> = [0x20].into();
     for (n, v) in fields {
         literal(&mut out, n, v)?
     }
@@ -662,11 +774,18 @@ impl Http2Server {
             kind: Http2FrameKind::Settings,
             flags: 0,
             stream_id: 0,
-            payload: Vector::new(),
+            payload: [0, 1, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1].into(),
         }
         .encode()
     }
     pub fn request(&self, frame: &Http2Frame) -> Result<RequestHead, HttpError> {
+        self.request_with_decoder(frame, &mut HpackDecoder::new())
+    }
+    fn request_with_decoder(
+        &self,
+        frame: &Http2Frame,
+        decoder: &mut HpackDecoder,
+    ) -> Result<RequestHead, HttpError> {
         if frame.kind != Http2FrameKind::Headers
             || frame.flags & 4 == 0
             || frame.stream_id == 0
@@ -674,7 +793,7 @@ impl Http2Server {
         {
             return Err(HttpError::InvalidResponse);
         }
-        let mut h = decode_block(&frame.payload)?;
+        let mut h = decoder.decode(frame_content(frame)?)?;
         validate_request_headers(&h)?;
         let method = take(&mut h, ":method")?;
         let scheme = take(&mut h, ":scheme")?;
@@ -823,6 +942,7 @@ fn read_server_frame(stream: &mut TlsServerStream) -> Result<Http2Frame, HttpErr
 pub struct Http2ClientConnection {
     stream: TlsClientStream,
     protocol: Http2Client,
+    decoder: HpackDecoder,
     send_connection_window: i64,
     send_stream_window: i64,
     peer_initial_stream_window: i64,
@@ -876,7 +996,7 @@ impl Http2ClientConnection {
             .write_all(&protocol.connection_bytes()?)
             .map_err(map_tls_read_error)?;
         let settings = read_client_frame(&mut stream)?;
-        if settings.kind != Http2FrameKind::Settings || settings.flags != 0 {
+        if settings.kind != Http2FrameKind::Settings || settings.flags & 1 != 0 {
             return Err(HttpError::InvalidResponse);
         }
         let (initial_window, maximum_frame) = peer_send_settings(&settings.payload)?;
@@ -898,6 +1018,7 @@ impl Http2ClientConnection {
         Ok(Self {
             stream,
             protocol,
+            decoder: HpackDecoder::new(),
             send_connection_window: 65_535,
             send_stream_window: initial_window,
             peer_initial_stream_window: initial_window,
@@ -905,6 +1026,58 @@ impl Http2ClientConnection {
             pending_response_frames: Vector::new(),
             pending_receive_credit: 0,
         })
+    }
+    fn read_frame(&mut self) -> Result<Http2Frame, HttpError> {
+        let mut frame = read_client_frame(&mut self.stream)?;
+        if frame.kind == Http2FrameKind::Settings && frame.flags & 1 != 0 {
+            if !frame.payload.is_empty() {
+                return Err(HttpError::InvalidResponse);
+            }
+            self.decoder.acknowledge_zero_limit();
+        }
+        if frame.kind == Http2FrameKind::Continuation {
+            return Err(HttpError::InvalidResponse);
+        }
+        if frame.kind == Http2FrameKind::Headers {
+            let mut payload = Vector::new();
+            payload
+                .try_extend_from_slice(frame_content(&frame)?)
+                .map_err(|_| HttpError::Allocation)?;
+            let end_stream = frame.flags & 1;
+            let mut fragments = 1;
+            while frame.flags & 4 == 0 {
+                if fragments >= MAX_HEADER_FRAGMENTS {
+                    return Err(HttpError::InvalidResponse);
+                }
+                let continuation = read_client_frame(&mut self.stream)?;
+                if continuation.kind != Http2FrameKind::Continuation
+                    || continuation.stream_id != frame.stream_id
+                {
+                    return Err(HttpError::InvalidResponse);
+                }
+                if payload
+                    .len()
+                    .checked_add(continuation.payload.len())
+                    .is_none_or(|n| n > MAX_HEADER_BLOCK)
+                {
+                    return Err(HttpError::InvalidResponse);
+                }
+                payload
+                    .try_extend_from_slice(&continuation.payload)
+                    .map_err(|_| HttpError::Allocation)?;
+                frame.flags = continuation.flags;
+                fragments += 1;
+            }
+            let headers = self.decoder.decode(&payload)?;
+            // Queued response frames must no longer depend on a mutable decoder.
+            let mut canonical: Vector<u8> = [0x20].into();
+            for header in headers.iter() {
+                literal(&mut canonical, &header.name, &header.value)?;
+            }
+            frame.payload = canonical;
+            frame.flags = 4 | end_stream;
+        }
+        Ok(frame)
     }
     pub fn request(
         &mut self,
@@ -1008,7 +1181,7 @@ impl Http2ClientConnection {
     }
 
     fn receive_send_control(&mut self, stream_id: u32) -> Result<bool, HttpError> {
-        let frame = read_client_frame(&mut self.stream)?;
+        let frame = self.read_frame()?;
         match frame.kind {
             Http2FrameKind::Settings => self.accept_peer_settings(&frame).map(|()| false),
             Http2FrameKind::WindowUpdate => self
@@ -1058,16 +1231,12 @@ impl Http2ClientConnection {
                 Err(HttpError::InvalidResponse)
             };
         }
-        let (initial_window, maximum_frame) = peer_send_settings(&frame.payload)?;
-        if let Some(initial_window) = initial_window {
-            let delta = initial_window - self.peer_initial_stream_window;
-            self.send_stream_window = self
-                .send_stream_window
-                .checked_add(delta)
-                .filter(|window| *window >= -0x7fff_ffff && *window <= 0x7fff_ffff)
-                .ok_or(HttpError::InvalidResponse)?;
-            self.peer_initial_stream_window = initial_window;
-        }
+        let (_, maximum_frame) = peer_send_settings(&frame.payload)?;
+        apply_initial_windows_in_order(
+            &frame.payload,
+            &mut self.send_stream_window,
+            &mut self.peer_initial_stream_window,
+        )?;
         if let Some(maximum_frame) = maximum_frame {
             self.peer_maximum_frame = maximum_frame;
         }
@@ -1121,7 +1290,7 @@ impl Http2ClientConnection {
         let mut head = None;
         loop {
             let frame = if self.pending_response_frames.is_empty() {
-                read_client_frame(&mut self.stream)?
+                self.read_frame()?
             } else {
                 self.pending_response_frames.remove(0)
             };
@@ -1150,7 +1319,7 @@ impl Http2ClientConnection {
                     }
                     let consumed =
                         u32::try_from(frame.payload.len()).map_err(|_| HttpError::BodyTooLarge)?;
-                    output.write(&frame.payload)?;
+                    output.write(frame_content(&frame)?)?;
                     self.acknowledge_response_bytes(stream_id, consumed, false)?;
                     if frame.flags & 1 != 0 {
                         break;
@@ -1206,6 +1375,10 @@ pub struct Http2ServerConnection {
     stream: TlsServerStream,
     protocol: Http2Server,
     state: Http2ConnectionState,
+    decoder: HpackDecoder,
+    receive_connection_window: i64,
+    receive_stream_window: i64,
+    consecutive_control_frames: usize,
     request_stream: Option<u32>,
     request_ended: bool,
     pending_request_data: Vector<u8>,
@@ -1233,7 +1406,7 @@ impl Http2ServerConnection {
             return Err(HttpError::InvalidResponse);
         }
         let first = read_server_frame(&mut stream)?;
-        if first.kind != Http2FrameKind::Settings || first.flags != 0 {
+        if first.kind != Http2FrameKind::Settings || first.flags & 1 != 0 {
             return Err(HttpError::InvalidResponse);
         }
         let (initial_window, maximum_frame) = peer_send_settings(&first.payload)?;
@@ -1258,6 +1431,10 @@ impl Http2ServerConnection {
             stream,
             protocol,
             state,
+            decoder: HpackDecoder::new(),
+            receive_connection_window: 65_535,
+            receive_stream_window: 65_535,
+            consecutive_control_frames: 0,
             request_stream: None,
             request_ended: false,
             pending_request_data: Vector::new(),
@@ -1277,32 +1454,15 @@ impl Http2ServerConnection {
             return Err(HttpError::InvalidResponse);
         }
         loop {
-            let mut frame = self.read_frame()?;
+            let frame = self.read_frame()?;
             match frame.kind {
                 Http2FrameKind::Headers => {
                     let id = frame.stream_id;
-                    if frame.flags & 4 == 0 {
-                        let end_stream = frame.flags & 1;
-                        while frame.flags & 4 == 0 {
-                            let continuation = self.read_frame()?;
-                            if frame
-                                .payload
-                                .len()
-                                .checked_add(continuation.payload.len())
-                                .is_none_or(|length| length > MAX_HEADER_BLOCK)
-                            {
-                                return Err(HttpError::InvalidResponse);
-                            }
-                            frame
-                                .payload
-                                .try_extend_from_slice(&continuation.payload)
-                                .map_err(|_| HttpError::Allocation)?;
-                            frame.flags = continuation.flags;
-                        }
-                        frame.flags = 4 | end_stream;
-                    }
-                    let request = self.protocol.request(&frame)?;
+                    let request = self
+                        .protocol
+                        .request_with_decoder(&frame, &mut self.decoder)?;
                     let expected_content_length = request_content_length(&request.headers)?;
+                    self.consecutive_control_frames = 0;
                     if frame.flags & 1 != 0
                         && expected_content_length.is_some_and(|length| length != 0)
                     {
@@ -1314,6 +1474,7 @@ impl Http2ServerConnection {
                     // clearing the stream first rejects them and closes the
                     // connection while the peer is still acknowledging data.
                     self.request_stream = Some(id);
+                    self.receive_stream_window = 65_535;
                     self.request_ended = frame.flags & 1 != 0;
                     self.expected_content_length = expected_content_length;
                     self.received_content_length = 0;
@@ -1326,7 +1487,7 @@ impl Http2ServerConnection {
                         .write_all(&Http2Frame { flags: 1, ..frame }.encode()?)
                         .map_err(|_| HttpError::Tls)?;
                 }
-                Http2FrameKind::Ping if frame.flags == 1 => {}
+                Http2FrameKind::Ping if frame.flags & 1 != 0 => {}
                 Http2FrameKind::WindowUpdate => self.accept_window_update(&frame)?,
                 Http2FrameKind::Priority | Http2FrameKind::Unknown(_) => {}
                 Http2FrameKind::GoAway => return Err(HttpError::Io),
@@ -1356,7 +1517,7 @@ impl Http2ServerConnection {
         loop {
             let frame = self.read_frame()?;
             match frame.kind {
-                Http2FrameKind::Data if frame.stream_id == stream_id && frame.flags & !1 == 0 => {
+                Http2FrameKind::Data if frame.stream_id == stream_id => {
                     self.account_request_data(frame.payload.len(), frame.flags & 1 != 0)?;
                     self.pending_request_data = frame.payload;
                     self.pending_request_offset = 0;
@@ -1377,7 +1538,7 @@ impl Http2ServerConnection {
                         .write_all(&Http2Frame { flags: 1, ..frame }.encode()?)
                         .map_err(|_| HttpError::Tls)?;
                 }
-                Http2FrameKind::Ping if frame.flags == 1 => {}
+                Http2FrameKind::Ping if frame.flags & 1 != 0 => {}
                 Http2FrameKind::Settings => self.accept_peer_settings(&frame)?,
                 Http2FrameKind::WindowUpdate => self.accept_window_update(&frame)?,
                 Http2FrameKind::RstStream
@@ -1436,6 +1597,8 @@ impl Http2ServerConnection {
             return Ok(());
         }
         let credit = core::mem::take(&mut self.pending_request_credit);
+        self.receive_connection_window += i64::from(credit);
+        self.receive_stream_window += i64::from(credit);
         for target in [0, stream_id] {
             self.stream
                 .write_all(
@@ -1456,25 +1619,19 @@ impl Http2ServerConnection {
             return Err(HttpError::InvalidResponse);
         }
         if frame.flags & 1 != 0 {
-            return if frame.flags == 1 && frame.payload.is_empty() {
+            self.decoder.acknowledge_zero_limit();
+            return if frame.payload.is_empty() {
                 Ok(())
             } else {
                 Err(HttpError::InvalidResponse)
             };
         }
-        if frame.flags != 0 {
-            return Err(HttpError::InvalidResponse);
-        }
-        let (initial_window, maximum_frame) = peer_send_settings(&frame.payload)?;
-        if let Some(initial_window) = initial_window {
-            let delta = initial_window - self.peer_initial_stream_window;
-            self.send_stream_window = self
-                .send_stream_window
-                .checked_add(delta)
-                .filter(|window| *window >= -0x7fff_ffff && *window <= 0x7fff_ffff)
-                .ok_or(HttpError::InvalidResponse)?;
-            self.peer_initial_stream_window = initial_window;
-        }
+        let (_, maximum_frame) = peer_send_settings(&frame.payload)?;
+        apply_initial_windows_in_order(
+            &frame.payload,
+            &mut self.send_stream_window,
+            &mut self.peer_initial_stream_window,
+        )?;
         if let Some(maximum_frame) = maximum_frame {
             self.peer_maximum_frame = maximum_frame;
         }
@@ -1596,6 +1753,7 @@ impl Http2ServerConnection {
                     .encode()?,
                 )
                 .map_err(|_| HttpError::Tls)?;
+            self.consecutive_control_frames = 0;
             self.send_connection_window -= count as i64;
             self.send_stream_window -= count as i64;
             at += count;
@@ -1614,10 +1772,9 @@ impl Http2ServerConnection {
                 .stream
                 .write_all(&Http2Frame { flags: 1, ..frame }.encode()?)
                 .map_err(|_| HttpError::Tls),
-            Http2FrameKind::Ping if frame.flags == 1 => Ok(()),
+            Http2FrameKind::Ping if frame.flags & 1 != 0 => Ok(()),
             Http2FrameKind::Data
                 if frame.stream_id == stream_id
-                    && frame.flags & !1 == 0
                     && self.pending_request_data.is_empty()
                     && !self.request_ended =>
             {
@@ -1628,6 +1785,7 @@ impl Http2ServerConnection {
                 if self.pending_request_data.is_empty() && self.pending_request_end {
                     self.request_ended = true;
                     self.pending_request_end = false;
+                    self.acknowledge_request_bytes(stream_id, 0, true)?;
                 }
                 Ok(())
             }
@@ -1677,13 +1835,166 @@ impl Http2ServerConnection {
         if self.state.active_stream == Some(stream_id) {
             self.state.active_stream = None;
         }
+        if self.request_stream == Some(stream_id) {
+            self.discard_request_body()?;
+        }
         Ok(())
     }
 
-    fn read_frame(&mut self) -> Result<Http2Frame, HttpError> {
-        let frame = read_server_frame(&mut self.stream)?;
-        self.state.receive(&frame)?;
+    fn discard_request_body(&mut self) -> Result<(), HttpError> {
+        let unread = self.pending_request_data.len() - self.pending_request_offset;
+        let credit = self
+            .pending_request_credit
+            .checked_add(unread as u32)
+            .ok_or(HttpError::InvalidResponse)?;
+        self.pending_request_credit = 0;
+        self.pending_request_data.clear();
+        self.pending_request_offset = 0;
+        self.pending_request_end = false;
+        self.request_ended = true;
+        if credit != 0 {
+            self.receive_connection_window += i64::from(credit);
+            self.stream
+                .write_all(
+                    &Http2Frame {
+                        kind: Http2FrameKind::WindowUpdate,
+                        flags: 0,
+                        stream_id: 0,
+                        payload: credit.to_be_bytes().into(),
+                    }
+                    .encode()?,
+                )
+                .map_err(|_| HttpError::Tls)?;
+        }
+        Ok(())
+    }
+
+    fn read_header_block(
+        &mut self,
+        mut frame: Http2Frame,
+        admitted: bool,
+    ) -> Result<Http2Frame, HttpError> {
+        let fragment = frame_content(&frame)?;
+        let mut payload = Vector::new();
+        payload
+            .try_extend_from_slice(fragment)
+            .map_err(|_| HttpError::Allocation)?;
+        let end_stream = frame.flags & 1;
+        let mut fragments = 1;
+        while frame.flags & 4 == 0 {
+            if fragments >= MAX_HEADER_FRAGMENTS {
+                return Err(HttpError::InvalidResponse);
+            }
+            let continuation = read_server_frame(&mut self.stream)?;
+            if continuation.kind != Http2FrameKind::Continuation
+                || continuation.stream_id != frame.stream_id
+            {
+                return Err(HttpError::InvalidResponse);
+            }
+            if admitted {
+                self.state.receive(&continuation)?;
+            }
+            if payload
+                .len()
+                .checked_add(continuation.payload.len())
+                .is_none_or(|n| n > MAX_HEADER_BLOCK)
+            {
+                return Err(HttpError::InvalidResponse);
+            }
+            payload
+                .try_extend_from_slice(&continuation.payload)
+                .map_err(|_| HttpError::Allocation)?;
+            frame.flags = continuation.flags;
+            fragments += 1;
+        }
+        frame.payload = payload;
+        frame.flags = 4 | end_stream;
         Ok(frame)
+    }
+
+    fn read_frame(&mut self) -> Result<Http2Frame, HttpError> {
+        loop {
+            let mut frame = read_server_frame(&mut self.stream)?;
+            account_control_frame(&mut self.consecutive_control_frames)?;
+            if frame.kind == Http2FrameKind::Data {
+                debit_receive_window(&mut self.receive_connection_window, frame.payload.len())?;
+                if self.state.active_stream == Some(frame.stream_id) {
+                    debit_receive_window(&mut self.receive_stream_window, frame.payload.len())?;
+                }
+            }
+            if frame.kind == Http2FrameKind::Headers
+                && self.state.continuation_stream.is_none()
+                && self.state.active_stream.is_some()
+                && frame.stream_id > self.state.last_peer_stream
+                && frame.stream_id % 2 != 0
+                && !self.state.goaway_received
+            {
+                // Decode refused blocks too: compression state is connection-wide.
+                let refused = self.read_header_block(frame, false)?;
+                self.decoder.decode(&refused.payload)?;
+                self.state.last_peer_stream = refused.stream_id;
+                self.reset_stream(refused.stream_id, 7)?; // REFUSED_STREAM; never exposed to the application.
+                continue;
+            }
+            if frame.stream_id != 0
+                && frame.stream_id % 2 != 0
+                && frame.stream_id <= self.state.last_peer_stream
+                && self.state.active_stream != Some(frame.stream_id)
+            {
+                match frame.kind {
+                    Http2FrameKind::Data => {
+                        frame_content(&frame)?;
+                        // In-flight DATA after our reset still consumes connection credit.
+                        if !frame.payload.is_empty() {
+                            self.receive_connection_window += frame.payload.len() as i64;
+                            self.stream
+                                .write_all(
+                                    &Http2Frame {
+                                        kind: Http2FrameKind::WindowUpdate,
+                                        flags: 0,
+                                        stream_id: 0,
+                                        payload: (frame.payload.len() as u32).to_be_bytes().into(),
+                                    }
+                                    .encode()?,
+                                )
+                                .map_err(|_| HttpError::Tls)?;
+                        }
+                        continue;
+                    }
+                    Http2FrameKind::RstStream => continue,
+                    Http2FrameKind::WindowUpdate => {
+                        validate_window_update(&frame)?;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            self.state.receive(&frame)?;
+            match frame.kind {
+                Http2FrameKind::Headers => {
+                    return self.read_header_block(frame, true);
+                }
+                Http2FrameKind::Data => {
+                    let data = frame_content(&frame)?;
+                    let padding_credit = frame.payload.len() - data.len();
+                    if !data.is_empty() {
+                        self.consecutive_control_frames = 0;
+                    }
+                    let mut payload = Vector::new();
+                    payload
+                        .try_extend_from_slice(data)
+                        .map_err(|_| HttpError::Allocation)?;
+                    frame.payload = payload;
+                    frame.flags &= 1;
+                    self.acknowledge_request_bytes(frame.stream_id, padding_credit as u32, false)?;
+                }
+                Http2FrameKind::RstStream => {
+                    self.discard_request_body()?;
+                }
+                _ => {}
+            }
+            return Ok(frame);
+        }
     }
 
     fn account_request_data(&mut self, bytes: usize, end_stream: bool) -> Result<(), HttpError> {
@@ -1740,7 +2051,7 @@ fn decode_response(frame: &Http2Frame) -> Result<ResponseHead, HttpError> {
     if frame.kind != Http2FrameKind::Headers || frame.flags & 4 == 0 {
         return Err(HttpError::InvalidResponse);
     }
-    let mut h = decode_block(&frame.payload)?;
+    let mut h = decode_block(frame_content(frame)?)?;
     let status: u16 = take(&mut h, ":status")?
         .parse()
         .map_err(|_| HttpError::InvalidResponse)?;
@@ -1755,6 +2066,155 @@ mod tests {
     use super::*;
     use mrml_runtime::TcpListener;
     use mrml_tls::TlsServerConfig;
+    #[test]
+    fn rfc9113_server_advertises_bounded_concurrency_and_hpack() {
+        let wire = Http2Server::new().settings().unwrap();
+        let (frame, _) = Http2Frame::decode(&wire).unwrap();
+        assert!(
+            frame
+                .payload
+                .chunks_exact(6)
+                .any(|s| s == [0, 3, 0, 0, 0, 1])
+        );
+        assert!(
+            frame
+                .payload
+                .chunks_exact(6)
+                .any(|s| s == [0, 1, 0, 0, 0, 0])
+        );
+    }
+
+    #[test]
+    fn rfc9113_duplicate_settings_apply_in_wire_order() {
+        assert_eq!(
+            peer_send_settings(&[0, 4, 0, 0, 0, 1, 0, 4, 0, 0, 0, 2]),
+            Ok((Some(2), None))
+        );
+        // An invalid earlier value is still an error, even if overwritten.
+        assert!(peer_send_settings(&[0, 4, 128, 0, 0, 0, 0, 4, 0, 0, 0, 2]).is_err());
+    }
+
+    #[test]
+    fn rfc9113_unknown_flags_and_reserved_stream_bit_are_ignored() {
+        let mut wire = Http2Frame {
+            kind: Http2FrameKind::Settings,
+            flags: 0x80,
+            stream_id: 0,
+            payload: Vector::new(),
+        }
+        .encode()
+        .unwrap();
+        wire[5] |= 0x80;
+        let (frame, _) = Http2Frame::decode(&wire).unwrap();
+        assert_eq!(frame.stream_id, 0);
+        Http2ConnectionState::new().receive(&frame).unwrap();
+    }
+
+    #[test]
+    fn rfc9113_padded_priority_headers_decode_only_header_fragment() {
+        let (_, wire) = Http2Client::new()
+            .request("GET", "https", "example.com", "/padded", &[], true)
+            .unwrap();
+        let (mut frame, _) = Http2Frame::decode(&wire).unwrap();
+        let mut payload: Vector<u8> = [2, 0, 0, 0, 0, 15].into();
+        payload.try_extend_from_slice(&frame.payload).unwrap();
+        payload.try_extend_from_slice(&[0, 0]).unwrap();
+        frame.payload = payload;
+        frame.flags |= 0x28 | 0x80;
+        Http2ConnectionState::new().receive(&frame).unwrap();
+        assert_eq!(
+            Http2Server::new().request(&frame).unwrap().target,
+            "/padded"
+        );
+    }
+
+    #[test]
+    fn hpack_connection_retains_initial_dynamic_entries_and_enforces_acknowledged_zero() {
+        let mut decoder = HpackDecoder::new();
+        // Independently authored literal with incremental indexing: x: y.
+        let first = decoder.decode(&[0x40, 1, b'x', 1, b'y']).unwrap();
+        assert_eq!(decoder.decode(&[0xbe]).unwrap(), first);
+        assert_eq!(decoder.bytes, 34);
+        decoder.acknowledge_zero_limit();
+        assert!(decoder.decode(&[0xbe]).is_err());
+        assert!(decoder.decode(&[0x21, 0x82]).is_err());
+        assert_eq!(decoder.decode(&[0x20, 0x82]).unwrap()[0].value, "GET");
+        assert_eq!(decoder.bytes, 0);
+        assert!(decoder.decode(&[0xbe]).is_err());
+        decoder.decode(&[0x40, 1, b'x', 1, b'y']).unwrap();
+        assert_eq!(decoder.bytes, 0);
+    }
+
+    #[test]
+    fn hpack_eviction_and_illegal_midblock_resize_are_bounded() {
+        let mut decoder = HpackDecoder::new();
+        // Capacity 34 fits exactly one x:y entry.
+        decoder.decode(&[0x3f, 3, 0x40, 1, b'x', 1, b'y']).unwrap();
+        decoder.decode(&[0x40, 1, b'a', 1, b'b']).unwrap();
+        assert_eq!(decoder.decode(&[0xbe]).unwrap()[0].name, "a");
+        assert!(decoder.decode(&[0xbf]).is_err());
+        assert_eq!(decoder.entries.len(), 1);
+        assert!(decoder.decode(&[0x82, 0x20]).is_err());
+        assert!(decoder.decode(&[0x3f, 0xe2, 0x1f]).is_err()); // 4097
+    }
+
+    #[test]
+    fn padded_data_separates_application_bytes_from_full_flow_control_payload() {
+        let mut frame = Http2Frame {
+            kind: Http2FrameKind::Data,
+            flags: 0x89,
+            stream_id: 1,
+            payload: [2, b'a', b'b', b'c', 0, 0].into(),
+        };
+        assert_eq!(frame_content(&frame).unwrap(), b"abc");
+        assert_eq!(
+            frame.payload.len() - frame_content(&frame).unwrap().len(),
+            3
+        );
+        frame.payload = [2, 0].into();
+        assert!(frame_content(&frame).is_err());
+        frame.payload.clear();
+        assert!(frame_content(&frame).is_err());
+        frame.kind = Http2FrameKind::Headers;
+        frame.flags = 0x20;
+        frame.payload = [0; 4].into();
+        assert!(frame_content(&frame).is_err());
+    }
+
+    #[test]
+    fn receive_window_and_control_work_fail_closed_at_exact_bounds() {
+        let mut window = 65_535;
+        debit_receive_window(&mut window, 65_535).unwrap();
+        assert!(debit_receive_window(&mut window, 1).is_err());
+        assert_eq!(window, 0);
+        let mut count = 0;
+        for _ in 0..MAX_CONSECUTIVE_CONTROL_FRAMES {
+            account_control_frame(&mut count).unwrap();
+        }
+        assert!(account_control_frame(&mut count).is_err());
+        assert_eq!(count, MAX_CONSECUTIVE_CONTROL_FRAMES);
+    }
+
+    #[test]
+    fn duplicate_initial_window_settings_cannot_hide_intermediate_overflow() {
+        let mut window = 0x7fff_ffff;
+        let mut initial = 65_535;
+        // A final-only delta is zero, but the first setting overflows by one.
+        let payload = [0, 4, 0, 1, 0, 0, 0, 4, 0, 0, 255, 255];
+        assert!(apply_initial_windows_in_order(&payload, &mut window, &mut initial).is_err());
+        assert_eq!(window, 0x7fff_ffff);
+        assert_eq!(initial, 65_535);
+        window = 10;
+        apply_initial_windows_in_order(
+            &[0, 4, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1],
+            &mut window,
+            &mut initial,
+        )
+        .unwrap();
+        assert_eq!(window, 10 - 65_535 + 1);
+        assert_eq!(initial, 1);
+    }
+
     #[test]
     fn client_server_round_trip() {
         let mut c = Http2Client::new();
@@ -1838,9 +2298,10 @@ mod tests {
             )
             .unwrap();
         let expected: Vector<u8> = [
-            0x00, 0x00, 0x21, 0x01, 0x05, 0x00, 0x00, 0x00, 0x01, 0x82, 0x87, 0x01, 0x0e, b'h',
-            b'u', b'g', b'g', b'i', b'n', b'g', b'f', b'a', b'c', b'e', b'.', b'c', b'o', 0x84,
-            0x0f, 0x2b, 0x0b, b'm', b'r', b'm', b'l', b'-', b'h', b't', b't', b'p', b'/', b'1',
+            0x00, 0x00, 0x22, 0x01, 0x05, 0x00, 0x00, 0x00, 0x01, 0x20, 0x82, 0x87, 0x01, 0x0e,
+            b'h', b'u', b'g', b'g', b'i', b'n', b'g', b'f', b'a', b'c', b'e', b'.', b'c', b'o',
+            0x84, 0x0f, 0x2b, 0x0b, b'm', b'r', b'm', b'l', b'-', b'h', b't', b't', b'p', b'/',
+            b'1',
         ]
         .into();
         assert_eq!(wire, expected);
@@ -2290,21 +2751,23 @@ mod tests {
         let Some(key_path) = mrml_runtime::environment_variable("MRML_HTTP2_LOOPBACK_KEY") else {
             return;
         };
-        let Some(ocsp_path) = mrml_runtime::environment_variable("MRML_HTTP2_LOOPBACK_OCSP") else {
-            return;
-        };
+        let ocsp_path = mrml_runtime::environment_variable("MRML_HTTP2_LOOPBACK_OCSP");
         let mut chain = mrml_runtime::read_file(&certificate_path).unwrap();
         chain
             .try_extend_from_slice(&mrml_runtime::read_file(&issuer_path).unwrap())
             .unwrap();
         let key = mrml_runtime::read_file(&key_path).unwrap();
-        let ocsp = mrml_runtime::read_file(&ocsp_path).unwrap();
-        let config = TlsServerConfig::from_pem(&chain, &key)
+        let mut config = TlsServerConfig::from_pem(&chain, &key)
             .unwrap()
             .with_protocols(&["h2"])
-            .unwrap()
-            .with_ocsp_response(&ocsp)
             .unwrap();
+        // H2 does not universally require a staple. When a fixture supplies
+        // one, preserve its independent client-side verification.
+        if let Some(ocsp_path) = ocsp_path {
+            config = config
+                .with_ocsp_response(&mrml_runtime::read_file(&ocsp_path).unwrap())
+                .unwrap();
+        }
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
         let Ok(worker) = mrml_runtime::spawn_joinable(move || {
@@ -2376,3 +2839,6 @@ mod tests {
         assert!(worker.join());
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod oracle_tests;

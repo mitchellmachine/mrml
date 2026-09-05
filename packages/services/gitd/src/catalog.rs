@@ -333,7 +333,7 @@ mod tests {
         Repository,
     };
     use std::fs;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 
     const PROFILES: &[u8] = b"version=1\nprofile=private|private|1048576\nprofile=protected|protected|268435456\nprofile=public|public-read|8388608\n";
     const REPOSITORIES: &[u8] = b"version=1\nrepository=owner/private|private|3|5|7\nrepository=owner/project|protected|4|6|8\nrepository=owner/public|public|2|4|6\n";

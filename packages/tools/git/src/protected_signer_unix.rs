@@ -4,9 +4,10 @@ use mrml_crypto::hmac_sha256;
 use mrml_runtime::{Text, UnixStream, Vector};
 
 use crate::{
-    HistoryVerificationError, HybridCommitSignatures, HybridCommitSigningProvider, ObjectFormat,
-    ObjectId, ProtectedCommitSigningRequest, RepositoryGeneration, RepositoryIdentity,
-    RevocationGeneration, SignaturePurpose, TrustGeneration, MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES,
+    HistoryVerificationError, HybridCommitSignatures, HybridCommitSigningProvider,
+    MAX_AUTHENTICATED_AUDIT_RECEIPT_BYTES, ObjectFormat, ObjectId, ProtectedCommitSigningRequest,
+    RepositoryGeneration, RepositoryIdentity, RevocationGeneration, SignaturePurpose,
+    TrustGeneration,
 };
 
 const MAGIC: &[u8; 8] = b"MRGPSG02";
@@ -17,8 +18,7 @@ pub const OP_ADVANCE_GENERATION: u16 = 2;
 pub const OP_HEALTH: u16 = 3;
 const SESSION_ID_BYTES: usize = 32;
 const SESSION_HELLO_BYTES: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 32;
-const REQUEST_HEADER: usize =
-    8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 2 + 8;
+const REQUEST_HEADER: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + 8 + 8 + 8 + 32 + 2 + 8;
 const RESPONSE_HEADER: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + 2 + 2 + 2;
 const ADVANCE_REQUEST_HEADER: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + 4;
 const HEALTH_REQUEST_BYTES: usize = 8 + 2 + 2 + SESSION_ID_BYTES + 8 + 8 + 8 + TAG_BYTES;
@@ -202,8 +202,8 @@ impl crate::ProtectedSignerGenerationAdvancer for UnixProtectedCommitSigningProv
         self.next_request_id = request_id
             .checked_add(1)
             .ok_or(HistoryVerificationError::Signature)?;
-        let mut stream = UnixStream::connect(&self.socket)
-            .map_err(|_| HistoryVerificationError::Signature)?;
+        let mut stream =
+            UnixStream::connect(&self.socket).map_err(|_| HistoryVerificationError::Signature)?;
         stream
             .set_read_timeout_millis(IO_TIMEOUT_MILLIS)
             .and_then(|_| stream.set_write_timeout_millis(IO_TIMEOUT_MILLIS))
@@ -315,10 +315,9 @@ pub fn encode_advance_request(
     }
     let length = u32::try_from(authenticated_receipt.len())
         .map_err(|_| UnixProtectedSignerError::Resource)?;
-    let mut output = Vector::with_capacity(
-        ADVANCE_REQUEST_HEADER + authenticated_receipt.len() + TAG_BYTES,
-    )
-    .map_err(|_| UnixProtectedSignerError::Resource)?;
+    let mut output =
+        Vector::with_capacity(ADVANCE_REQUEST_HEADER + authenticated_receipt.len() + TAG_BYTES)
+            .map_err(|_| UnixProtectedSignerError::Resource)?;
     for bytes in [
         MAGIC.as_slice(),
         &VERSION.to_be_bytes(),
@@ -394,7 +393,11 @@ pub fn decode_health_request(
         return Err(UnixProtectedSignerError::Protocol);
     }
     let mut session_id = [0; SESSION_ID_BYTES];
-    session_id.copy_from_slice(input.get(12..44).ok_or(UnixProtectedSignerError::Protocol)?);
+    session_id.copy_from_slice(
+        input
+            .get(12..44)
+            .ok_or(UnixProtectedSignerError::Protocol)?,
+    );
     let request = ProtectedSignerHealthRequest {
         session_id,
         session_expires_at: read_u64(input, 44)?,
@@ -430,9 +433,13 @@ pub fn decode_advance_request(
         return Err(UnixProtectedSignerError::Protocol);
     }
     let mut session_id = [0; SESSION_ID_BYTES];
-    session_id.copy_from_slice(input.get(12..44).ok_or(UnixProtectedSignerError::Protocol)?);
-    let length = usize::try_from(read_u32(input, 68)?)
-        .map_err(|_| UnixProtectedSignerError::Resource)?;
+    session_id.copy_from_slice(
+        input
+            .get(12..44)
+            .ok_or(UnixProtectedSignerError::Protocol)?,
+    );
+    let length =
+        usize::try_from(read_u32(input, 68)?).map_err(|_| UnixProtectedSignerError::Resource)?;
     if session_id == [0; SESSION_ID_BYTES]
         || read_u64(input, 44)? == 0
         || read_u64(input, 52)? == 0
@@ -538,7 +545,11 @@ pub fn decode_protected_signer_request(
         return Err(UnixProtectedSignerError::Protocol);
     }
     let mut session_id = [0; SESSION_ID_BYTES];
-    session_id.copy_from_slice(input.get(12..44).ok_or(UnixProtectedSignerError::Protocol)?);
+    session_id.copy_from_slice(
+        input
+            .get(12..44)
+            .ok_or(UnixProtectedSignerError::Protocol)?,
+    );
     let session_expires_at = read_u64(input, 44)?;
     let sequence = read_u64(input, 52)?;
     let request_id = read_u64(input, 60)?;
@@ -964,9 +975,7 @@ mod tests {
         assert!(decode_health_response(5, session, 1, &response, &wrong_capability).is_err());
         let mut altered_session = session;
         altered_session.id[0] ^= 1;
-        assert!(
-            decode_health_response(5, altered_session, 1, &response, &capability).is_err()
-        );
+        assert!(decode_health_response(5, altered_session, 1, &response, &capability).is_err());
     }
 
     #[test]
@@ -1078,7 +1087,10 @@ mod tests {
         };
         let receipt = [0x31; 137];
         let request = encode_advance_request(11, session, 1, &receipt, &capability).unwrap();
-        assert_eq!(protected_signer_operation(&request), Ok(OP_ADVANCE_GENERATION));
+        assert_eq!(
+            protected_signer_operation(&request),
+            Ok(OP_ADVANCE_GENERATION)
+        );
         let decoded = decode_advance_request(&request, &capability).unwrap();
         assert_eq!(decoded.request_id, 11);
         assert_eq!(&decoded.authenticated_receipt[..], &receipt);
@@ -1104,7 +1116,10 @@ mod tests {
             maximum_sequence: 1,
         };
         let hello = encode_protected_signer_hello(session, &capability).unwrap();
-        assert_eq!(decode_protected_signer_hello(&hello, &capability).unwrap(), session);
+        assert_eq!(
+            decode_protected_signer_hello(&hello, &capability).unwrap(),
+            session
+        );
         let mut tampered = hello;
         tampered[12] ^= 1;
         assert_eq!(

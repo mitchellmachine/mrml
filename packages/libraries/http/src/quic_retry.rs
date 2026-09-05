@@ -292,13 +292,7 @@ impl QuicRetryTokenManager {
         now: u64,
         purpose: QuicRetryPurpose,
     ) -> Result<(), QuicError> {
-        self.verify_and_consume_inner(
-            token,
-            peer,
-            Some(original_destination_id),
-            now,
-            purpose,
-        )?;
+        self.verify_and_consume_inner(token, peer, Some(original_destination_id), now, purpose)?;
         Ok(())
     }
 
@@ -310,13 +304,7 @@ impl QuicRetryTokenManager {
         peer: SocketAddress,
         now: u64,
     ) -> Result<Vector<u8>, QuicError> {
-        self.verify_and_consume_inner(
-            token,
-            peer,
-            None,
-            now,
-            QuicRetryPurpose::AddressValidation,
-        )
+        self.verify_and_consume_inner(token, peer, None, now, QuicRetryPurpose::AddressValidation)
     }
 
     fn verify_and_consume_inner(
@@ -380,8 +368,7 @@ impl QuicRetryTokenManager {
             || plain[13..15] != peer.port.to_be_bytes()
             || plain.len() != FIXED_PLAINTEXT_LENGTH + id_length
             || id_length > MAX_CONNECTION_ID_LENGTH
-            || expected_original_destination_id
-                .is_some_and(|expected| plain[16..] != *expected)
+            || expected_original_destination_id.is_some_and(|expected| plain[16..] != *expected)
             || now < issued_at
             || now > expires_at
         {

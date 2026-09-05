@@ -1,13 +1,18 @@
 use mrml_runtime::Vector;
 
+mod incremental;
+pub(crate) use incremental::{DeflateOutput, stream_zlib};
+
+// Two tables, input/output buffers including growth, and a sideband copy.
+// Conservative on both supported host pointer widths; excludes caller input.
+pub(crate) const STREAM_SCRATCH_BYTES: u64 = 768 * 1024;
+
 const WINDOW: usize = 32 * 1024;
 const HASH_SIZE: usize = 1 << 15;
-// Fixed level-9 search profile. These are format parameters, not inputs to an
-// adaptive codec or workload classifier.
-const MAX_CHAIN: usize = 4096;
+// Compatibility profile also has a bounded, non-maximum-effort search.
+const MAX_CHAIN: usize = 32;
 const MAX_MATCH: usize = 258;
 const MIN_MATCH: usize = 3;
-const MAX_DYNAMIC_BYTES: usize = 1024 * 1024;
 
 struct Bits {
     bytes: Vector<u8>,
@@ -48,37 +53,13 @@ impl Bits {
     }
 }
 
-/// Encodes one deterministic zlib stream. Inputs through 1 MiB use the bounded
-/// level-9 LZ77/dynamic-Huffman profile; larger inputs use linear-time stored
-/// blocks so adversarial collision chains cannot monopolize a service worker.
-/// The threshold is fixed and depends only on the already bounded public object
-/// length, never on content-derived compressibility or an adaptive heuristic.
+/// Collects the bounded incremental encoder's single zlib stream.
 pub(crate) fn encode_zlib(source: &[u8]) -> Vector<u8> {
-    if source.len() > MAX_DYNAMIC_BYTES {
-        encode_zlib_stored(source)
-    } else {
-        encode_zlib_with_profile(source, HuffmanProfile::Dynamic)
-    }
-}
-
-fn encode_zlib_stored(source: &[u8]) -> Vector<u8> {
     let mut output = Vector::new();
-    output.extend([0x78, 0x01]);
-    let mut offset = 0usize;
-    while offset < source.len() || (source.is_empty() && offset == 0) {
-        let length = (source.len() - offset).min(u16::MAX as usize);
-        let final_block = offset + length == source.len();
-        output.push(u8::from(final_block));
-        output.extend((length as u16).to_le_bytes());
-        output.extend((!(length as u16)).to_le_bytes());
-        output.extend(source[offset..offset + length].iter().copied());
-        offset += length;
-        if final_block {
-            break;
-        }
+    match stream_zlib(&[source], &mut output) {
+        Ok(()) => output,
+        Err(never) => match never {},
     }
-    output.extend(adler32(source).to_be_bytes());
-    output
 }
 
 /// First-party fixed-Huffman compatibility profile. Canonical pack storage
@@ -328,11 +309,10 @@ mod tests {
     use crate::inflate::inflate_zlib;
 
     #[test]
-    fn dynamic_level_9_stream_round_trips_boundaries_and_empty_input() {
+    fn stream_round_trips_boundaries_and_empty_input() {
         for input in [&b""[..], &b"a"[..], &b"abc"[..], &b"abcdabcdabcd"[..]] {
             let encoded = encode_zlib(input);
-            assert_eq!(&encoded[..2], &[0x78, 0xda]);
-            assert_eq!(encoded[2] & 7, 5);
+            assert_eq!(&encoded[..2], &[0x78, 0x01]);
             assert_eq!(&*inflate_zlib(&encoded).unwrap(), input);
         }
     }
@@ -355,7 +335,7 @@ mod tests {
     fn dynamic_profile_is_exact_and_complete() {
         assert_eq!(reverse(0b1101, 4), 0b1011);
         assert_eq!(reverse(0b1_0010_1101, 9), 0b1_0110_1001);
-        assert_eq!(MAX_CHAIN, 4096);
+        assert_eq!(MAX_CHAIN, 32);
         assert_eq!(literal_length_code_length(0), 8);
         assert_eq!(literal_length_code_length(147), 8);
         assert_eq!(literal_length_code_length(148), 9);
@@ -404,13 +384,13 @@ mod tests {
     }
 
     #[test]
-    fn large_inputs_use_bounded_linear_stored_blocks() {
-        let input: Vector<u8> = core::iter::repeat_n(b'x', MAX_DYNAMIC_BYTES + 1).collect();
-        let encoded = encode_zlib(&input);
-        assert_eq!(&encoded[..2], &[0x78, 0x01]);
-        assert_eq!(encoded[2], 0);
-        assert!(encoded.len() > input.len());
-        assert_eq!(inflate_zlib(&encoded).unwrap(), input);
+    fn large_compressible_inputs_remain_compressed() {
+        for length in [1024 * 1024 + 1, 32 * 1024 * 1024] {
+            let input: Vector<u8> = core::iter::repeat_n(b'x', length).collect();
+            let encoded = encode_zlib(&input);
+            assert!(encoded.len() < input.len() / 10);
+            assert_eq!(inflate_zlib(&encoded).unwrap(), input);
+        }
     }
 
     #[test]
