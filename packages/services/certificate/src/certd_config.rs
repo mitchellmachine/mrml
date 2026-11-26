@@ -1,5 +1,5 @@
 use mrml_acme::{AcmeUrl, CertificateProfile, DnsIdentifier, MAX_CSR_IDENTIFIERS};
-use mrml_crypto::Sha256;
+use crate::certd_identifier_set_digest;
 use mrml_json::Value;
 
 pub const MAX_CERTD_CONFIG_BYTES: usize = 16 * 1024;
@@ -194,17 +194,6 @@ fn digest(value: &str) -> Result<[u8; 32], CertdConfigError> {
     } else {
         Ok(output)
     }
-}
-
-pub fn certd_identifier_set_digest(identifiers: &[Option<DnsIdentifier>]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"mrml-certd-approved-identifier-set-v1\0");
-    digest.update(&(identifiers.len() as u16).to_be_bytes());
-    for identifier in identifiers.iter().flatten() {
-        digest.update(&(identifier.as_str().len() as u16).to_be_bytes());
-        digest.update(identifier.as_str().as_bytes());
-    }
-    digest.finalize()
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, CertdConfigError> {

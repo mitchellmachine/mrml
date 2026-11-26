@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(peer_credentials_unix_socket)]
+#![cfg_attr(target_os = "linux", feature(peer_credentials_unix_socket))]
 
 mod acme_operation_journal;
 mod administration;
@@ -14,6 +14,7 @@ mod certd_channel;
 mod certd_channel_unix;
 #[cfg(target_os = "linux")]
 mod certd_config;
+mod certd_identifier_set;
 mod certd_jws_protocol;
 mod certd_key_protocol;
 mod certificate;
@@ -118,9 +119,10 @@ pub use certd_channel_unix::{
 };
 #[cfg(target_os = "linux")]
 pub use certd_config::{
-    certd_identifier_set_digest, parse_certd_config, CertdConfig, CertdConfigError,
+    parse_certd_config, CertdConfig, CertdConfigError,
     CertdDirectoryClass, MAX_CERTD_CONFIG_BYTES,
 };
+pub use certd_identifier_set::certd_identifier_set_digest;
 pub use certd_jws_protocol::{
     decode_certd_jws_request, encode_certd_jws_request, CertdJwsProtocolError,
     CERTD_JWS_REQUEST_HEADER_BYTES, MAX_CERTD_JWS_PAYLOAD_BYTES,
