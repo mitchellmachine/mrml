@@ -15,7 +15,7 @@ The previous oracle records remain unchanged. Historical linker and archive
 probes that intentionally name the August toolchain remain pinned to that
 observation point; this generation does not supersede their results.
 
-## Differential compiler corpus
+## Differential compiler corpus at oracle adoption
 
 The same MRML revision was checked against ORACLE-0003 and ORACLE-0004 on
 native Windows (`x86_64-pc-windows-gnullvm`) and Arch Linux under WSL2
@@ -31,8 +31,11 @@ replacement behavior, differential semantic execution, and the compiler
 driver. No regression was observed in the completed corpus. On Windows, both
 versions fail to build the driver dependency `org.mrml.library.runtime`:
 Windows `NativeFile` lacks `lock_exclusive` and `set_owner_mode` (`E0599`).
-No Windows driver tests ran, so driver parity on Windows is unverified.
- No compiler semantics were changed as part of this upgrade.
+No Windows driver tests ran during this baseline comparison. No compiler
+semantics were changed as part of the upgrade.
+
+For subsequent native Windows runtime and driver results, see the current
+[compiler checkpoint](../CHECKPOINT.md#hosted-windows-file-operations).
 
 From the repository root, with the matching dated host toolchain selected:
 

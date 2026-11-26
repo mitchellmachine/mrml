@@ -44,10 +44,11 @@ but they do not protect a guest from a compromised host. MRML does not claim
 production security, formal verification, or physical-hardware support without
 specific evidence.
 
-Native Windows and local Windows VMM testing are currently suspended. Wine may
-be used for Windows-target toolchain coverage, but a Wine result is not native
-Windows, WHP, Hyper-V, VBS, or physical-hardware evidence. The exact trust model
-and claim limits are in [Security](../SECURITY.md).
+Focused runtime and compiler checks have run on native Windows with gnullvm.
+See the [compiler checkpoint](../compiler/CHECKPOINT.md) for the exact results.
+Local Windows VMM testing remains suspended. Wine may provide Windows-target
+toolchain coverage, but it is not native Windows, WHP, Hyper-V, VBS, or
+physical-hardware evidence. See [Security](../SECURITY.md) for claim limits.
 
 ## Where to go next
 
@@ -60,6 +61,6 @@ and claim limits are in [Security](../SECURITY.md).
   services, accessibility, and isolation.
 
 The homepage is [mrml.ca](https://mrml.ca), and the source repository is
-[git.mrml.ca/mitchellrenouf/mrml](https://git.mrml.ca/mitchellrenouf/mrml).
+[github.com/mitchellmachine/mrml](https://github.com/mitchellmachine/mrml).
 Questions and comments are welcome at
 [mitchellrenouf@mrml.ca](mailto:mitchellrenouf@mrml.ca).

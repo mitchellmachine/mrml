@@ -11,7 +11,7 @@ reading every technical document in order.
 - [Contributing](CONTRIBUTING.md): contribution, security, accessibility, and
   evidence rules.
 - [Verify commits](VERIFY_COMMITS.md): verify repository history with the
-  project GPG public key.
+  project SSH signing key (Ed25519).
 
 ## Essential project documents
 

@@ -52,7 +52,8 @@ the named commit and current source.
   and Arch WSL2 passed 50 runtime tests and 18 driver tests after the Windows
   retained-file operations were implemented. The earlier driver blocker
   remains recorded in ORACLE-0004 as baseline evidence. Prior oracle records
-  and historical probes remain unchanged.
+  remain unchanged; the TLS probe edits document safety without changing
+  probe behavior.
 - Language direction: Rust 2024 is the edition floor. Contemporary and future
   Rust semantics are the target; obsolete editions, historical unsoundness,
   rustc internals, diagnostic wording, and unstable Rust ABI details are not
@@ -85,9 +86,12 @@ named edition can be adopted through a pinned, workspace-wide migration.
   primary group and protected ACL with three explicit grants. The normal
   read handle could not change the DACL. This is native hosted file-system
   evidence, not coverage for every Windows file system or account policy.
-- The workspace manifest check passed. The repository-wide assurance check
-  stopped at a pre-existing unsafe-policy omission for
-  `docs/compiler/probes/pinned_std_thread_tls_execution.rs`.
+- The workspace manifest check passed. Both Windows TLS probes now have
+  narrowly scoped unsafe-policy entries and returned 42 when built and run
+  with the pinned Windows oracle. The repository-wide `mrml assurance check`
+  now stops at existing unsafe-policy drift in
+  `packages/libraries/crypto/src/aes_gcm.rs` (nine unsafe blocks, eight
+  admitted). This is separate from the focused Windows test results.
 - Patent review: **NOT_TRIGGERED**; this uses existing operating-system
   locking and access-control primitives. See [review log](../patents/REVIEW_LOG.md).
 
