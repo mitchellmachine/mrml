@@ -479,10 +479,7 @@ fn development_key_files_enabled() -> bool {
 
 #[inline(never)]
 fn erase_secret(bytes: &mut [u8]) {
-    for byte in bytes {
-        unsafe { core::ptr::write_volatile(byte, 0) };
-    }
-    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    mrml_crypto::erase_secret_bytes(bytes);
 }
 
 fn load_development_secret(path: &str, maximum: usize) -> Result<Vector<u8>> {

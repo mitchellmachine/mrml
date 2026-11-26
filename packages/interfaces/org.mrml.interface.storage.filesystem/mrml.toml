@@ -38,3 +38,6 @@ source = "packages/interfaces/org.mrml.interface.storage.filesystem/src/lib.rs"
 
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]
+
+[[projected_build]]
+targets = ["UEFI"]

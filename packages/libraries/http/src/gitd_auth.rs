@@ -821,10 +821,7 @@ fn constant_time_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
 
 #[inline(never)]
 fn erase(bytes: &mut [u8]) {
-    for byte in bytes {
-        unsafe { core::ptr::write_volatile(byte, 0) };
-    }
-    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    mrml_crypto::erase_secret_bytes(bytes);
 }
 
 #[cfg(test)]

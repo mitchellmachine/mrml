@@ -237,10 +237,11 @@ pub(super) fn set_owner_mode(
         (group, group_bits),
         (world, other_bits),
     ] {
+        if bits == 0 {
+            continue;
+        }
         // SAFETY: the ACL is initialized and principal is a live Windows SID.
-        if bits != 0
-            && unsafe { add_ace(acl, ACL_REVISION, access_mask(bits), principal.0.as_ptr()) } == 0
-        {
+        if unsafe { add_ace(acl, ACL_REVISION, access_mask(bits), principal.0.as_ptr()) } == 0 {
             return None;
         }
     }

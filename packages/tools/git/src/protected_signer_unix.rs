@@ -50,10 +50,7 @@ impl ProtectedSignerCapability {
 
 impl Drop for ProtectedSignerCapability {
     fn drop(&mut self) {
-        for byte in &mut self.0 {
-            unsafe { core::ptr::write_volatile(byte, 0) };
-        }
-        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        mrml_crypto::erase_secret_bytes(&mut self.0);
     }
 }
 

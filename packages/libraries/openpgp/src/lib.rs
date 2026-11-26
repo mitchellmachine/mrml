@@ -1752,11 +1752,7 @@ fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
 /// This does not prove erasure of compiler-created copies, registers, caches,
 /// swap, crash dumps, or hardware state; isolated key custody remains required.
 fn wipe_sensitive(bytes: &mut [u8]) {
-    for byte in bytes {
-        // SAFETY: `byte` is a live, uniquely borrowed byte in `bytes`.
-        unsafe { core::ptr::write_volatile(byte, 0) };
-    }
-    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    mrml_crypto::erase_secret_bytes(bytes);
 }
 
 fn hex_value(byte: u8) -> Option<u8> {

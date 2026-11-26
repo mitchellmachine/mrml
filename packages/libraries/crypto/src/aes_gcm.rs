@@ -1,6 +1,7 @@
 //! AES-128-GCM authenticated encryption for TLS 1.3.
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+// SIMD is only available where the target ABI enables SSE2 (not the pinned soft-float native/UEFI targets).
 use core::sync::atomic::{AtomicU8, Ordering};
 
 fn xtime(x: u8) -> u8 {
@@ -96,7 +97,7 @@ fn aes128_encrypt_software(keys: &[u8; 176], input: &[u8; 16]) -> [u8; 16] {
     state
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 fn aes_instructions_available() -> bool {
     static AVAILABLE: AtomicU8 = AtomicU8::new(0);
     match AVAILABLE.load(Ordering::Relaxed) {
@@ -110,7 +111,7 @@ fn aes_instructions_available() -> bool {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[target_feature(enable = "aes")]
 unsafe fn aes128_encrypt_instructions(keys: &[u8; 176], input: &[u8; 16]) -> [u8; 16] {
     use core::arch::x86_64::{
@@ -134,7 +135,7 @@ unsafe fn aes128_encrypt_instructions(keys: &[u8; 176], input: &[u8; 16]) -> [u8
 }
 
 fn aes128_encrypt_expanded(keys: &[u8; 176], input: &[u8; 16]) -> [u8; 16] {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     if aes_instructions_available() {
         // SAFETY: CPUID above proves AES instruction support. The intrinsic
         // implementation performs only unaligned fixed-width loads/stores
@@ -199,7 +200,7 @@ fn ghash_mul_software(x: u128, y: u128) -> u128 {
     z
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 fn pclmulqdq_available() -> bool {
     static AVAILABLE: AtomicU8 = AtomicU8::new(0);
     match AVAILABLE.load(Ordering::Relaxed) {
@@ -213,7 +214,7 @@ fn pclmulqdq_available() -> bool {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[target_feature(enable = "pclmulqdq")]
 unsafe fn ghash_mul_instructions(x: u128, y: u128) -> u128 {
     use core::arch::x86_64::{
@@ -252,7 +253,7 @@ unsafe fn ghash_mul_instructions(x: u128, y: u128) -> u128 {
 }
 
 fn ghash_mul(x: u128, y: u128) -> u128 {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     if pclmulqdq_available() {
         // SAFETY: CPUID above proves PCLMULQDQ support. The helper builds
         // operands by value and uses complete fixed-width output arrays.
@@ -348,7 +349,7 @@ mod tests {
         out
     }
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     #[test]
     fn aes_instructions_match_constant_time_software_fallback() {
         if !aes_instructions_available() {
@@ -365,7 +366,7 @@ mod tests {
         assert_eq!(accelerated, hex("69c4e0d86a7b0430d8cdb78070b4c55a"));
     }
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     #[test]
     fn pclmulqdq_ghash_matches_constant_time_software_fallback() {
         if !pclmulqdq_available() {

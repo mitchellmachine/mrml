@@ -100,9 +100,7 @@ impl fmt::Debug for ScopedBearerCredential {
 
 impl Drop for ScopedBearerCredential {
     fn drop(&mut self) {
-        for byte in &mut self.authorization {
-            unsafe { core::ptr::write_volatile(byte, 0) };
-        }
+        mrml_crypto::erase_secret_bytes(&mut self.authorization);
     }
 }
 

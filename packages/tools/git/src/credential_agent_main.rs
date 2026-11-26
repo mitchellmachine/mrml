@@ -348,10 +348,7 @@ fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> Result<(), ()> {
 }
 
 fn erase(bytes: &mut [u8]) {
-    for byte in bytes {
-        unsafe { core::ptr::write_volatile(byte, 0) };
-    }
-    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    mrml_crypto::erase_secret_bytes(bytes);
 }
 
 impl TerminationSignals {

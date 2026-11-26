@@ -1,6 +1,5 @@
 use crate::{BinaryReader, BinaryWriter, ProtocolError};
 use core::fmt;
-use core::sync::atomic::{Ordering, compiler_fence};
 use mrml_crypto::{rsa_pkcs1_sha256_sign, rsa_pkcs1_sha256_verify};
 use mrml_runtime::Vector;
 
@@ -42,10 +41,7 @@ impl fmt::Debug for RsaPrivateKey {
 
 impl Drop for RsaPrivateKey {
     fn drop(&mut self) {
-        for byte in &mut self.private_exponent {
-            unsafe { core::ptr::write_volatile(byte, 0) };
-        }
-        compiler_fence(Ordering::SeqCst);
+        mrml_crypto::erase_secret_bytes(&mut self.private_exponent);
     }
 }
 
