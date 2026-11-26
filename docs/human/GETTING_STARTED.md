@@ -103,7 +103,9 @@ For the full host-compatible Windows suite, run
 `target\debug\mrml.exe test --all --target windows --release` in PowerShell
 (use `./target/debug/mrml test --all --target linux --release` on Linux).
 WHP, Hyper-V, and VBS probes require native Windows and their own host
-prerequisites. Wine does not provide Windows VMM coverage.
+prerequisites. Wine does not provide Windows VMM coverage. See the
+[full platform test record](../PLATFORM_TESTS.md) for the latest package results
+and how the fail-fast runs were continued.
 
 ## 6. Understand build outputs
 

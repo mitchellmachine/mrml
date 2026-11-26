@@ -19,11 +19,11 @@ and the [Engineering Constitution](ENGINEERING_CONSTITUTION.md).
 ## Windows testing
 
 Use **native Windows** with the pinned `x86_64-pc-windows-gnullvm` toolchain
-for Windows host tests. Local Windows testing, including VMM tests, is no
-longer suspended. For WHP, Hyper-V, or VBS results, use a native Windows host
-with the required features and record the backend that actually ran. The
-compiler, runtime, and Zstandard results above do not establish a new VMM
-result. Wine runs are Windows-target toolchain coverage only.
+for Windows host tests. Native Windows and local VMM testing are active. Use a
+native host with the required features for WHP, Hyper-V, and VBS checks. The
+[full platform test record](PLATFORM_TESTS.md) reports the native WHP and WSL2
+KVM results separately. Wine runs provide Windows-target toolchain coverage
+only.
 
 [Setup and test commands](human/GETTING_STARTED.md) ·
 [Compiler test evidence](compiler/CHECKPOINT.md) ·
