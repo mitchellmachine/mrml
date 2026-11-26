@@ -4516,22 +4516,34 @@ fn run_rust_action(
             host
         };
         let test_compile_target = default_rust_target(test_target)?.to_owned();
+        let test_mode = RustCompileMode {
+            target: test_target,
+            compile_target: &test_compile_target,
+            release,
+            test: true,
+            gpu_arch,
+            compile_env,
+            sanitizer,
+        };
         let mut test_built = BTreeSet::new();
-        compile_rust_component(
-            workspace,
-            component,
-            &RustCompileMode {
-                target: test_target,
-                compile_target: &test_compile_target,
-                release,
-                test: true,
-                gpu_arch,
-                compile_env,
-                sanitizer,
-            },
-            "default",
-            &mut test_built,
-        )?;
+        // Inline tests emit a test executable, not the library that separate
+        // host harnesses and binary tests may link via self_extern.
+        if target != test_target
+            || compile_target != test_compile_target
+            || feature_profile != "default"
+        {
+            compile_rust_component(
+                workspace,
+                component,
+                &RustCompileMode {
+                    test: false,
+                    ..test_mode
+                },
+                "default",
+                &mut test_built,
+            )?;
+        }
+        compile_rust_component(workspace, component, &test_mode, "default", &mut test_built)?;
         for test in &action.tests {
             run_declared_test(
                 workspace,

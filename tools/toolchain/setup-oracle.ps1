@@ -18,7 +18,15 @@ function Get-TomlArray([string]$Name) {
 }
 
 if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) { throw "rustup is required" }
-$Installed = @(rustup toolchain list)
+# rustup can otherwise auto-install the checkout's implicit Windows host
+# toolchain (often MSVC) before we select gnullvm explicitly.
+Push-Location -LiteralPath ([IO.Path]::GetTempPath())
+try {
+    $Installed = @(rustup toolchain list)
+    if ($LASTEXITCODE -ne 0) { throw "rustup toolchain list failed" }
+} finally {
+    Pop-Location
+}
 if (-not ($Installed | Where-Object { $_ -match "^$([regex]::Escape($WindowsToolchain))(\s|$)" })) {
     rustup toolchain install $WindowsToolchain --profile minimal --component rust-mingw
 }
@@ -43,7 +51,7 @@ $OracleFile = Get-ChildItem -LiteralPath (Join-Path $RepoRoot "docs\compiler\ora
     Sort-Object Name -Descending | Select-Object -First 1
 if (-not $OracleFile) { throw "No oracle record found" }
 $OracleText = Get-Content -Raw -LiteralPath $OracleFile.FullName
-$CommitMatch = [regex]::Match($OracleText, '(?m)^- full commit: `([0-9a-f]+)`$')
+$CommitMatch = [regex]::Match($OracleText, '(?m)^- full commit: `([0-9a-f]{40})`\r?$')
 if (-not $CommitMatch.Success) { throw "Could not read the full commit from $($OracleFile.Name)" }
 $ExpectedCommit = $CommitMatch.Groups[1].Value
 $ActualCommitLine = rustup run $WindowsToolchain rustc -Vv | Where-Object { $_ -like "commit-hash:*" }
