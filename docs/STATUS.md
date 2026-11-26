@@ -15,7 +15,7 @@
 | System-release edges | 3 |
 | Feature declarations | 97 |
 | Artifact declarations | 110 |
-| Exact build-input declarations | 196 |
+| Exact build-input declarations | 197 |
 | Declared integration tests | 11 |
 | Declared examples | 8 |
 | Declared benchmarks | 1 |

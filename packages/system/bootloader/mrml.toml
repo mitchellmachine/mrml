@@ -362,3 +362,11 @@ kind = "compile-env"
 line = 4806
 path = "packages/system/bootloader/src/main.rs"
 reason = "Read the declared compile-time setting mrml-kernel-min-version for embedded_minimum_version in org.mrml.system.bootloader; absence and defaults are handled explicitly at that site."
+
+[[build_input]]
+fingerprint = "fnv1a64:76bc24c0d500ef8c"
+id = "included-file.fat32-probe-sectors"
+kind = "included-file"
+line = 9
+path = "packages/system/bootloader/src/fat32_data_probe.rs"
+reason = "Embed the checked deterministic FAT32 sectors only for the opt-in guest read and restart probes; this image is not a production storage source."

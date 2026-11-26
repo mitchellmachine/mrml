@@ -26,8 +26,19 @@ stale route and file handles, and reopens and reads the same file from a fresh
 instance without rebooting. Run `tools/ci/test-native-fat32-restart-whp.ps1` or
 `bash tools/ci/test-native-fat32-restart-kvm.sh`. This is an opt-in, single-vCPU
 guest qualification with synthetic media and disposable signing keys. It is
-not physical-device evidence or a general production storage launcher. The
-next hardware gate is non-destructive testing on a named physical target.
+not physical-device evidence or a general production storage launcher.
+
+The next storage gate is a QEMU/OVMF guest boot with a separate disposable
+FAT32 disk attached to an emulated storage controller instead of serving
+sectors from the embedded image. The signed FAT32 service should read the same
+known bytes through the guest driver, restart under supervision without a guest
+reboot, reject stale route and file handles without submitting device I/O,
+then reopen the file and read the same bytes again. Keep the test disk
+read-only to the guest and run the check in CI once it is reproducible.
+QEMU is sufficient for this gate, not evidence of physical compatibility.
+Defer non-destructive testing on a named physical target until more of the
+native boot and storage stack is ready; no host physical disk is part of this
+gate.
 
 Bring-up evidence against `31087f19` plus the FAT32 dispatch regression:
 the real dispatch loop, on a synthetic block device with modeled syscalls,
