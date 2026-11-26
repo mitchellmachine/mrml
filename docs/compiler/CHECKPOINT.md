@@ -47,9 +47,12 @@ the named commit and current source.
 - Current build/oracle: `docs/compiler/oracles/ORACLE-0004.md`, rustc
   `1.102.0-nightly`, full commit `6c709eb428d472a3c3d93681c1ba37d44a1c27cf`,
   dated 2026-11-25 and distributed as `nightly-2026-11-26`. Arch WSL2
-  passed all 1,357 compiler tests. Native Windows passed 1,339 core tests;
-  the driver build hits the same runtime blocker as ORACLE-0003. Prior
-  oracle records and historical probes remain unchanged.
+  passed all 1,357 compiler tests. Native Windows passed 1,339 core tests
+  and, after the Linux-only file API guards, all 18 driver tests using
+  gnullvm without MSVC or the Windows SDK. The Windows runtime suite passed
+  all 48 tests after its PowerShell fixture was made explicitly UTF-8.
+  The earlier driver blocker remains recorded in ORACLE-0004 as baseline
+  evidence. Prior oracle records and historical probes remain unchanged.
 - Language direction: Rust 2024 is the edition floor. Contemporary and future
   Rust semantics are the target; obsolete editions, historical unsoundness,
   rustc internals, diagnostic wording, and unstable Rust ABI details are not

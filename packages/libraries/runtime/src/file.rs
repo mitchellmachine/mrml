@@ -922,6 +922,7 @@ impl File {
     }
 
     /// Holds an exclusive advisory lock until this file is dropped.
+    #[cfg(target_os = "linux")]
     pub fn lock_exclusive(&self) -> Result<(), FileError> {
         self.inner
             .lock_exclusive()
@@ -943,6 +944,7 @@ impl File {
     }
 
     /// Applies owner and permission metadata to this retained regular file.
+    #[cfg(target_os = "linux")]
     pub fn set_owner_mode(&self, uid: u32, gid: u32, mode: u32) -> Result<(), FileError> {
         self.inner
             .set_owner_mode(uid, gid, mode)

@@ -553,7 +553,7 @@ mod tests {
             command.args([
                 "-NoProfile",
                 "-Command",
-                "[Console]::Out.Write('out λ'); [Console]::Error.Write('err 星'); exit 7",
+                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [Console]::Out.Write('out λ'); [Console]::Error.Write('err 星'); exit 7",
             ]);
             command
         };
