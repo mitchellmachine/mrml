@@ -128,3 +128,275 @@ kind = "compile-env"
 line = 783
 path = "packages/tools/git/src/main.rs"
 reason = "Read the declared compile-time setting cargo-pkg-version for dispatch in org.mrml.tool.git; absence and defaults are handled explicitly at that site."
+
+[[build_input]]
+fingerprint = "fnv1a64:82386478fd9f83b9"
+id = "external-command.audit-oracle-inflate.python3.1"
+kind = "external-command"
+line = 146
+path = "packages/tools/git/src/compression_oracle_tests.rs"
+reason = "Use python3 as an independent compression or Git pack oracle in the oracle_inflate test."
+
+[[build_input]]
+fingerprint = "fnv1a64:8b33f406606b0c83"
+id = "external-command.audit-compression-external-zlib-and-git-oracle-matrix.python3.2"
+kind = "external-command"
+line = 186
+path = "packages/tools/git/src/compression_oracle_tests.rs"
+reason = "Use python3 as an independent compression or Git pack oracle in the compression_external_zlib_and_git_oracle_matrix test."
+
+[[build_input]]
+fingerprint = "fnv1a64:09a5590ce26a57f4"
+id = "external-command.audit-run-case.git.3"
+kind = "external-command"
+line = 314
+path = "packages/tools/git/src/compression_oracle_tests.rs"
+reason = "Use git as an independent compression or Git pack oracle in the run_case test."
+
+[[build_input]]
+fingerprint = "fnv1a64:09a55a0ce26a59a7"
+id = "external-command.audit-run-case.git.4"
+kind = "external-command"
+line = 324
+path = "packages/tools/git/src/compression_oracle_tests.rs"
+reason = "Use git as an independent compression or Git pack oracle in the run_case test."
+
+[[build_input]]
+fingerprint = "fnv1a64:3dc6901260543d68"
+id = "external-command.audit-git-generated-related-pack.git.5"
+kind = "external-command"
+line = 352
+path = "packages/tools/git/src/compression_oracle_tests.rs"
+reason = "Use git as an independent compression or Git pack oracle in the git_generated_related_pack test."
+
+[[build_input]]
+fingerprint = "fnv1a64:3dc6911260543f1b"
+id = "external-command.audit-git-generated-related-pack.git.6"
+kind = "external-command"
+line = 370
+path = "packages/tools/git/src/compression_oracle_tests.rs"
+reason = "Use git as an independent compression or Git pack oracle in the git_generated_related_pack test."
+
+[[build_input]]
+fingerprint = "fnv1a64:f7fd83dc7f542c39"
+id = "external-command.audit-process-kill-matrix-classifies-every-durable-receive-boundary.proc-self-exe.7"
+kind = "external-command"
+line = 750
+path = "packages/tools/git/src/receive_store.rs"
+reason = "Launch the selected test child in process_kill_matrix_classifies_every_durable_receive_boundary to verify cross-process recovery, identity or synchronization."
+
+[[build_input]]
+fingerprint = "fnv1a64:2f91ee5aeba37def"
+id = "external-command.audit-separate-processes-serialize-same-repository-and-isolate-distinct-repository.proc-self-exe.8"
+kind = "external-command"
+line = 1143
+path = "packages/tools/git/src/ref_state_file.rs"
+reason = "Launch the selected test child in separate_processes_serialize_same_repository_and_isolate_distinct_repository to verify cross-process recovery, identity or synchronization."
+
+[[build_input]]
+fingerprint = "fnv1a64:7aad0821a11f2d47"
+id = "external-command.audit-invoke.binary.9"
+kind = "external-command"
+line = 74
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the binary test executable in the invoke offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:0b665324983a0cf0"
+id = "external-command.audit-sign.binary.10"
+kind = "external-command"
+line = 86
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the binary test executable in the sign offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:0b03e57c057da2fa"
+id = "external-command.audit-sign.cosign.11"
+kind = "external-command"
+line = 88
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the cosign test executable in the sign offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:05efa266d7760a25"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.cosign.12"
+kind = "external-command"
+line = 200
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the cosign test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:05efa166d7760872"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.cosign.13"
+kind = "external-command"
+line = 208
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the cosign test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:656ff071ac3db461"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.rustc.14"
+kind = "external-command"
+line = 223
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the rustc test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:05efa066d77606bf"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.cosign.15"
+kind = "external-command"
+line = 319
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the cosign test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:1f26de455e08c457"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.binary.16"
+kind = "external-command"
+line = 347
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the binary test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:1f26dd455e08c2a4"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.binary.17"
+kind = "external-command"
+line = 350
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the binary test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:1f26e0455e08c7bd"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.binary.18"
+kind = "external-command"
+line = 392
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the binary test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:1f26df455e08c60a"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.binary.19"
+kind = "external-command"
+line = 423
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the binary test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:05ef9f66d776050c"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.cosign.20"
+kind = "external-command"
+line = 461
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the cosign test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:05ef9e66d7760359"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.cosign.21"
+kind = "external-command"
+line = 518
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the cosign test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:1f26da455e08bd8b"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.binary.22"
+kind = "external-command"
+line = 571
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the binary test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:1f26d9455e08bbd8"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.binary.23"
+kind = "external-command"
+line = 594
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the binary test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:1f26dc455e08c0f1"
+id = "external-command.audit-external-release-key-and-every-signed-file-gate-docker-load.binary.24"
+kind = "external-command"
+line = 610
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the binary test executable in the external_release_key_and_every_signed_file_gate_docker_load offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:ba9e880d8d6f950e"
+id = "external-command.audit-sha.sha256sum.25"
+kind = "external-command"
+line = 875
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the sha256sum test executable in the sha offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:04405d2423e0444f"
+id = "external-command.audit-legacy-wrapper-rejects-substituted-bundle-key.cosign.26"
+kind = "external-command"
+line = 896
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the cosign test executable in the legacy_wrapper_rejects_substituted_bundle_key offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:04405c2423e0429c"
+id = "external-command.audit-legacy-wrapper-rejects-substituted-bundle-key.cosign.27"
+kind = "external-command"
+line = 903
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the cosign test executable in the legacy_wrapper_rejects_substituted_bundle_key offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:04405f2423e047b5"
+id = "external-command.audit-legacy-wrapper-rejects-substituted-bundle-key.cosign.28"
+kind = "external-command"
+line = 965
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the cosign test executable in the legacy_wrapper_rejects_substituted_bundle_key offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:ac2c0d38b13e1677"
+id = "external-command.audit-legacy-wrapper-rejects-substituted-bundle-key.rustc.29"
+kind = "external-command"
+line = 983
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the rustc test executable in the legacy_wrapper_rejects_substituted_bundle_key offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:caf28ae827f82b80"
+id = "external-command.audit-legacy-wrapper-rejects-substituted-bundle-key.verifier.30"
+kind = "external-command"
+line = 1007
+path = "packages/tools/git/src/release_cli_tests.rs"
+reason = "Invoke the verifier test executable in the legacy_wrapper_rejects_substituted_bundle_key offline release fixture; no production release is activated."
+
+[[build_input]]
+fingerprint = "fnv1a64:e658e2c4dbe01602"
+id = "external-command.audit-authenticate.cosign.31"
+kind = "external-command"
+line = 234
+path = "packages/tools/git/src/release_main.rs"
+reason = "Use the validated external Cosign executable for offline owner-signature verification of bounded staged release metadata."
+
+[[build_input]]
+fingerprint = "fnv1a64:7df98eaa1bfe9fdc"
+id = "external-command.audit-inspect-image.docker.32"
+kind = "external-command"
+line = 415
+path = "packages/tools/git/src/release_main.rs"
+reason = "Query validated Docker executable for a loaded image identity, platform, service user, and entrypoint."
+
+[[build_input]]
+fingerprint = "fnv1a64:8bc398e254cc3ff5"
+id = "external-command.audit-preflight-image.docker.33"
+kind = "external-command"
+line = 437
+path = "packages/tools/git/src/release_main.rs"
+reason = "List images matching the exact proposed tag before loading an authenticated offline release."
+
+[[build_input]]
+fingerprint = "fnv1a64:47b099be6ca8c1c4"
+id = "external-command.audit-application-main.docker.34"
+kind = "external-command"
+line = 511
+path = "packages/tools/git/src/release_main.rs"
+reason = "Load only archives from the authenticated staged release after tag preflight, then verify resulting image identities."

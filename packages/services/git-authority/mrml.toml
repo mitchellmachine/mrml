@@ -70,3 +70,27 @@ targets = ["LINUX"]
 
 [test_policy]
 stack_bytes = 8388608
+
+[[build_input]]
+fingerprint = "fnv1a64:7fa2982241a4be52"
+id = "external-command.audit-catalog-lock-survives-builder-and-each-store.std-env-current-exe-unwrap.1"
+kind = "external-command"
+line = 475
+path = "packages/services/git-authority/src/generation.rs"
+reason = "Launch the selected test child in catalog_lock_survives_builder_and_each_store to verify cross-process recovery, identity or synchronization."
+
+[[build_input]]
+fingerprint = "fnv1a64:fb88064a29215a47"
+id = "external-command.audit-transition-process-kills-reopen-exact-signature-and-snapshot-boundaries.executable.2"
+kind = "external-command"
+line = 2528
+path = "packages/services/git-authority/src/main.rs"
+reason = "Launch the selected test child in transition_process_kills_reopen_exact_signature_and_snapshot_boundaries to verify cross-process recovery, identity or synchronization."
+
+[[build_input]]
+fingerprint = "fnv1a64:fb88054a29215894"
+id = "external-command.audit-transition-process-kills-reopen-exact-signature-and-snapshot-boundaries.executable.3"
+kind = "external-command"
+line = 2567
+path = "packages/services/git-authority/src/main.rs"
+reason = "Launch the selected test child in transition_process_kills_reopen_exact_signature_and_snapshot_boundaries to verify cross-process recovery, identity or synchronization."

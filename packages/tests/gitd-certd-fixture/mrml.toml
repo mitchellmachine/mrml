@@ -80,3 +80,11 @@ targets = ["LINUX"]
 
 [test_policy]
 stack_bytes = 8388608
+
+[[build_input]]
+fingerprint = "fnv1a64:4b5ec6702589e93e"
+id = "external-command.audit-run.command.1"
+kind = "external-command"
+line = 120
+path = "packages/tests/gitd-certd-fixture/src/measure_native.rs"
+reason = "Run the exact admitted native Git client path in the Linux measurement fixture and account for the child process."

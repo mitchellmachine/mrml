@@ -77,3 +77,19 @@ alias = "mrml_kernel"
 compile_name = "mrml-kernel"
 package = "org.mrml.system.kernel"
 scope = "compile"
+
+[[build_input]]
+fingerprint = "fnv1a64:40d5ee34e18a6ce6"
+id = "external-command.audit-external-zstd-1-5-7-decodes-rfc-profile-when-configured.oracle.1"
+kind = "external-command"
+line = 1052
+path = "packages/libraries/zstd/src/lib.rs"
+reason = "Use the configured Zstandard 1.5.7 oracle only in the external compressed-block interoperability test."
+
+[[build_input]]
+fingerprint = "fnv1a64:40d5ef34e18a6e99"
+id = "external-command.audit-external-zstd-1-5-7-decodes-rfc-profile-when-configured.oracle.2"
+kind = "external-command"
+line = 1088
+path = "packages/libraries/zstd/src/lib.rs"
+reason = "Use the configured Zstandard 1.5.7 oracle only in the external compressed-block interoperability test."

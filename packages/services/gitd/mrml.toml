@@ -105,3 +105,75 @@ targets = ["LINUX"]
 
 [test_policy]
 stack_bytes = 8388608
+
+[[build_input]]
+fingerprint = "fnv1a64:a8589f316d58b747"
+id = "external-command.audit-token-store-recovers-process-exit-at-every-replace-boundary.std-env-current-exe-unwrap.1"
+kind = "external-command"
+line = 1129
+path = "packages/services/gitd/src/auth_store.rs"
+reason = "Launch the selected test child in token_store_recovers_process_exit_at_every_replace_boundary to verify cross-process recovery, identity or synchronization."
+
+[[build_input]]
+fingerprint = "fnv1a64:9cc9600441d733bf"
+id = "external-command.audit-real-listener-two-ipv4-sources-repeated-invalid-credentials.openssl.2"
+kind = "external-command"
+line = 134
+path = "packages/services/gitd/src/tcp_listener_tests.rs"
+reason = "Invoke openssl only in the named local real_listener_two_ipv4_sources_repeated_invalid_credentials certificate or listener fixture."
+
+[[build_input]]
+fingerprint = "fnv1a64:8eb69582bd97558a"
+id = "external-command.audit-real-listener-two-ipv4-sources-repeated-invalid-credentials.python.3"
+kind = "external-command"
+line = 176
+path = "packages/services/gitd/src/tcp_listener_tests.rs"
+reason = "Invoke python only in the named local real_listener_two_ipv4_sources_repeated_invalid_credentials certificate or listener fixture."
+
+[[build_input]]
+fingerprint = "fnv1a64:d16ef099b04ee2a6"
+id = "included-file.audit-unchanged-generation-requires-current-identity-and-signer-revalidation.local-acme-root.pem.4"
+kind = "included-file"
+line = 27
+path = "packages/services/gitd/src/tls_refresh_tests.rs"
+reason = "Compile the checked-in local-acme-root.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:77d4420aca42bef7"
+id = "external-command.audit-unchanged-generation-requires-current-identity-and-signer-revalidation.std-env-current-exe-unwrap.5"
+kind = "external-command"
+line = 32
+path = "packages/services/gitd/src/tls_refresh_tests.rs"
+reason = "Launch the selected test child in unchanged_generation_requires_current_identity_and_signer_revalidation to verify cross-process recovery, identity or synchronization."
+
+[[build_input]]
+fingerprint = "fnv1a64:6b1e959face7b4c6"
+id = "included-file.audit-identity-payload-with-expiry.local-acme-leaf.pem.6"
+kind = "included-file"
+line = 303
+path = "packages/services/gitd/src/tls_refresh_tests.rs"
+reason = "Compile the checked-in local-acme-leaf.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:44711800409cd0be"
+id = "included-file.audit-identity-payload-with-expiry.local-acme-root.pem.7"
+kind = "included-file"
+line = 309
+path = "packages/services/gitd/src/tls_refresh_tests.rs"
+reason = "Compile the checked-in local-acme-root.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:642b2ef7b7ec3e6f"
+id = "external-command.audit-successful-unchanged-refresh-with-ephemeral-openssl-identity.openssl.8"
+kind = "external-command"
+line = 431
+path = "packages/services/gitd/src/tls_refresh_tests.rs"
+reason = "Invoke openssl only in the named local successful_unchanged_refresh_with_ephemeral_openssl_identity certificate or listener fixture."
+
+[[build_input]]
+fingerprint = "fnv1a64:07f25c92c0f31894"
+id = "external-command.audit-successful-unchanged-refresh-with-ephemeral-openssl-identity.std-env-current-exe-unwrap.9"
+kind = "external-command"
+line = 496
+path = "packages/services/gitd/src/tls_refresh_tests.rs"
+reason = "Launch the selected test child in successful_unchanged_refresh_with_ephemeral_openssl_identity to verify cross-process recovery, identity or synchronization."

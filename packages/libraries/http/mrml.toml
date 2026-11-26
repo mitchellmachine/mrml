@@ -49,3 +49,27 @@ alias = "mrml_zstd"
 compile_name = "mrml-zstd"
 package = "org.mrml.zstd"
 scope = "compile"
+
+[[build_input]]
+fingerprint = "fnv1a64:d11de88c7e456a1a"
+id = "external-command.audit-authenticated-loopback-when-configured.curl.1"
+kind = "external-command"
+line = 2806
+path = "packages/libraries/http/src/http2.rs"
+reason = "Use the configured curl oracle only in the authenticated_loopback_when_configured loopback protocol test."
+
+[[build_input]]
+fingerprint = "fnv1a64:5d7f4ea0904fa477"
+id = "external-command.audit-run.python.2"
+kind = "external-command"
+line = 188
+path = "packages/libraries/http/src/http2/oracle_tests.rs"
+reason = "Use the configured python oracle only in the run loopback protocol test."
+
+[[build_input]]
+fingerprint = "fnv1a64:d11de88c7e456a1a"
+id = "external-command.audit-authenticated-loopback-when-configured.curl.3"
+kind = "external-command"
+line = 1906
+path = "packages/libraries/http/src/http3.rs"
+reason = "Use the configured curl oracle only in the authenticated_loopback_when_configured loopback protocol test."

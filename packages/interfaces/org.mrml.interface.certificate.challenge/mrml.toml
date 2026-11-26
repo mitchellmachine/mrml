@@ -1,32 +1,40 @@
 [manifest]
 format = "mrml"
 version = 2
+
 [package]
 default = false
 id = "org.mrml.interface.certificate.challenge"
 kind = "interface"
 name = "mrml-interface-certificate-challenge-v1"
 profile = "interface"
+
 [interface]
 abi = "mrml-call-v1"
 fingerprint = "8535218a69138c26e5483551c4ae57e1e9c73c7ad394433a431159f9e93ea110"
 generation = 1
 schema = "1.mri"
+
 [[target]]
 arch = "x86_64"
 environment = "mrml"
+
 [[target]]
 arch = "x86_64"
 environment = "windows"
+
 [[target]]
 arch = "x86_64"
 environment = "linux"
+
 [[artifact]]
 kind = "lib"
 name = "mrml_interface_certificate_challenge_v1"
+
 [rust]
 crate_name = "mrml_interface_certificate_challenge_v1"
 crate_type = "lib"
 source = "packages/interfaces/org.mrml.interface.certificate.challenge/src/lib.rs"
+
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]

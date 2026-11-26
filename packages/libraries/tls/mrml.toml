@@ -37,3 +37,19 @@ alias = "mrml_runtime"
 compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"
 scope = "compile"
+
+[[build_input]]
+fingerprint = "fnv1a64:1bac61e7b0b70440"
+id = "external-command.audit-server-pss-signature-verifies-with-openssl-when-configured.openssl.1"
+kind = "external-command"
+line = 1250
+path = "packages/libraries/tls/src/server.rs"
+reason = "Use the configured OpenSSL tool for the RSA-PSS interoperability test at this exact command site."
+
+[[build_input]]
+fingerprint = "fnv1a64:1bac62e7b0b705f3"
+id = "external-command.audit-server-pss-signature-verifies-with-openssl-when-configured.openssl.2"
+kind = "external-command"
+line = 1258
+path = "packages/libraries/tls/src/server.rs"
+reason = "Use the configured OpenSSL tool for the RSA-PSS interoperability test at this exact command site."

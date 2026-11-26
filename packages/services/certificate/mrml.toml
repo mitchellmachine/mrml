@@ -167,3 +167,107 @@ targets = ["WINDOWS", "LINUX"]
 
 [test_policy]
 stack_bytes = 8388608
+
+[[build_input]]
+fingerprint = "fnv1a64:1eecc0895c00ab37"
+id = "external-command.audit-real-sigterm-is-observed-without-waiting-for-a-connection.std-env-current-exe-unwrap.1"
+kind = "external-command"
+line = 88
+path = "packages/services/certificate/src/certd_hosted_lifecycle.rs"
+reason = "Launch the selected test child in real_sigterm_is_observed_without_waiting_for_a_connection to verify cross-process recovery, identity or synchronization."
+
+[[build_input]]
+fingerprint = "fnv1a64:25bfe67cf94d6999"
+id = "external-command.audit-real-sigterm-is-observed-without-waiting-for-a-connection.bin-kill.2"
+kind = "external-command"
+line = 109
+path = "packages/services/certificate/src/certd_hosted_lifecycle.rs"
+reason = "Send SIGTERM to this test's own Linux child process to exercise graceful certificate service shutdown."
+
+[[build_input]]
+fingerprint = "fnv1a64:4dc8e0dfc65d4343"
+id = "included-file.audit-module.local-acme-root.pem.3"
+kind = "included-file"
+line = 35
+path = "packages/services/certificate/src/certd_trust_roots_tests.rs"
+reason = "Compile the checked-in local-acme-root.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:bc6b59916afbda9a"
+id = "included-file.audit-independently-generated-chain-binds-key-names-purpose-and-root.pkix-leaf.pem.4"
+kind = "included-file"
+line = 1016
+path = "packages/services/certificate/src/certificate.rs"
+reason = "Compile the checked-in pkix-leaf.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:13640e09a36f2a72"
+id = "included-file.audit-independently-generated-chain-binds-key-names-purpose-and-root.pkix-root.pem.5"
+kind = "included-file"
+line = 1018
+path = "packages/services/certificate/src/certificate.rs"
+reason = "Compile the checked-in pkix-root.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:5e30d24db0aeb12e"
+id = "included-file.audit-independently-generated-chain-binds-exact-dns-and-ip-sans.ip-leaf.pem.6"
+kind = "included-file"
+line = 1084
+path = "packages/services/certificate/src/certificate.rs"
+reason = "Compile the checked-in ip-leaf.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:c8f11509b18f25b6"
+id = "included-file.audit-independently-generated-chain-binds-exact-dns-and-ip-sans.ip-root.pem.7"
+kind = "included-file"
+line = 1086
+path = "packages/services/certificate/src/certificate.rs"
+reason = "Compile the checked-in ip-root.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:b5b979a65853ccd6"
+id = "included-file.audit-local-authority-issuance-retrieves-and-validates-exact-chain.local-acme-leaf.pem.8"
+kind = "included-file"
+line = 1162
+path = "packages/services/certificate/src/certificate.rs"
+reason = "Compile the checked-in local-acme-leaf.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:dbd54f82a95fe2b2"
+id = "included-file.audit-local-authority-issuance-retrieves-and-validates-exact-chain.local-acme-leaf.pem.9"
+kind = "included-file"
+line = 1262
+path = "packages/services/certificate/src/certificate.rs"
+reason = "Compile the checked-in local-acme-leaf.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:fbc28e4e01fbc2da"
+id = "included-file.audit-local-authority-issuance-retrieves-and-validates-exact-chain.local-acme-root.pem.10"
+kind = "included-file"
+line = 1296
+path = "packages/services/certificate/src/certificate.rs"
+reason = "Compile the checked-in local-acme-root.pem public certificate into the certificate validation fixture, not the runtime trust store."
+
+[[build_input]]
+fingerprint = "fnv1a64:60a426f6509e8689"
+id = "external-command.audit-sign-tls13-certificate-verify.openssl.11"
+kind = "external-command"
+line = 282
+path = "packages/services/certificate/src/challenge_tls_alpn_hosted.rs"
+reason = "Use OpenSSL only in the local TLS-ALPN integration test for sign_tls13_certificate_verify, with temporary test keys."
+
+[[build_input]]
+fingerprint = "fnv1a64:f5f39edd71a06566"
+id = "external-command.audit-tcp-443-role-completes-exact-acme-tls-1-loopback.openssl.12"
+kind = "external-command"
+line = 364
+path = "packages/services/certificate/src/challenge_tls_alpn_hosted.rs"
+reason = "Use OpenSSL only in the local TLS-ALPN integration test for tcp_443_role_completes_exact_acme_tls_1_loopback, with temporary test keys."
+
+[[build_input]]
+fingerprint = "fnv1a64:f5f39fdd71a06719"
+id = "external-command.audit-tcp-443-role-completes-exact-acme-tls-1-loopback.openssl.13"
+kind = "external-command"
+line = 390
+path = "packages/services/certificate/src/challenge_tls_alpn_hosted.rs"
+reason = "Use OpenSSL only in the local TLS-ALPN integration test for tcp_443_role_completes_exact_acme_tls_1_loopback, with temporary test keys."

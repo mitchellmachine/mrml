@@ -58,3 +58,115 @@ targets = ["MRML_NATIVE", "UEFI", "WINDOWS", "LINUX"]
 
 [[projected_build]]
 targets = ["UEFI"]
+
+[[build_input]]
+fingerprint = "fnv1a64:f1ea58047f6d9ede"
+id = "included-file.audit-nist-acvp-fips204-siggen-case-41.nist-acvp-fips204-siggen-41-secret.hex.1"
+kind = "included-file"
+line = 1189
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-siggen-41-secret.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:b590f2b512f7ebd9"
+id = "included-file.audit-nist-acvp-fips204-siggen-case-41.nist-acvp-fips204-siggen-41-context.hex.2"
+kind = "included-file"
+line = 1192
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-siggen-41-context.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:6b24153e90bddb19"
+id = "included-file.audit-nist-acvp-fips204-siggen-case-41.nist-acvp-fips204-siggen-41-message.hex.3"
+kind = "included-file"
+line = 1195
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-siggen-41-message.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:f84aa7e41bf795b2"
+id = "included-file.audit-nist-acvp-fips204-siggen-case-41.nist-acvp-fips204-siggen-41-signature.hex.4"
+kind = "included-file"
+line = 1198
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-siggen-41-signature.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:993d61c61ac4f3c5"
+id = "included-file.audit-nist-acvp-fips204-sigver-cases.nist-acvp-fips204-sigver-33-public.hex.5"
+kind = "included-file"
+line = 1211
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-sigver-33-public.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:686499e08f5942a1"
+id = "included-file.audit-nist-acvp-fips204-sigver-cases.nist-acvp-fips204-sigver-33-context.hex.6"
+kind = "included-file"
+line = 1214
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-sigver-33-context.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:d283b4a67002c001"
+id = "included-file.audit-nist-acvp-fips204-sigver-cases.nist-acvp-fips204-sigver-33-message.hex.7"
+kind = "included-file"
+line = 1217
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-sigver-33-message.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:9d9c24c14008248a"
+id = "included-file.audit-nist-acvp-fips204-sigver-cases.nist-acvp-fips204-sigver-33-signature.hex.8"
+kind = "included-file"
+line = 1220
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-sigver-33-signature.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:b82d726202fcfcb7"
+id = "included-file.audit-nist-acvp-fips204-sigver-cases.nist-acvp-fips204-sigver-31-public.hex.9"
+kind = "included-file"
+line = 1233
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-sigver-31-public.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:0ec83fa9f8363f73"
+id = "included-file.audit-nist-acvp-fips204-sigver-cases.nist-acvp-fips204-sigver-31-context.hex.10"
+kind = "included-file"
+line = 1236
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-sigver-31-context.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:519d6ae96092655b"
+id = "included-file.audit-nist-acvp-fips204-sigver-cases.nist-acvp-fips204-sigver-31-message.hex.11"
+kind = "included-file"
+line = 1239
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-sigver-31-message.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:f409385da0a2c010"
+id = "included-file.audit-nist-acvp-fips204-sigver-cases.nist-acvp-fips204-sigver-31-signature.hex.12"
+kind = "included-file"
+line = 1242
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in nist-acvp-fips204-sigver-31-signature.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:7e5c18f2dd907447"
+id = "included-file.audit-verifies-independently-generated-openssl-3-6-4-vector.openssl-3.6.4-mldsa65-public.hex.13"
+kind = "included-file"
+line = 1261
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in openssl-3.6.4-mldsa65-public.hex reference bytes only into the named ML-DSA conformance test."
+
+[[build_input]]
+fingerprint = "fnv1a64:805e19f0740bfb00"
+id = "included-file.audit-verifies-independently-generated-openssl-3-6-4-vector.openssl-3.6.4-mldsa65-signature.hex.14"
+kind = "included-file"
+line = 1264
+path = "packages/libraries/crypto/src/ml_dsa.rs"
+reason = "Compile the checked-in openssl-3.6.4-mldsa65-signature.hex reference bytes only into the named ML-DSA conformance test."
