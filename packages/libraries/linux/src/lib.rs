@@ -1082,29 +1082,25 @@ impl NativeFile {
     }
 
     pub fn is_regular(&self) -> bool {
-        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
-        (unsafe { fstat(self.0, status.as_mut_ptr()) }) == 0
-            && (unsafe { status.assume_init() }.mode & 0o170000) == 0o100000
+        self.metadata()
+            .is_some_and(|status| status.mode & 0o170000 == 0o100000)
     }
 
     pub fn has_owner_only_permissions(&self) -> bool {
-        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
-        (unsafe { fstat(self.0, status.as_mut_ptr()) }) == 0
-            && (unsafe { status.assume_init() }.mode & 0o777) == 0o600
+        self.metadata()
+            .is_some_and(|status| status.mode & 0o777 == 0o600)
     }
 
     pub fn has_private_read_permissions(&self) -> bool {
-        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
-        if (unsafe { fstat(self.0, status.as_mut_ptr()) }) != 0 {
-            return false;
-        }
-        matches!(unsafe { status.assume_init() }.mode & 0o777, 0o400 | 0o600)
+        self.metadata()
+            .is_some_and(|status| matches!(status.mode & 0o777, 0o400 | 0o600))
     }
 
     pub fn is_owned_by_effective_user(&self) -> bool {
-        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
-        (unsafe { fstat(self.0, status.as_mut_ptr()) }) == 0
-            && unsafe { status.assume_init() }.uid == unsafe { geteuid() }
+        self.metadata().is_some_and(|status| {
+            // SAFETY: geteuid takes no pointers and returns the caller's effective UID.
+            status.uid == unsafe { geteuid() }
+        })
     }
 
     pub fn open_write(path: &CStr) -> Option<Self> {
@@ -1297,7 +1293,31 @@ struct OpenHow {
 }
 
 #[cfg(unix)]
+fn openat2_descriptor(parent: c_int, path: &CStr, how: &OpenHow) -> Option<c_int> {
+    const SYS_OPENAT2_X86_64: c_long = 437;
+    // SAFETY: the NUL-terminated path and fixed-layout OpenHow remain live
+    // and readable during the call. Callers retain the parent directory and
+    // give the returned descriptor an owner before exposing it.
+    let result = unsafe {
+        syscall(
+            SYS_OPENAT2_X86_64,
+            parent,
+            path.as_ptr(),
+            how as *const OpenHow,
+            core::mem::size_of::<OpenHow>(),
+        )
+    };
+    let descriptor = c_int::try_from(result).ok()?;
+    (descriptor >= 0).then_some(descriptor)
+}
+
+#[cfg(unix)]
 impl NativeDirectory {
+    fn descriptor(&self) -> c_int {
+        // SAFETY: this owner keeps the libc directory stream open for the call.
+        unsafe { dirfd(self.0) }
+    }
+
     pub fn open(path: &CStr) -> Option<Self> {
         NonNull::new(unsafe { opendir(path.as_ptr()) }).map(|directory| Self(directory.as_ptr()))
     }
@@ -1311,7 +1331,7 @@ impl NativeDirectory {
     }
 
     pub fn set_owner_mode(&self, owner: u32, group: u32, mode: u32) -> bool {
-        let descriptor = unsafe { dirfd(self.0) };
+        let descriptor = self.descriptor();
         descriptor >= 0
             && mode & !0o7777 == 0
             && unsafe { fchown(descriptor, owner, group) } == 0
@@ -1320,7 +1340,6 @@ impl NativeDirectory {
 
     /// Opens a configured absolute root without following any symlink component.
     pub fn open_root(path: &CStr) -> Option<Self> {
-        const SYS_OPENAT2_X86_64: c_long = 437;
         const AT_FDCWD: c_int = -100;
         const O_RDONLY: u64 = 0;
         const O_DIRECTORY: u64 = 0o200000;
@@ -1336,30 +1355,16 @@ impl NativeDirectory {
             mode: 0,
             resolve: RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS,
         };
-        // SAFETY: the immutable C string and ABI-layout `OpenHow` remain live
-        // for the syscall. `from_descriptor` owns or closes the result.
-        let descriptor = unsafe {
-            syscall(
-                SYS_OPENAT2_X86_64,
-                AT_FDCWD,
-                path.as_ptr(),
-                &how as *const OpenHow,
-                core::mem::size_of::<OpenHow>(),
-            )
-        };
-        if descriptor < 0 || descriptor > c_int::MAX as c_long {
-            return None;
-        }
-        Self::from_descriptor(descriptor as c_int)
+        let descriptor = openat2_descriptor(AT_FDCWD, path, &how)?;
+        Self::from_descriptor(descriptor)
     }
 
     /// Resolves a relative directory beneath this retained descriptor.
     ///
-    /// This is the only `openat2` syscall boundary. The fixed flags reject
+    /// The fixed resolution flags reject
     /// absolute paths, `..`, symlinks, magic links, and mount crossings before
     /// a descriptor can escape the caller's retained root.
     pub fn open_beneath(&self, path: &CStr) -> Option<Self> {
-        const SYS_OPENAT2_X86_64: c_long = 437;
         const O_RDONLY: u64 = 0;
         const O_DIRECTORY: u64 = 0o200000;
         const O_NOFOLLOW: u64 = 0x2_0000;
@@ -1379,32 +1384,17 @@ impl NativeDirectory {
                 | RESOLVE_NO_SYMLINKS
                 | RESOLVE_BENEATH,
         };
-        let parent = unsafe { dirfd(self.0) };
+        let parent = self.descriptor();
         if parent < 0 {
             return None;
         }
-        // SAFETY: `path` and `how` remain valid for the duration of the
-        // syscall, `how` has the kernel ABI layout, and no returned descriptor
-        // is exposed until fdopendir assumes ownership of it.
-        let descriptor = unsafe {
-            syscall(
-                SYS_OPENAT2_X86_64,
-                parent,
-                path.as_ptr(),
-                &how as *const OpenHow,
-                core::mem::size_of::<OpenHow>(),
-            )
-        };
-        if descriptor < 0 || descriptor > c_int::MAX as c_long {
-            return None;
-        }
-        Self::from_descriptor(descriptor as c_int)
+        let descriptor = openat2_descriptor(parent, path, &how)?;
+        Self::from_descriptor(descriptor)
     }
 
     /// Opens an existing regular file beneath this retained directory without
     /// following links or crossing into a descendant mount.
     pub fn open_regular_beneath(&self, path: &CStr) -> Option<NativeFile> {
-        const SYS_OPENAT2_X86_64: c_long = 437;
         const O_RDONLY: u64 = 0;
         const O_NOFOLLOW: u64 = 0x2_0000;
         const O_CLOEXEC: u64 = 0x8_0000;
@@ -1423,30 +1413,16 @@ impl NativeDirectory {
                 | RESOLVE_NO_SYMLINKS
                 | RESOLVE_BENEATH,
         };
-        let parent = unsafe { dirfd(self.0) };
+        let parent = self.descriptor();
         if parent < 0 {
             return None;
         }
-        // SAFETY: identical to `open_beneath`; the returned descriptor is
-        // accepted only after descriptor-based regular-file validation.
-        let descriptor = unsafe {
-            syscall(
-                SYS_OPENAT2_X86_64,
-                parent,
-                path.as_ptr(),
-                &how as *const OpenHow,
-                core::mem::size_of::<OpenHow>(),
-            )
-        };
-        if descriptor < 0 || descriptor > c_int::MAX as c_long {
-            return None;
-        }
-        let file = NativeFile(descriptor as c_int);
+        let descriptor = openat2_descriptor(parent, path, &how)?;
+        let file = NativeFile(descriptor);
         file.is_regular().then_some(file)
     }
 
     pub fn create_file(&self, name: &CStr, mode: u32) -> Option<NativeFile> {
-        const SYS_OPENAT2_X86_64: c_long = 437;
         const O_WRONLY: u64 = 1;
         const O_CREAT: u64 = 64;
         const O_EXCL: u64 = 128;
@@ -1467,25 +1443,12 @@ impl NativeDirectory {
                 | RESOLVE_NO_SYMLINKS
                 | RESOLVE_BENEATH,
         };
-        let parent = unsafe { dirfd(self.0) };
+        let parent = self.descriptor();
         if parent < 0 {
             return None;
         }
-        // SAFETY: `name` is one retained-directory child, `how` has the Linux
-        // ABI layout, and `NativeFile` assumes ownership only on success.
-        let descriptor = unsafe {
-            syscall(
-                SYS_OPENAT2_X86_64,
-                parent,
-                name.as_ptr(),
-                &how as *const OpenHow,
-                core::mem::size_of::<OpenHow>(),
-            )
-        };
-        if descriptor < 0 || descriptor > c_int::MAX as c_long {
-            return None;
-        }
-        let file = NativeFile(descriptor as c_int);
+        let descriptor = openat2_descriptor(parent, name, &how)?;
+        let file = NativeFile(descriptor);
         file.is_regular().then_some(file)
     }
 
@@ -1493,7 +1456,7 @@ impl NativeDirectory {
         if !safe_child_name(name) || mode & !0o777 != 0 {
             return None;
         }
-        let parent = unsafe { dirfd(self.0) };
+        let parent = self.descriptor();
         if parent < 0 || unsafe { mkdirat(parent, name.as_ptr(), mode) } != 0 {
             return None;
         }
@@ -1504,7 +1467,7 @@ impl NativeDirectory {
         if !safe_child_name(existing) || !safe_child_name(replacement) {
             return false;
         }
-        let directory = unsafe { dirfd(self.0) };
+        let directory = self.descriptor();
         // SAFETY: both names are single NUL-terminated children and both dirfd
         // arguments refer to the same retained directory.
         directory >= 0
@@ -1522,7 +1485,7 @@ impl NativeDirectory {
         if !safe_child_name(existing) || !safe_child_name(new_name) {
             return false;
         }
-        let directory = unsafe { dirfd(self.0) };
+        let directory = self.descriptor();
         // SAFETY: both paths are validated single children of the same live
         // retained directory. `linkat` fails when `new_name` already exists.
         directory >= 0
@@ -1541,8 +1504,8 @@ impl NativeDirectory {
         if !safe_child_name(existing) || !safe_child_name(replacement) {
             return false;
         }
-        let source_directory = unsafe { dirfd(self.0) };
-        let destination_directory = unsafe { dirfd(destination.0) };
+        let source_directory = self.descriptor();
+        let destination_directory = destination.descriptor();
         const SYS_RENAMEAT2_X86_64: c_long = 316;
         const RENAME_NOREPLACE: u32 = 1;
         // SAFETY: both names are single NUL-terminated children, both retained
@@ -1566,7 +1529,7 @@ impl NativeDirectory {
         if !safe_child_name(name) {
             return false;
         }
-        let directory = unsafe { dirfd(self.0) };
+        let directory = self.descriptor();
         // SAFETY: `name` is a single NUL-terminated child and `directory` is
         // live for the duration of unlinkat.
         directory >= 0 && unsafe { unlinkat(directory, name.as_ptr(), 0) } == 0
@@ -1577,7 +1540,7 @@ impl NativeDirectory {
         if !safe_child_name(name) {
             return false;
         }
-        let directory = unsafe { dirfd(self.0) };
+        let directory = self.descriptor();
         // SAFETY: `name` is one validated child and `AT_REMOVEDIR` restricts
         // removal to an empty directory beneath the retained parent.
         directory >= 0 && unsafe { unlinkat(directory, name.as_ptr(), AT_REMOVEDIR) } == 0
@@ -1595,7 +1558,7 @@ impl NativeDirectory {
     }
 
     pub fn metadata(&self) -> Option<NativeFileMetadata> {
-        let descriptor = unsafe { dirfd(self.0) };
+        let descriptor = self.descriptor();
         (descriptor >= 0).then(|| metadata_for_descriptor(descriptor))?
     }
 
@@ -1611,13 +1574,13 @@ impl NativeDirectory {
     }
 
     pub fn sync(&self) -> bool {
-        let descriptor = unsafe { dirfd(self.0) };
+        let descriptor = self.descriptor();
         descriptor >= 0 && (unsafe { fsync(descriptor) }) == 0
     }
 
     pub fn lock_exclusive(&self) -> bool {
         const LOCK_EXCLUSIVE: c_int = 2;
-        let descriptor = unsafe { dirfd(self.0) };
+        let descriptor = self.descriptor();
         descriptor >= 0 && (unsafe { flock(descriptor, LOCK_EXCLUSIVE) }) == 0
     }
 }
@@ -1625,9 +1588,12 @@ impl NativeDirectory {
 #[cfg(unix)]
 fn metadata_for_descriptor(descriptor: c_int) -> Option<NativeFileMetadata> {
     let mut status = core::mem::MaybeUninit::<Stat>::uninit();
+    // SAFETY: the caller retains the descriptor, and status has the Linux
+    // x86-64 libc stat layout and writable storage for the duration of fstat.
     if unsafe { fstat(descriptor, status.as_mut_ptr()) } != 0 {
         return None;
     }
+    // SAFETY: successful fstat initialized the stat structure.
     let status = unsafe { status.assume_init() };
     Some(NativeFileMetadata {
         inode: status.inode,
