@@ -1357,7 +1357,7 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
             .unwrap_or_else(|_| halt());
     let descriptors = capability_descriptors(
         (root_capability, Rights::CONTROL),
-        (setting_capability, Rights::READ.union(Rights::WRITE)),
+        (setting_capability, Rights::WRITE),
     );
     unsafe {
         send_buffer(

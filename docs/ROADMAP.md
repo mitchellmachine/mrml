@@ -55,6 +55,19 @@ the host-side policy fixture with `Unauthorized(PermissionDenied)`. Do not
 treat these as one diagnosed cause or grant additional rights to the fixture
 just to advance the probe.
 
+The signed restart-request probe now **PASSES** on WHP and nested KVM.
+The saved guest instruction mapped to the fixture's deliberate fail-stop
+after configuration request 2 was rejected at revision 0. The sender had
+delegated `READ | WRITE` for an update that requires an exact `WRITE` leaf.
+It now delegates write-only for the commit and retains the separate read-only
+transfer for policy lookup. The WHP host policy fixture now also uses distinct
+read-only and write-only capabilities, matching KVM. Production authorization
+and expected trace markers were not relaxed. Ordinary KVM service mode
+advances beyond configuration but still stops before the final receiver
+cleanup marker. The passing restart-request probe establishes a fresh
+authorized service generation; it does not execute the actual FAT32 provider
+or satisfy the live storage recovery gate.
+
 Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and generation-2
 `storage.filesystem` schemas define bounded opaque-handle operations for isolated

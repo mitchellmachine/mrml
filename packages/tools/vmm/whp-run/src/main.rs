@@ -632,28 +632,34 @@ fn configured_total_service_policy(
         ],
     )
     .map_err(|error| anyhow!("WHP policy configuration failed: {:?}", error))?;
-    let mut capabilities = CapabilitySpace::<3>::new();
+    let mut capabilities = CapabilitySpace::<5>::new();
     let root = capabilities
         .insert(root_object, Rights::CONTROL)
         .map_err(|error| anyhow!("WHP policy root capability failed: {:?}", error))?;
-    let component_access = capabilities
-        .insert(component_object, Rights::READ.union(Rights::WRITE))
-        .map_err(|error| anyhow!("WHP component capability failed: {:?}", error))?;
-    let system_access = capabilities
-        .insert(system_object, Rights::READ.union(Rights::WRITE))
-        .map_err(|error| anyhow!("WHP system capability failed: {:?}", error))?;
+    let component_write = capabilities
+        .insert(component_object, Rights::WRITE)
+        .map_err(|error| anyhow!("WHP component write capability failed: {:?}", error))?;
+    let component_read = capabilities
+        .insert(component_object, Rights::READ)
+        .map_err(|error| anyhow!("WHP component read capability failed: {:?}", error))?;
+    let system_write = capabilities
+        .insert(system_object, Rights::WRITE)
+        .map_err(|error| anyhow!("WHP system write capability failed: {:?}", error))?;
+    let system_read = capabilities
+        .insert(system_object, Rights::READ)
+        .map_err(|error| anyhow!("WHP system read capability failed: {:?}", error))?;
     let mut transaction = ConfigTransaction::<2>::new(0);
     component
         .stage(
             &mut transaction,
-            component_access,
+            component_write,
             OwnerIsolationSelection::Native,
         )
         .map_err(|error| anyhow!("WHP component policy staging failed: {:?}", error))?;
     system
         .stage(
             &mut transaction,
-            system_access,
+            system_write,
             OwnerIsolationSelection::Balanced,
         )
         .map_err(|error| anyhow!("WHP system policy staging failed: {:?}", error))?;
@@ -664,9 +670,9 @@ fn configured_total_service_policy(
         &configuration,
         &capabilities,
         system,
-        system_access,
+        system_read,
         component,
-        component_access,
+        component_read,
     )
     .map_err(|error| anyhow!("WHP policy load failed: {:?}", error))?;
     let recovery = handoff
