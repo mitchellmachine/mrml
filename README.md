@@ -41,15 +41,12 @@ local development paths.
 ## Homepage, source, and contact
 
 - Homepage: [mrml.ca](https://mrml.ca)
-- Source: [git.mrml.ca/mitchellrenouf/mrml](https://git.mrml.ca/mitchellrenouf/mrml)
-- Releases: [MRML releases](https://git.mrml.ca/mitchellrenouf/mrml/releases)
-- Contact and Git-server account requests:
+- Source: [github.com/mitchellmachine/mrml](https://github.com/mitchellmachine/mrml)
+- Releases: [MRML releases](https://github.com/mitchellmachine/mrml/releases)
+- Contact:
   [mitchellrenouf@mrml.ca](mailto:mitchellrenouf@mrml.ca)
 
-MRML was originally hosted at `github.com/mitchellrenouf/mrml`. The owner moved
-the project because he no longer wanted Microsoft to host it and wanted the
-source outside the United States. The former GitHub account has since been
-deleted.
+MRML is now hosted on GitHub at [mitchellmachine/mrml](https://github.com/mitchellmachine/mrml).
 
 ## Important limitations
 
