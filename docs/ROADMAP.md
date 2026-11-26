@@ -82,6 +82,18 @@ hosted runtime test. The signed guest still needs a separate block route with
 capability release and reply delivery, plus the real FAT32 caller and its
 supervised read-restart-read sequence.
 
+The opt-in `fat32_ready_probe` launches the actual signed
+`mrml-fat32-service.efi` at CPL3. The kernel copies the one-use read-only
+launch record, verifies its capability was released, and accepts a real
+capability-free v3 Ready message only from the launch-bound task and endpoint,
+with all six identity/generation fields matching. The fixture runs with
+`tools/ci/test-native-fat32-ready-kvm.sh` on Arch WSL2 nested KVM and
+`tools/ci/test-native-fat32-ready-whp.ps1` on Windows WHP. Its first attempts
+hit the guarded stack: the pinned PE prologue polls a 0x35378-byte frame, so
+this mode uses a bounded 64-page stack with the guard retained. This proof
+stops at Ready; no storage RPC, mounted volume, supervised restart, or
+physical hardware is qualified by it.
+
 Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and generation-2
 `storage.filesystem` schemas define bounded opaque-handle operations for isolated

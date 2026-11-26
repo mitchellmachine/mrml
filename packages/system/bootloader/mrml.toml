@@ -77,6 +77,9 @@ name = "production-policy"
 name = "service-preemption-probe"
 
 [[feature]]
+name = "fat32-ready-probe"
+
+[[feature]]
 name = "service-probe"
 
 [[feature]]
@@ -146,6 +149,18 @@ package = "org.mrml.system.kernel"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_interface_storage_block_provider_v1"
+compile_name = "mrml-interface-storage-block-provider-v1"
+package = "org.mrml.interface.storage.block-provider"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_interface_storage_filesystem_v3"
+compile_name = "mrml-interface-storage-filesystem-v3"
+package = "org.mrml.interface.storage.filesystem"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_storage_ahci"
 compile_name = "mrml-storage-ahci"
 package = "org.mrml.library.storage.ahci"
@@ -199,6 +214,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe", "buffer-drift-probe"]
 name = "buffer_drift_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "fat32-ready-probe"]
+name = "fat32_ready_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]
