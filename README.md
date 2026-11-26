@@ -21,7 +21,7 @@ order.
 | --- | --- |
 | [Project overview](docs/human/OVERVIEW.md) | What MRML is, its goals, maturity, and current platform limits |
 | [Getting started](docs/human/GETTING_STARTED.md) | How to obtain the source and prepare the supported local toolchain |
-| [Verify every commit](docs/human/VERIFY_COMMITS.md) | How to audit every commit and identify history that the project GPG key cannot authenticate |
+| [Verify every commit](docs/human/VERIFY_COMMITS.md) | How to verify every commit on GitHub with the project’s Ed25519 SSH signing key |
 | [Contributing](docs/human/CONTRIBUTING.md) | The practical rules for making and reviewing changes |
 | [Documentation map](docs/human/DOCUMENTATION.md) | Architecture, security, compiler, platform, and evidence records |
 
