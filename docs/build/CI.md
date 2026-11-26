@@ -31,6 +31,18 @@ external oracles and hardware-specific features are not automatically exercised.
 The matrix does not build every experimental feature combination and does not
 prove hardware support, native guest userspace test coverage or release readiness.
 
+## Optional hosted supervisor probe
+
+After setting up the pinned oracle and running `cargo build --locked`, use
+`bash tools/ci/test-native-supervisor-kvm.sh` on a Linux host with an accessible
+`/dev/kvm`, or `pwsh -File tools/ci/test-native-supervisor-whp.ps1` on native
+Windows with WHP. On Windows, keep the gnullvm oracle and its linker on the path
+in the shell that starts the script. Each script builds a fresh probe, uses
+three separate disposable signing keys, and requires the backend's exact
+authorized restart proof within 60 seconds of guest execution. These scripts
+are opt-in and leave ordinary hardware-independent CI unchanged. They verify
+an authorized fresh service generation, not live FAT32 I/O after recovery.
+
 Before claiming all gates are green, check the run for the exact commit and
 inspect any unavailable or ignored cases. In particular,
 `mrml assurance check` remains a blocking check while the unsafe-policy backlog
