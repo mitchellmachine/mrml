@@ -2349,10 +2349,24 @@ mod tests {
         short_at: Option<usize>,
     }
 
-    struct FilesystemImageTransport {
+    pub(super) struct FilesystemImageTransport {
         session: BlockOpaqueHandle,
         calls: [u64; 8],
         count: usize,
+    }
+
+    impl FilesystemImageTransport {
+        pub(super) fn new(session: BlockOpaqueHandle) -> Self {
+            Self {
+                session,
+                calls: [0; 8],
+                count: 0,
+            }
+        }
+
+        pub(super) fn calls(&self) -> &[u64] {
+            &self.calls[..self.count]
+        }
     }
 
     impl BlockProviderReadTransport for FilesystemImageTransport {
@@ -2453,7 +2467,10 @@ mod tests {
         }
     }
 
-    fn block_binding(volume: OpaqueHandle, session: BlockOpaqueHandle) -> Fat32BlockBinding {
+    pub(super) fn block_binding(
+        volume: OpaqueHandle,
+        session: BlockOpaqueHandle,
+    ) -> Fat32BlockBinding {
         // SAFETY: This test fixture defines `session` as the exact backing session
         // for `volume`; production callers must obtain the association from the runtime.
         unsafe { Fat32BlockBinding::new(volume, session, 4096).unwrap() }

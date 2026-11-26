@@ -406,10 +406,13 @@ mod tests {
         fn write_shared(
             &mut self,
             capability: Capability,
-            _offset: u64,
-            _input: &[u8],
+            offset: u64,
+            input: &[u8],
         ) -> Result<(), Self::Error> {
             assert_eq!(capability.token(), TOKEN);
+            let start = usize::try_from(offset).map_err(|_| ())?;
+            let end = start.checked_add(input.len()).ok_or(())?;
+            self.shared.get_mut(start..end).ok_or(())?.copy_from_slice(input);
             self.writes += 1;
             Ok(())
         }
@@ -556,6 +559,113 @@ mod tests {
                 .unwrap()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn dispatch_reads_fixture_and_rejects_retired_handle_after_remount() {
+        use mrml_interface_storage_filesystem_v3::{
+            BorrowedWriteView, ReadError, decode_lookup_response, decode_open_response,
+            decode_read_response, encode_lookup_request, encode_open_request, encode_read_request,
+        };
+
+        let volume = OpaqueHandle::new(3, 8).unwrap();
+        let session = BlockOpaqueHandle::new(5, 7).unwrap();
+        let transport = crate::tests::FilesystemImageTransport::new(session);
+        let mut block = [0; 4096];
+        let backend = Fat32BlockMountBackend::new(
+            crate::tests::block_binding(volume, session),
+            transport,
+            &mut block,
+        )
+        .unwrap();
+        let provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
+        let mut cluster = [0; 4096];
+        let mut staging = [0; 512];
+        let mut service =
+            Fat32DispatchService::<_, 1, 1, 1>::new(provider, &mut cluster, &mut staging);
+        let mut dispatch = |mut call: Syscalls| {
+            let mut request = [0; FAT32_DISPATCH_REQUEST_BYTES];
+            let mut tokens = [0; 1];
+            let mut shared = [0; 512];
+            let mut response = [0; FAT32_DISPATCH_RESPONSE_BYTES];
+            service
+                .serve_one(&mut call, &mut request, &mut tokens, &mut shared, &mut response)
+                .unwrap();
+            assert_eq!(call.releases, call.capability_count);
+            assert_eq!(shared, [0; 512]);
+            call
+        };
+
+        let mount = encode_mount_request(volume, BorrowedReadView::within(0, 0, 0).unwrap())
+            .unwrap();
+        let mount_once = |dispatch: &mut dyn FnMut(Syscalls) -> Syscalls| {
+            let call = dispatch(syscalls(&mount, 0));
+            assert_eq!(call.response_length, MOUNT_RESPONSE_BYTES);
+            decode_mount_response(call.response[..MOUNT_RESPONSE_BYTES].try_into().unwrap())
+                .unwrap()
+                .unwrap()
+        };
+        let mounted = mount_once(&mut dispatch);
+        let name = b"KERNEL.MRP";
+        let lookup = encode_lookup_request(
+            volume,
+            mounted.generation,
+            mounted.root,
+            BorrowedReadView::within(0, name.len() as u64, 512).unwrap(),
+        )
+        .unwrap();
+        let mut call = syscalls(&lookup, 1);
+        call.shared[..name.len()].copy_from_slice(name);
+        let call = dispatch(call);
+        assert_eq!(call.response_length, LOOKUP_RESPONSE_BYTES);
+        let object = decode_lookup_response(call.response[..LOOKUP_RESPONSE_BYTES].try_into().unwrap())
+            .unwrap()
+            .unwrap();
+        let open = encode_open_request(volume, mounted.generation, mounted.root, object).unwrap();
+        let call = dispatch(syscalls(&open, 0));
+        assert_eq!(call.response_length, OPEN_RESPONSE_BYTES);
+        let file = decode_open_response(call.response[..OPEN_RESPONSE_BYTES].try_into().unwrap())
+            .unwrap()
+            .unwrap();
+        let read = |generation| {
+            let request = encode_read_request(
+                volume, generation, file, 3, BorrowedWriteView::within(4, 8, 512).unwrap(),
+            )
+            .unwrap();
+            let mut call = syscalls(&request, 1);
+            call.shared.fill(0xcc);
+            call
+        };
+        let call = dispatch(read(mounted.generation));
+        assert_eq!(call.response_length, READ_RESPONSE_BYTES);
+        assert_eq!(
+            decode_read_response(call.response[..READ_RESPONSE_BYTES].try_into().unwrap(), 8),
+            Ok(Ok(8))
+        );
+        assert_eq!(call.writes, 1);
+        let mut expected = [0xcc; 512];
+        expected[4..12].copy_from_slice(&[3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(call.shared, expected);
+
+        let unmount = encode_unmount_request(volume, mounted.generation).unwrap();
+        let call = dispatch(syscalls(&unmount, 0));
+        assert_eq!(call.response_length, UNMOUNT_RESPONSE_BYTES);
+        assert!(decode_unmount_response(call.response[..UNMOUNT_RESPONSE_BYTES].try_into().unwrap())
+            .unwrap()
+            .is_ok());
+        let replacement = mount_once(&mut dispatch);
+        assert_ne!(replacement.generation, mounted.generation);
+        for generation in [mounted.generation, replacement.generation] {
+            let call = dispatch(read(generation));
+            assert_eq!(
+                decode_read_response(call.response[..READ_RESPONSE_BYTES].try_into().unwrap(), 8),
+                Ok(Err(ReadError::StaleObject))
+            );
+            assert_eq!(call.writes, 0);
+            assert_eq!(call.shared, [0xcc; 512]);
+        }
+        let transport = service.provider.into_backend().into_transport();
+        assert_eq!(transport.calls(), &[0, 4, 132, 260, 4, 132, 263, 0]);
     }
 
     #[test]

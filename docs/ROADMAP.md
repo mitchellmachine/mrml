@@ -19,6 +19,35 @@ remain independently attributable.
 
 ## Current priority
 
+The next kernel qualification gate is a signed guest that launches the real
+FAT32 service under supervision, mounts a disposable volume, reads a known
+file, retires the provider, rejects its stale route and file handles, and
+reopens and reads the same file through a fresh instance without a kernel
+reboot. Run the same guest contract on WHP and KVM. A host model, bare kernel
+entry, or guest service-image build cannot satisfy this gate. Follow it with
+non-destructive testing on a named physical target before claiming hardware
+support.
+
+Bring-up evidence against `31087f19` plus the FAT32 dispatch regression:
+the real dispatch loop, on a synthetic block device with modeled syscalls,
+mounts, looks up, opens and reads exact file bytes, unmounts and remounts, then
+rejects both an old mount token and reuse of the old file handle with the
+fresh mount generation. Neither stale request writes the shared buffer or
+issues block I/O. FAT32 (103 tests) and storage (168 tests) passed on native
+Windows gnullvm and Arch WSL2 with ORACLE-0004; the native FAT32 image built.
+This does not exercise provider restart, CPL3, or device hardware.
+
+The existing independent `service-restart-request-probe` currently blocks
+live supervisor qualification. A fresh `service_restart_request_probe` UEFI
+kernel and default native `org.mrml.system.service-image`, signed with separate
+disposable keys, reached the same earlier configuration-response mismatch on
+both backends: while waiting for stage 2, each received frame port `0x4d59`
+with word `0x001b230d` (user-mode general-protection fault). No successful
+restart was observed in that run. Diagnose the guest failure before the
+expected response rather than accepting the fault or weakening the expected
+trace. This is distinct from the FAT32 dispatch regression and is not evidence
+of a FAT32 fault.
+
 Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and generation-2
 `storage.filesystem` schemas define bounded opaque-handle operations for isolated
