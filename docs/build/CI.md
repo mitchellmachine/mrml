@@ -43,6 +43,13 @@ authorized restart proof within 60 seconds of guest execution. These scripts
 are opt-in and leave ordinary hardware-independent CI unchanged. They verify
 an authorized fresh service generation, not live FAT32 I/O after recovery.
 
+For the FAT32 guest milestone, run
+`python3 tools/ci/make-fat32-probe-image.py PATH` to create a new disposable raw
+volume. It contains mirrored FATs and one file, `PROBE.TXT`, with the exact
+bytes `MRML FAT32 recovery fixture\n`. The generator refuses an existing
+output. This is a filesystem image, not boot media; attach it only to the
+guest storage fixture with read-only block rights.
+
 Before claiming all gates are green, check the run for the exact commit and
 inspect any unavailable or ignored cases. In particular,
 `mrml assurance check` remains a blocking check while the unsafe-policy backlog
