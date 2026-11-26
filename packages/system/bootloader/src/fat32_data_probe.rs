@@ -13,21 +13,42 @@ const COPY_OFFSET: usize = 13;
 const CANARY: u8 = 0xa7;
 type Runtime = TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>;
 
+#[cfg(feature = "fat32-restart-probe")]
+pub(super) struct RestartEraser<F>(pub(super) F);
+
+#[cfg(feature = "fat32-restart-probe")]
+impl<F> ServiceAddressSpaceEraser for RestartEraser<F>
+where
+    F: FnMut(mrml_kernel::TaskId, UserContext) -> Result<(), ()>,
+{
+    type Error = ();
+
+    fn erase(&mut self, task: mrml_kernel::TaskId, context: UserContext) -> Result<(), ()> {
+        (self.0)(task, context)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Phase {
     Ready,
     Mount,
     Lookup(u64, fs::OpaqueHandle),
     Open(u64),
-    Read,
+    Read(u64, fs::OpaqueHandle),
+    Stale(u64, fs::OpaqueHandle, bool),
     Done,
 }
 
 pub(super) struct HostedFat32Data {
     filesystem: mrml_kernel::TaskId,
+    #[cfg(feature = "fat32-restart-probe")]
+    entry: u64,
     caller: mrml_kernel::TaskId,
     block: mrml_kernel::TaskId,
     fs_signal: Capability,
+    endpoint_object: ObjectId,
+    first_file: Option<(u64, fs::OpaqueHandle)>,
+    completed_file: Option<(u64, fs::OpaqueHandle)>,
     block_signal: Capability,
     block_read: Capability,
     block_transfer: Capability,
@@ -50,6 +71,8 @@ impl HostedFat32Data {
         block: mrml_kernel::TaskId,
     ) -> Option<Self> {
         let context = runtime.context(filesystem).ok()?;
+        #[cfg(feature = "fat32-restart-probe")]
+        let entry = context.instruction_pointer();
         let block_read = Capability::from_token(context.rbp);
         let block_transfer = Capability::from_token(context.rsi);
         runtime
@@ -99,9 +122,14 @@ impl HostedFat32Data {
         }
         Some(Self {
             filesystem,
+            #[cfg(feature = "fat32-restart-probe")]
+            entry,
             caller,
             block,
             fs_signal,
+            endpoint_object: FAT32_READY_ENDPOINT,
+            first_file: None,
+            completed_file: None,
             block_signal,
             block_read,
             block_transfer,
@@ -123,8 +151,10 @@ impl HostedFat32Data {
             Phase::Mount => 1,
             Phase::Lookup(..) => 2,
             Phase::Open(_) => 3,
-            Phase::Read => 4,
-            Phase::Done => 5,
+            Phase::Read(..) => 4,
+            Phase::Stale(_, _, false) => 5,
+            Phase::Stale(_, _, true) => 6,
+            Phase::Done => 7,
         }
     }
 
@@ -168,7 +198,7 @@ impl HostedFat32Data {
         }
         let rights = match self.phase {
             Phase::Lookup(..) => Some(Rights::MAP.union(Rights::READ)),
-            Phase::Read => Some(Rights::MAP.union(Rights::WRITE)),
+            Phase::Read(..) | Phase::Stale(..) => Some(Rights::MAP.union(Rights::WRITE)),
             Phase::Mount | Phase::Open(_) => None,
             _ => return None,
         };
@@ -187,7 +217,8 @@ impl HostedFat32Data {
     }
 
     pub(super) fn release_allowed(&self, token: Capability) -> bool {
-        self.file_copy_done && self.delegated == Some(token)
+        (self.file_copy_done || matches!(self.phase, Phase::Stale(..)))
+            && self.delegated == Some(token)
     }
 
     pub(super) fn copy(
@@ -263,7 +294,7 @@ impl HostedFat32Data {
                 offset,
                 input_address,
                 length,
-            } if matches!(self.phase, Phase::Read) && Some(capability) == self.delegated => {
+            } if matches!(self.phase, Phase::Read(..)) && Some(capability) == self.delegated => {
                 if self.file_copy_done
                     || (offset, length) != (COPY_OFFSET as u64, EXPECTED.len() as u32)
                 {
@@ -328,11 +359,14 @@ impl HostedFat32Data {
                 self.filesystem,
                 signal,
                 Rights::SIGNAL,
-                FAT32_READY_ENDPOINT,
+                self.endpoint_object,
             )
             .ok()?;
-        if matches!(self.phase, Phase::Lookup(..) | Phase::Read) {
-            if !self.file_copy_done
+        if matches!(
+            self.phase,
+            Phase::Lookup(..) | Phase::Read(..) | Phase::Stale(..)
+        ) {
+            if (!matches!(self.phase, Phase::Stale(..)) && !self.file_copy_done)
                 || runtime
                     .capabilities(self.filesystem)
                     .ok()?
@@ -396,14 +430,34 @@ impl HostedFat32Data {
             }
             Phase::Open(generation) => {
                 let file = fs::decode_open_response(wire.try_into().ok()?).ok()?.ok()?;
-                self.fs_page.fill(CANARY);
-                let view =
-                    fs::BorrowedWriteView::within(COPY_OFFSET as u64, EXPECTED.len() as u64, 4096)?;
-                let request = fs::encode_read_request(volume, generation, file, 0, view).ok()?;
-                self.send_fs(runtime, &request, Some(Rights::MAP.union(Rights::WRITE)))?;
-                self.phase = Phase::Read;
+                if let Some((old_mount, old_file)) = self.first_file {
+                    if (generation == old_mount) || (file == old_file) {
+                        return None;
+                    }
+                    self.send_read(runtime, old_mount, old_file)?;
+                    self.phase = Phase::Stale(generation, file, false);
+                } else {
+                    self.send_read(runtime, generation, file)?;
+                    self.phase = Phase::Read(generation, file);
+                }
             }
-            Phase::Read => {
+            Phase::Stale(generation, file, fresh_mount) => {
+                if fs::decode_read_response(wire.try_into().ok()?, EXPECTED.len() as u64)
+                    != Ok(Err(fs::ReadError::StaleObject))
+                    || self.file_copy_done
+                    || self.fs_page.iter().any(|&byte| byte != CANARY)
+                {
+                    return None;
+                }
+                if fresh_mount {
+                    self.send_read(runtime, generation, file)?;
+                    self.phase = Phase::Read(generation, file);
+                } else {
+                    self.send_read(runtime, generation, self.first_file?.1)?;
+                    self.phase = Phase::Stale(generation, file, true);
+                }
+            }
+            Phase::Read(generation, file) => {
                 if fs::decode_read_response(wire.try_into().ok()?, EXPECTED.len() as u64)
                     != Ok(Ok(EXPECTED.len() as u64))
                     || &self.fs_page[COPY_OFFSET..COPY_OFFSET + EXPECTED.len()] != EXPECTED
@@ -416,12 +470,102 @@ impl HostedFat32Data {
                 {
                     return None;
                 }
+                self.completed_file = Some((generation, file));
                 self.phase = Phase::Done;
                 return Some((seq, true));
             }
             Phase::Done => return None,
         }
         Some((seq, false))
+    }
+
+    fn send_read(
+        &mut self,
+        runtime: &mut Runtime,
+        generation: u64,
+        file: fs::OpaqueHandle,
+    ) -> Option<()> {
+        self.fs_page.fill(CANARY);
+        let view = fs::BorrowedWriteView::within(COPY_OFFSET as u64, EXPECTED.len() as u64, 4096)?;
+        let request =
+            fs::encode_read_request(fs::OpaqueHandle::new(2, 6)?, generation, file, 0, view)
+                .ok()?;
+        self.send_fs(runtime, &request, Some(Rights::MAP.union(Rights::WRITE)))
+    }
+
+    #[cfg(feature = "fat32-restart-probe")]
+    pub(super) fn block_task(&self) -> mrml_kernel::TaskId {
+        self.block
+    }
+
+    #[cfg(feature = "fat32-restart-probe")]
+    pub(super) fn restore_entry(&self) -> u64 {
+        self.entry
+    }
+
+    #[cfg(feature = "fat32-restart-probe")]
+    pub(super) fn should_restart(&self) -> bool {
+        self.first_file.is_none() && self.completed_file.is_some()
+    }
+
+    #[cfg(feature = "fat32-restart-probe")]
+    pub(super) fn rebind_after_retirement(
+        &mut self,
+        runtime: &mut Runtime,
+        replacement: mrml_kernel::TaskId,
+        endpoint_object: ObjectId,
+    ) -> Option<()> {
+        let retired = self.filesystem;
+        let revoked = self.fs_signal;
+        if !self.should_restart()
+            || replacement == retired
+            || runtime.context(retired).is_ok()
+            || endpoint_object == self.endpoint_object
+        {
+            return None;
+        }
+        runtime.revoke_capability(self.caller, revoked).ok()?;
+        // Test real IPC rather than only comparing tokens, including the
+        // stale caller leaf presented to the still-live replacement task.
+        if !matches!(
+            runtime.deliver_ipc(
+                self.caller,
+                replacement,
+                &mut self.caller_endpoint,
+                revoked,
+                b"retired-route",
+                &[]
+            ),
+            Err(mrml_kernel::TaskRuntimeError::Ipc(_))
+        ) {
+            return None;
+        }
+        let signal = runtime
+            .capabilities_mut(self.caller)
+            .ok()?
+            .insert(endpoint_object, Rights::SIGNAL)
+            .ok()?;
+        let context = runtime.context(replacement).ok()?;
+        self.block_read = Capability::from_token(context.rbp);
+        self.block_transfer = Capability::from_token(context.rsi);
+        self.fs_signal = signal;
+        self.endpoint_object = endpoint_object;
+        self.filesystem = replacement;
+        self.caller_endpoint = Endpoint::new(endpoint_object);
+        if !matches!(
+            runtime.deliver_ipc(self.caller, retired, &mut self.caller_endpoint, signal, b"retired-task", &[]),
+            Err(error) if error.is_precommit_send_denial()
+        ) {
+            return None;
+        }
+        self.first_file = self.completed_file.take();
+        self.phase = Phase::Ready;
+        self.delegated = None;
+        self.file_copy_done = false;
+        self.block_copy = None;
+        self.block_page.fill(0);
+        self.fs_page.fill(0);
+        Some(())
     }
 
     fn serve_block(
@@ -431,8 +575,10 @@ impl HostedFat32Data {
         payload: &[u8],
         transfers: &[(Capability, Rights)],
     ) -> Option<u64> {
-        if matches!(self.phase, Phase::Ready | Phase::Open(_) | Phase::Done)
-            || self.block_copy.is_some()
+        if !matches!(
+            self.phase,
+            Phase::Mount | Phase::Lookup(..) | Phase::Read(..)
+        ) || self.block_copy.is_some()
             || transfers != [(self.block_transfer, Rights::MAP.union(Rights::WRITE))]
         {
             return None;

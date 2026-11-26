@@ -19,14 +19,15 @@ remain independently attributable.
 
 ## Current priority
 
-The next kernel qualification gate is a signed guest that launches the real
-FAT32 service under supervision, mounts a disposable volume, reads a known
-file, retires the provider, rejects its stale route and file handles, and
-reopens and reads the same file through a fresh instance without a kernel
-reboot. Run the same guest contract on WHP and KVM. A host model, bare kernel
-entry, or guest service-image build cannot satisfy this gate. Follow it with
-non-destructive testing on a named physical target before claiming hardware
-support.
+The hosted signed FAT32 guest qualification gate **PASSES** on Windows WHP
+and Arch WSL2 nested KVM. The real signed service mounts the synthetic volume,
+opens and reads `PROBE.TXT`, retires through `ServiceSupervisor`, rejects its
+stale route and file handles, and reopens and reads the same file from a fresh
+instance without rebooting. Run `tools/ci/test-native-fat32-restart-whp.ps1` or
+`bash tools/ci/test-native-fat32-restart-kvm.sh`. This is an opt-in, single-vCPU
+guest qualification with synthetic media and disposable signing keys. It is
+not physical-device evidence or a general production storage launcher. The
+next hardware gate is non-destructive testing on a named physical target.
 
 Bring-up evidence against `31087f19` plus the FAT32 dispatch regression:
 the real dispatch loop, on a synthetic block device with modeled syscalls,
@@ -106,6 +107,20 @@ exposed a 4096-byte provider workspace passed to a primitive requiring the
 mounted cluster's exact size; lookup and read now use a checked prefix of
 the workspace. This is a signed guest file-read proof only, not the
 supervised restart and stale-generation qualification gate.
+
+The separate `fat32_restart_probe` resets no VM state. The supervisor rejects
+restart until the old task is removed and its cleanup ticket is completed.
+The probe zeroes and rereads the old writable image/stack pages, unmaps the
+bounded old image and stack, and starts the verified successor in a distinct
+root. The original caller attempts IPC with the revoked endpoint leaf and
+also targets the retired task with a valid new leaf; both sends are denied.
+The native service derives disjoint mount/object and root/file generation
+ranges from its launch-bound provider epoch. The probe presents the old
+file handle both with the old mount and against the newly opened file's
+fresh mount, checks both responses are `StaleObject` with unchanged output
+and no admitted block reads, then reads the same 28 bytes through the fresh
+handle. Generation ranges fail closed; native epochs are 1 through 65,535
+and each root/file counter is bounded within that epoch.
 
 Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and generation-2

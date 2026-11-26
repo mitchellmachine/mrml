@@ -150,6 +150,8 @@ pub struct Fat32MountTable<const N: usize> {
     next_mount_generation: Option<u64>,
     next_root_generation: Option<u32>,
     next_completion_serial: Option<u64>,
+    mount_limit: u64,
+    root_limit: u32,
 }
 
 impl<const N: usize> Fat32MountTable<N> {
@@ -159,6 +161,8 @@ impl<const N: usize> Fat32MountTable<N> {
             next_mount_generation: Some(1),
             next_root_generation: Some(1),
             next_completion_serial: Some(1),
+            mount_limit: u64::MAX,
+            root_limit: u32::MAX,
         }
     }
 
@@ -189,8 +193,12 @@ impl<const N: usize> Fat32MountTable<N> {
         let root_index = u32::try_from(slot).map_err(|_| Fat32MountError::Capacity)?;
         let root = OpaqueHandle::new(root_index, root_generation)
             .ok_or(Fat32MountError::GenerationExhausted)?;
-        self.next_mount_generation = generation.checked_add(1);
-        self.next_root_generation = root_generation.checked_add(1);
+        self.next_mount_generation = generation
+            .checked_add(1)
+            .filter(|value| *value <= self.mount_limit);
+        self.next_root_generation = root_generation
+            .checked_add(1)
+            .filter(|value| *value <= self.root_limit);
         self.mounts[slot] = Some(Fat32Mount {
             volume,
             generation,
@@ -248,6 +256,8 @@ impl<const N: usize> Fat32MountTable<N> {
             next_mount_generation: Some(mount),
             next_root_generation: Some(root),
             next_completion_serial: Some(completion),
+            mount_limit: u64::MAX,
+            root_limit: u32::MAX,
         }
     }
 }
@@ -560,6 +570,7 @@ struct Fat32OpenRecord {
 #[derive(Clone, Copy)]
 struct Fat32OpenSlot {
     generation: u32,
+    generation_limit: u32,
     record: Option<Fat32OpenRecord>,
     reserved: bool,
     retired: bool,
@@ -568,6 +579,7 @@ struct Fat32OpenSlot {
 impl Fat32OpenSlot {
     const EMPTY: Self = Self {
         generation: 1,
+        generation_limit: u32::MAX,
         record: None,
         reserved: false,
         retired: false,
@@ -576,7 +588,7 @@ impl Fat32OpenSlot {
     fn retire(&mut self) {
         self.record = None;
         self.reserved = false;
-        if let Some(next) = self.generation.checked_add(1) {
+        if let Some(next) = self.generation.checked_add(1).filter(|value| *value <= self.generation_limit) {
             self.generation = next;
         } else {
             self.retired = true;
@@ -610,6 +622,7 @@ pub struct Fat32MountedProvider<B, const N: usize, const O: usize = 64> {
     mounts: Fat32MountTable<N>,
     objects: [Option<Fat32ObjectRecord>; O],
     next_object: Option<u64>,
+    object_limit: u64,
     open: [Fat32OpenSlot; O],
 }
 
@@ -620,8 +633,35 @@ impl<B, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
             mounts: Fat32MountTable::new(),
             objects: [None; O],
             next_object: Some(1),
+            object_limit: u64::MAX,
             open: [Fat32OpenSlot::EMPTY; O],
         }
+    }
+
+    /// Binds native filesystem identities to an exact launch generation.
+    /// A supervisor must never reuse this generation for the same route.
+    /// The 32-bit root/file wire generations reserve 16 bits for each lease;
+    /// constructions beyond that range, or exhausted counters, fail closed.
+    pub fn for_provider_generation(backend: B, provider: u64) -> Option<Self> {
+        let provider = u16::try_from(provider)
+            .ok()
+            .filter(|provider| *provider != 0)?;
+        let narrow = u32::from(provider) << 16;
+        let wide = u64::from(provider) << 32;
+        let mut provider = Self::new(backend);
+        provider.mounts.next_mount_generation = Some(wide | 1);
+        provider.mounts.next_root_generation = Some(narrow | 1);
+        provider.mounts.next_completion_serial = Some(wide | 1);
+        provider.mounts.mount_limit = wide | u64::from(u32::MAX);
+        provider.mounts.root_limit = narrow | u32::from(u16::MAX);
+        provider.next_object = Some(wide | 1);
+        provider.object_limit = provider.mounts.mount_limit;
+        provider.open.fill(Fat32OpenSlot {
+            generation: narrow | 1,
+            generation_limit: provider.mounts.root_limit,
+            ..Fat32OpenSlot::EMPTY
+        });
+        Some(provider)
     }
 
     pub fn into_backend(self) -> B {
@@ -693,7 +733,9 @@ impl<B, const N: usize, const O: usize> Fat32MountedProvider<B, N, O> {
         let object = self
             .next_object
             .ok_or(Fat32ObjectIdentityError::GenerationExhausted)?;
-        self.next_object = object.checked_add(1);
+        self.next_object = object
+            .checked_add(1)
+            .filter(|value| *value <= self.object_limit);
         self.objects[slot] = Some(Fat32ObjectRecord {
             volume,
             mount_generation: generation,
@@ -3374,6 +3416,54 @@ mod tests {
         );
         assert_eq!(lookup.provider.backend.transport.count, 1);
         assert_eq!(directory_scratch, [0; 4096]);
+    }
+
+    #[test]
+    fn new_native_provider_rejects_old_handle_even_after_reopening_same_slot() {
+        let volume = OpaqueHandle::new(4, 7).unwrap();
+        let backend = || MountBackend {
+            sector: boot_sector(),
+            fail: false,
+            requested: None,
+            destination_was_zero: false,
+        };
+        let open_in = |generation| {
+            let mut provider =
+                Fat32MountedProvider::<_, 1, 1>::for_provider_generation(backend(), generation)
+                    .unwrap();
+            let mount = provider.mount(volume).unwrap();
+            let object = provider
+                .identify_root_entry(volume, mount.generation, mount.root, file_entry(5, 4096))
+                .unwrap();
+            let reservation = provider
+                .reserve_open(volume, mount.generation, mount.root, object)
+                .unwrap();
+            let file = provider.activate_open(reservation).unwrap();
+            (provider, mount, object, file)
+        };
+        let (_, first_mount, first_object, first_file) = open_in(5);
+        let (mut successor, second_mount, second_object, second_file) = open_in(6);
+        assert_ne!(first_mount.generation, second_mount.generation);
+        assert_ne!(first_mount.root, second_mount.root);
+        assert_ne!(first_object, second_object);
+        assert_eq!(first_file.index(), second_file.index());
+        assert_ne!(first_file.generation(), second_file.generation());
+        assert_eq!(
+            successor.open_entry(volume, second_mount.generation, first_file),
+            Err(Fat32OpenError::StaleHandle),
+        );
+        assert!(
+            successor
+                .open_entry(volume, second_mount.generation, second_file)
+                .is_ok()
+        );
+        successor.open[0].generation = successor.open[0].generation_limit;
+        successor.open[0].retire();
+        assert!(successor.open[0].retired);
+        assert!(Fat32MountedProvider::<_, 1, 1>::for_provider_generation(backend(), 0).is_none());
+        assert!(
+            Fat32MountedProvider::<_, 1, 1>::for_provider_generation(backend(), 65536).is_none()
+        );
     }
 
     #[test]

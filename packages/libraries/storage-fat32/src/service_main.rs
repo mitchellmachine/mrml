@@ -178,7 +178,12 @@ unsafe extern "sysv64" fn mrml_fat32_service(
         &mut block_scratch.0[..logical_block_bytes],
     )
     .unwrap_or_else(|_| halt());
-    let provider = Fat32MountedProvider::<_, MOUNT_CAPACITY, OBJECT_CAPACITY>::new(backend);
+    let provider =
+        Fat32MountedProvider::<_, MOUNT_CAPACITY, OBJECT_CAPACITY>::for_provider_generation(
+            backend,
+            launch_binding.filesystem_provider_generation(),
+        )
+        .unwrap_or_else(|| halt());
     let cluster_scratch = unsafe { &mut *core::ptr::addr_of_mut!(CLUSTER_SCRATCH) };
     let staging = unsafe { &mut *core::ptr::addr_of_mut!(STAGING_SCRATCH) };
     let mut service =

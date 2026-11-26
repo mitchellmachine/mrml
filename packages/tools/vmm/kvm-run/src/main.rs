@@ -1058,6 +1058,7 @@ enum LaunchMode {
     ServiceRestartRequestProbe,
     Fat32ReadyProbe,
     Fat32DataProbe,
+    Fat32RestartProbe,
     ServicePreemptionProbe,
     GpuBenchmark,
     SmpProbe,
@@ -1096,6 +1097,7 @@ impl LaunchMode {
             "service-restart-request-probe" => Ok(Self::ServiceRestartRequestProbe),
             "fat32-ready-probe" => Ok(Self::Fat32ReadyProbe),
             "fat32-data-probe" => Ok(Self::Fat32DataProbe),
+            "fat32-restart-probe" => Ok(Self::Fat32RestartProbe),
             "service-preemption-probe" => Ok(Self::ServicePreemptionProbe),
             "gpu-benchmark" => Ok(Self::GpuBenchmark),
             "smp-probe" => Ok(Self::SmpProbe),
@@ -1104,7 +1106,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, certificate-service-probe, deadline-receive-probe, deadline-receive-message-probe, deadline-receive-cancel-probe, deadline-receive-cancel-denied-probe, deadline-receive-cancel-replay-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, fat32-ready-probe, fat32-data-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, certificate-service-probe, deadline-receive-probe, deadline-receive-message-probe, deadline-receive-cancel-probe, deadline-receive-cancel-denied-probe, deadline-receive-cancel-replay-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, fat32-ready-probe, fat32-data-probe, fat32-restart-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -2357,6 +2359,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::Fat32ReadyProbe
             | LaunchMode::Fat32DataProbe
+            | LaunchMode::Fat32RestartProbe
             | LaunchMode::ServicePreemptionProbe
             | LaunchMode::SmpServiceMigrationProbe
     ) != (arguments.len() == 9)
@@ -2405,6 +2408,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::Fat32ReadyProbe
             | LaunchMode::Fat32DataProbe
+            | LaunchMode::Fat32RestartProbe
             | LaunchMode::ServicePreemptionProbe
             | LaunchMode::SmpServiceMigrationProbe
     );
@@ -2448,6 +2452,17 @@ fn application_main() -> Result<()> {
         (None, None) => None,
         _ => return Err(anyhow!("incomplete service verification inputs")),
     };
+    if mode == LaunchMode::Fat32RestartProbe {
+        let image = service_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing FAT32 service image"))?
+            .image();
+        if image.image_base() != SERVICE_VIRTUAL || image.image_size() > 2 * 1024 * 1024 {
+            return Err(anyhow!(
+                "FAT32 service image exceeds its restart erasure arena"
+            ));
+        }
+    }
     let application_bundle = if mode.application_package_id().is_some() {
         Some(mrml_runtime::read_file_bounded(
             &arguments[6],
@@ -3301,7 +3316,8 @@ fn application_main() -> Result<()> {
         | LaunchMode::BlockServiceProbe
         | LaunchMode::ServiceRestartRequestProbe
         | LaunchMode::Fat32ReadyProbe
-        | LaunchMode::Fat32DataProbe => system
+        | LaunchMode::Fat32DataProbe
+        | LaunchMode::Fat32RestartProbe => system
             .prepare_isolated_service_kernel_guest::<16>(
                 0,
                 &executable,
@@ -3399,7 +3415,7 @@ fn application_main() -> Result<()> {
             LaunchMode::BlockServiceProbe => 256,
             LaunchMode::CertificateServiceProbe => 64,
             // The pinned FAT32 PE entry probes a 0x35378-byte frame.
-            LaunchMode::Fat32ReadyProbe | LaunchMode::Fat32DataProbe => 64,
+            LaunchMode::Fat32ReadyProbe | LaunchMode::Fat32DataProbe | LaunchMode::Fat32RestartProbe => 64,
             _ => 8,
         };
         let local_apic = component_smp_mode
@@ -3517,6 +3533,7 @@ fn application_main() -> Result<()> {
                 | LaunchMode::ServiceRestartRequestProbe
                 | LaunchMode::Fat32ReadyProbe
                 | LaunchMode::Fat32DataProbe
+                | LaunchMode::Fat32RestartProbe
         ) {
             guest = guest
                 .attach_isolated_service_at(
@@ -3627,6 +3644,7 @@ fn application_main() -> Result<()> {
                     | LaunchMode::ServiceRestartRequestProbe
                     | LaunchMode::Fat32ReadyProbe
                     | LaunchMode::Fat32DataProbe
+                    | LaunchMode::Fat32RestartProbe
             ) && (guest.service_entry_at(2) != Some(service_entry)
                 || guest.service_page_table_root_at(2)
                     != PhysAddr::new(SERVICE_C_TABLE_PHYSICAL).ok()))
@@ -4370,14 +4388,17 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("KVM invalid-return peer execution failed: {:?}", error))?;
         require_invalid_return_stage(exit, 0x27)?;
         exit = VmExit::Halted;
-    } else if matches!(mode, LaunchMode::Fat32ReadyProbe | LaunchMode::Fat32DataProbe) {
+    } else if matches!(mode, LaunchMode::Fat32ReadyProbe | LaunchMode::Fat32DataProbe | LaunchMode::Fat32RestartProbe) {
         let data = mode == LaunchMode::Fat32DataProbe;
-        if exit != (VmExit::Io { port: SERVICE_PROBE_PORT, size: 4, write: true, value: if data { 0xf321 } else { 0xf320 } }) {
+        let restart = mode == LaunchMode::Fat32RestartProbe;
+        if exit != (VmExit::Io { port: SERVICE_PROBE_PORT, size: 4, write: true, value: if restart { 0xf322 } else if data { 0xf321 } else { 0xf320 } }) {
             let state = guest.snapshot()
                 .map_err(|error| anyhow!("FAT32 readiness failed ({:?}): {:?}", exit, error))?;
             return Err(anyhow!("FAT32 readiness mismatch: {:?}; rip={:#x} rsp={:#x} cr2={:#x}", exit, state.instruction_pointer(), state.stack_pointer(), state.fault_address()));
         }
-        if data {
+        if restart {
+            println!("verified signed FAT32 supervised restart and stale-handle denial under KVM");
+        } else if data {
             println!("verified signed FAT32 PROBE.TXT read under KVM");
         } else {
             println!("verified authenticated native FAT32 readiness under KVM");

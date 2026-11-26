@@ -518,14 +518,16 @@ impl HostedFat32Ready {
         provider: mrml_kernel::TaskId,
         caller: mrml_kernel::TaskId,
         block: mrml_kernel::TaskId,
+        endpoint_object: ObjectId,
+        provider_generation: u64,
     ) -> Self {
         let dependency = ObjectId(0xf322);
         let association = BlockProviderDependencyHandoff::new(
-            12,
+            provider_generation.checked_add(7).unwrap_or_else(|| halt()),
             9,
             41,
-            3,
-            5,
+            provider_generation,
+            provider_generation,
             11,
             4,
             7,
@@ -549,7 +551,7 @@ impl HostedFat32Ready {
                 .unwrap_or_else(|_| halt())
                 .token()
         };
-        let service_signal = install(FAT32_READY_ENDPOINT, Rights::SIGNAL);
+        let service_signal = install(endpoint_object, Rights::SIGNAL);
         let startup = Capability::from_token(install(FAT32_STARTUP_OBJECT, Rights::READ));
         let block_signal = install(dependency, Rights::SIGNAL);
         let block_buffer = ObjectId(0xf323);
@@ -1491,7 +1493,99 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     requested.fill((Capability::from_token(0), Rights::NONE));
                     match result {
                         Some((_, true)) => {
-                            asm!("out dx, eax", in("dx") SERVICE_PROBE_PORT, in("eax") 0xf321u32, options(nomem, nostack));
+                            #[cfg(feature = "fat32-restart-probe")]
+                            if data.should_restart() {
+                                let caller = ready.caller;
+                                let block = data.block_task();
+                                let entry = data.restore_entry();
+                                let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR)).as_mut().unwrap_or_else(|| halt());
+                                let service = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt())[0];
+                                let management = (*core::ptr::addr_of!(SERVICE_MANAGEMENT)).as_ref().unwrap_or_else(|| halt());
+                                let control = (*core::ptr::addr_of!(SERVICE_CONTROLS)).unwrap_or_else(|| halt())[0];
+                                let retirement = supervisor.exit_current(runtime).unwrap_or_else(|_| halt());
+                                if retirement.task != current || runtime.context(current).is_ok() {
+                                    halt();
+                                }
+                                let _ = runtime.consume_idle_dispatch(retirement.dispatch).unwrap_or_else(|_| halt());
+                                let context = UserContext::new(PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()), entry, 0x0074_0000)
+                                    .unwrap_or_else(|_| halt());
+                                if !matches!(
+                                    supervisor.prepare_restart_at(service, management, control, Priority::RESPONSIVE, context, 0),
+                                    Err(mrml_kernel::ServiceError::CleanupRequired)
+                                ) {
+                                    halt();
+                                }
+                                // This opt-in probe is single-vCPU. At the syscall
+                                // boundary the retired A root is still active, and
+                                // the VMM owns its private, nonoverlapping image and
+                                // stack arenas. No guest address is selected by wire.
+                                let mut eraser = fat32_data_probe::RestartEraser(|task, context: UserContext| {
+                                    if task != current || context.page_table().get() != SERVICE_ROOT {
+                                        return Err(());
+                                    }
+                                    let mut active = ActivePageTables::current().map_err(|_| ())?;
+                                    if active.root() != context.page_table() { return Err(()); }
+                                    // The VMM loads the verified image at 0x140000000
+                                    // backed by its own bounded arena, and a separate
+                                    // exactly 64-page guarded writable stack.
+                                    for (base, physical, pages, is_stack) in [
+                                        (0x1_4000_0000u64, 0x0060_0000u64, 512u64, false),
+                                        (0x0070_0000u64, 0x0080_0000u64, 64u64, true),
+                                    ] {
+                                        for page in 0..pages {
+                                            let delta = page * mrml_kernel::PAGE_SIZE;
+                                            let address = base + delta;
+                                            let va = VirtAddr::new(address).map_err(|_| ())?;
+                                            let Some(leaf) = active.leaf(va).map_err(|_| ())? else {
+                                                if is_stack { return Err(()); }
+                                                continue;
+                                            };
+                                            if !leaf.user() || leaf.physical().get() != physical + delta
+                                                || leaf.device_pat_index_three()
+                                                || (leaf.writable() && leaf.executable())
+                                                || (is_stack && !leaf.writable())
+                                            {
+                                                return Err(());
+                                            }
+                                            let permissions = if leaf.writable() {
+                                                let words = address as *mut u64;
+                                                for index in 0..(mrml_kernel::PAGE_SIZE as usize / 8) {
+                                                    core::ptr::write_volatile(words.add(index), 0);
+                                                }
+                                                for index in 0..(mrml_kernel::PAGE_SIZE as usize / 8) {
+                                                    if core::ptr::read_volatile(words.add(index)) != 0 { return Err(()); }
+                                                }
+                                                PagePermissions::USER_READ_WRITE
+                                            } else if leaf.executable() {
+                                                PagePermissions::USER_READ_EXECUTE
+                                            } else {
+                                                PagePermissions::USER_READ
+                                            };
+                                            let mapping = Mapping::new(va, leaf.physical(), 1, permissions).map_err(|_| ())?;
+                                            active.unmap_exact(mapping).map_err(|_| ())?;
+                                            if active.leaf(va).map_err(|_| ())?.is_some() { return Err(()); }
+                                        }
+                                    }
+                                    Ok(())
+                                });
+                                supervisor.complete_cleanup(retirement.cleanup, &mut eraser).unwrap_or_else(|_| halt());
+                                let next_service = supervisor.restart(service, management, control, runtime, Priority::RESPONSIVE, context)
+                                    .unwrap_or_else(|_| halt());
+                                let replacement = supervisor.task(next_service).ok().flatten().unwrap_or_else(|| halt());
+                                if next_service == service || replacement == current { halt(); }
+                                let next_endpoint = ObjectId(0xf330);
+                                let next_epoch = ready.expected.provider_generation().checked_add(1).unwrap_or_else(|| halt());
+                                let next_ready = HostedFat32Ready::install(runtime, replacement, caller, block, next_endpoint, next_epoch);
+                                data.rebind_after_retirement(runtime, replacement, next_endpoint).unwrap_or_else(|| halt());
+                                core::ptr::addr_of_mut!(FAT32_READY_STATE).write(Some(next_ready));
+                                if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == replacement) {
+                                    halt();
+                                }
+                                enter_service_task(runtime, replacement);
+                            }
+                            asm!("out dx, eax", in("dx") SERVICE_PROBE_PORT,
+                                in("eax") if cfg!(feature = "fat32-restart-probe") { 0xf322u32 } else { 0xf321u32 },
+                                options(nomem, nostack));
                             halt();
                         }
                         Some((sequence, false)) => frame.complete(sequence),
@@ -3988,9 +4082,33 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 let provider = make(SERVICE_ROOT, Priority::RESPONSIVE);
                 // Neither placeholder executes. This mode terminates at the
                 // verified readiness boundary, before dispatching any FS RPC.
-                let caller = make(SERVICE_B_ROOT, Priority::NORMAL);
-                let block = make(SERVICE_C_ROOT, Priority::NORMAL);
-                let state = HostedFat32Ready::install(&mut runtime, provider, caller, block);
+                #[cfg(not(feature = "fat32-restart-probe"))]
+                let (caller, block) = (make(SERVICE_B_ROOT, Priority::NORMAL), make(SERVICE_C_ROOT, Priority::NORMAL));
+                #[cfg(feature = "fat32-restart-probe")]
+                let (caller, block) = {
+                    // Kernel-owned inbox identities have no executable user lifecycle.
+                    // Keep slot B's fresh verified PE/stack reserved for the successor.
+                    let mut parked = |root| runtime.create_for_construction(
+                        Priority::NORMAL,
+                        UserContext::new(PhysAddr::new(root).unwrap_or_else(|_| halt()), entry, 0x0074_0000)
+                            .unwrap_or_else(|_| halt()),
+                    ).unwrap_or_else(|_| halt());
+                    (parked(SERVICE_C_ROOT), parked(0x0160_0000))
+                };
+                let state = HostedFat32Ready::install(&mut runtime, provider, caller, block, FAT32_READY_ENDPOINT, 5);
+                #[cfg(feature = "fat32-restart-probe")]
+                {
+                    let object = ObjectId(0xf325);
+                    let mut supervisor = ServiceSupervisor::<SERVICE_TASK_CAPACITY>::new();
+                    let service = supervisor.register_with_policy_in_runtime(object, provider, RestartPolicy::ONCE_IMMEDIATE, &runtime)
+                        .unwrap_or_else(|_| halt());
+                    let mut management = CapabilitySpace::<3>::new();
+                    let control = management.insert(object, Rights::CONTROL).unwrap_or_else(|_| halt());
+                    core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor));
+                    core::ptr::addr_of_mut!(SERVICE_MANAGEMENT).write(Some(management));
+                    core::ptr::addr_of_mut!(SERVICE_CONTROLS).write(Some([control; 3]));
+                    core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service; 3]));
+                }
                 #[cfg(feature = "fat32-data-probe")]
                 core::ptr::addr_of_mut!(FAT32_DATA_STATE).write(Some(
                     fat32_data_probe::HostedFat32Data::install(&mut runtime, provider, caller, block)

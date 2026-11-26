@@ -2159,7 +2159,8 @@ fn application_main() -> Result<()> {
         arguments.len() == 9 && arguments[5] == "service-restart-request-probe";
     let fat32_data_mode = arguments.len() == 9 && arguments[5] == "fat32-data-probe";
     let fat32_ready_mode = arguments.len() == 9 && arguments[5] == "fat32-ready-probe";
-    let fat32_mode = fat32_ready_mode || fat32_data_mode;
+    let fat32_restart_mode = arguments.len() == 9 && arguments[5] == "fat32-restart-probe";
+    let fat32_mode = fat32_ready_mode || fat32_data_mode || fat32_restart_mode;
     let service_preemption_mode =
         arguments.len() == 9 && arguments[5] == "service-preemption-probe";
     let smp_service_migration_mode =
@@ -2273,6 +2274,17 @@ fn application_main() -> Result<()> {
         (None, None) => None,
         _ => return Err(anyhow!("incomplete service verification inputs")),
     };
+    if fat32_restart_mode {
+        let image = service_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing FAT32 service image"))?
+            .image();
+        if image.image_base() != SERVICE_VIRTUAL || image.image_size() > 2 * 1024 * 1024 {
+            return Err(anyhow!(
+                "FAT32 service image exceeds its restart erasure arena"
+            ));
+        }
+    }
     let application_bundle = if application_mode {
         Some(mrml_runtime::read_file_bounded(
             &arguments[6],
@@ -4404,12 +4416,14 @@ fn application_main() -> Result<()> {
                 port: SERVICE_PROBE_PORT,
                 size: 4,
                 write: true,
-                value: if fat32_data_mode { 0xf321 } else { 0xf320 },
+                value: if fat32_restart_mode { 0xf322 } else if fat32_data_mode { 0xf321 } else { 0xf320 },
             })
         {
             return Err(anyhow!("WHP FAT32 readiness mismatch: {:?}", exit));
         }
-        if fat32_data_mode {
+        if fat32_restart_mode {
+            println!("verified signed FAT32 supervised restart and stale-handle denial under WHP");
+        } else if fat32_data_mode {
             println!("verified signed FAT32 PROBE.TXT read under WHP");
         } else {
             println!("verified authenticated native FAT32 readiness under WHP");
