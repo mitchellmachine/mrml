@@ -72,7 +72,12 @@ post-fix `--all` invocation.
   backend stayed ignored. This is hosted/nested evidence, not bare-metal
   certification.
 
-The workspace manifest and lock checks passed. Repository-wide assurance
-still stops at pre-existing AES-GCM unsafe-policy drift; it is separate from
-the host test totals. Patent review: **NOT_TRIGGERED**; the fixes reuse
+The workspace manifest and lock checks passed. At the time of this full run,
+repository-wide assurance stopped at AES-GCM unsafe-policy drift, independently
+of the host test totals. A follow-up changed GHASH to pass its SIMD input lanes
+by value, removing two raw loads. The strengthened differential test covers
+both 64-bit lane boundaries, zero, and all-ones inputs; the crypto package
+passed 56 release tests on native Windows and 56 on Arch WSL2. See
+[Project status](PROJECT_STATUS.md#workspace-checks-and-generated-inventories)
+for the remaining assurance blocker. Patent review: **NOT_TRIGGERED**; the fixes reuse
 existing platform and project mechanisms. See the [review log](patents/REVIEW_LOG.md).

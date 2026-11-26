@@ -40,8 +40,9 @@ descriptions are not evidence of CI configured on GitHub today.
 [generated unsafe inventory](UNSAFE_INVENTORY.md) are retained earlier
 snapshots, not live counts. The normal `mrml assurance generate` workflow
 cannot refresh them while the repository-wide unsafe-policy check fails.
-A fresh generation attempt stopped at AES-GCM (nine unsafe blocks
-against a budget of eight). Do not widen budgets or suppress gates just to
+AES-GCM now meets its reduced budget. The next reported blocker is an
+unadmitted block in `packages/libraries/crypto/src/zeroize.rs`. Do not
+widen budgets or suppress gates just to
 regenerate documentation. A manifest check, local test, or historical receipt
 does not imply that repository-wide assurance has passed.
 

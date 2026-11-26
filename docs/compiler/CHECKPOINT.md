@@ -95,9 +95,10 @@ named edition can be adopted through a pinned, workspace-wide migration.
 - The workspace manifest check passed. Both Windows TLS probes now have
   narrowly scoped unsafe-policy entries and returned 42 when built and run
   with the pinned Windows oracle. The repository-wide `mrml assurance check`
-  now stops at existing unsafe-policy drift in
-  `packages/libraries/crypto/src/aes_gcm.rs` (nine unsafe blocks, eight
-  admitted). This is separate from the focused Windows test results.
+  stopped at AES-GCM unsafe-policy drift during this run. That issue was
+  fixed later; see [Project status](../PROJECT_STATUS.md#workspace-checks-and-generated-inventories)
+  for the current blocker. Assurance is separate from the focused Windows
+  test results.
 - Patent review: **NOT_TRIGGERED**; this uses existing operating-system
   locking and access-control primitives. See [review log](../patents/REVIEW_LOG.md).
 

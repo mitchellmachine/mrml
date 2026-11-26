@@ -217,16 +217,15 @@ fn pclmulqdq_available() -> bool {
 #[target_feature(enable = "pclmulqdq")]
 unsafe fn ghash_mul_instructions(x: u128, y: u128) -> u128 {
     use core::arch::x86_64::{
-        __m128i, _mm_clmulepi64_si128, _mm_loadu_si128, _mm_storeu_si128, _mm_xor_si128,
+        __m128i, _mm_clmulepi64_si128, _mm_set_epi64x, _mm_storeu_si128, _mm_xor_si128,
     };
 
-    let x = x.reverse_bits().to_le_bytes();
-    let y = y.reverse_bits().to_le_bytes();
-    // SAFETY: both arrays contain exactly 16 readable bytes and the intrinsic
-    // explicitly permits unaligned loads.
-    let left = unsafe { _mm_loadu_si128(x.as_ptr().cast::<__m128i>()) };
-    // SAFETY: same fixed-width bound as the preceding load.
-    let right = unsafe { _mm_loadu_si128(y.as_ptr().cast::<__m128i>()) };
+    // Reverse the GHASH bit order, then pass the two halves by value.
+    // The intrinsic takes the high lane first and keeps the low lane in bits 0..63.
+    let x = x.reverse_bits();
+    let y = y.reverse_bits();
+    let left = _mm_set_epi64x((x >> 64) as i64, x as i64);
+    let right = _mm_set_epi64x((y >> 64) as i64, y as i64);
     let low = _mm_clmulepi64_si128(left, right, 0x00);
     let high = _mm_clmulepi64_si128(left, right, 0x11);
     let cross = _mm_xor_si128(
@@ -255,8 +254,8 @@ unsafe fn ghash_mul_instructions(x: u128, y: u128) -> u128 {
 fn ghash_mul(x: u128, y: u128) -> u128 {
     #[cfg(target_arch = "x86_64")]
     if pclmulqdq_available() {
-        // SAFETY: CPUID above proves PCLMULQDQ support. All intrinsic operands
-        // and destinations are fixed-width in-bounds arrays.
+        // SAFETY: CPUID above proves PCLMULQDQ support. The helper builds
+        // operands by value and uses complete fixed-width output arrays.
         return unsafe { ghash_mul_instructions(x, y) };
     }
     ghash_mul_software(x, y)
@@ -374,11 +373,20 @@ mod tests {
         }
         let mut left = 0x66e9_4bd4_ef8a_2c3b_884c_fa59_ca34_2b2eu128;
         let mut right = 0x0388_dace_60b6_a392_f328_c2b9_71b2_fe78u128;
-        for _ in 0..256 {
+        let expect_equal = |left, right| {
             // SAFETY: the availability check above proves the required CPU
             // feature; the operation accepts two by-value fixed-width words.
             let accelerated = unsafe { ghash_mul_instructions(left, right) };
             assert_eq!(accelerated, ghash_mul_software(left, right));
+        };
+        let boundaries = [0, 1, 1 << 63, 1 << 64, 1 << 127, u128::MAX];
+        for a in boundaries {
+            for b in boundaries {
+                expect_equal(a, b);
+            }
+        }
+        for _ in 0..256 {
+            expect_equal(left, right);
             left = left
                 .wrapping_mul(0xda94_2042_e4dd_58b5_9e37_79b9_7f4a_7c15)
                 .rotate_left(29)
