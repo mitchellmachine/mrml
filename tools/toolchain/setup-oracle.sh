@@ -59,9 +59,10 @@ while IFS= read -r target; do
     fi
 done < <(read_toml_array targets)
 
-oracle_file=$(find "$repo_root/docs/compiler/oracles" -maxdepth 1 -type f -name 'ORACLE-*.md' -printf '%f\n' | sort | tail -n 1)
-[ -n "$oracle_file" ] || die "no oracle record found"
-expected_commit=$(sed -n 's/^- full commit: `\([0-9a-f][0-9a-f]*\)`$/\1/p' "$repo_root/docs/compiler/oracles/$oracle_file")
+# Bash glob expansion is portable to macOS; BSD find lacks -printf.
+oracle_file=$(printf '%s\n' "$repo_root"/docs/compiler/oracles/ORACLE-*.md | LC_ALL=C sort | tail -n 1)
+[ -f "$oracle_file" ] || die "no oracle record found"
+expected_commit=$(sed -n -E 's/^- full commit: `([0-9a-f]{40})`[[:space:]]*$/\1/p' "$oracle_file")
 [ -n "$expected_commit" ] || die "could not read the full commit from $oracle_file"
 actual_commit=$(rustup run "$channel" rustc -Vv | sed -n 's/^commit-hash: //p')
 [ "$actual_commit" = "$expected_commit" ] || die "rustc commit $actual_commit does not match $oracle_file ($expected_commit)"

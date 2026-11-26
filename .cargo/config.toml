@@ -26,3 +26,10 @@ rustflags = [
     "-C", "link-arg=/debug:none",
     "-C", "link-arg=/timestamp:0",
 ]
+
+[target.'cfg(target_os = "macos")']
+rustflags = [
+    "-C", "panic=abort",
+    "--cfg", "mrml_stage_zero",
+    "--check-cfg=cfg(mrml_stage_zero)",
+]
