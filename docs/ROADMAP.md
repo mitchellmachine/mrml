@@ -48,6 +48,13 @@ expected response rather than accepting the fault or weakening the expected
 trace. This is distinct from the FAT32 dispatch regression and is not evidence
 of a FAT32 fault.
 
+As a control, the ordinary `service_probe` kernel used the same signed
+service image. KVM passed the host policy setup and reached the same guest
+fault without the restart manager. WHP's ordinary mode stopped earlier in
+the host-side policy fixture with `Unauthorized(PermissionDenied)`. Do not
+treat these as one diagnosed cause or grant additional rights to the fixture
+just to advance the probe.
+
 Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and generation-2
 `storage.filesystem` schemas define bounded opaque-handle operations for isolated
