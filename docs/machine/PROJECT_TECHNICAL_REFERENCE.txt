@@ -9,6 +9,9 @@ document and current evidence take precedence. Links copied from the former
 root README may be expressed relative to the repository root and are retained
 as archival text rather than validated navigation.
 
+For current native Windows and VMM testing policy, see
+`docs/PROJECT_STATUS.md#windows-testing`. The quoted policy below is historical.
+
 # MRML
 
 MRML—the **Mitchell Renouf Machine Learning Library**—is an AI-led,
@@ -16,10 +19,10 @@ human-directed experimental computing stack, implemented from first principles
 in dependency-free Rust and validated incrementally across UEFI, KVM, Linux,
 and historically Hyper-V/WHP on Windows.
 
-> **Current local Windows status:** Native Windows and local Windows VMM/WHP
-> testing are suspended for now. Codex and local contributors must not attempt
+> **Historical Windows status (at the time of this snapshot):** Native Windows and local Windows VMM/WHP
+> testing were suspended at that time. Codex and local contributors must not attempt
 > WHP, WHPX, Hyper-V, or VBS tests from the current Wine environment. The
-> Windows-target toolchain is currently exercised locally only under Wine; that
+> Windows-target toolchain was then exercised locally only under Wine; that
 > is toolchain coverage, not native Windows, Windows ABI, WHP, Hyper-V, VBS, or
 > Windows hardware evidence. Keep the configured GitHub Actions native-Windows
 > and WHP gates: a passing GitHub-hosted Windows job is current native evidence
@@ -66,7 +69,7 @@ reference CPUs are targets, not current physical-hardware support claims.
 | Area | Repository-owned implementation | Current maturity |
 | --- | --- | --- |
 | Local inference | GGUF loading, tokenizer, Gemma-family execution, CPU kernels, Rust-to-PTX CUDA kernels, KV cache, sampling, CLI, JSONL automation, and HTTPS/SSE service | Functional but narrower and less tuned than established runtimes |
-| Microkernel | PE32+ x86_64 kernel, UEFI handoff, page tables, GDT/IDT/TSS, CPL3 tasks, APIC timer, preemption, capabilities, IPC, fault retirement, SMP, and service lifecycle | Booting research kernel with signed QEMU and KVM probes plus historical and CI-scoped WHP evidence; local Windows VMM testing is suspended; not production ready |
+| Microkernel | PE32+ x86_64 kernel, UEFI handoff, page tables, GDT/IDT/TSS, CPL3 tasks, APIC timer, preemption, capabilities, IPC, fault retirement, SMP, and service lifecycle | Booting research kernel with signed QEMU and KVM probes plus historical and CI-scoped WHP evidence; local Windows VMM testing was suspended at the time of the snapshot; not production ready |
 | Virtualization | Common VM policy plus native KVM and Hyper-V/WHP launchers, signed launch manifests, isolated guest memory, interrupt handling, and authenticated queues | KVM development and benchmark harnesses; Windows VMM/WHP testing is CI-only for now; a compromised host remains authoritative |
 | Mediated GPU | Authenticated rings, signed kernels, capabilities, quotas, watchdogs, reset, CPU fallback, fail-stop EPT/VT-d, checked DMAR/MCFG, complete-route proofs, one-shot MMIO ownership, generation-checked domain authority, root-race-checked direct tables, and fail-closed all-unit assembly | Register and benchmark plumbing exist; physical execution and hardware IOMMU validation, plus near-native in-VM CUDA, remain unfinished |
 | Rust compiler | Original forward-looking Rust lexer, parser, semantic analysis, constant evaluation, code generation, and source-to-object driver for a documented subset | Experimental contemporary/future-Rust subset, not a complete `rustc` replacement |
@@ -409,7 +412,7 @@ configuration, warm-up policy, measurement boundary, and variation across
 runs. Codec and compiler compatibility require independent conformance or
 differential evidence, not only self-round-trip tests.
 
-## Context for ChatGPT and Codex sessions
+## Historical handoff notes for ChatGPT and Codex sessions
 
 This section exists specifically to prevent a new AI session from overstating
 the repository or undoing its invariants.

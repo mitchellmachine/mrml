@@ -8,7 +8,9 @@ environment.
 Current repository builds and tests use `mrml build` and `mrml test`; Cargo is
 reserved for the locked stage-zero `mrml` frontend. Cargo command blocks later
 in this file are dated historical oracle evidence, not current contributor
-instructions.
+instructions. For current native Windows coverage and the pinned oracle, see
+[the compiler checkpoint](../../../docs/compiler/CHECKPOINT.md). A skipped
+Windows run in an older milestone below refers only to that milestone.
 
 The long-term target is contemporary and forward-looking Rust semantics with
 MRML-specific security and systems integration. Rust 2024 is the floor, not the

@@ -16,6 +16,19 @@ and the [Engineering Constitution](ENGINEERING_CONSTITUTION.md).
 | Git and Gitd | Hosted protected SHA-256 Git, Gitd, a separate authority, and offline releases and recovery tooling. Base Compose publishes TCP 443 to Gitd; its accepted transport is TLS 1.3 with HTTP/2. | Dated hardened Docker tests cover protected pushes, verified offline images, backup and clean restore, and recreation. HTTP/3 is not enabled in that baseline. This project’s GitHub source history is SHA-1 and separately SSH-signed; it is not served by Gitd. [Git checkpoint](gitd/operations/CURRENT_COMPLETION.md), [source verification](human/VERIFY_COMMITS.md) |
 | Certificate service and ACME | Bounded ACME library, Linux certificate and ACME worker binaries, Compose artifacts, CA enrollment and identity handoff paths. | Controlled local-CA enrollment and hosted Gitd/certd integration are recorded. Those results do not prove public-CA issuance with owner production credentials or authorize public activation. [ACME](ACME.md), [Compose guide](../deploy/compose/README.md) |
 
+## Windows testing
+
+Use **native Windows** with the pinned `x86_64-pc-windows-gnullvm` toolchain
+for Windows host tests. Local Windows testing, including VMM tests, is no
+longer suspended. For WHP, Hyper-V, or VBS results, use a native Windows host
+with the required features and record the backend that actually ran. The
+compiler, runtime, and Zstandard results above do not establish a new VMM
+result. Wine runs are Windows-target toolchain coverage only.
+
+[Setup and test commands](human/GETTING_STARTED.md) ·
+[Compiler test evidence](compiler/CHECKPOINT.md) ·
+[Kernel and VMM evidence](MICROKERNEL.md)
+
 ## Workspace checks and generated inventories
 
 Use `mrml list`, `mrml manifest check`, and `mrml manifest lock --check` for

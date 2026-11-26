@@ -46,11 +46,10 @@ but they do not protect a guest from a compromised host. MRML does not claim
 production security, formal verification, or physical-hardware support without
 specific evidence.
 
-Focused runtime and compiler checks have run on native Windows with gnullvm.
-See the [compiler checkpoint](../compiler/CHECKPOINT.md) for the exact results.
-Local Windows VMM testing remains suspended. Wine may provide Windows-target
-toolchain coverage, but it is not native Windows, WHP, Hyper-V, VBS, or
-physical-hardware evidence. See [Security](../SECURITY.md) for claim limits.
+Native Windows tests use gnullvm. Local VMM testing can also run on a native
+Windows host with the required features; the results are recorded separately
+from compiler and runtime tests. See [Windows testing](../PROJECT_STATUS.md#windows-testing)
+for the current testing scope and [Security](../SECURITY.md) for claim limits.
 
 ## Where to go next
 

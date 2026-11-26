@@ -101,7 +101,10 @@ named edition can be adopted through a pinned, workspace-wide migration.
 - Patent review: **NOT_TRIGGERED**; this uses existing operating-system
   locking and access-control primitives. See [review log](../patents/REVIEW_LOG.md).
 
-## Latest bounded language milestone
+## Earlier bounded language milestones
+
+Individual platform skips below describe only the recorded increment. For the
+current native Windows rerun see [Hosted Windows file operations](#hosted-windows-file-operations).
 
 The MRML V1 two-word emitter now accepts modern same-width `cast_signed` and
 `cast_unsigned` methods for `u128`/`i128`, together with their saturating and

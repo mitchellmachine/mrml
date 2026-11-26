@@ -2120,10 +2120,9 @@ and must wait or be split.
 
 Use [Project status](PROJECT_STATUS.md) for the current workspace and test
 scope. Native Windows gnullvm runtime and compiler tests are recorded in the
-[compiler checkpoint](compiler/CHECKPOINT.md). Local Windows VMM/WHP testing
-remains suspended. Do not attempt WHP, WHPX, Hyper-V, VBS, or other Windows VMM
-tests from Wine. Label Wine runs as Wine-hosted toolchain coverage, not native
-Windows, Windows ABI, or hardware evidence. This checkout has no tracked GitHub
+[compiler checkpoint](compiler/CHECKPOINT.md). For WHP, Hyper-V, or VBS, test on
+native Windows with the required features and record the exact backend. Wine
+runs record toolchain coverage, not native Windows or hardware evidence. This checkout has no tracked GitHub
 Actions workflow. Attribute a CI result only to the revision, runner and checks
 that actually ran. Earlier dated Windows/WHP entries remain historical evidence.
 Run focused Linux tests first, then the strongest relevant supported

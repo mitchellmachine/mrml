@@ -6,7 +6,9 @@ in [SECURITY.md](SECURITY.md), application direction in
 [APPLICATION_PLATFORM.md](APPLICATION_PLATFORM.md), dependency order in
 [ROADMAP.md](ROADMAP.md), and context-loss procedure in
 [RECOVERY.md](RECOVERY.md). Planned architecture in those documents must not be
-reported as implemented evidence here.
+reported as implemented evidence here. Platform skips and unavailable hosts in
+individual entries describe those runs. For current Windows testing scope see
+[Project status](PROJECT_STATUS.md#windows-testing).
 
 This document records design intent, not a claim of production readiness. The
 kernel is new, original Rust intended for CC0 dedication. Research informs

@@ -99,8 +99,11 @@ Some checks require particular hardware, firmware, virtualization support, or
 credentials. A skipped or unavailable environment is not a passing result.
 Record the exact command and outcome, and claim only what was exercised.
 
-Do not attempt local WHP, WHPX, Hyper-V, or VBS testing from Wine. Windows
-toolchain execution under Wine provides toolchain coverage only.
+For the full host-compatible Windows suite, run
+`target\debug\mrml.exe test --all --target windows --release` in PowerShell
+(use `./target/debug/mrml test --all --target linux --release` on Linux).
+WHP, Hyper-V, and VBS probes require native Windows and their own host
+prerequisites. Wine does not provide Windows VMM coverage.
 
 ## 6. Understand build outputs
 
