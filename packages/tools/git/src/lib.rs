@@ -5,6 +5,7 @@ use mrml_runtime::{Text, Vector};
 #[cfg(test)]
 mod adversarial;
 mod arrival_pack;
+mod git_file_root;
 mod audit_receipt;
 mod authority_candidate;
 mod authority_client;

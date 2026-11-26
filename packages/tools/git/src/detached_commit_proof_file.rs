@@ -1,5 +1,6 @@
 //! Crash-durable immutable storage for untrusted detached commit proofs.
 
+use crate::git_file_root::GitFileRoot;
 use mrml_crypto::{ML_DSA_65_SIGNATURE_BYTES, Sha256};
 use mrml_openpgp::MAX_OPENPGP_SIGNATURE_BYTES;
 use mrml_runtime::{
@@ -33,7 +34,7 @@ pub enum DetachedCommitProofFileError {
 /// accelerators; every lookup rechecks the complete stored context and record.
 pub struct DurableDetachedCommitProofDirectory {
     root: Text,
-    retained: Option<mrml_runtime::DirectoryCapability>,
+    retained: GitFileRoot,
 }
 
 impl DurableDetachedCommitProofDirectory {
@@ -45,7 +46,7 @@ impl DurableDetachedCommitProofDirectory {
         }
         Ok(Self {
             root,
-            retained: None,
+            retained: GitFileRoot::Ambient,
         })
     }
 
@@ -61,7 +62,7 @@ impl DurableDetachedCommitProofDirectory {
         }
         Ok(Self {
             root: Text::new(),
-            retained: Some(root),
+            retained: GitFileRoot::Retained(root),
         })
     }
 
@@ -167,7 +168,8 @@ impl DurableDetachedCommitProofDirectory {
     }
 
     fn exists(&self, name: &str) -> Result<bool, DetachedCommitProofFileError> {
-        if let Some(root) = &self.retained {
+        #[cfg(target_os = "linux")]
+        if let Some(root) = self.retained.as_ref() {
             if root.open_regular(name).is_ok() {
                 return Ok(true);
             }
@@ -186,21 +188,24 @@ impl DurableDetachedCommitProofDirectory {
 
     fn create_file(&self, name: &str) -> Result<File, DetachedCommitProofFileError> {
         match &self.retained {
-            Some(root) => root
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root
                 .create_new_file(name, 0o600)
                 .map_err(|_| DetachedCommitProofFileError::Io),
-            None => File::create_new(&join_path(&self.root, name))
+            GitFileRoot::Ambient => File::create_new(&join_path(&self.root, name))
                 .map_err(|_| DetachedCommitProofFileError::Io),
         }
     }
 
     fn open_file(&self, name: &str) -> Result<File, DetachedCommitProofFileError> {
         let file = match &self.retained {
-            Some(root) => root.open_regular(name),
-            None => File::open_regular(&join_path(&self.root, name)),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.open_regular(name),
+            GitFileRoot::Ambient => File::open_regular(&join_path(&self.root, name)),
         }
         .map_err(|_| DetachedCommitProofFileError::Integrity)?;
-        if self.retained.is_some() {
+        #[cfg(target_os = "linux")]
+        if self.retained.as_ref().is_some() {
             let metadata = file
                 .metadata()
                 .map_err(|_| DetachedCommitProofFileError::Integrity)?;
@@ -213,10 +218,11 @@ impl DurableDetachedCommitProofDirectory {
 
     fn sync(&self) -> Result<(), DetachedCommitProofFileError> {
         match &self.retained {
-            Some(root) => root
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root
                 .sync()
                 .map_err(|_| DetachedCommitProofFileError::Durability),
-            None => sync_proof_directory(&self.root),
+            GitFileRoot::Ambient => sync_proof_directory(&self.root),
         }
     }
 }

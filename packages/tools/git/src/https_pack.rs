@@ -323,6 +323,7 @@ mod tests {
         output.write(b"PACK").unwrap();
         assert_eq!(output.write(b"x"), Err(HttpsPackError::TooLarge));
         output.finish().unwrap();
+        drop(output);
         assert_eq!(&mrml_runtime::read_file(&path).unwrap()[..], b"PACK");
         assert!(FilePackOutput::create_new(&path, 4).is_err());
         mrml_runtime::remove_dir_all(&root).unwrap();

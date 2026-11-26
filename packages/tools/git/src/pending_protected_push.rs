@@ -232,15 +232,20 @@ mod tests {
 
     #[test]
     fn durable_record_blocks_overwrite_reopens_and_removes() {
-        let root = mrml_runtime::mrml_format!(
-            "/tmp/mrml-pending-protected-push-{}",
-            mrml_runtime::process_id()
+        let root = mrml_runtime::join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!(
+                "mrml-pending-protected-push-{}",
+                mrml_runtime::process_id()
+            ),
         );
         let _ = mrml_runtime::remove_dir_all(&root);
         mrml_runtime::create_dir_all(&root).unwrap();
         let expected = record();
         PendingProtectedPush::create(&root, &expected).unwrap();
-        assert!(PendingProtectedPush::create(&root, &expected).is_err());
+        let mut replacement = expected.clone();
+        replacement.candidate = QuarantineTransactionId([99; 16]);
+        assert!(PendingProtectedPush::create(&root, &replacement).is_err());
         assert_eq!(PendingProtectedPush::load(&root).unwrap(), Some(expected));
         PendingProtectedPush::remove(&root).unwrap();
         assert_eq!(PendingProtectedPush::load(&root).unwrap(), None);

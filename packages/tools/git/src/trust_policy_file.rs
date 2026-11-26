@@ -1,5 +1,6 @@
 //! Crash-durable Linux storage for the exact current trust-policy generation.
 
+use crate::git_file_root::GitFileRoot;
 use mrml_crypto::Sha3_512;
 use mrml_runtime::{
     File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory,
@@ -37,7 +38,7 @@ pub struct LinuxDurableTrustPolicyStore {
     active: Text,
     temporary: Text,
     lock: Text,
-    retained: Option<mrml_runtime::DirectoryCapability>,
+    retained: GitFileRoot,
 }
 
 impl LinuxDurableTrustPolicyStore {
@@ -132,7 +133,7 @@ impl LinuxDurableTrustPolicyStore {
             active: Text::from("trust-policy.current"),
             temporary: Text::from("trust-policy.next"),
             lock: Text::from("trust-policy.lock"),
-            retained: Some(root),
+            retained: GitFileRoot::Retained(root),
         })
     }
 
@@ -327,14 +328,15 @@ impl LinuxDurableTrustPolicyStore {
 
     fn open_file(&self, name: &str) -> Result<File, TrustPolicyFileError> {
         match &self.retained {
-            Some(root) => {
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => {
                 let file = root
                     .open_regular(name)
                     .map_err(|_| TrustPolicyFileError::Integrity)?;
                 self.validate_file(&file, 0o644)?;
                 Ok(file)
             }
-            None => File::open_regular(name).map_err(|_| TrustPolicyFileError::Integrity),
+            GitFileRoot::Ambient => File::open_regular(name).map_err(|_| TrustPolicyFileError::Integrity),
         }
     }
 
@@ -344,18 +346,20 @@ impl LinuxDurableTrustPolicyStore {
         error: TrustPolicyFileError,
     ) -> Result<File, TrustPolicyFileError> {
         match &self.retained {
-            Some(root) => {
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => {
                 let mode = if self.lock == name { 0o600 } else { 0o644 };
                 let file = root.create_new_file(name, mode).map_err(|_| error)?;
                 self.validate_file(&file, mode).map_err(|_| error)?;
                 Ok(file)
             }
-            None => File::create_new(name).map_err(|_| error),
+            GitFileRoot::Ambient => File::create_new(name).map_err(|_| error),
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn validate_file(&self, file: &File, expected_mode: u32) -> Result<(), TrustPolicyFileError> {
-        let Some(root) = &self.retained else {
+        let Some(root) = self.retained.as_ref() else {
             return Ok(());
         };
         let parent = root
@@ -376,24 +380,27 @@ impl LinuxDurableTrustPolicyStore {
 
     fn rename(&self, existing: &str, replacement: &str) -> Result<(), TrustPolicyFileError> {
         match &self.retained {
-            Some(root) => root
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root
                 .rename_child(existing, replacement)
                 .map_err(|_| TrustPolicyFileError::Io),
-            None => rename_file(existing, replacement).map_err(|_| TrustPolicyFileError::Io),
+            GitFileRoot::Ambient => rename_file(existing, replacement).map_err(|_| TrustPolicyFileError::Io),
         }
     }
 
     fn remove(&self, name: &str) -> Result<(), TrustPolicyFileError> {
         match &self.retained {
-            Some(root) => root.remove_file(name).map_err(|_| TrustPolicyFileError::Io),
-            None => remove_file(name).map_err(|_| TrustPolicyFileError::Io),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.remove_file(name).map_err(|_| TrustPolicyFileError::Io),
+            GitFileRoot::Ambient => remove_file(name).map_err(|_| TrustPolicyFileError::Io),
         }
     }
 
     fn sync(&self) -> Result<(), TrustPolicyFileError> {
         match &self.retained {
-            Some(root) => root.sync().map_err(|_| TrustPolicyFileError::Durability),
-            None => sync_policy_directory(&self.root),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.sync().map_err(|_| TrustPolicyFileError::Durability),
+            GitFileRoot::Ambient => sync_policy_directory(&self.root),
         }
     }
 
@@ -407,7 +414,7 @@ impl LinuxDurableTrustPolicyStore {
             temporary: join_path(&root, "trust-policy.next"),
             lock: join_path(&root, "trust-policy.lock"),
             root,
-            retained: None,
+            retained: GitFileRoot::Ambient,
         })
     }
 }

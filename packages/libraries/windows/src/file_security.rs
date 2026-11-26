@@ -77,6 +77,42 @@ pub(super) fn open_owner_mode(path: &[u16]) -> Option<NativeFile> {
     NativeFile::handle_is_regular_file(handle).then_some(file)
 }
 
+pub(super) fn sync_directory(path: &[u16]) -> bool {
+    let Some(name) = path.strip_suffix(&[0]) else {
+        return false;
+    };
+    if name.is_empty() || name.contains(&0) {
+        return false;
+    }
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+    const FILE_SHARE_ALL: u32 = 7;
+    const OPEN_EXISTING: u32 = 3;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    // SAFETY: path is NUL-terminated and lives through this synchronous call.
+    let handle = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            GENERIC_WRITE,
+            FILE_SHARE_ALL,
+            core::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            core::ptr::null_mut(),
+        )
+    };
+    if handle as isize == -1 {
+        return false;
+    }
+    let directory = NativeFile(handle, core::cell::Cell::new(false));
+    NativeFile::handle_disk_attributes(handle).is_some_and(|flags| {
+        flags & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
+            == FILE_ATTRIBUTE_DIRECTORY
+    }) && directory.sync()
+}
+
 struct LocalSid(NonNull<c_void>);
 
 impl Drop for LocalSid {

@@ -1,5 +1,6 @@
 //! Crash-durable storage for immutable, exact-key pack representations.
 
+use crate::git_file_root::GitFileRoot;
 use mrml_crypto::Sha256;
 use mrml_runtime::{
     File, Text, Vector, canonical_path, create_dir_all, join_path, path_exists, path_is_directory,
@@ -35,7 +36,7 @@ impl From<PackCacheError> for PackCacheFileError {
 
 pub struct ImmutablePackCacheDirectory {
     root: Text,
-    retained: Option<mrml_runtime::DirectoryCapability>,
+    retained: GitFileRoot,
 }
 
 impl ImmutablePackCacheDirectory {
@@ -47,7 +48,7 @@ impl ImmutablePackCacheDirectory {
         }
         Ok(Self {
             root,
-            retained: None,
+            retained: GitFileRoot::Ambient,
         })
     }
 
@@ -61,7 +62,7 @@ impl ImmutablePackCacheDirectory {
         }
         Ok(Self {
             root: Text::new(),
-            retained: Some(root),
+            retained: GitFileRoot::Retained(root),
         })
     }
 
@@ -149,7 +150,8 @@ impl ImmutablePackCacheDirectory {
     }
 
     fn exists(&self, name: &str) -> Result<bool, PackCacheFileError> {
-        if let Some(root) = &self.retained {
+        #[cfg(target_os = "linux")]
+        if let Some(root) = self.retained.as_ref() {
             if root.open_regular(name).is_ok() {
                 return Ok(true);
             }
@@ -168,19 +170,22 @@ impl ImmutablePackCacheDirectory {
 
     fn create_file(&self, name: &str) -> Result<File, PackCacheFileError> {
         match &self.retained {
-            Some(root) => root.create_new_file(name, 0o600),
-            None => File::create_new(&join_path(&self.root, name)),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.create_new_file(name, 0o600),
+            GitFileRoot::Ambient => File::create_new(&join_path(&self.root, name)),
         }
         .map_err(|_| PackCacheFileError::Io)
     }
 
     fn open_file(&self, name: &str) -> Result<File, PackCacheFileError> {
         let file = match &self.retained {
-            Some(root) => root.open_regular(name),
-            None => File::open_regular(&join_path(&self.root, name)),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.open_regular(name),
+            GitFileRoot::Ambient => File::open_regular(&join_path(&self.root, name)),
         }
         .map_err(|_| PackCacheFileError::Integrity)?;
-        if self.retained.is_some() {
+        #[cfg(target_os = "linux")]
+        if self.retained.as_ref().is_some() {
             let metadata = file.metadata().map_err(|_| PackCacheFileError::Integrity)?;
             if metadata.mode & 0o777 != 0o600 || metadata.links != 1 {
                 return Err(PackCacheFileError::Integrity);
@@ -191,16 +196,18 @@ impl ImmutablePackCacheDirectory {
 
     fn remove(&self, name: &str) -> Result<(), PackCacheFileError> {
         match &self.retained {
-            Some(root) => root.remove_file(name),
-            None => remove_file(&join_path(&self.root, name)),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.remove_file(name),
+            GitFileRoot::Ambient => remove_file(&join_path(&self.root, name)),
         }
         .map_err(|_| PackCacheFileError::Io)
     }
 
     fn sync(&self) -> Result<(), PackCacheFileError> {
         match &self.retained {
-            Some(root) => root.sync().map_err(|_| PackCacheFileError::Durability),
-            None => sync_cache_directory(&self.root),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.sync().map_err(|_| PackCacheFileError::Durability),
+            GitFileRoot::Ambient => sync_cache_directory(&self.root),
         }
     }
 }

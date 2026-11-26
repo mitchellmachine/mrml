@@ -1787,21 +1787,35 @@ pub struct NativeFile(*mut c_void, core::cell::Cell<bool>);
 #[cfg(windows)]
 mod file_security;
 
+/// Flushes an opened directory. Returns false if the filesystem rejects it.
+#[cfg(windows)]
+pub fn sync_directory_wide(path: &[u16]) -> bool {
+    file_security::sync_directory(path)
+}
+
 #[cfg(windows)]
 unsafe impl Send for NativeFile {}
 
 #[cfg(windows)]
 impl NativeFile {
-    fn handle_is_regular_file(handle: *mut c_void) -> bool {
+    fn handle_disk_attributes(handle: *mut c_void) -> Option<u32> {
         const FILE_TYPE_DISK: u32 = 1;
+        let mut information = core::mem::MaybeUninit::<ByHandleFileInformation>::uninit();
+        if (unsafe { GetFileType(handle) }) != FILE_TYPE_DISK
+            || (unsafe { GetFileInformationByHandle(handle, information.as_mut_ptr()) }) == 0
+        {
+            return None;
+        }
+        // SAFETY: a successful call fills the complete information record.
+        Some(unsafe { information.assume_init() }.attributes)
+    }
+
+    fn handle_is_regular_file(handle: *mut c_void) -> bool {
         const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        let mut information = core::mem::MaybeUninit::<ByHandleFileInformation>::uninit();
-        (unsafe { GetFileType(handle) }) == FILE_TYPE_DISK
-            && (unsafe { GetFileInformationByHandle(handle, information.as_mut_ptr()) }) != 0
-            && unsafe { information.assume_init() }.attributes
-                & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
-                == 0
+        Self::handle_disk_attributes(handle).is_some_and(|attributes| {
+            attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) == 0
+        })
     }
 
     /// Acquires a blocking exclusive lock over the file, including future growth.

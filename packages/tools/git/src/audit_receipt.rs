@@ -1,5 +1,6 @@
 //! Canonical bounded audit-receipt transcript and immutable persistence.
 
+use crate::git_file_root::GitFileRoot;
 use mrml_crypto::Sha256;
 use mrml_runtime::{
     File, Text, Vector, canonical_path, create_dir_all, join_path, path_is_directory,
@@ -158,7 +159,7 @@ fn validate(receipt: &AuditReceipt) -> Result<(), AuditReceiptError> {
 
 pub struct AuditReceiptDirectory {
     root: Text,
-    retained: Option<mrml_runtime::DirectoryCapability>,
+    retained: GitFileRoot,
 }
 impl AuditReceiptDirectory {
     pub fn open(path: &str) -> Result<Self, DurableFailure> {
@@ -169,7 +170,7 @@ impl AuditReceiptDirectory {
         }
         Ok(Self {
             root,
-            retained: None,
+            retained: GitFileRoot::Ambient,
         })
     }
     #[cfg(target_os = "linux")]
@@ -182,7 +183,7 @@ impl AuditReceiptDirectory {
         }
         Ok(Self {
             root: Text::new(),
-            retained: Some(root),
+            retained: GitFileRoot::Retained(root),
         })
     }
     pub fn append(&self, receipt: &AuditReceipt) -> Result<(), DurableFailure> {
@@ -229,36 +230,39 @@ impl AuditReceiptDirectory {
 
     fn create_file(&self, name: &str) -> Result<File, DurableFailure> {
         match &self.retained {
-            Some(root) => {
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => {
                 let file = root
                     .create_new_file(name, 0o600)
                     .map_err(|_| DurableFailure::AuditReceipt)?;
                 validate_receipt_file(root, &file).map_err(|_| DurableFailure::AuditReceipt)?;
                 Ok(file)
             }
-            None => File::create_new(&join_path(&self.root, name))
+            GitFileRoot::Ambient => File::create_new(&join_path(&self.root, name))
                 .map_err(|_| DurableFailure::AuditReceipt),
         }
     }
 
     fn open_file(&self, name: &str) -> Result<File, AuditReceiptError> {
         match &self.retained {
-            Some(root) => {
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => {
                 let file = root
                     .open_regular(name)
                     .map_err(|_| AuditReceiptError::Malformed)?;
                 validate_receipt_file(root, &file)?;
                 Ok(file)
             }
-            None => File::open_regular(&join_path(&self.root, name))
+            GitFileRoot::Ambient => File::open_regular(&join_path(&self.root, name))
                 .map_err(|_| AuditReceiptError::Malformed),
         }
     }
 
     fn sync(&self) -> Result<(), DurableFailure> {
         match &self.retained {
-            Some(root) => root.sync().map_err(|_| DurableFailure::AuditReceipt),
-            None => sync_receipt_directory(&self.root),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.sync().map_err(|_| DurableFailure::AuditReceipt),
+            GitFileRoot::Ambient => sync_receipt_directory(&self.root),
         }
     }
 }

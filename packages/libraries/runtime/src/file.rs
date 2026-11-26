@@ -723,6 +723,19 @@ pub fn sync_directory(path: &str) -> Result<(), FileError> {
     let directory = mrml_linux::NativeDirectory::open(path).ok_or(FileError::DirectoryFailed)?;
     directory.sync().then_some(()).ok_or(FileError::WriteFailed)
 }
+/// Request a native filesystem flush for a directory opened without following
+/// a final reparse point. An unsupported or denied flush returns an error.
+#[cfg(windows)]
+pub fn sync_directory(path: &str) -> Result<(), FileError> {
+    if path.is_empty() || path.as_bytes().contains(&0) {
+        return Err(FileError::InvalidPath);
+    }
+    let encoded = encode_windows_path(path).ok_or(FileError::InvalidPath)?;
+    mrml_windows::sync_directory_wide(&encoded)
+        .then_some(())
+        .ok_or(FileError::WriteFailed)
+}
+
 impl core::error::Error for FileError {}
 
 pub struct File {
@@ -1005,6 +1018,21 @@ mod tests {
             &crate::temporary_directory(),
             &crate::mrml_format!("{name}-{}", crate::process_id()),
         )
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_flush_accepts_directory_and_rejects_file() {
+        let root = test_path("mrml-directory-flush");
+        create_dir_all(&root).unwrap();
+        let path = crate::join_path(&root, "file");
+        write_file(&path, b"data").unwrap();
+        assert_eq!(sync_directory(&root), Ok(()));
+        assert_eq!(sync_directory(&path), Err(FileError::WriteFailed));
+        assert_eq!(sync_directory("bad\0path"), Err(FileError::InvalidPath));
+        remove_file(&path).unwrap();
+        sync_directory(&root).unwrap();
+        remove_dir_all(&root).unwrap();
     }
 
     #[cfg(windows)]

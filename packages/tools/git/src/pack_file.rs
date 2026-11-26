@@ -854,13 +854,18 @@ mod tests {
             assert_eq!(validated.largest_object, 13);
             assert_eq!(validated.checksum, scan.checksum);
 
+            #[cfg(target_os = "linux")]
             let directory = mrml_runtime::DirectoryCapability::open_root(&root).unwrap();
+            #[cfg(target_os = "linux")]
+            let open_pack = || {
+                directory
+                    .open_regular(format.name())
+                    .map_err(|_| PackError::Truncated)
+            };
+            #[cfg(windows)]
+            let open_pack = || File::open_regular(&path).map_err(|_| PackError::Truncated);
             let capability_validated = validate_pack_file_with_bases_from_opener(
-                || {
-                    directory
-                        .open_regular(format.name())
-                        .map_err(|_| PackError::Truncated)
-                },
+                open_pack,
                 format,
                 pack.len() as u64,
                 1,

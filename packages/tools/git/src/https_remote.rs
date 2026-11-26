@@ -1288,8 +1288,10 @@ mod tests {
 
     #[test]
     fn push_body_source_streams_prefix_then_exact_file_and_bounds_report() {
-        let path =
-            mrml_runtime::mrml_format!("/tmp/mrml-git-push-source-{}", mrml_runtime::process_id());
+        let path = mrml_runtime::join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-git-push-source-{}", mrml_runtime::process_id()),
+        );
         let _ = mrml_runtime::remove_file(&path);
         mrml_runtime::write_new_file(&path, b"PACK-file-bytes").unwrap();
         let file = File::open_regular(&path).unwrap();
@@ -1304,6 +1306,7 @@ mod tests {
             received.try_extend_from_slice(&chunk[..read]).unwrap();
         }
         assert_eq!(&received[..], b"prefix-PACK-file-bytes");
+        drop(source);
         mrml_runtime::remove_file(&path).unwrap();
 
         let mut report = LimitedResponseBody::new(4);

@@ -1,5 +1,6 @@
 //! Crash-durable filesystem persistence for bounded receive journals.
 
+use crate::git_file_root::GitFileRoot;
 use mrml_runtime::{
     File, Text, Vector, canonical_path, create_dir_all, join_path, path_is_directory,
     read_directory, remove_file, rename_file,
@@ -13,7 +14,7 @@ use crate::{
 
 pub struct ReceiveJournalDirectory {
     root: Text,
-    retained: Option<mrml_runtime::DirectoryCapability>,
+    retained: GitFileRoot,
 }
 
 impl ReceiveJournalDirectory {
@@ -28,7 +29,7 @@ impl ReceiveJournalDirectory {
         }
         Ok(Self {
             root,
-            retained: None,
+            retained: GitFileRoot::Ambient,
         })
     }
 
@@ -39,7 +40,7 @@ impl ReceiveJournalDirectory {
         validate_directory(&root)?;
         Ok(Self {
             root: Text::new(),
-            retained: Some(root),
+            retained: GitFileRoot::Retained(root),
         })
     }
 
@@ -130,38 +131,41 @@ impl ReceiveJournalDirectory {
 
     fn create_file(&self, name: &str) -> Result<File, DurableFailure> {
         match &self.retained {
-            Some(root) => {
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => {
                 let file = root
                     .create_new_file(name, 0o600)
                     .map_err(|_| DurableFailure::StaleLock)?;
                 validate_file(root, &file)?;
                 Ok(file)
             }
-            None => File::create_new(&join_path(&self.root, name))
+            GitFileRoot::Ambient => File::create_new(&join_path(&self.root, name))
                 .map_err(|_| DurableFailure::StaleLock),
         }
     }
 
     fn open_file(&self, name: &str) -> Result<File, ReceiveJournalError> {
         match &self.retained {
-            Some(root) => {
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => {
                 let file = root
                     .open_regular(name)
                     .map_err(|_| ReceiveJournalError::Malformed)?;
                 validate_journal_file(root, &file)?;
                 Ok(file)
             }
-            None => File::open_regular(&join_path(&self.root, name))
+            GitFileRoot::Ambient => File::open_regular(&join_path(&self.root, name))
                 .map_err(|_| ReceiveJournalError::Malformed),
         }
     }
 
     fn rename(&self, existing: &str, replacement: &str) -> Result<(), DurableFailure> {
         match &self.retained {
-            Some(root) => root
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root
                 .rename_child(existing, replacement)
                 .map_err(|_| DurableFailure::Rename),
-            None => rename_file(
+            GitFileRoot::Ambient => rename_file(
                 &join_path(&self.root, existing),
                 &join_path(&self.root, replacement),
             )
@@ -171,24 +175,27 @@ impl ReceiveJournalDirectory {
 
     fn remove(&self, name: &str) -> Result<(), DurableFailure> {
         match &self.retained {
-            Some(root) => root.remove_file(name).map_err(|_| DurableFailure::Rename),
-            None => remove_file(&join_path(&self.root, name)).map_err(|_| DurableFailure::Rename),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.remove_file(name).map_err(|_| DurableFailure::Rename),
+            GitFileRoot::Ambient => remove_file(&join_path(&self.root, name)).map_err(|_| DurableFailure::Rename),
         }
     }
 
     fn entries(&self) -> Result<Vector<mrml_runtime::DirectoryEntry>, ReceiveJournalError> {
         match &self.retained {
-            Some(root) => root
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root
                 .read_directory()
                 .map_err(|_| ReceiveJournalError::Malformed),
-            None => read_directory(&self.root).map_err(|_| ReceiveJournalError::Malformed),
+            GitFileRoot::Ambient => read_directory(&self.root).map_err(|_| ReceiveJournalError::Malformed),
         }
     }
 
     fn sync(&self) -> Result<(), DurableFailure> {
         match &self.retained {
-            Some(root) => root.sync().map_err(|_| DurableFailure::Fsync),
-            None => sync_journal_directory(&self.root),
+            #[cfg(target_os = "linux")]
+            GitFileRoot::Retained(root) => root.sync().map_err(|_| DurableFailure::Fsync),
+            GitFileRoot::Ambient => sync_journal_directory(&self.root),
         }
     }
 }

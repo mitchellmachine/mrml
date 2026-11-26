@@ -23,7 +23,6 @@ pub use channel::{
     sync_channel,
 };
 pub use env::environment_variable;
-#[cfg(unix)]
 pub use file::sync_directory;
 #[cfg(target_os = "linux")]
 pub use file::{DirectoryCapability, DirectoryMetadata, FileMetadata};
