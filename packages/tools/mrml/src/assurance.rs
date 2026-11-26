@@ -254,8 +254,9 @@ fn source_inventory(root: &Path) -> Result<SourceInventory, String> {
             .tests
             .checked_add(text.matches("#[test]").count())
             .ok_or("AssuranceSourceCountOverflow")?;
-        if metadata.len() > inventory.largest_bytes {
-            inventory.largest_bytes = metadata.len();
+        let source_bytes = lf_source_bytes(&text);
+        if source_bytes > inventory.largest_bytes {
+            inventory.largest_bytes = source_bytes;
             inventory.largest_path = relative.clone();
         }
         let counts = unsafe_counts(&text, &relative)?;
@@ -1268,6 +1269,13 @@ fn write_generated(root: &Path, relative: &str, text: &str) -> Result<(), String
         .map_err(|error| format!("AssuranceGeneratedWrite {{ path: {relative}, detail: {error} }}"))
 }
 
+// The on-disk cap above still uses the raw file size. The published inventory
+// uses logical source bytes so Git checkout line endings cannot change it.
+fn lf_source_bytes(value: &str) -> u64 {
+    let bytes = value.as_bytes();
+    (bytes.len() - bytes.windows(2).filter(|pair| *pair == b"\r\n").count()) as u64
+}
+
 fn normalize_newlines(value: &str) -> String {
     value.replace("\r\n", "\n")
 }
@@ -1483,6 +1491,15 @@ fn escape_markdown(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_size_is_independent_of_checkout_line_endings() {
+        let lf = "let text = \"é\";\n\n";
+        let crlf = lf.replace('\n', "\r\n");
+        assert_eq!(lf_source_bytes(lf), lf.len() as u64);
+        assert_eq!(lf_source_bytes(&crlf), lf_source_bytes(lf));
+        assert_eq!(lf_source_bytes("a\rb"), 3);
+    }
 
     #[test]
     fn unsafe_scanner_ignores_comments_and_literals() {
