@@ -6,43 +6,44 @@
 
 | Measure | Current value |
 | --- | ---: |
-| Workspace packages | 58 |
-| Package manifests | 58 |
-| Compile edges | 167 |
-| Package edges | 152 |
+| Workspace packages | 71 |
+| Package manifests | 71 |
+| Compile edges | 215 |
+| Package edges | 195 |
 | Runtime-interface edges | 5 |
 | Build-tool edges | 0 |
 | System-release edges | 3 |
-| Feature declarations | 91 |
-| Artifact declarations | 86 |
-| Exact build-input declarations | 114 |
+| Feature declarations | 94 |
+| Artifact declarations | 110 |
+| Exact build-input declarations | 196 |
 | Declared integration tests | 11 |
 | Declared examples | 8 |
 | Declared benchmarks | 1 |
-| Declared binaries | 19 |
+| Declared binaries | 30 |
 
 ## Source and test inventory
 
 | Measure | Current value |
 | --- | ---: |
-| Rust source files | 506 |
-| Rust source lines | 494895 |
-| Static `#[test]` annotations | 3769 |
-| Largest Rust source | `packages/compiler/core/src/codegen/tests.rs` (989719 bytes) |
-| Files containing admitted unsafe boundaries | 149 |
-| Unsafe blocks | 2298 |
-| Unsafe functions | 383 |
-| Unsafe implementations | 276 |
-| Unsafe extern blocks | 260 |
-| Unsafe traits | 64 |
-| Unsafe blocks without a nearby `SAFETY:` note | 2123 |
+| Rust source files | 745 |
+| Rust source lines | 659455 |
+| Static `#[test]` annotations | 4672 |
+| Largest Rust source | `packages/compiler/core/src/codegen/tests.rs` (1017462 bytes) |
+| Files containing admitted unsafe boundaries | 170 |
+| Unsafe blocks | 2492 |
+| Unsafe functions | 418 |
+| Unsafe implementations | 290 |
+| Unsafe extern blocks | 283 |
+| Unsafe traits | 68 |
+| Unsafe blocks without a preceding `SAFETY:` line comment | 2258 |
+| Unsafe attributes (manual review) | 139 |
 
 ## Enforced repository gates
 
 - Build inputs are admitted by stable ID plus kind, repository path, and line-independent token fingerprint. Count-preserving substitution, stale declarations, duplicate identities, comments, strings, and multiline expressions have dedicated audit tests.
 - Audited Rust source files are limited to 2 MiB; the compiler code generator is split into phase-oriented include units below that ceiling.
 - Unsafe growth is fail-closed against `tools/ci/unsafe-policy.tsv`; reductions pass without increasing a budget. The detailed generated inventory is in [UNSAFE_INVENTORY.md](UNSAFE_INVENTORY.md).
-- CI checks canonical manifests and lock state, the exact-site audit, generated-document drift, local Markdown links, full native Linux and Windows tests, the host CUDA feature profile, the CUDA PTX target, stage-zero Clippy, and full Linux AddressSanitizer tests.
+- CI checks canonical manifests and lock state, exact-site inputs, generated-document drift, local Markdown links, full Linux and Windows builds/tests, MRML and UEFI builds, declared MRML host-model tests, authenticated QEMU guest boot, CUDA compilation, stage-zero Clippy, and Linux AddressSanitizer tests.
 
 ## CI configuration evidence
 

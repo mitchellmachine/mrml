@@ -37,13 +37,11 @@ including Windows/Linux builds and tests and separate MRML build and guest
 coverage. Configuration is not evidence of a passing run.
 
 [Generated workspace status](STATUS.md) and the
-[generated unsafe inventory](UNSAFE_INVENTORY.md) are retained earlier
-snapshots, not live counts. The normal `mrml assurance generate` workflow
-cannot refresh them while the repository-wide unsafe-policy check fails.
-The remaining unsafe-policy backlog is recorded in the
-[audit remediation record](AUDIT_REMEDIATION.md). Do not widen budgets or
-suppress gates just to regenerate documentation. A manifest check, local test, or historical receipt
-does not imply that repository-wide assurance has passed.
+[generated unsafe inventory](UNSAFE_INVENTORY.md) are checked snapshots, not
+live counts. Passing the inventory gate means the checkout stays within the
+recorded limits; it does not attest that the unsafe boundaries are sound.
+Exact owner-authorized carry-forward caps and the remaining focused review
+backlog are recorded in the [audit remediation record](AUDIT_REMEDIATION.md).
 
 For the rest of the project, use the [documentation guide](human/DOCUMENTATION.md)
 or the [technical index](machine/README.md). Dated oracle and operational

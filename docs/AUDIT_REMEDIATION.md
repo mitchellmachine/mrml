@@ -26,9 +26,16 @@ It is not an independent security audit or a claim of full semantic review.
 
 ## Remaining review
 
-`mrml assurance check` is not green. Review remaining unadmitted or above-budget
-files with `mrml assurance inspect`; it cannot grant policy approval. Do not
-approve a bulk baseline from measured counts. Start with kernel/boot/VMM
+The owner authorized exact carry-forward caps for the 25 blocked files to
+restore the CI regression gate. This records open review debt; it does not
+approve the implementations. No extra headroom was added to those entries
+and the assurance checker is unchanged. Any new above-cap or unlisted
+boundary still fails. Linux descriptor consolidation removed 24 unsafe
+blocks before recording its cap.
+
+Continue focused reviews of the carry-forward files. Use
+`mrml assurance inspect` for future drift; it cannot grant policy approval.
+Start with kernel/boot/VMM
 ownership, pointer lifetimes and revocation, followed by storage/DMA teardown,
 Windows/Linux FFI and the hosted service/signing boundaries. Record each
 reviewed function and caller, invariant, platform evidence, finding, and
