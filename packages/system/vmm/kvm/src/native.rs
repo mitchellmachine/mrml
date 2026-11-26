@@ -497,8 +497,12 @@ impl KvmSystem {
         &self,
         vcpu_id: u32,
     ) -> Result<KvmBackend<N>, KvmError> {
+        let cpuid = self.virtual_cpuid(vcpu_id, 1)?;
         let vm = self.create_vm()?;
         let vcpu = vm.create_vcpu(vcpu_id)?;
+        // KVM validates long-mode register state against the guest CPUID,
+        // including its physical address width, even without an IRQ chip.
+        vcpu.set_cpuid(&cpuid)?;
         Ok(KvmBackend {
             vcpu,
             secondary: None,
@@ -2482,6 +2486,34 @@ mod tests {
         pe[section + 36..section + 40].copy_from_slice(&0x6000_0000u32.to_le_bytes());
         pe[0x200] = 0xcc;
         pe
+    }
+
+    #[test]
+    fn live_non_apic_vcpu_accepts_long_mode_state() {
+        let system = match KvmSystem::open() {
+            Ok(system) => system,
+            Err(KvmError::SystemCall) => return,
+            Err(error) => panic!("available KVM failed validation: {error:?}"),
+        };
+        assert_eq!(
+            system.create_backend::<1>(1).err(),
+            Some(KvmError::InvalidVcpu)
+        );
+        let mut backend = system.create_backend::<1>(0).unwrap();
+        let root = 0x10_0000;
+        backend.map_memory(root, PAGE_SIZE as usize, false).unwrap();
+        backend
+            .vcpu
+            .configure_long_mode_entry(
+                0xffff_8000_0000_1000,
+                0xffff_8000_0000_2000,
+                root,
+                0,
+                0,
+                0,
+                0,
+            )
+            .unwrap();
     }
 
     #[test]
