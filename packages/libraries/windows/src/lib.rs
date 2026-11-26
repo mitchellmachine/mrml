@@ -1782,7 +1782,10 @@ pub unsafe fn spawn_joinable_thread(
 
 #[derive(Debug)]
 #[cfg(windows)]
-pub struct NativeFile(*mut c_void);
+pub struct NativeFile(*mut c_void, core::cell::Cell<bool>);
+
+#[cfg(windows)]
+mod file_security;
 
 #[cfg(windows)]
 unsafe impl Send for NativeFile {}
@@ -1799,6 +1802,33 @@ impl NativeFile {
             && unsafe { information.assume_init() }.attributes
                 & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
                 == 0
+    }
+
+    /// Acquires a blocking exclusive lock over the file, including future growth.
+    /// Synchronous handles never leave a request pending on the stack.
+    pub fn lock_exclusive(&self) -> bool {
+        if self.1.get() {
+            return true;
+        }
+        let locked = file_security::lock_exclusive(self);
+        self.1.set(locked);
+        locked
+    }
+
+    /// Opens only security-metadata access and rejects final reparse points.
+    pub fn open_owner_mode(path: &[u16]) -> Option<Self> {
+        file_security::open_owner_mode(path)
+    }
+
+    /// Applies Windows SID ownership and a protected DACL to this handle.
+    pub fn set_owner_mode(
+        &self,
+        owner: &core::ffi::CStr,
+        group: &core::ffi::CStr,
+        mode: u32,
+    ) -> bool {
+        Self::handle_is_regular_file(self.0)
+            && file_security::set_owner_mode(self, owner, group, mode).is_some()
     }
 
     pub fn open_read(path: &[u16]) -> Option<Self> {
@@ -1819,7 +1849,7 @@ impl NativeFile {
                 core::ptr::null_mut(),
             )
         };
-        (handle as isize != -1).then_some(Self(handle))
+        (handle as isize != -1).then(|| Self(handle, core::cell::Cell::new(false)))
     }
 
     pub fn create_write(path: &[u16]) -> Option<Self> {
@@ -1840,7 +1870,7 @@ impl NativeFile {
                 core::ptr::null_mut(),
             )
         };
-        (handle as isize != -1).then_some(Self(handle))
+        (handle as isize != -1).then(|| Self(handle, core::cell::Cell::new(false)))
     }
 
     pub fn create_new_write(path: &[u16]) -> Option<Self> {
@@ -1867,7 +1897,7 @@ impl NativeFile {
             let _ = unsafe { CloseHandle(handle) };
             return None;
         }
-        Some(Self(handle))
+        Some(Self(handle, core::cell::Cell::new(false)))
     }
 
     pub fn open_regular_read(path: &[u16]) -> Option<Self> {
@@ -1893,7 +1923,7 @@ impl NativeFile {
             let _ = unsafe { CloseHandle(handle) };
             return None;
         }
-        Some(Self(handle))
+        Some(Self(handle, core::cell::Cell::new(false)))
     }
 
     pub fn create_secret(path: &[u16]) -> Option<Self> {
@@ -1988,7 +2018,7 @@ impl NativeFile {
             let _ = unsafe { CloseHandle(handle) };
             return None;
         }
-        Some(Self(handle))
+        Some(Self(handle, core::cell::Cell::new(false)))
     }
 
     pub fn sync(&self) -> bool {
@@ -2011,7 +2041,7 @@ impl NativeFile {
                 core::ptr::null_mut(),
             )
         };
-        (handle as isize != -1).then_some(Self(handle))
+        (handle as isize != -1).then(|| Self(handle, core::cell::Cell::new(false)))
     }
 
     pub fn read(&self, buffer: &mut [u8]) -> Option<usize> {

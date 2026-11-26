@@ -47,12 +47,12 @@ the named commit and current source.
 - Current build/oracle: `docs/compiler/oracles/ORACLE-0004.md`, rustc
   `1.102.0-nightly`, full commit `6c709eb428d472a3c3d93681c1ba37d44a1c27cf`,
   dated 2026-11-25 and distributed as `nightly-2026-11-26`. Arch WSL2
-  passed all 1,357 compiler tests. Native Windows passed 1,339 core tests
-  and, after the Linux-only file API guards, all 18 driver tests using
-  gnullvm without MSVC or the Windows SDK. The Windows runtime suite passed
-  all 48 tests after its PowerShell fixture was made explicitly UTF-8.
-  The earlier driver blocker remains recorded in ORACLE-0004 as baseline
-  evidence. Prior oracle records and historical probes remain unchanged.
+  passed all 1,357 compiler tests. Native Windows passed 1,339 core tests.
+  Both native Windows (`x86_64-pc-windows-gnullvm`, no MSVC or Windows SDK)
+  and Arch WSL2 passed 50 runtime tests and 18 driver tests after the Windows
+  retained-file operations were implemented. The earlier driver blocker
+  remains recorded in ORACLE-0004 as baseline evidence. Prior oracle records
+  and historical probes remain unchanged.
 - Language direction: Rust 2024 is the edition floor. Contemporary and future
   Rust semantics are the target; obsolete editions, historical unsoundness,
   rustc internals, diagnostic wording, and unstable Rust ABI details are not
@@ -62,6 +62,34 @@ Do not replace the exact oracle with the newest installed nightly. A future
 oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
+
+## Hosted Windows file operations
+
+- Locking waits on a whole-file Win32 byte-range lock, including future writes
+  beyond the current end of the file. Ordinary I/O from competing handles fails
+  while the lock is held. Memory-mapped access is outside that guarantee.
+- Ownership changes use SID strings and a dedicated regular-file handle opened
+  for Windows security-metadata access. They replace the DACL by handle and
+  protect it from inheritance. Supported modes have nested owner, group and
+  other grants; unrepresentable modes and Unix special bits fail instead of
+  widening access. Open handles and Windows privilege or owner-rights rules
+  are not revoked or redefined. Linux numeric UID/GID behavior is unchanged.
+- Native Windows commands (both passed):
+  `mrml test org.mrml.library.runtime --target windows --release` and
+  `mrml test org.mrml.compiler.driver --target windows --release`.
+  Arch WSL2 commands (both passed):
+  `mrml test org.mrml.library.runtime --target linux --release` and
+  `mrml test org.mrml.compiler.driver --target linux --release`.
+- In a native Windows disposable-file probe, Windows denied a write-open
+  after mode 0400, restored write access at 0644, and reported the requested
+  primary group and protected ACL with three explicit grants. The normal
+  read handle could not change the DACL. This is native hosted file-system
+  evidence, not coverage for every Windows file system or account policy.
+- The workspace manifest check passed. The repository-wide assurance check
+  stopped at a pre-existing unsafe-policy omission for
+  `docs/compiler/probes/pinned_std_thread_tls_execution.rs`.
+- Patent review: **NOT_TRIGGERED**; this uses existing operating-system
+  locking and access-control primitives. See [review log](../patents/REVIEW_LOG.md).
 
 ## Latest bounded language milestone
 

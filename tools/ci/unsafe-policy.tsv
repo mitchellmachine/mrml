@@ -73,6 +73,7 @@ packages/libraries/storage-nvme/src/userspace_syscall_adapter.rs	4	2	2	0	1	4	Bas
 packages/libraries/uefi/src/lib.rs	84	13	1	40	0	84	Baseline-admitted firmware, boot, or freestanding hardware boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/uefi/src/main.rs	110	11	9	2	0	107	Baseline-admitted firmware, boot, or freestanding hardware boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/uefi/src/tpm.rs	4	1	5	0	1	4	Baseline-admitted firmware, boot, or freestanding hardware boundary; count growth is blocked pending focused file-level invariant review.
+packages/libraries/windows/src/file_security.rs	10	0	0	6	0	0	Synchronous file locking, explicit metadata-only file access, and handle-bound Windows SID and protected DACL operations.
 packages/libraries/windows/src/lib.rs	229	7	9	26	0	220	Baseline-admitted Windows platform FFI boundary plus reviewed TCP_NODELAY and getpeername calls with fixed socket ABI types and exact lengths.
 packages/libraries/zim/src/service_probe_main.rs	11	4	0	1	0	11	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/libraries/zstd/src/kernel_transport.rs	0	0	1	0	0	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.

@@ -921,8 +921,9 @@ impl File {
             .ok_or(FileError::WriteFailed)
     }
 
-    /// Holds an exclusive advisory lock until this file is dropped.
-    #[cfg(target_os = "linux")]
+    /// Waits for an exclusive lock held until this file is dropped.
+    /// Linux uses advisory locking. Windows denies competing handle I/O across
+    /// the locked range, but does not exclude memory-mapped access.
     pub fn lock_exclusive(&self) -> Result<(), FileError> {
         self.inner
             .lock_exclusive()
@@ -952,6 +953,34 @@ impl File {
             .ok_or(FileError::WriteFailed)
     }
 
+    /// Opens an existing regular file for Windows ACL and ownership changes
+    /// without requesting data access or following the final reparse point.
+    #[cfg(windows)]
+    pub fn open_owner_mode(path: &str) -> Result<Self, FileError> {
+        let path = encode_windows_path(path).ok_or(FileError::InvalidPath)?;
+        let inner =
+            mrml_windows::NativeFile::open_owner_mode(&path).ok_or(FileError::OpenFailed)?;
+        Ok(Self { inner, position: 0 })
+    }
+
+    /// Sets a Windows owner, primary group, and protected file DACL by handle.
+    /// Supply Windows SIDs (not Unix IDs) and use a handle opened by
+    /// [Self::open_owner_mode]. Windows grants are additive: special Unix bits
+    /// and modes where group exceeds owner or other exceeds group are rejected.
+    /// The DACL replaces inherited grants but cannot revoke existing handles.
+    #[cfg(windows)]
+    pub fn set_owner_mode(
+        &self,
+        owner: &core::ffi::CStr,
+        group: &core::ffi::CStr,
+        mode: u32,
+    ) -> Result<(), FileError> {
+        self.inner
+            .set_owner_mode(owner, group, mode)
+            .then_some(())
+            .ok_or(FileError::WriteFailed)
+    }
+
     pub const fn position(&self) -> u64 {
         self.position
     }
@@ -976,6 +1005,60 @@ mod tests {
             &crate::temporary_directory(),
             &crate::mrml_format!("{name}-{}", crate::process_id()),
         )
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_file_lock_denies_other_handle_io_until_drop() {
+        let path = test_path("mrml-exclusive-lock");
+        let mut owner = File::create_new(&path).unwrap();
+        let mut other = File::open(&path).unwrap();
+        // Lock an empty file and then grow it: new bytes must be covered.
+        owner.lock_exclusive().unwrap();
+        owner.lock_exclusive().unwrap();
+        owner.write_all(b"z").unwrap();
+        let mut byte = [0];
+        assert_eq!(other.read_exact(&mut byte), Err(FileError::ReadFailed));
+        drop(owner);
+
+        other.lock_exclusive().unwrap();
+        other.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, *b"z");
+        drop(other);
+        remove_file(&path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_owner_mode_rejects_unsupported_modes_and_bad_sids() {
+        let path = test_path("mrml-owner-mode");
+        write_file(&path, b"unchanged").unwrap();
+        let file = File::open_owner_mode(&path).unwrap();
+        let owner = c"S-1-5-32-544";
+        let group = c"S-1-5-32-545";
+        assert_eq!(
+            file.set_owner_mode(owner, group, 0o460),
+            Err(FileError::WriteFailed)
+        );
+        assert_eq!(
+            file.set_owner_mode(owner, group, 0o6444),
+            Err(FileError::WriteFailed)
+        );
+        assert_eq!(
+            file.set_owner_mode(c"S-1-invalid", group, 0o600),
+            Err(FileError::WriteFailed)
+        );
+        assert_eq!(
+            file.set_owner_mode(c"S-1-1-0", group, 0o600),
+            Err(FileError::WriteFailed)
+        );
+        assert_eq!(
+            file.set_owner_mode(owner, owner, 0o600),
+            Err(FileError::WriteFailed)
+        );
+        drop(file);
+        drop(File::open_write(&path).unwrap());
+        remove_file(&path).unwrap();
     }
 
     #[test]
