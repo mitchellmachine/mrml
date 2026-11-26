@@ -67,10 +67,11 @@ use mrml_kernel::arch::x86_64::LocalApicTimer;
 #[cfg(any(
     feature = "application-probe",
     feature = "uefi-service-preemption-probe",
+    feature = "uefi-fat32-restart-probe",
     feature = "ahci-service-manager-probe"
 ))]
 use mrml_kernel::arch::x86_64::PreallocatedPageTableStore;
-#[cfg(feature = "uefi-service-preemption-probe")]
+#[cfg(any(feature = "uefi-service-preemption-probe", feature = "uefi-fat32-restart-probe"))]
 use mrml_kernel::arch::x86_64::ServiceAddressSpace;
 #[cfg(any(
     feature = "timer-probe",
@@ -133,7 +134,8 @@ use mrml_kernel::{
 };
 #[cfg(any(
     feature = "application-probe",
-    feature = "uefi-service-preemption-probe"
+    feature = "uefi-service-preemption-probe",
+    feature = "uefi-fat32-restart-probe"
 ))]
 use mrml_kernel::{ArtifactKind, SignedArtifact, TrustRoot};
 #[cfg(feature = "service-probe")]
@@ -498,6 +500,8 @@ static mut FAT32_READY_STATE: Option<HostedFat32Ready> = None;
 mod fat32_data_probe;
 #[cfg(feature = "fat32-data-probe")]
 static mut FAT32_DATA_STATE: Option<fat32_data_probe::HostedFat32Data> = None;
+#[cfg(feature = "uefi-fat32-restart-probe")]
+mod native_fat32_probe;
 
 #[cfg(feature = "fat32-ready-probe")]
 struct HostedFat32Ready {
@@ -1497,7 +1501,16 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             if data.should_restart() {
                                 let caller = ready.caller;
                                 let block = data.block_task();
-                                let entry = data.restore_entry();
+                                #[cfg(not(feature = "uefi-fat32-restart-probe"))]
+                                let (context, retired_root, erase_ranges) = (
+                                    UserContext::new(PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()), data.restore_entry(), 0x0074_0000)
+                                        .unwrap_or_else(|_| halt()),
+                                    SERVICE_ROOT,
+                                    [(0x1_4000_0000u64, 0x0060_0000u64, 512u64, false),
+                                     (0x0070_0000u64, 0x0080_0000u64, 64u64, true)],
+                                );
+                                #[cfg(feature = "uefi-fat32-restart-probe")]
+                                let (context, retired_root, erase_ranges) = native_fat32_probe::restart_layout();
                                 let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR)).as_mut().unwrap_or_else(|| halt());
                                 let service = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt())[0];
                                 let management = (*core::ptr::addr_of!(SERVICE_MANAGEMENT)).as_ref().unwrap_or_else(|| halt());
@@ -1507,31 +1520,21 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                                     halt();
                                 }
                                 let _ = runtime.consume_idle_dispatch(retirement.dispatch).unwrap_or_else(|_| halt());
-                                let context = UserContext::new(PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()), entry, 0x0074_0000)
-                                    .unwrap_or_else(|_| halt());
                                 if !matches!(
                                     supervisor.prepare_restart_at(service, management, control, Priority::RESPONSIVE, context, 0),
                                     Err(mrml_kernel::ServiceError::CleanupRequired)
                                 ) {
                                     halt();
                                 }
-                                // This opt-in probe is single-vCPU. At the syscall
-                                // boundary the retired A root is still active, and
-                                // the VMM owns its private, nonoverlapping image and
-                                // stack arenas. No guest address is selected by wire.
+                                // Single BSP, retiring the active root. All ranges
+                                // are bound to the boot-provisioned private arenas.
                                 let mut eraser = fat32_data_probe::RestartEraser(|task, context: UserContext| {
-                                    if task != current || context.page_table().get() != SERVICE_ROOT {
+                                    if task != current || context.page_table().get() != retired_root {
                                         return Err(());
                                     }
                                     let mut active = ActivePageTables::current().map_err(|_| ())?;
                                     if active.root() != context.page_table() { return Err(()); }
-                                    // The VMM loads the verified image at 0x140000000
-                                    // backed by its own bounded arena, and a separate
-                                    // exactly 64-page guarded writable stack.
-                                    for (base, physical, pages, is_stack) in [
-                                        (0x1_4000_0000u64, 0x0060_0000u64, 512u64, false),
-                                        (0x0070_0000u64, 0x0080_0000u64, 64u64, true),
-                                    ] {
+                                    for (base, physical, pages, is_stack) in erase_ranges {
                                         for page in 0..pages {
                                             let delta = page * mrml_kernel::PAGE_SIZE;
                                             let address = base + delta;
@@ -1583,6 +1586,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                                 }
                                 enter_service_task(runtime, replacement);
                             }
+                            #[cfg(feature = "uefi-fat32-restart-probe")]
+                            native_fat32_probe::finish(true);
                             asm!("out dx, eax", in("dx") SERVICE_PROBE_PORT,
                                 in("eax") if cfg!(feature = "fat32-restart-probe") { 0xf322u32 } else { 0xf321u32 },
                                 options(nomem, nostack));
@@ -1590,6 +1595,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         }
                         Some((sequence, false)) => frame.complete(sequence),
                         None => {
+                            #[cfg(feature = "uefi-fat32-restart-probe")]
+                            native_fat32_probe::finish(false);
                             asm!("out dx, eax", in("dx") SERVICE_PROBE_PORT, in("eax")
                                 ((reply_status & 0xff) << 16 | (0xf400u32 + data.stage() + if receiver == ready.caller { 0 } else { 0x10 })),
                                 options(nomem, nostack));
@@ -4062,38 +4069,52 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             let _ = handoff;
             #[cfg(feature = "fat32-ready-probe")]
             {
-                let entry = hosted_service_entry();
+                #[cfg(feature = "uefi-fat32-restart-probe")]
+                let first = native_fat32_probe::prepare(handoff);
+                #[cfg(not(feature = "uefi-fat32-restart-probe"))]
+                let first = UserContext::new(
+                    PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
+                    hosted_service_entry(),
+                    0x0074_0000,
+                ).unwrap_or_else(|_| halt());
                 let mut runtime =
                     TaskRuntime::<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>::new(1_000, 1)
                         .unwrap_or_else(|_| halt());
-                let mut make = |physical, priority| {
+                let provider = runtime.create(Priority::RESPONSIVE, first).unwrap_or_else(|_| halt());
+                #[cfg(not(feature = "fat32-restart-probe"))]
+                let mut make = |physical| {
                     runtime
                         .create(
-                            priority,
+                            Priority::NORMAL,
                             UserContext::new(
                                 PhysAddr::new(physical).unwrap_or_else(|_| halt()),
-                                entry,
-                                0x0074_0000,
+                                first.instruction_pointer(),
+                                first.stack_pointer(),
                             )
                             .unwrap_or_else(|_| halt()),
                         )
                         .unwrap_or_else(|_| halt())
                 };
-                let provider = make(SERVICE_ROOT, Priority::RESPONSIVE);
                 // Neither placeholder executes. This mode terminates at the
                 // verified readiness boundary, before dispatching any FS RPC.
                 #[cfg(not(feature = "fat32-restart-probe"))]
-                let (caller, block) = (make(SERVICE_B_ROOT, Priority::NORMAL), make(SERVICE_C_ROOT, Priority::NORMAL));
-                #[cfg(feature = "fat32-restart-probe")]
+                let (caller, block) = (make(SERVICE_B_ROOT), make(SERVICE_C_ROOT));
+                #[cfg(all(feature = "fat32-restart-probe", not(feature = "uefi-fat32-restart-probe")))]
                 let (caller, block) = {
-                    // Kernel-owned inbox identities have no executable user lifecycle.
-                    // Keep slot B's fresh verified PE/stack reserved for the successor.
                     let mut parked = |root| runtime.create_for_construction(
                         Priority::NORMAL,
-                        UserContext::new(PhysAddr::new(root).unwrap_or_else(|_| halt()), entry, 0x0074_0000)
+                        UserContext::new(PhysAddr::new(root).unwrap_or_else(|_| halt()), first.instruction_pointer(), 0x0074_0000)
                             .unwrap_or_else(|_| halt()),
                     ).unwrap_or_else(|_| halt());
                     (parked(SERVICE_C_ROOT), parked(0x0160_0000))
+                };
+                #[cfg(feature = "uefi-fat32-restart-probe")]
+                let (caller, block) = {
+                    // These inbox identities never become runnable.
+                    let mut parked = || runtime.create_for_construction(
+                        Priority::NORMAL, first
+                    ).unwrap_or_else(|_| halt());
+                    (parked(), parked())
                 };
                 let state = HostedFat32Ready::install(&mut runtime, provider, caller, block, FAT32_READY_ENDPOINT, 5);
                 #[cfg(feature = "fat32-restart-probe")]
@@ -5044,7 +5065,7 @@ fn run_service_probe(handoff: &BootHandoff, probe: impl FnOnce(&BootHandoff)) ->
     halt()
 }
 
-#[cfg(feature = "uefi-service-preemption-probe")]
+#[cfg(any(feature = "uefi-service-preemption-probe", feature = "uefi-fat32-restart-probe"))]
 fn embedded_service_root() -> Option<[u8; 64]> {
     let encoded = option_env!("MRML_SERVICE_ROOT_DIGEST_HEX")?.as_bytes();
     if encoded.len() != 128 {
@@ -5084,7 +5105,8 @@ fn decode_digest(encoded: &[u8]) -> Option<[u8; 64]> {
 
 #[cfg(any(
     feature = "application-probe",
-    feature = "uefi-service-preemption-probe"
+    feature = "uefi-service-preemption-probe",
+    feature = "uefi-fat32-restart-probe"
 ))]
 fn hex_nibble(byte: u8) -> Option<u8> {
     match byte {
@@ -5115,7 +5137,7 @@ fn parse_nonzero_version(bytes: &[u8]) -> Option<u64> {
     (value != 0).then_some(value)
 }
 
-#[cfg(feature = "uefi-service-preemption-probe")]
+#[cfg(any(feature = "uefi-service-preemption-probe", feature = "uefi-fat32-restart-probe"))]
 fn embedded_service_minimum_version() -> Option<u64> {
     let bytes = option_env!("MRML_SERVICE_MIN_VERSION")?.as_bytes();
     if bytes.is_empty() || bytes.len() > 20 {

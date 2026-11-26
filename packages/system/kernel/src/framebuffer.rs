@@ -165,38 +165,41 @@ impl<'a> FramebufferSurface<'a> {
     }
 
     /// Paint the kernel's early-boot marker without a font or compositor dependency.
-    /// Small diagnostic surfaces retain the existing colored marker.
     pub fn mark_kernel_ready(&mut self, color: Color) -> Result<(), FramebufferError> {
-        const GLYPHS: [[u8; 7]; 10] = [
-            [17, 27, 21, 21, 17, 17, 17], // M
-            [30, 17, 17, 30, 20, 18, 17], // R
-            [16, 16, 16, 16, 16, 16, 31], // L
-            [0; 7],                       // space
-            [17, 18, 20, 24, 20, 18, 17], // K
-            [31, 16, 16, 30, 16, 16, 31], // E
-            [17, 25, 21, 19, 17, 17, 17], // N
-            [14, 17, 17, 31, 17, 17, 17], // A
-            [30, 17, 17, 17, 17, 17, 30], // D
-            [17, 17, 10, 4, 4, 4, 4],     // Y
-        ];
-        const TEXT: [usize; 17] = [0, 1, 0, 2, 3, 4, 5, 1, 6, 5, 2, 3, 1, 5, 7, 8, 9];
+        self.draw_boot_label(b"MRML KERNEL READY", color)
+    }
+
+    /// Draw a bounded early-boot label. Deliberately not a general text renderer.
+    pub fn draw_boot_label(&mut self, label: &[u8], color: Color) -> Result<(), FramebufferError> {
         const X: u32 = 16;
         const Y: u32 = 24;
-        const ZOOM: u32 = 3;
-        if self.info.width < X + (TEXT.len() as u32 * 6 - 1) * ZOOM
-            || self.info.height < Y + 7 * ZOOM
+        if label.is_empty()
+            || label.len() > 40
+            || label.iter().any(|&byte| boot_glyph(byte).is_none())
         {
+            return Err(FramebufferError::OutOfBounds);
+        }
+        let columns = label.len() as u32 * 6 - 1;
+        let zoom = self
+            .info
+            .width
+            .saturating_sub(X)
+            .checked_div(columns)
+            .unwrap_or(0)
+            .min(3);
+        if zoom == 0 || self.info.height < Y + 7 * zoom {
             return Ok(());
         }
-        for (column, glyph) in TEXT.iter().copied().enumerate() {
-            for (row, bits) in GLYPHS[glyph].iter().copied().enumerate() {
+        for (column, byte) in label.iter().copied().enumerate() {
+            let glyph = boot_glyph(byte).ok_or(FramebufferError::OutOfBounds)?;
+            for (row, bits) in glyph.into_iter().enumerate() {
                 for bit in 0..5 {
                     if bits & (1 << (4 - bit)) != 0 {
                         self.fill_rectangle(
-                            X + (column as u32 * 6 + bit) * ZOOM,
-                            Y + row as u32 * ZOOM,
-                            ZOOM,
-                            ZOOM,
+                            X + (column as u32 * 6 + bit) * zoom,
+                            Y + row as u32 * zoom,
+                            zoom,
+                            zoom,
                             color,
                         )?;
                     }
@@ -207,9 +210,69 @@ impl<'a> FramebufferSurface<'a> {
     }
 }
 
+fn boot_glyph(byte: u8) -> Option<[u8; 7]> {
+    Some(match byte {
+        b'M' => [17, 27, 21, 21, 17, 17, 17],
+        b'R' => [30, 17, 17, 30, 20, 18, 17],
+        b'L' => [16, 16, 16, 16, 16, 16, 31],
+        b' ' => [0; 7],
+        b'K' => [17, 18, 20, 24, 20, 18, 17],
+        b'E' => [31, 16, 16, 30, 16, 16, 31],
+        b'N' => [17, 25, 21, 19, 17, 17, 17],
+        b'A' => [14, 17, 17, 31, 17, 17, 17],
+        b'D' => [30, 17, 17, 17, 17, 17, 30],
+        b'Y' => [17, 17, 10, 4, 4, 4, 4],
+        b'F' => [31, 16, 16, 30, 16, 16, 16],
+        b'T' => [31, 4, 4, 4, 4, 4, 4],
+        b'3' => [30, 1, 1, 14, 1, 1, 30],
+        b'2' => [14, 17, 1, 2, 4, 8, 31],
+        b'S' => [15, 16, 16, 14, 1, 1, 30],
+        b'O' => [14, 17, 17, 17, 17, 17, 14],
+        b'P' => [30, 17, 17, 30, 16, 16, 16],
+        b'I' => [14, 4, 4, 4, 4, 4, 14],
+        b'B' => [30, 17, 17, 30, 17, 17, 30],
+        b'8' => [14, 17, 17, 14, 17, 17, 14],
+        b':' => [0, 4, 4, 0, 4, 4, 0],
+        b'-' => [0, 0, 0, 31, 0, 0, 0],
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fat32_terminal_label_draws_and_invalid_label_leaves_pixels_unchanged() {
+        let info = FramebufferInfo::new(
+            0x1000,
+            38_400,
+            200,
+            48,
+            200,
+            PixelFormat::RedGreenBlueReserved,
+        )
+        .unwrap();
+        let mut bytes = [0u8; 38_400];
+        let white = Color {
+            red: 255,
+            green: 255,
+            blue: 255,
+        };
+        let mut surface = FramebufferSurface::new(info, &mut bytes).unwrap();
+        assert_eq!(
+            surface.draw_boot_label(b"FAT32?", white),
+            Err(FramebufferError::OutOfBounds)
+        );
+        assert!(surface.bytes.iter().all(|&byte| byte == 0));
+        surface
+            .draw_boot_label(b"FAT32 RESTART: PASS - 28 BYTES", white)
+            .unwrap();
+        let first = (24 * 200 + 16) * 4;
+        let last = (24 * 200 + 16 + 29 * 6 + 1) * 4;
+        assert_eq!(&surface.bytes[first..first + 4], &[255, 255, 255, 0]);
+        assert_eq!(&surface.bytes[last..last + 4], &[255, 255, 255, 0]);
+    }
 
     #[test]
     fn ready_text_requires_room_and_respects_padding() {

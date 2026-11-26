@@ -123,6 +123,7 @@ packages/services/storage/src/service_loop.rs	0	0	2	0	1	0	Baseline-admitted low-
 packages/services/storage/src/storage_module.rs	4	1	0	0	0	4	Storage module adapter; counts remain fixed to exact installed module bytes, bounded entry construction, and teardown.
 packages/services/storage/src/transaction.rs	0	0	1	0	0	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/system/bootloader/src/main.rs	249	46	7	8	0	246	Boot entry, interrupt and privileged hardware boundaries; exact carry-forward baseline authorized to restore regression tracking, not a completed safety review.
+packages/system/bootloader/src/native_fat32_probe.rs	6	0	0	0	0	0	Opt-in BSP firmware diagnostic: retained verified artifact, two exact disjoint page-table stores, kernel-only framebuffer, and debug-port trace. No undocumented blocks admitted.
 packages/system/bootloader/src/vmx_probe.rs	49	9	1	0	0	49	Baseline-admitted firmware, boot, or freestanding hardware boundary; count growth is blocked pending focused file-level invariant review.
 packages/system/kernel/src/arch/x86_64/active_user_copy.rs	6	4	2	0	1	6	Baseline-admitted kernel, virtualization, mapping, or device boundary; count growth is blocked pending focused file-level invariant review.
 packages/system/kernel/src/arch/x86_64/ap_trampoline.rs	8	1	0	0	0	8	Baseline-admitted kernel, virtualization, mapping, or device boundary; count growth is blocked pending focused file-level invariant review.

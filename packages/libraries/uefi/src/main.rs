@@ -144,8 +144,13 @@ const RELEASE_PUBLIC_KEY_PATH: &[u16] = &[
 const RELEASE_SIGNATURE_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 82, 69, 76, 69, 65, 83, 69, 46, 83, 73, 71, 0,
 ];
-const SERVICE_STACK_PAGES: usize = 16;
-const SERVICE_TABLE_PAGES: usize = 64;
+const SERVICE_SLOTS: usize = if cfg!(feature = "fat32-restart-probe") {
+    2
+} else {
+    1
+};
+const SERVICE_STACK_PAGES: usize = if SERVICE_SLOTS == 2 { 128 } else { 16 };
+const SERVICE_TABLE_PAGES: usize = SERVICE_SLOTS * 64;
 
 #[derive(Clone, Copy)]
 struct Framebuffer {
@@ -821,7 +826,10 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         return Err(LOAD_ERROR);
     }
     let service_image_size = service_verified.image().image_size() as usize;
-    let service_image_pages = service_image_size.div_ceil(PAGE_BYTES);
+    let service_slot_pages = service_image_size.div_ceil(PAGE_BYTES);
+    let service_image_pages = service_slot_pages
+        .checked_mul(SERVICE_SLOTS)
+        .ok_or(LOAD_ERROR)?;
     let service_allocation_bytes = service_image_pages
         .checked_mul(PAGE_BYTES)
         .ok_or(LOAD_ERROR)?;
@@ -833,10 +841,13 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         core::slice::from_raw_parts_mut(service_image_physical as *mut u8, service_allocation_bytes)
     };
     service_image.fill(0);
-    let service_entry = service_verified
-        .image()
-        .materialize(&mut service_image[..service_image_size])
-        .map_err(|_| LOAD_ERROR)?;
+    let mut service_entry = 0;
+    for slot in service_image.chunks_exact_mut(service_slot_pages * PAGE_BYTES) {
+        service_entry = service_verified
+            .image()
+            .materialize(&mut slot[..service_image_size])
+            .map_err(|_| LOAD_ERROR)?;
+    }
     loader_trace(0xa5);
     let mut service_stack_physical = 0u64;
     check(unsafe {

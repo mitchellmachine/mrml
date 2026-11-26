@@ -83,6 +83,9 @@ name = "fat32-data-probe"
 name = "fat32-restart-probe"
 
 [[feature]]
+name = "uefi-fat32-restart-probe"
+
+[[feature]]
 name = "fat32-ready-probe"
 
 [[feature]]
@@ -225,6 +228,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe", "fat32-ready-probe", "fat32-data-probe", "fat32-restart-probe"]
 name = "fat32_restart_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "fat32-ready-probe", "fat32-data-probe", "fat32-restart-probe", "uefi-fat32-restart-probe"]
+name = "uefi_fat32_restart_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]
