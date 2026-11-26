@@ -504,8 +504,14 @@ mod tests {
             .write(true)
             .open(&path)
             .unwrap();
-        file.seek(SeekFrom::Start(HEADER_BYTES as u64 + 3)).unwrap();
-        file.write_all(&[0xa5]).unwrap();
+        let tamper_offset = SeekFrom::Start(HEADER_BYTES as u64 + 3);
+        file.seek(tamper_offset).unwrap();
+        let mut ciphertext = [0u8; 1];
+        file.read_exact(&mut ciphertext).unwrap();
+        // A fixed replacement can match this randomized ciphertext by chance.
+        ciphertext[0] ^= 1;
+        file.seek(tamper_offset).unwrap();
+        file.write_all(&ciphertext).unwrap();
         file.sync_all().unwrap();
         assert_eq!(
             store.load_account(descriptor).err(),

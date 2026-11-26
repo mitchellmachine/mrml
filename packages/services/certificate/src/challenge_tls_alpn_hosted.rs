@@ -418,24 +418,22 @@ mod tests {
         .unwrap();
         let listener = TcpListener::bind([127, 0, 0, 1], 0).unwrap();
         let port = listener.local_port().unwrap();
-        let completed = Shared::new(AtomicBool::new(false));
-        let completed_server = completed.clone();
         let server_error = Shared::new(SpinMutex::new(None));
         let server_error_writer = server_error.clone();
-        assert!(mrml_runtime::spawn_detached(move || {
+        let server = mrml_runtime::spawn_joinable(move || {
             *server_error_writer.lock() = challenge.serve_one(&listener, 15).err();
-            completed_server.store(true, Ordering::SeqCst);
         })
-        .is_ok());
+        .ok()
+        .expect("TLS-ALPN test server thread");
         let client_result = mrml_tls::TlsClientStream::connect_resolved_for_acme_tls_alpn01(
             "git.example",
             [127, 0, 0, 1],
             port,
             challenge_request.key_authorization_digest,
         );
-        while !completed.load(Ordering::SeqCst) {
-            core::hint::spin_loop();
-        }
+        // The challenge provider is retired on drop, not on the last
+        // handshake write. Join the owning thread before inspecting it.
+        assert!(server.join());
         assert!(
             client_result.is_ok(),
             "client={:?} server={:?}",
@@ -445,13 +443,7 @@ mod tests {
         let client = client_result.unwrap();
         assert_eq!(client.negotiated_protocol(), Some("acme-tls/1"));
         drop(client);
-        for _ in 0..1000 {
-            if completed.load(Ordering::SeqCst) && retired.load(Ordering::SeqCst) {
-                break;
-            }
-            core::hint::spin_loop();
-        }
-        assert!(completed.load(Ordering::SeqCst));
+        assert!(server_error.lock().is_none());
         assert!(retired.load(Ordering::SeqCst));
         let _ = mrml_runtime::remove_file(&cert_path);
         let _ = mrml_runtime::remove_file(&der_path);
