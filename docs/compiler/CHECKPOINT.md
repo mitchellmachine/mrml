@@ -78,6 +78,12 @@ named edition can be adopted through a pinned, workspace-wide migration.
 - Native Windows commands (both passed):
   `mrml test org.mrml.library.runtime --target windows --release` and
   `mrml test org.mrml.compiler.driver --target windows --release`.
+  The native Windows core rerun passed 1,339 tests: 848 unit tests and 491
+  across the four declared integration suites. The sandboxed frontend run
+  built the core but stopped when Windows refused to launch a generated PE
+  (loader error 623). The same freshly built unit executable passed outside
+  the sandbox. The four integration suites were rebuilt using the frontend's
+  declared flags and the fresh core library, then passed outside the sandbox.
   Arch WSL2 commands (both passed):
   `mrml test org.mrml.library.runtime --target linux --release` and
   `mrml test org.mrml.compiler.driver --target linux --release`.
