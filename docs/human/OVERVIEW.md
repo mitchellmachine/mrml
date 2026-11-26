@@ -27,13 +27,15 @@ must also follow the [Engineering Constitution](../ENGINEERING_CONSTITUTION.md).
 
 ## What exists today
 
-The repository contains working but experimental components for local
-inference, a microkernel, KVM and WHP virtualization backends, a Rust compiler
-subset, networking and cryptography, media codecs, storage, and first-party
-build tools. Maturity varies substantially between components.
+The repository contains experimental local inference, a capability-oriented
+microkernel, KVM and WHP backends, a Rust compiler subset, media codecs, storage
+providers, and native build tools. It also contains a separate protected SHA-256
+Git stack and certificate/ACME services with hosted Linux and Docker evidence.
+The GitHub repository uses SSH-signed source history; Gitd is a separate project
+component, not the host for that source.
 
-For current, machine-derived workspace facts, read
-[Workspace status](../STATUS.md). For implementation evidence and remaining
+Read [Project status](../PROJECT_STATUS.md) for implementation and test coverage
+across these areas. For implementation evidence and remaining
 kernel milestones, read [Microkernel](../MICROKERNEL.md). The
 [Roadmap](../ROADMAP.md) gives the dependency order for future work.
 

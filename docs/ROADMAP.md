@@ -3,9 +3,10 @@
 This roadmap is dependency ordered. It describes intended work, not completion
 claims. Status is determined from source, tests, and the evidence ledger in
 [MICROKERNEL.md](MICROKERNEL.md), using the vocabulary in
-[ARCHITECTURE.md](ARCHITECTURE.md). The machine-generated current workspace
-inventory is [STATUS.md](STATUS.md). Numbered component counts later in this
-file are dated migration chronology, not current package totals.
+[ARCHITECTURE.md](ARCHITECTURE.md). [Project status](PROJECT_STATUS.md) connects
+the current workspace, compiler, hosted services, and verification scope. The
+numbered component counts below belong to dated migration chronology, not the
+current manifest.
 
 ## Work-in-progress limit
 

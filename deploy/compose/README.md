@@ -1,4 +1,17 @@
-# MRML certificate deployment
+# MRML hosted Linux Compose profiles
+
+Use the profile that matches the deployment being reviewed:
+
+| Profile | Starting points |
+| --- | --- |
+| Gitd and protected Git authority | [Git Compose file](compose.git.yaml), [Linux deployment](../../docs/gitd/edge/LINUX_DEPLOYMENT.md), and [current Git checkpoint](../../docs/gitd/operations/CURRENT_COMPLETION.md) |
+| Certificate daemon and ACME worker | [ACME Compose file](compose.acme.yaml) and the certificate operator guide below |
+| Isolated signer or credential agent | [Signer](compose.signer.yaml), [credential agent](compose.credential-agent.yaml), and [Git key providers](../../docs/gitd/client/KEY_PROVIDERS.md) |
+
+The base Git deployment uses HTTP/2 over TCP. The recorded Docker acceptance
+is bounded test evidence, not authorization to activate a public service.
+
+## Certificate and ACME operator guide
 
 This directory defines the isolated Linux/amd64 certificate and ACME worker
 images and the image-only Compose fragment. It does not redefine Gitd or the Git

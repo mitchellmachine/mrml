@@ -74,7 +74,8 @@ Begin with the repository assurance check:
 
 A repository-wide assurance failure is separate from a focused test result.
 See the [compiler checkpoint](../compiler/CHECKPOINT.md#hosted-windows-file-operations)
-for the known unsafe-policy blocker.
+for the known unsafe-policy blocker. Use [Project status](../PROJECT_STATUS.md)
+for checks and evidence across the rest of the workspace.
 
 Then run the focused tests for the files you changed. Broader Linux validation
 can be requested through the frontend:

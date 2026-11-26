@@ -20,8 +20,9 @@ overlap:
    for major architectural decisions.
 2. The canonical architecture and policy document for a subsystem defines its
    current constraints.
-3. Generated status and inventory files describe the checked workspace; they do
-   not create policy.
+3. [Project status](../PROJECT_STATUS.md) ties current source to bounded
+   evidence. Generated inventories describe the workspace at their generation
+   point and do not create policy.
 4. Oracle, probe, review, and historical records report bounded evidence. They
    do not establish broader support or completion claims.
 5. [`PROJECT_TECHNICAL_REFERENCE.txt`](PROJECT_TECHNICAL_REFERENCE.txt) is a
@@ -46,6 +47,8 @@ environment and operation recorded.
 
 - [Accessible browser semantics](../BROWSER_SEMANTICS.md)
 - [Rust compiler direction](../COMPILER.md)
+- [Protected Git and Gitd current checkpoint](../gitd/operations/CURRENT_COMPLETION.md)
+- [Certificate and ACME service](../ACME.md)
 - [Deployment, installation, and system administration](../DEPLOYMENT.md)
 - [Adaptive isolation placement](../ISOLATION_PLACEMENT.md)
 - [Microkernel design and evidence](../MICROKERNEL.md)
@@ -69,11 +72,12 @@ environment and operation recorded.
 
 ## Generated status and inventories
 
-These files are maintained by repository tooling. Do not hand-edit generated
-content unless the generating workflow explicitly requires it.
+Generated outputs are maintained by repository tooling. Until the assurance
+check passes, use [Project status](../PROJECT_STATUS.md) and the live manifest
+commands for current facts, rather than the retained generated counts.
 
-- [Generated workspace status](../STATUS.md)
-- [Generated unsafe-boundary inventory](../UNSAFE_INVENTORY.md)
+- [Generated workspace status (snapshot)](../STATUS.md)
+- [Generated unsafe-boundary inventory (snapshot)](../UNSAFE_INVENTORY.md)
 - [Cargo bridge inventory](../build/BRIDGE_INVENTORY.md)
 - [Universal build migration inventory](../build/MIGRATION_INVENTORY.md)
 - [Compiler durable checkpoint](../compiler/CHECKPOINT.md)

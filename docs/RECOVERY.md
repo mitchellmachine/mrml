@@ -2118,17 +2118,16 @@ and must wait or be split.
 
 ## 5. Verify and report
 
-Use the README's current platform-testing policy. Local native Windows and
-Windows VMM/WHP testing are suspended for now: Codex must not attempt WHP,
-WHPX, Hyper-V, VBS, or other Windows VMM tests from the Wine environment. The
-Windows-target gnullvm toolchain is currently exercised locally only under Wine;
-label that result as Wine-hosted toolchain coverage, never native Windows,
-Windows ABI, WHP, VBS, or hardware evidence. Preserve the configured native
-Windows and WHP GitHub Actions gates; when a GitHub-hosted job passes, record it
-as current native evidence only for what that job actually exercised. Earlier
-dated Windows/WHP entries remain historical evidence. Run focused Linux tests
-first, then the strongest relevant supported platform-independent and Linux/KVM
-suites. Record exact commands, toolchain, backend, artifact versions,
+Use [Project status](PROJECT_STATUS.md) for the current workspace and test
+scope. Native Windows gnullvm runtime and compiler tests are recorded in the
+[compiler checkpoint](compiler/CHECKPOINT.md). Local Windows VMM/WHP testing
+remains suspended. Do not attempt WHP, WHPX, Hyper-V, VBS, or other Windows VMM
+tests from Wine. Label Wine runs as Wine-hosted toolchain coverage, not native
+Windows, Windows ABI, or hardware evidence. This checkout has no tracked GitHub
+Actions workflow. Attribute a CI result only to the revision, runner and checks
+that actually ran. Earlier dated Windows/WHP entries remain historical evidence.
+Run focused Linux tests first, then the strongest relevant supported
+platform-independent and Linux/KVM suites. Record exact commands, toolchain, backend, artifact versions,
 configuration, outcomes, and benchmark boundaries. Label evidence as unit test,
 simulated, Wine-hosted toolchain, GitHub-hosted native Windows, QEMU TCG,
 hosted/nested KVM, or physical hardware.
