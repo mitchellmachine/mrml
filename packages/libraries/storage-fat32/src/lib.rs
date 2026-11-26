@@ -910,6 +910,7 @@ impl<T: BlockProviderReadTransport, const N: usize, const O: usize>
         staging: &mut [u8],
         cluster_scratch: &mut [u8],
     ) -> Result<(), Fat32OpenReadError> {
+        cluster_scratch.fill(0);
         let record = self
             .open_record(volume, generation, handle)
             .map_err(Fat32OpenReadError::Open)?;
@@ -921,6 +922,9 @@ impl<T: BlockProviderReadTransport, const N: usize, const O: usize>
                     Fat32ObjectIdentityError::Lifecycle(error),
                 ))
             })?;
+        let cluster_scratch = exact_cluster_workspace(geometry, cluster_scratch).ok_or(
+            Fat32OpenReadError::Filesystem(Fat32Error::InvalidReadBuffers),
+        )?;
         let offset = u32::try_from(offset)
             .map_err(|_| Fat32OpenReadError::Filesystem(Fat32Error::InvalidFileRange))?;
         let mut reader = Fat32BlockFilesystemReader::new(volume, geometry, &mut self.backend);
@@ -1542,6 +1546,15 @@ pub fn append_fat32_short_directory<const N: usize>(
     Ok(())
 }
 
+fn exact_cluster_workspace(geometry: Fat32Geometry, scratch: &mut [u8]) -> Option<&mut [u8]> {
+    let length = usize::from(geometry.bytes_per_sector)
+        .checked_mul(usize::from(geometry.sectors_per_cluster))?;
+    if length == 0 {
+        return None;
+    }
+    scratch.get_mut(..length)
+}
+
 pub fn load_fat32_directory<const C: usize, const E: usize, R>(
     geometry: Fat32Geometry,
     first_cluster: u32,
@@ -1598,10 +1611,14 @@ impl<T: BlockProviderReadTransport, const N: usize, const O: usize>
         root: OpaqueHandle,
         cluster_scratch: &mut [u8],
     ) -> Result<Fat32DirectoryBatch<E>, Fat32RootDirectoryError> {
+        cluster_scratch.fill(0);
         let geometry = self
             .mounts
             .geometry(volume, generation, root)
             .map_err(Fat32RootDirectoryError::Lifecycle)?;
+        let cluster_scratch = exact_cluster_workspace(geometry, cluster_scratch).ok_or(
+            Fat32RootDirectoryError::Filesystem(Fat32Error::InvalidDirectoryExtent),
+        )?;
         let mut reader = Fat32BlockFilesystemReader::new(volume, geometry, &mut self.backend);
         load_fat32_directory::<C, E, _>(
             geometry,

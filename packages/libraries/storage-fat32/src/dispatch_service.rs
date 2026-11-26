@@ -579,7 +579,8 @@ mod tests {
         )
         .unwrap();
         let provider = Fat32MountedProvider::<_, 1, 1>::new(backend);
-        let mut cluster = [0; 4096];
+        // Native dispatch reserves capacity, not the mounted cluster's exact length.
+        let mut cluster = [0xaa; 8192];
         let mut staging = [0; 512];
         let mut service =
             Fat32DispatchService::<_, 1, 1, 1>::new(provider, &mut cluster, &mut staging);

@@ -494,6 +494,10 @@ const FAT32_READY_ENDPOINT: ObjectId = ObjectId(0xf320);
 const FAT32_STARTUP_OBJECT: ObjectId = ObjectId(0xf321);
 #[cfg(feature = "fat32-ready-probe")]
 static mut FAT32_READY_STATE: Option<HostedFat32Ready> = None;
+#[cfg(feature = "fat32-data-probe")]
+mod fat32_data_probe;
+#[cfg(feature = "fat32-data-probe")]
+static mut FAT32_DATA_STATE: Option<fat32_data_probe::HostedFat32Data> = None;
 
 #[cfg(feature = "fat32-ready-probe")]
 struct HostedFat32Ready {
@@ -1208,6 +1212,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
         *runtime.context_mut(current).unwrap_or_else(|_| halt()) =
             UserContext::from_user_call(root, frame).unwrap_or_else(|_| halt());
         if cfg!(feature = "fat32-ready-probe")
+            && !(cfg!(feature = "fat32-data-probe") && matches!(request,
+                SyscallRequest::ReceiveBuffer { .. } | SyscallRequest::WriteSharedBuffer { .. }))
             && !matches!(
                 request,
                 SyscallRequest::SendBuffer { .. }
@@ -1475,6 +1481,29 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 }
                 descriptors.fill(None);
                 descriptor_storage.fill(0);
+                #[cfg(feature = "fat32-data-probe")]
+                if let Some(data) = (*core::ptr::addr_of_mut!(FAT32_DATA_STATE)).as_mut() {
+                    let ready = (*core::ptr::addr_of!(FAT32_READY_STATE)).as_ref().unwrap_or_else(|| halt());
+                    if current != ready.provider { halt(); }
+                    let reply_status = payload.get(..4).and_then(|v| <[u8; 4]>::try_from(v).ok()).map(u32::from_le_bytes).unwrap_or(0);
+                    let result = data.send(runtime, ready, receiver, endpoint, payload, &requested[..capability_count]);
+                    payload_storage.fill(0);
+                    requested.fill((Capability::from_token(0), Rights::NONE));
+                    match result {
+                        Some((_, true)) => {
+                            asm!("out dx, eax", in("dx") SERVICE_PROBE_PORT, in("eax") 0xf321u32, options(nomem, nostack));
+                            halt();
+                        }
+                        Some((sequence, false)) => frame.complete(sequence),
+                        None => {
+                            asm!("out dx, eax", in("dx") SERVICE_PROBE_PORT, in("eax")
+                                ((reply_status & 0xff) << 16 | (0xf400u32 + data.stage() + if receiver == ready.caller { 0 } else { 0x10 })),
+                                options(nomem, nostack));
+                            halt();
+                        }
+                    }
+                    return;
+                }
                 let endpoint_object = (*core::ptr::addr_of_mut!(SERVICE_ENDPOINT))
                     .as_mut()
                     .unwrap_or_else(|| halt());
@@ -1607,11 +1636,21 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     pending.payload_capacity,
                     pending.capability_capacity,
                 ) {
-                    Ok(message) => complete_buffer_current(root, pending, &message, frame),
+                    Ok(message) => {
+                        #[cfg(feature = "fat32-data-probe")]
+                        if let Some(data) = (*core::ptr::addr_of_mut!(FAT32_DATA_STATE)).as_mut() {
+                            data.received(runtime, &message).unwrap_or_else(|| halt());
+                        }
+                        complete_buffer_current(root, pending, &message, frame);
+                    }
                     Err(mrml_kernel::TaskRuntimeError::ReceiveCapacity) => {
                         frame.complete_error();
                     }
                     Err(mrml_kernel::TaskRuntimeError::InboxEmpty) => {
+                        if cfg!(feature = "fat32-data-probe") {
+                            frame.complete_error();
+                            return;
+                        }
                         let pending_slot = pending_buffer_insert_slot(current);
                         match runtime
                             .receive_or_block_current()
@@ -1661,7 +1700,14 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 {
                     let proof = (*core::ptr::addr_of!(FAT32_READY_STATE))
                         .as_ref().unwrap_or_else(|| halt());
-                    if current != proof.provider || !proof.copied || capability != proof.startup {
+                    #[cfg(feature = "fat32-data-probe")]
+                    let file_release = (*core::ptr::addr_of!(FAT32_DATA_STATE)).as_ref()
+                        .is_some_and(|data| data.release_allowed(capability));
+                    #[cfg(not(feature = "fat32-data-probe"))]
+                    let file_release = false;
+                    if current != proof.provider || !proof.copied
+                        || (capability != proof.startup && !file_release)
+                    {
                         frame.complete_error();
                         return;
                     }
@@ -1675,6 +1721,24 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             }
             request @ (SyscallRequest::ReadSharedBuffer { .. }
             | SyscallRequest::WriteSharedBuffer { .. }) => {
+                #[cfg(feature = "fat32-data-probe")]
+                {
+                    let proof = (*core::ptr::addr_of!(FAT32_READY_STATE)).as_ref().unwrap_or_else(|| halt());
+                    if current != proof.provider { halt(); }
+                    if !matches!(request, SyscallRequest::ReadSharedBuffer { capability, .. } if capability == proof.startup) {
+                        let data = (*core::ptr::addr_of_mut!(FAT32_DATA_STATE)).as_mut().unwrap_or_else(|| halt());
+                        let active = ActivePageTables::current().unwrap_or_else(|_| halt());
+                        let mut user = ActiveTaskUserCopy::new(&active, root, current, DirectActiveUserMemory);
+                        if data.copy(runtime, request, &mut user).is_some() {
+                            frame.complete(0);
+                        } else {
+                            asm!("out dx, eax", in("dx") SERVICE_PROBE_PORT, in("eax")
+                                (0xf420u32 + data.stage()), options(nomem, nostack));
+                            halt();
+                        }
+                        return;
+                    }
+                }
                 #[cfg(feature = "fat32-ready-probe")]
                 if let SyscallRequest::ReadSharedBuffer {
                     capability, offset, output_address, length,
@@ -3927,6 +3991,11 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 let caller = make(SERVICE_B_ROOT, Priority::NORMAL);
                 let block = make(SERVICE_C_ROOT, Priority::NORMAL);
                 let state = HostedFat32Ready::install(&mut runtime, provider, caller, block);
+                #[cfg(feature = "fat32-data-probe")]
+                core::ptr::addr_of_mut!(FAT32_DATA_STATE).write(Some(
+                    fat32_data_probe::HostedFat32Data::install(&mut runtime, provider, caller, block)
+                        .unwrap_or_else(|| halt()),
+                ));
                 if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == provider)
                 {
                     halt();

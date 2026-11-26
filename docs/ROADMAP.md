@@ -94,6 +94,19 @@ this mode uses a bounded 64-page stack with the guard retained. This proof
 stops at Ready; no storage RPC, mounted volume, supervised restart, or
 physical hardware is qualified by it.
 
+The separate opt-in `fat32_data_probe` sends mount, lookup, open, and read
+over the real signed service's v3 IPC endpoint and gets canonical v1 block
+responses from the test-only in-guest media coordinator. Its sparse immutable
+volume expands byte-for-byte to the generated FAT32 image. The probe tests
+all 28 bytes of `PROBE.TXT` and guards the output at a nonzero offset.
+Block and file copy capabilities are attenuated and revoked before the
+corresponding response is observed. The scripts `test-native-fat32-data-whp.ps1`
+and `test-native-fat32-data-kvm.sh` run the same read contract. The live probe
+exposed a 4096-byte provider workspace passed to a primitive requiring the
+mounted cluster's exact size; lookup and read now use a checked prefix of
+the workspace. This is a signed guest file-read proof only, not the
+supervised restart and stale-generation qualification gate.
+
 Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and generation-2
 `storage.filesystem` schemas define bounded opaque-handle operations for isolated

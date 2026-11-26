@@ -77,6 +77,9 @@ name = "production-policy"
 name = "service-preemption-probe"
 
 [[feature]]
+name = "fat32-data-probe"
+
+[[feature]]
 name = "fat32-ready-probe"
 
 [[feature]]
@@ -214,6 +217,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe", "buffer-drift-probe"]
 name = "buffer_drift_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "fat32-ready-probe", "fat32-data-probe"]
+name = "fat32_data_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]

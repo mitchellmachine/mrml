@@ -15,7 +15,7 @@ TOTAL_SECTORS = DATA_START + CLUSTERS
 PROBE_BYTES = b"MRML FAT32 recovery fixture\n"
 
 
-def create_image(path: Path) -> None:
+def sectors() -> tuple[tuple[int, bytes | bytearray], ...]:
     boot = bytearray(SECTOR_BYTES)
     boot[:11] = b"\xeb\x58\x90MRMLTEST"
     struct.pack_into("<HBHB", boot, 11, SECTOR_BYTES, 1, RESERVED, 2)
@@ -41,29 +41,40 @@ def create_image(path: Path) -> None:
     directory[11] = 0x21  # archived, read-only regular file
     struct.pack_into("<HI", directory, 26, 3, len(PROBE_BYTES))
 
+    return (
+        (0, boot),
+        (1, info),
+        (6, boot),
+        (7, info),
+        (RESERVED, fat),
+        (RESERVED + FAT_SECTORS, fat),
+        (DATA_START, directory),
+        (DATA_START + 1, PROBE_BYTES),
+    )
+
+
+def create_image(path: Path, sector_table: bool = False) -> None:
     # Exclusive creation never truncates a user file or follows an existing
     # symlink. All writes use bounded offsets in a newly created regular file.
     with path.open("xb") as image:
-        image.truncate(TOTAL_SECTORS * SECTOR_BYTES)
-        for lba, data in (
-            (0, boot),
-            (1, info),
-            (6, boot),
-            (7, info),
-            (RESERVED, fat),
-            (RESERVED + FAT_SECTORS, fat),
-            (DATA_START, directory),
-            (DATA_START + 1, PROBE_BYTES),
-        ):
-            image.seek(lba * SECTOR_BYTES)
-            image.write(data)
+        if sector_table:
+            image.write(struct.pack("<I", TOTAL_SECTORS))
+            for lba, data in sectors():
+                image.write(struct.pack("<I", lba))
+                image.write(data.ljust(SECTOR_BYTES, b"\x00"))
+        else:
+            image.truncate(TOTAL_SECTORS * SECTOR_BYTES)
+            for lba, data in sectors():
+                image.seek(lba * SECTOR_BYTES)
+                image.write(data)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--sector-table", action="store_true", help="emit compact guest fixture")
     args = parser.parse_args()
-    create_image(args.output)
+    create_image(args.output, args.sector_table)
 
 
 if __name__ == "__main__":

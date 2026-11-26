@@ -2157,7 +2157,9 @@ fn application_main() -> Result<()> {
     let block_service_mode = arguments.len() == 9 && arguments[5] == "block-service-probe";
     let service_restart_request_mode =
         arguments.len() == 9 && arguments[5] == "service-restart-request-probe";
+    let fat32_data_mode = arguments.len() == 9 && arguments[5] == "fat32-data-probe";
     let fat32_ready_mode = arguments.len() == 9 && arguments[5] == "fat32-ready-probe";
+    let fat32_mode = fat32_ready_mode || fat32_data_mode;
     let service_preemption_mode =
         arguments.len() == 9 && arguments[5] == "service-preemption-probe";
     let smp_service_migration_mode =
@@ -2166,7 +2168,7 @@ fn application_main() -> Result<()> {
         || component_service_mode
         || block_service_mode
         || service_restart_request_mode
-        || fat32_ready_mode
+        || fat32_mode
         || service_preemption_mode
         || smp_service_migration_mode;
     let boot_mode = matches!(arguments.len(), 6 | 8) && arguments[5] == "boot";
@@ -3100,7 +3102,7 @@ fn application_main() -> Result<()> {
         || component_service_mode
         || block_service_mode
         || service_restart_request_mode
-        || fat32_ready_mode
+        || fat32_mode
     {
         system.prepare_isolated_service_kernel(&executable, handoff.as_slice(), layout)
     } else if service_preemption_mode {
@@ -3199,7 +3201,7 @@ fn application_main() -> Result<()> {
             || component_smp_mode;
         let isolated_stack_pages = if block_service_mode {
             256
-        } else if fat32_ready_mode {
+        } else if fat32_mode {
             // Match KVM's guarded stack for the FAT32 PE entry.
             64
         } else {
@@ -3301,7 +3303,7 @@ fn application_main() -> Result<()> {
                     )
                 })?
         };
-        if service_mode || service_restart_request_mode || fat32_ready_mode {
+        if service_mode || service_restart_request_mode || fat32_mode {
             guest = guest
                 .attach_isolated_service_at(
                     2,
@@ -3400,7 +3402,7 @@ fn application_main() -> Result<()> {
         if guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
             || guest.service_page_table_root_at(1) != PhysAddr::new(SERVICE_B_TABLE_PHYSICAL).ok()
             || (!component_service_mode && provider_entry != service_entry)
-            || ((service_mode || service_restart_request_mode || fat32_ready_mode)
+            || ((service_mode || service_restart_request_mode || fat32_mode)
                 && (guest.service_entry_at(2) != Some(service_entry)
                     || guest.service_page_table_root_at(2)
                         != PhysAddr::new(SERVICE_C_TABLE_PHYSICAL).ok()))
@@ -4396,18 +4398,22 @@ fn application_main() -> Result<()> {
         guest.finish()?;
         return Ok(());
     }
-    if fat32_ready_mode {
+    if fat32_mode {
         if exit
             != (VmExit::Io {
                 port: SERVICE_PROBE_PORT,
                 size: 4,
                 write: true,
-                value: 0xf320,
+                value: if fat32_data_mode { 0xf321 } else { 0xf320 },
             })
         {
             return Err(anyhow!("WHP FAT32 readiness mismatch: {:?}", exit));
         }
-        println!("verified authenticated native FAT32 readiness under WHP");
+        if fat32_data_mode {
+            println!("verified signed FAT32 PROBE.TXT read under WHP");
+        } else {
+            println!("verified authenticated native FAT32 readiness under WHP");
+        }
         guest.finish()?;
         return Ok(());
     }
