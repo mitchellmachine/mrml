@@ -163,11 +163,91 @@ impl<'a> FramebufferSurface<'a> {
         }
         Ok(())
     }
+
+    /// Paint the kernel's early-boot marker without a font or compositor dependency.
+    /// Small diagnostic surfaces retain the existing colored marker.
+    pub fn mark_kernel_ready(&mut self, color: Color) -> Result<(), FramebufferError> {
+        const GLYPHS: [[u8; 7]; 10] = [
+            [17, 27, 21, 21, 17, 17, 17], // M
+            [30, 17, 17, 30, 20, 18, 17], // R
+            [16, 16, 16, 16, 16, 16, 31], // L
+            [0; 7],                       // space
+            [17, 18, 20, 24, 20, 18, 17], // K
+            [31, 16, 16, 30, 16, 16, 31], // E
+            [17, 25, 21, 19, 17, 17, 17], // N
+            [14, 17, 17, 31, 17, 17, 17], // A
+            [30, 17, 17, 17, 17, 17, 30], // D
+            [17, 17, 10, 4, 4, 4, 4],     // Y
+        ];
+        const TEXT: [usize; 17] = [0, 1, 0, 2, 3, 4, 5, 1, 6, 5, 2, 3, 1, 5, 7, 8, 9];
+        const X: u32 = 16;
+        const Y: u32 = 24;
+        const ZOOM: u32 = 3;
+        if self.info.width < X + (TEXT.len() as u32 * 6 - 1) * ZOOM
+            || self.info.height < Y + 7 * ZOOM
+        {
+            return Ok(());
+        }
+        for (column, glyph) in TEXT.iter().copied().enumerate() {
+            for (row, bits) in GLYPHS[glyph].iter().copied().enumerate() {
+                for bit in 0..5 {
+                    if bits & (1 << (4 - bit)) != 0 {
+                        self.fill_rectangle(
+                            X + (column as u32 * 6 + bit) * ZOOM,
+                            Y + row as u32 * ZOOM,
+                            ZOOM,
+                            ZOOM,
+                            color,
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ready_text_requires_room_and_respects_padding() {
+        let info = FramebufferInfo::new(
+            0x1000,
+            65_536,
+            320,
+            48,
+            322,
+            PixelFormat::BlueGreenRedReserved,
+        )
+        .unwrap();
+        let mut bytes = [0x5a; 65_536];
+        FramebufferSurface::new(info, &mut bytes)
+            .unwrap()
+            .mark_kernel_ready(Color {
+                red: 1,
+                green: 2,
+                blue: 3,
+            })
+            .unwrap();
+        let offset = (24 * 322 + 16) * 4;
+        assert_eq!(&bytes[offset..offset + 4], &[3, 2, 1, 0]);
+        assert_eq!(&bytes[offset + 12..offset + 16], &[0x5a; 4]);
+        assert_eq!(&bytes[(24 * 322 + 320) * 4..(25 * 322) * 4], &[0x5a; 8]);
+        let info =
+            FramebufferInfo::new(0x1000, 16, 2, 2, 2, PixelFormat::RedGreenBlueReserved).unwrap();
+        let mut tiny = [0x5a; 16];
+        FramebufferSurface::new(info, &mut tiny)
+            .unwrap()
+            .mark_kernel_ready(Color {
+                red: 1,
+                green: 2,
+                blue: 3,
+            })
+            .unwrap();
+        assert_eq!(tiny, [0x5a; 16]);
+    }
 
     #[test]
     fn validates_gop_geometry_and_renders_both_pixel_orders() {

@@ -5008,6 +5008,11 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 blue: 0x57,
             },
         );
+        let _ = surface.mark_kernel_ready(Color {
+            red: 0xff,
+            green: 0xff,
+            blue: 0xff,
+        });
         #[cfg(feature = "gpu-benchmark")]
         if run_gpu_benchmark(handoff.evidence().entropy()).is_err() {
             halt();

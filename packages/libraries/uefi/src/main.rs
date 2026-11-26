@@ -347,6 +347,226 @@ pub unsafe extern "efiapi" fn efi_main(image: Handle, table: *mut SystemTable) -
     }
 }
 
+fn select_framebuffer(services: &BootServices, console: Handle) -> Result<Framebuffer, Status> {
+    let mut interface = core::ptr::null_mut();
+    // SAFETY: boot services are live and output pointers are initialized by firmware.
+    let on_console = !console.is_null()
+        && unsafe { (services.handle_protocol)(console, &GOP_GUID, &mut interface) } == SUCCESS
+        && !interface.is_null();
+    if !on_console {
+        // SAFETY: resolve the fallback protocol while boot services are live.
+        check(unsafe {
+            (services.locate_protocol)(&GOP_GUID, core::ptr::null_mut(), &mut interface)
+        })?;
+    }
+    let gop = interface.cast::<GraphicsOutputProtocol>();
+    if gop.is_null() || !gop.is_aligned() {
+        return Err(LOAD_ERROR);
+    }
+    let preferred = on_console
+        .then(|| console_edid(services, console))
+        .flatten();
+    let (gop, preferred) = match preferred {
+        Some(size) => (gop, Some(size)),
+        None => paired_gop(services, gop),
+    };
+
+    const MAX_MODES: usize = 256;
+    let (current, count, initial) = framebuffer_snapshot(gop).ok_or(LOAD_ERROR)?;
+    if let Some(framebuffer) = initial
+        && Some((framebuffer.width, framebuffer.height)) == preferred
+    {
+        return Ok(framebuffer);
+    }
+    let mut candidates = [None; MAX_MODES];
+    for (index, candidate) in candidates.iter_mut().enumerate().take(count as usize) {
+        let mut bytes = 0;
+        let mut info = core::ptr::null_mut();
+        // SAFETY: firmware returned this GOP; QueryMode allocates the output for the caller.
+        let status = unsafe { ((*gop).query_mode)(gop, index as u32, &mut bytes, &mut info) };
+        if status != SUCCESS || info.is_null() {
+            continue;
+        }
+        if bytes >= core::mem::size_of::<GraphicsOutputModeInformation>() && info.is_aligned() {
+            // SAFETY: a successful query supplied a complete aligned info structure.
+            let value = unsafe { info.read() };
+            *candidate = framebuffer_mode_rank(value, preferred, index as u32 == current)
+                .map(|rank| (rank, value.horizontal_resolution, value.vertical_resolution));
+        }
+        // SAFETY: the successful query transferred this allocation to the caller.
+        check(unsafe { (services.free_pool)(info.cast()) })?;
+    }
+    for rank in 0..=3 {
+        for (index, candidate) in candidates.iter().enumerate() {
+            let Some((value, width, height)) = *candidate else {
+                continue;
+            };
+            if rank != value {
+                continue;
+            }
+            // SAFETY: this index was successfully queried on the same live GOP.
+            if framebuffer_snapshot(gop)
+                .is_none_or(|(mode, _, frame)| mode != index as u32 || frame.is_none())
+                && unsafe { ((*gop).set_mode)(gop, index as u32) } != SUCCESS
+            {
+                continue;
+            }
+            if let Some((mode, _, Some(frame))) = framebuffer_snapshot(gop)
+                && mode == index as u32
+                && (frame.width, frame.height) == (width, height)
+            {
+                return Ok(frame);
+            }
+        }
+        if rank == 1
+            && let Some((_, _, Some(frame))) = framebuffer_snapshot(gop)
+        {
+            return Ok(frame);
+        }
+    }
+    framebuffer_snapshot(gop)
+        .and_then(|(_, _, frame)| frame)
+        .ok_or(LOAD_ERROR)
+}
+
+fn framebuffer_snapshot(
+    gop: *mut GraphicsOutputProtocol,
+) -> Option<(u32, u32, Option<Framebuffer>)> {
+    if !gop.is_aligned() {
+        return None;
+    }
+    // SAFETY: only called with a GOP returned by live boot services;
+    // mode and info are copied or used only until the next firmware call.
+    let mode = unsafe { gop.as_ref()?.mode };
+    if !mode.is_aligned() {
+        return None;
+    }
+    // SAFETY: this is the aligned live mode pointer from the selected GOP.
+    let mode = unsafe { mode.as_ref()? };
+    let framebuffer = (|| {
+        if mode.info_size < core::mem::size_of::<GraphicsOutputModeInformation>()
+            || !mode.info.is_aligned()
+        {
+            return None;
+        }
+        // SAFETY: the live GOP mode advertises the complete aligned info structure.
+        let info = *unsafe { mode.info.as_ref()? };
+        framebuffer_mode_rank(info, None, true)?;
+        let format = if info.pixel_format == 0 {
+            PixelFormat::RedGreenBlueReserved
+        } else {
+            PixelFormat::BlueGreenRedReserved
+        };
+        FramebufferInfo::new(
+            mode.framebuffer_base,
+            mode.framebuffer_size as u64,
+            info.horizontal_resolution,
+            info.vertical_resolution,
+            info.pixels_per_scan_line,
+            format,
+        )
+        .ok()?;
+        Some(Framebuffer {
+            base: mode.framebuffer_base,
+            size: mode.framebuffer_size,
+            width: info.horizontal_resolution,
+            height: info.vertical_resolution,
+            stride: info.pixels_per_scan_line,
+            format: info.pixel_format,
+        })
+    })();
+    Some((mode.mode, mode.max_mode, framebuffer))
+}
+
+fn console_edid(services: &BootServices, handle: Handle) -> Option<(u32, u32)> {
+    for guid in [EDID_ACTIVE_GUID, EDID_DISCOVERED_GUID] {
+        let mut interface = core::ptr::null_mut();
+        // SAFETY: use only the EDID protocol on the same handle as the selected GOP.
+        if unsafe { (services.handle_protocol)(handle, &guid, &mut interface) } != SUCCESS {
+            continue;
+        }
+        let edid = interface.cast::<EdidProtocol>();
+        // SAFETY: success returned this EDID interface on the matched handle.
+        if edid.is_aligned()
+            && let Some(edid) = unsafe { edid.as_ref() }
+            && edid.size >= 128
+            && !edid.bytes.is_null()
+        {
+            // SAFETY: firmware advertises at least the complete 128-byte base block.
+            let base = unsafe { &*edid.bytes.cast::<[u8; 128]>() };
+            if let Some(size) = edid_preferred_resolution(base) {
+                return Some(size);
+            }
+        }
+    }
+    None
+}
+
+fn paired_gop(
+    services: &BootServices,
+    selected: *mut GraphicsOutputProtocol,
+) -> (*mut GraphicsOutputProtocol, Option<(u32, u32)>) {
+    let selected_frame = framebuffer_snapshot(selected).and_then(|(_, _, frame)| frame);
+    let mut count = 0;
+    let mut handles = core::ptr::null_mut::<Handle>();
+    // SAFETY: boot services are live; restrict inspection to a bounded firmware handle list.
+    if unsafe {
+        (services.locate_handle_buffer)(
+            LOCATE_BY_PROTOCOL,
+            &GOP_GUID,
+            core::ptr::null_mut(),
+            &mut count,
+            &mut handles,
+        )
+    } != SUCCESS
+        || handles.is_null()
+    {
+        return (selected, None);
+    }
+    let mut fallback = selected;
+    let mut preferred = (selected, None);
+    if count <= 64 && handles.is_aligned() {
+        // SAFETY: the successful firmware call supplied this bounded aligned handle array.
+        for &handle in unsafe { core::slice::from_raw_parts(handles, count) } {
+            let mut interface = core::ptr::null_mut();
+            // SAFETY: use only non-null handles from this live firmware array.
+            if !handle.is_null()
+                && unsafe { (services.handle_protocol)(handle, &GOP_GUID, &mut interface) }
+                    == SUCCESS
+            {
+                let gop = interface.cast::<GraphicsOutputProtocol>();
+                let frame = framebuffer_snapshot(gop).and_then(|(_, _, frame)| frame);
+                if selected_frame.is_none() && fallback == selected && frame.is_some() {
+                    fallback = gop;
+                }
+                // A virtual console GOP may wrap the physical GOP. Associate its
+                // EDID only by an exact live framebuffer match, never by order.
+                let same_display = selected_frame.zip(frame).is_some_and(|(a, b)| {
+                    (a.base, a.size, a.width, a.height, a.stride, a.format)
+                        == (b.base, b.size, b.width, b.height, b.stride, b.format)
+                });
+                if (gop == selected
+                    || same_display
+                    || (selected_frame.is_none() && frame.is_some()))
+                    && let Some(size) = console_edid(services, handle)
+                {
+                    preferred = (gop, Some(size));
+                    break;
+                }
+            }
+        }
+    }
+    // SAFETY: this is the allocated buffer from the successful locate call.
+    if unsafe { (services.free_pool)(handles.cast()) } != SUCCESS {
+        return (selected, None);
+    }
+    if preferred.1.is_some() {
+        preferred
+    } else {
+        (fallback, None)
+    }
+}
+
 unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     let system = unsafe { table.as_mut() }.ok_or(LOAD_ERROR)?;
     let services = unsafe { system.boot_services.as_mut() }.ok_or(LOAD_ERROR)?;
@@ -356,44 +576,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         return Err(LOAD_ERROR);
     }
 
-    let mut gop_pointer = core::ptr::null_mut();
-    check(unsafe {
-        (services.locate_protocol)(&GOP_GUID, core::ptr::null_mut(), &mut gop_pointer)
-    })?;
-    let gop = unsafe { (gop_pointer as *mut GraphicsOutputProtocol).as_mut() }.ok_or(LOAD_ERROR)?;
-    let mode = unsafe { gop.mode.as_mut() }.ok_or(LOAD_ERROR)?;
-    let info = unsafe { mode.info.as_ref() }.ok_or(LOAD_ERROR)?;
-    if !matches!(info.pixel_format, 0 | 1)
-        || info.horizontal_resolution == 0
-        || info.vertical_resolution == 0
-        || info.pixels_per_scan_line < info.horizontal_resolution
-        || mode.framebuffer_base == 0
-        || mode.framebuffer_size == 0
-    {
-        return Err(LOAD_ERROR);
-    }
-    let framebuffer = Framebuffer {
-        base: mode.framebuffer_base,
-        size: mode.framebuffer_size,
-        width: info.horizontal_resolution,
-        height: info.vertical_resolution,
-        stride: info.pixels_per_scan_line,
-        format: info.pixel_format,
-    };
-    let pixel_format = if framebuffer.format == 0 {
-        PixelFormat::RedGreenBlueReserved
-    } else {
-        PixelFormat::BlueGreenRedReserved
-    };
-    FramebufferInfo::new(
-        framebuffer.base,
-        framebuffer.size as u64,
-        framebuffer.width,
-        framebuffer.height,
-        framebuffer.stride,
-        pixel_format,
-    )
-    .map_err(|_| LOAD_ERROR)?;
+    let framebuffer = select_framebuffer(services, system.console_out_handle)?;
     paint(framebuffer, [0x80, 0x00, 0x00]);
 
     let mut rng_pointer = core::ptr::null_mut();

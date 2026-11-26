@@ -28,6 +28,14 @@ instance without rebooting. Run `tools/ci/test-native-fat32-restart-whp.ps1` or
 guest qualification with synthetic media and disposable signing keys. It is
 not physical-device evidence or a general production storage launcher.
 
+Early-boot display is separate from the storage gate. The UEFI loader prefers
+the selected output's checksummed EDID base-block preferred timing if GOP
+offers a supported linear mode of that size. It otherwise tries 1024x768,
+retains a usable live mode, or tries another supported linear mode. The kernel
+draws its own `MRML KERNEL READY` marker after firmware exit; this is not a
+FAT32 result, compositor, or display-driver qualification. The existing signed
+FAT32 restart probe still requires the hosted VMM's service-root mappings.
+
 The next storage gate is a QEMU/OVMF guest boot with a separate disposable
 FAT32 disk attached to an emulated storage controller instead of serving
 sectors from the embedded image. The signed FAT32 service should read the same

@@ -168,6 +168,18 @@ pub const GOP_GUID: Guid = Guid {
     data3: 0x4a38,
     data4: [0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a],
 };
+pub const EDID_ACTIVE_GUID: Guid = Guid {
+    data1: 0xbd8c_1056,
+    data2: 0x9f36,
+    data3: 0x44ec,
+    data4: [0x92, 0xa8, 0xa6, 0x33, 0x7f, 0x81, 0x79, 0x86],
+};
+pub const EDID_DISCOVERED_GUID: Guid = Guid {
+    data1: 0x1c0c_34f6,
+    data2: 0xd380,
+    data3: 0x41fa,
+    data4: [0xa0, 0x49, 0x8a, 0xd0, 0x6c, 0x1a, 0x66, 0xaa],
+};
 pub const RNG_GUID: Guid = Guid {
     data1: 0x3152_bca5,
     data2: 0xeade,
@@ -1868,6 +1880,7 @@ fn push_region(
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct GraphicsOutputModeInformation {
     pub version: u32,
     pub horizontal_resolution: u32,
@@ -1889,10 +1902,131 @@ pub struct GraphicsOutputMode {
 
 #[repr(C)]
 pub struct GraphicsOutputProtocol {
-    pub query_mode: usize,
-    pub set_mode: usize,
+    pub query_mode: unsafe extern "efiapi" fn(
+        *mut Self,
+        u32,
+        *mut usize,
+        *mut *mut GraphicsOutputModeInformation,
+    ) -> Status,
+    pub set_mode: unsafe extern "efiapi" fn(*mut Self, u32) -> Status,
     pub blt: usize,
     pub mode: *mut GraphicsOutputMode,
+}
+
+#[repr(C)]
+pub struct EdidProtocol {
+    pub size: u32,
+    pub bytes: *const u8,
+}
+
+/// Read the preferred detailed timing from a checksummed EDID base block.
+/// Extension-only timings fall back to firmware modes rather than being guessed.
+pub fn edid_preferred_resolution(base: &[u8; 128]) -> Option<(u32, u32)> {
+    if base[..8] != [0, 255, 255, 255, 255, 255, 255, 0]
+        || base.iter().copied().fold(0u8, u8::wrapping_add) != 0
+        || base[18] != 1
+        || base[19] > 4
+        || base[24] & 2 == 0
+        || base[54..56] == [0, 0]
+    {
+        return None;
+    }
+    let width = u32::from(base[56]) | (u32::from(base[58] & 0xf0) << 4);
+    let height = u32::from(base[59]) | (u32::from(base[61] & 0xf0) << 4);
+    (width != 0 && height != 0).then_some((width, height))
+}
+
+/// Rank only linear 32-bit modes understood by the existing handoff renderer.
+pub fn framebuffer_mode_rank(
+    info: GraphicsOutputModeInformation,
+    preferred: Option<(u32, u32)>,
+    current: bool,
+) -> Option<u8> {
+    let size = (info.horizontal_resolution, info.vertical_resolution);
+    if info.version != 0
+        || !matches!(info.pixel_format, 0 | 1)
+        || size.0 == 0
+        || size.1 == 0
+        || size.0 > 16_384
+        || size.1 > 16_384
+        || info.pixels_per_scan_line < size.0
+        || info.pixels_per_scan_line > 32_768
+    {
+        return None;
+    }
+    Some(if Some(size) == preferred {
+        0
+    } else if size == (1024, 768) {
+        1
+    } else if current {
+        2
+    } else {
+        3
+    })
+}
+
+#[cfg(test)]
+mod gop_mode_tests {
+    use super::*;
+
+    #[test]
+    fn preferred_detailed_timing_requires_valid_base_block() {
+        let mut edid = [0u8; 128];
+        edid[..8].copy_from_slice(&[0, 255, 255, 255, 255, 255, 255, 0]);
+        edid[18] = 1;
+        edid[19] = 4;
+        edid[24] = 2;
+        edid[54] = 1;
+        edid[56] = 0x80;
+        edid[58] = 0x70;
+        edid[59] = 0x38;
+        edid[61] = 0x40;
+        edid[127] = 0u8.wrapping_sub(edid.iter().copied().fold(0u8, u8::wrapping_add));
+        assert_eq!(edid_preferred_resolution(&edid), Some((1920, 1080)));
+        edid[56] ^= 1;
+        assert_eq!(edid_preferred_resolution(&edid), None);
+        edid[56] ^= 1;
+        edid[54] = 0;
+        edid[127] = edid[127].wrapping_add(1);
+        assert_eq!(edid_preferred_resolution(&edid), None);
+    }
+
+    #[test]
+    fn rank_prefers_edid_then_conservative_fallback_and_filters_bad_modes() {
+        let mode = |width, height, format, stride| GraphicsOutputModeInformation {
+            version: 0,
+            horizontal_resolution: width,
+            vertical_resolution: height,
+            pixel_format: format,
+            pixel_bitmask: [0; 4],
+            pixels_per_scan_line: stride,
+        };
+        let preferred = Some((1920, 1080));
+        assert_eq!(
+            framebuffer_mode_rank(mode(1920, 1080, 1, 1920), preferred, false),
+            Some(0)
+        );
+        assert_eq!(
+            framebuffer_mode_rank(mode(1024, 768, 0, 1056), preferred, false),
+            Some(1)
+        );
+        assert_eq!(
+            framebuffer_mode_rank(mode(1280, 720, 0, 1280), preferred, true),
+            Some(2)
+        );
+        assert_eq!(
+            framebuffer_mode_rank(mode(800, 600, 0, 800), preferred, false),
+            Some(3)
+        );
+        assert_eq!(
+            framebuffer_mode_rank(mode(1920, 1080, 3, 1920), preferred, false),
+            None
+        );
+        assert_eq!(
+            framebuffer_mode_rank(mode(1024, 768, 0, 800), preferred, false),
+            None
+        );
+    }
 }
 
 pub type GetRng =
