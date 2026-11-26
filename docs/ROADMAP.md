@@ -40,6 +40,12 @@ cleanup, stale-handle denial and exact reread. QEMU/OVMF verified the full
 trace and framebuffer with the embedded image. This does not qualify any
 physical device, native USB I/O, compositor or display driver.
 
+The firmware bring-up plan also includes a
+[bare-metal USB smoke test](platform/UEFI_BOOT_MANAGEMENT.md#bare-metal-usb-bring-up).
+It runs the same embedded fixture on one identified x86-64 UEFI machine. The
+USB stick is boot media only; this does not qualify a native storage controller.
+No physical run is claimed yet.
+
 The next storage gate is a QEMU/OVMF guest boot with a separate disposable
 FAT32 disk attached to an emulated storage controller instead of serving
 sectors from the embedded image. The signed FAT32 service should read the same
@@ -48,9 +54,8 @@ reboot, reject stale route and file handles without submitting device I/O,
 then reopen the file and read the same bytes again. Keep the test disk
 read-only to the guest and run the check in CI once it is reproducible.
 QEMU is sufficient for this gate, not evidence of physical compatibility.
-Defer non-destructive testing on a named physical target until more of the
-native boot and storage stack is ready; no host physical disk is part of this
-gate.
+Physical storage-controller qualification stays deferred; no host physical
+disk is part of the QEMU gate.
 
 Bring-up evidence against `31087f19` plus the FAT32 dispatch regression:
 the real dispatch loop, on a synthetic block device with modeled syscalls,

@@ -22,6 +22,7 @@ order.
 | [Project overview](docs/human/OVERVIEW.md) | What MRML is, its goals, maturity, and current platform limits |
 | [Project status](docs/PROJECT_STATUS.md) | What is implemented, what has been tested, and what remains open across the project |
 | [Getting started](docs/human/GETTING_STARTED.md) | How to obtain the source and prepare the supported local toolchain |
+| [UEFI USB bring-up](docs/platform/UEFI_BOOT_MANAGEMENT.md#bare-metal-usb-bring-up) | How to verify the firmware handoff and embedded FAT32 test on a spare USB stick |
 | [Verify every commit](docs/human/VERIFY_COMMITS.md) | How to verify every commit on GitHub with the project’s Ed25519 SSH signing key |
 | [Contributing](docs/human/CONTRIBUTING.md) | The practical rules for making and reviewing changes |
 | [Documentation map](docs/human/DOCUMENTATION.md) | Architecture, security, compiler, platform, and evidence records |

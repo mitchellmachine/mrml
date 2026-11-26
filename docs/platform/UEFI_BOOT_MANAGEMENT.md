@@ -6,6 +6,33 @@ retain their recorded status. No current claim is made for firmware NVRAM writes
 boot-entry creation, owner-key enrollment, compatibility-trust preservation,
 dbx update, dual boot, or physical-firmware behavior.
 
+## Bare-metal USB bring-up
+
+The bring-up test uses a dedicated, expendable USB flash drive, not the
+installer. First reproduce the signed FAT32 restart in QEMU/OVMF with
+`tools/ci/test-native-boot.sh OVMF_CODE OVMF_VARS --fat32-restart`. Both paths
+use the signed UEFI loader, kernel and FAT32 service, with one-use diagnostic
+keys and the same read-only fixture embedded in the kernel.
+
+1. Prepare the removable-media image for the diagnostic profile. The firmware
+   loads its x86-64 entry at `\EFI\BOOT\BOOTX64.EFI`. Confirm the exact USB
+   target before imaging it; imaging erases that stick's existing contents.
+2. Use the machine's one-time UEFI boot menu. Do not install MRML, change
+   permanent boot order, enroll test keys, or weaken Secure Boot to make the
+   diagnostic run. If the firmware refuses the test loader under the
+   machine's current policy, record the refusal and stop.
+3. Record machine and firmware version, Secure Boot state, display mode and
+   exact build commit. Success is `FAT32 RESTART: PASS - 28 BYTES` on screen
+   after handoff. Record `FAIL`, `NOT PASSED`, or a blank screen as a
+   non-pass. Remove the stick before booting back into the existing OS.
+
+UEFI reads the boot files from USB before handoff. The kernel's test reads
+`PROBE.TXT` from its embedded FAT32 image, retires and restarts the signed
+service without rebooting, rejects stale handles, and compares all 28 bytes
+again. This tests firmware handoff, framebuffer and the service on one machine,
+not MRML USB drive access, installation, or a physical storage driver. The
+internal system disk is not a target. No bare-metal pass has been recorded.
+
 ## Typed firmware objects and authority
 
 Firmware administration exposes typed `UefiVariable`, `UefiBootEntry`,
