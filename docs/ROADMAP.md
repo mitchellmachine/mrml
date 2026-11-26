@@ -66,7 +66,12 @@ and expected trace markers were not relaxed. Ordinary KVM service mode
 advances beyond configuration but still stops before the final receiver
 cleanup marker. The passing restart-request probe establishes a fresh
 authorized service generation; it does not execute the actual FAT32 provider
-or satisfy the live storage recovery gate.
+or satisfy the live storage recovery gate. The restart fixture now separates
+its data and management endpoints. Sending requires the live sender's exact
+SIGNAL capability for the endpoint object and the exact pair of task
+generations. The fixture tests both crossed capability/peer combinations
+before sending valid requests. A successful restart installs the replacement
+task generation in the data route.
 
 The immutable image adapter now accepts canonical block-provider v1 reads from
 an authenticated runtime receive and copies only the requested bytes through

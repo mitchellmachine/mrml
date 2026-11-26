@@ -94,6 +94,7 @@ global_asm!(
             and rsp, -16
             sub rsp, 16
             mov [rsp], r11
+            mov [rsp + 8], r10
             mov rdi, r13
             mov rsi, r14
             mov rdx, r12
@@ -351,7 +352,16 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     shared_read: u64,
     restart_manager: u64,
     _recovery_capability: u64,
+    restart_endpoint: u64,
 ) -> ! {
+    if restart_manager != 0
+        && (restart_endpoint == 0
+            || restart_endpoint == endpoint
+            || buffer_send_status(endpoint, restart_manager, b"wrong-route", &[]) != 1
+            || buffer_send_status(restart_endpoint, sender, b"wrong-route", &[]) != 1)
+    {
+        halt();
+    }
     unsafe { verify_shared_buffer_syscalls(shared_write, shared_read, generation) };
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
     let configuration = core::ptr::addr_of_mut!(CONFIGURATION);
@@ -396,8 +406,8 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     };
     unsafe { yield_now() };
     if restart_manager != 0 {
-        unsafe { send_buffer(endpoint, restart_manager, b"restart-ready", &[]) };
-        unsafe { dispatch_supervision_restart(endpoint, restart_manager, 0x501) };
+        unsafe { send_buffer(restart_endpoint, restart_manager, b"restart-ready", &[]) };
+        unsafe { dispatch_supervision_restart(restart_endpoint, restart_manager, 0x501) };
         unsafe { yield_now() };
         halt();
     }
@@ -2764,6 +2774,13 @@ fn capability_descriptor(capability: u64, rights: Rights) -> CapabilityDescripto
 
 #[cfg(not(feature = "preemption-probe"))]
 unsafe fn send_buffer(endpoint: u64, receiver: u64, payload: &[u8], descriptors: &[u8]) {
+    if buffer_send_status(endpoint, receiver, payload, descriptors) != 0 {
+        halt();
+    }
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+fn buffer_send_status(endpoint: u64, receiver: u64, payload: &[u8], descriptors: &[u8]) -> u64 {
     if payload.is_empty()
         || payload.len() > mrml_kernel::MAX_INLINE_PAYLOAD
         || !descriptors
@@ -2796,9 +2813,7 @@ unsafe fn send_buffer(endpoint: u64, receiver: u64, payload: &[u8], descriptors:
             options(nostack)
         )
     };
-    if status != 0 {
-        halt();
-    }
+    status
 }
 
 #[cfg(not(feature = "preemption-probe"))]

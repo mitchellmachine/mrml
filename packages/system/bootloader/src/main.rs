@@ -479,6 +479,54 @@ static mut SERVICE_RUNTIME: Option<
 > = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_ENDPOINT: Option<Endpoint> = None;
+#[cfg(feature = "service-restart-request-probe")]
+static mut SERVICE_RESTART_ROUTES: Option<HostedRestartRoutes> = None;
+
+#[cfg(feature = "service-restart-request-probe")]
+const SERVICE_RESTART_ENDPOINT_OBJECT: ObjectId = ObjectId(0x95);
+
+#[cfg(feature = "service-restart-request-probe")]
+struct HostedRestartRoutes {
+    coordinator: mrml_kernel::TaskId,
+    data_peer: mrml_kernel::TaskId,
+    manager: mrml_kernel::TaskId,
+    management: Endpoint,
+}
+
+#[cfg(feature = "service-restart-request-probe")]
+impl HostedRestartRoutes {
+    fn select<'a>(
+        &'a mut self,
+        runtime: &TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
+        sender: mrml_kernel::TaskId,
+        receiver: mrml_kernel::TaskId,
+        signal: Capability,
+        data: &'a mut Endpoint,
+    ) -> Option<&'a mut Endpoint> {
+        let peer_pair = |peer| {
+            (sender == self.coordinator && receiver == peer)
+                || (sender == peer && receiver == self.coordinator)
+        };
+        if peer_pair(self.data_peer) {
+            runtime
+                .authorize_capability_exact(sender, signal, Rights::SIGNAL, ObjectId(0x91))
+                .ok()?;
+            Some(data)
+        } else if peer_pair(self.manager) {
+            runtime
+                .authorize_capability_exact(
+                    sender,
+                    signal,
+                    Rights::SIGNAL,
+                    SERVICE_RESTART_ENDPOINT_OBJECT,
+                )
+                .ok()?;
+            Some(&mut self.management)
+        } else {
+            None
+        }
+    }
+}
 #[cfg(all(feature = "service-probe", not(feature = "component-service-probe")))]
 static mut SERVICE_SUPERVISOR: Option<ServiceSupervisor<SERVICE_TASK_CAPACITY>> = None;
 #[cfg(feature = "component-service-probe")]
@@ -1198,6 +1246,15 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 let endpoint_object = (*core::ptr::addr_of_mut!(SERVICE_ENDPOINT))
                     .as_mut()
                     .unwrap_or_else(|| halt());
+                #[cfg(feature = "service-restart-request-probe")]
+                let Some(endpoint_object) = (*core::ptr::addr_of_mut!(SERVICE_RESTART_ROUTES))
+                    .as_mut()
+                    .unwrap_or_else(|| halt())
+                    .select(runtime, current, receiver, endpoint, endpoint_object)
+                else {
+                    frame.complete_error();
+                    return;
+                };
                 #[cfg(feature = "deadline-receive-probe")]
                 let sequence = match deadline_deliver_ipc(
                     runtime,
@@ -1304,6 +1361,17 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 let endpoint_object = (*core::ptr::addr_of_mut!(SERVICE_ENDPOINT))
                     .as_mut()
                     .unwrap_or_else(|| halt());
+                #[cfg(feature = "service-restart-request-probe")]
+                let Some(endpoint_object) = (*core::ptr::addr_of_mut!(SERVICE_RESTART_ROUTES))
+                    .as_mut()
+                    .unwrap_or_else(|| halt())
+                    .select(runtime, current, receiver, endpoint, endpoint_object)
+                else {
+                    payload_storage.fill(0);
+                    requested.fill((Capability::from_token(0), Rights::NONE));
+                    frame.complete_error();
+                    return;
+                };
                 #[cfg(feature = "deadline-receive-probe")]
                 let delivery = deadline_deliver_ipc(
                     runtime,
@@ -3924,8 +3992,12 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             let manager_signal = runtime
                 .capabilities_mut(manager)
                 .and_then(|space| {
+                    #[cfg(feature = "service-restart-request-probe")]
+                    let object = SERVICE_RESTART_ENDPOINT_OBJECT;
+                    #[cfg(not(feature = "service-restart-request-probe"))]
+                    let object = endpoint_object;
                     space
-                        .insert(endpoint_object, Rights::SIGNAL)
+                        .insert(object, Rights::SIGNAL)
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
                 .unwrap_or_else(|_| halt());
@@ -3941,6 +4013,12 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             let endpoint = Endpoint::new(endpoint_object);
             runtime
                 .connect_control_peers(receiver, sender, &endpoint, receiver_capability, capability)
+                .unwrap_or_else(|_| halt());
+            #[cfg(feature = "service-restart-request-probe")]
+            let restart_receiver_signal = runtime
+                .capabilities_mut(receiver)
+                .unwrap_or_else(|_| halt())
+                .insert(SERVICE_RESTART_ENDPOINT_OBJECT, Rights::SIGNAL)
                 .unwrap_or_else(|_| halt());
             let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
             receiver_context.r13 = receiver_capability.token();
@@ -3973,6 +4051,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             #[cfg(feature = "service-restart-request-probe")]
             {
                 receiver_context.rbp = manager.token();
+                receiver_context.r10 = restart_receiver_signal.token();
             }
             let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
             sender_context.r13 = capability.token();
@@ -4069,6 +4148,13 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 halt();
             }
             core::ptr::addr_of_mut!(SERVICE_ENDPOINT).write(Some(endpoint));
+            #[cfg(feature = "service-restart-request-probe")]
+            core::ptr::addr_of_mut!(SERVICE_RESTART_ROUTES).write(Some(HostedRestartRoutes {
+                coordinator: receiver,
+                data_peer: sender,
+                manager,
+                management: Endpoint::new(SERVICE_RESTART_ENDPOINT_OBJECT),
+            }));
             #[cfg(not(feature = "component-service-probe"))]
             core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor_storage));
             core::ptr::addr_of_mut!(SERVICE_MANAGEMENT).write(Some(management));
@@ -5100,10 +5186,15 @@ unsafe fn restart_sender_from_request(
         };
     let sender = replacement.task();
     let replacement = replacement.service();
-    let endpoint = unsafe {
-        (*core::ptr::addr_of!(SERVICE_ENDPOINT))
-            .as_ref()
-            .unwrap_or_else(|| halt())
+    let (endpoint, routes) = unsafe {
+        (
+            (*core::ptr::addr_of!(SERVICE_ENDPOINT))
+                .as_ref()
+                .unwrap_or_else(|| halt()),
+            (*core::ptr::addr_of_mut!(SERVICE_RESTART_ROUTES))
+                .as_mut()
+                .unwrap_or_else(|| halt()),
+        )
     };
     let receiver_signal =
         unsafe { (*core::ptr::addr_of!(SERVICE_RECEIVER_SIGNAL)).unwrap_or_else(|| halt()) };
@@ -5144,6 +5235,7 @@ unsafe fn restart_sender_from_request(
     sender_context.rbp = supervision.token();
     sender_context.r10 = replacement.token();
     ids[1] = replacement;
+    routes.data_peer = sender;
     Some(replacement)
 }
 
