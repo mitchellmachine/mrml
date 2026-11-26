@@ -402,11 +402,10 @@ Run AddressSanitizer on the full Linux-compatible native graph and run
 feature- or hardware-specific suites for CUDA, KVM, UEFI, codecs, network
 protocols, and the compiler whenever those areas change. A workflow definition
 is not proof that a revision passed; retain the exact CI result and artifacts.
-Do not run WHP, WHPX, Hyper-V, VBS, or other Windows VMM suites locally while
-local Windows VMM testing is suspended. Retain those suites in GitHub Actions;
-a passing native-Windows job is evidence only for the operations that job
-actually exercised. Optional local Windows-target execution under Wine covers
-only the toolchain and must be labeled accordingly.
+At the time of this snapshot, contributors deferred local Windows VMM
+execution and referred to GitHub Actions for WHP results. This no longer
+states current policy. A native-Windows job is evidence only for the
+operations it actually exercised; Wine covers only the toolchain.
 Performance results must identify the artifact, backend, hardware,
 configuration, warm-up policy, measurement boundary, and variation across
 runs. Codec and compiler compatibility require independent conformance or
