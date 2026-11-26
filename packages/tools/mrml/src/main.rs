@@ -296,7 +296,7 @@ fn print_help() {
         "usage: mrml <list|doctor|audit|assurance|build|test|compiler|manifest|interface|package|release|cert> [component] [options]"
     );
     println!("       mrml manifest <check|fmt|lock> [--check]");
-    println!("       mrml assurance <check|generate>");
+    println!("       mrml assurance <check|generate|inspect>");
     println!("       mrml cert caa <recommend|verify> ...");
     println!(
         "       mrml cert status (--snapshot FILE | --endpoint 127.0.0.1:PORT --session-capability FILE --identity HEX) [--output human|structured]"
@@ -343,7 +343,8 @@ fn print_help() {
         "       mrml package qemu-boot IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--accelerator tcg|whpx|kvm] [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX]"
     );
     println!("       mrml interface generate-rust SCHEMA OUTPUT");
-    println!("  --all                 select every host-compatible component");
+    println!("  --all                 select every target-compatible component");
+    println!("  --keep-going          attempt all selected components; fail if any fail");
     println!("  --target <family>     native|windows|linux|uefi-x86_64|cuda-nvidia");
     println!("  --gpu-arch <name>     required metadata for CUDA target");
     println!("  --release             use release profile");
@@ -4337,7 +4338,31 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
         return Err(format!("NoMatchingComponents {{ target: {target} }}"));
     }
 
+    let keep_going = args.iter().any(|arg| arg == "--keep-going");
+    let mut failures = Vec::new();
+    let mut attempted = 0_u32;
     for component in components {
+        // These are host-model tests, not execution of freestanding binaries.
+        if operation == "test"
+            && target == "MRML_NATIVE"
+            && all
+            && selected.is_none()
+            && !component
+                .rust_action
+                .as_ref()
+                .is_some_and(|action| action.host_test_targets.iter().any(|item| item == host))
+        {
+            emit(
+                mode,
+                operation,
+                component,
+                &target,
+                "host-model",
+                "NO_HOST_HARNESS",
+            );
+            continue;
+        }
+        attempted += 1;
         if target == "CUDA" && mode == OutputMode::Structured {
             let gpu_arch = args
                 .windows(2)
@@ -4348,13 +4373,17 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
                 "metadata|target=CUDA|gpu_arch={gpu_arch}|artifact=PTX|toolchain=upstream-rustc-nvptx|runtime_authority=none"
             );
         }
-        let builder = "native-rustc";
+        let builder = if operation == "test" && target == "MRML_NATIVE" {
+            "native-build-plus-host-model"
+        } else {
+            "native-rustc"
+        };
         emit(mode, operation, component, &target, builder, "START");
         let gpu_arch = args
             .windows(2)
             .find(|pair| pair[0] == "--gpu-arch")
             .map(|pair| pair[1].as_str());
-        run_rust_action(
+        let result = run_rust_action(
             workspace,
             component,
             RustActionRequest {
@@ -4366,8 +4395,26 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
                 compile_env: &compile_env,
                 sanitizer,
             },
-        )?;
-        emit(mode, operation, component, &target, builder, "PASS");
+        );
+        match result {
+            Ok(()) => emit(mode, operation, component, &target, builder, "PASS"),
+            Err(error) if keep_going => {
+                emit(mode, operation, component, &target, builder, "FAIL");
+                failures.push(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if attempted == 0 {
+        return Err(format!("NoTestHarnesses {{ target: {target} }}"));
+    }
+    if !failures.is_empty() {
+        return Err(format!(
+            "ComponentFailures ({}/{}):\n{}",
+            failures.len(),
+            attempted,
+            failures.join("\n")
+        ));
     }
     Ok(())
 }

@@ -1,0 +1,102 @@
+name: MRML builds and tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  assurance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: bash tools/toolchain/setup-oracle.sh
+      - id: bootstrap
+        run: cargo build --locked
+      - name: Validate tracked shell scripts and static website
+        run: |
+          while IFS= read -r -d '' script; do
+            IFS= read -r shebang < "$script"
+            case "$shebang" in
+              *bash) bash -n -- "$script" ;;
+              *) sh -n -- "$script" ;;
+            esac
+          done < <(git ls-files -z -- '*.sh')
+          python3 website/check_static.py
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: ./target/debug/mrml manifest fmt --check
+      - run: ./target/debug/mrml manifest check
+      - run: ./target/debug/mrml manifest lock --check
+      - run: ./target/debug/mrml audit --all --target native --output structured
+      - run: ./target/debug/mrml assurance check
+
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y libopus-dev
+      - run: bash tools/toolchain/setup-oracle.sh
+      - id: bootstrap
+        run: cargo build --locked
+      - run: ./target/debug/mrml build --all --target linux --release --output structured --keep-going
+      - if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        run: ./target/debug/mrml test --all --target linux --release --output structured --keep-going
+      - run: ./target/debug/mrml build org.mrml.library.tensor --target linux --feature-profile cuda
+      - run: ./target/debug/mrml build org.mrml.library.tensor --target cuda-nvidia --gpu-arch sm_100
+      - run: ./target/debug/mrml build org.mrml.library.tensor --target cuda-nvidia --gpu-arch sm_120
+
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Check Windows checkout shell line endings
+        run: |
+          $bad = @(git ls-files --eol -- '*.sh' | Where-Object { $_ -notmatch '^i/lf\s+w/lf\s+' })
+          if ($bad.Count) { $bad; throw 'Shell scripts must stay LF in the Windows checkout' }
+      - shell: pwsh
+        run: |
+          . .\tools\toolchain\setup-oracle.ps1
+          "RUSTUP_TOOLCHAIN=$env:RUSTUP_TOOLCHAIN" >> $env:GITHUB_ENV
+          Join-Path (rustc --print sysroot) bin >> $env:GITHUB_PATH
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - id: bootstrap
+        run: cargo build --locked
+      - run: cargo test --locked
+      - run: ./target/debug/mrml.exe build --all --target windows --release --output structured --keep-going
+      - if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        run: ./target/debug/mrml.exe test --all --target windows --release --output structured --keep-going
+      - run: ./target/debug/mrml.exe build org.mrml.library.tensor --target windows --feature-profile cuda
+
+  mrml-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y libopus-dev qemu-system-x86 ovmf fdisk mtools
+      - run: bash tools/toolchain/setup-oracle.sh
+      - id: bootstrap
+        run: cargo build --locked
+      - run: ./target/debug/mrml build --all --target native --release --output structured --keep-going
+      - if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        run: ./target/debug/mrml build --all --target uefi-x86_64 --release --output structured --keep-going
+      - name: Run native packages' declared host-model harnesses
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        run: ./target/debug/mrml test --all --target native --release --output structured --keep-going
+      - name: Execute authenticated native kernel boot under QEMU/OVMF
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        run: bash tools/ci/test-native-boot.sh /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_VARS_4M.fd

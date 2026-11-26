@@ -1,0 +1,22 @@
+name: MRML Linux AddressSanitizer
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  address-sanitizer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y libopus-dev
+      - run: bash tools/toolchain/setup-oracle.sh
+      - run: cargo build --locked
+      - run: ./target/debug/mrml test --all --target linux --sanitizer address --output structured --keep-going

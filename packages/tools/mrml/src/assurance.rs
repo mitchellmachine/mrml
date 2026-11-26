@@ -18,6 +18,7 @@ struct UnsafeCounts {
     externs: usize,
     traits: usize,
     undocumented_blocks: usize,
+    unsafe_attributes: usize,
 }
 
 impl UnsafeCounts {
@@ -54,6 +55,10 @@ impl UnsafeCounts {
             .undocumented_blocks
             .checked_add(other.undocumented_blocks)
             .ok_or("AssuranceUnsafeCountOverflow")?;
+        self.unsafe_attributes = self
+            .unsafe_attributes
+            .checked_add(other.unsafe_attributes)
+            .ok_or("AssuranceUnsafeCountOverflow")?;
         Ok(())
     }
 }
@@ -72,6 +77,7 @@ struct SourceInventory {
     largest_path: String,
     largest_bytes: u64,
     unsafe_by_path: BTreeMap<String, UnsafeCounts>,
+    unsafe_attribute_files: BTreeMap<String, usize>,
     unsafe_total: UnsafeCounts,
 }
 
@@ -102,6 +108,12 @@ struct WorkflowInventory {
     assurance: bool,
     linux_full_tests: bool,
     windows_full_tests: bool,
+    linux_full_build: bool,
+    windows_full_build: bool,
+    mrml_native_build: bool,
+    mrml_uefi_build: bool,
+    mrml_host_model_tests: bool,
+    mrml_guest_boot: bool,
     cuda_profile: bool,
     cuda_target: bool,
     stage_zero_clippy: bool,
@@ -112,10 +124,36 @@ pub(super) fn command(workspace: &Workspace, args: &[String]) -> Result<(), Stri
     match args.first().map(String::as_str).unwrap_or("check") {
         "check" if args.len() == 1 || args.is_empty() => check(workspace),
         "generate" if args.len() == 1 => generate(workspace),
+        "inspect" if args.len() == 1 => inspect(workspace),
         other => Err(format!(
-            "AssuranceUsage {{ command: {other}, usage: mrml assurance <check|generate> }}"
+            "AssuranceUsage {{ command: {other}, usage: mrml assurance <check|generate|inspect> }}"
         )),
     }
+}
+
+// Read-only evidence. This deliberately does not signal an assurance PASS.
+fn inspect(workspace: &Workspace) -> Result<(), String> {
+    let source = source_inventory(&workspace.root)?;
+    let policy = unsafe_policy(&workspace.root)?;
+    for (path, count) in &source.unsafe_attribute_files {
+        println!("unsafe-attributes|path={path}|observed={count}|disposition=manual-review");
+    }
+    for (path, actual) in &source.unsafe_by_path {
+        if let Err(error) = validate_unsafe_file(path, actual, &policy) {
+            println!("unsafe-review|{error}");
+        }
+    }
+    for path in policy.keys() {
+        if !workspace.root.join(path).is_file() {
+            println!("unsafe-review|UnsafeBoundaryPathMissing {{ path: {path} }}");
+        }
+    }
+    validate_workflows(workflow_inventory(&workspace.root)?)?;
+    println!(
+        "assurance-inspect|rust-files={}|unsafe-attributes={}|workflow-configuration=present|not-a-gate-pass=true",
+        source.rust_files, source.unsafe_total.unsafe_attributes
+    );
+    Ok(())
 }
 
 fn check(workspace: &Workspace) -> Result<(), String> {
@@ -180,6 +218,7 @@ fn source_inventory(root: &Path) -> Result<SourceInventory, String> {
         largest_path: String::new(),
         largest_bytes: 0,
         unsafe_by_path: BTreeMap::new(),
+        unsafe_attribute_files: BTreeMap::new(),
         unsafe_total: UnsafeCounts::default(),
     };
     for path in rust_files {
@@ -221,6 +260,11 @@ fn source_inventory(root: &Path) -> Result<SourceInventory, String> {
         }
         let counts = unsafe_counts(&text, &relative)?;
         inventory.unsafe_total.add(counts)?;
+        if counts.unsafe_attributes != 0 {
+            inventory
+                .unsafe_attribute_files
+                .insert(relative.clone(), counts.unsafe_attributes);
+        }
         if counts.any() {
             inventory.unsafe_by_path.insert(relative, counts);
         }
@@ -340,11 +384,11 @@ fn graph_inventory(root: &Path) -> Result<GraphInventory, String> {
 }
 
 fn workflow_inventory(root: &Path) -> Result<WorkflowInventory, String> {
-    let ci = fs::read_to_string(root.join(".gitea/workflows/ci.yml")).map_err(|error| {
+    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml")).map_err(|error| {
         format!("AssuranceWorkflowRead {{ workflow: ci.yml, detail: {error} }}")
     })?;
     let sanitizers =
-        fs::read_to_string(root.join(".gitea/workflows/sanitizers.yml")).map_err(|error| {
+        fs::read_to_string(root.join(".github/workflows/sanitizers.yml")).map_err(|error| {
             format!("AssuranceWorkflowRead {{ workflow: sanitizers.yml, detail: {error} }}")
         })?;
     let ci_commands = workflow_commands(&ci);
@@ -370,6 +414,74 @@ fn workflow_inventory(root: &Path) -> Result<WorkflowInventory, String> {
             &ci_commands,
             &["test", "--all", "--target", "windows", "--release"],
         ),
+        linux_full_build: has_mrml_command(
+            &ci_commands,
+            &[
+                "build",
+                "--all",
+                "--target",
+                "linux",
+                "--release",
+                "--output",
+                "structured",
+                "--keep-going",
+            ],
+        ),
+        windows_full_build: has_mrml_command(
+            &ci_commands,
+            &[
+                "build",
+                "--all",
+                "--target",
+                "windows",
+                "--release",
+                "--output",
+                "structured",
+                "--keep-going",
+            ],
+        ),
+        mrml_native_build: has_mrml_command(
+            &ci_commands,
+            &[
+                "build",
+                "--all",
+                "--target",
+                "native",
+                "--release",
+                "--output",
+                "structured",
+                "--keep-going",
+            ],
+        ),
+        mrml_uefi_build: has_mrml_command(
+            &ci_commands,
+            &[
+                "build",
+                "--all",
+                "--target",
+                "uefi-x86_64",
+                "--release",
+                "--output",
+                "structured",
+                "--keep-going",
+            ],
+        ),
+        mrml_host_model_tests: has_mrml_command(
+            &ci_commands,
+            &[
+                "test",
+                "--all",
+                "--target",
+                "native",
+                "--release",
+                "--output",
+                "structured",
+                "--keep-going",
+            ],
+        ),
+        mrml_guest_boot: ci_commands
+            .iter()
+            .any(|cmd| command_tokens(cmd).starts_with(&["bash", "tools/ci/test-native-boot.sh"])),
         cuda_profile: has_mrml_command(
             &ci_commands,
             &[
@@ -543,6 +655,12 @@ fn validate_workflows(workflows: WorkflowInventory) -> Result<(), String> {
         ("repository-assurance", workflows.assurance),
         ("linux-full-tests", workflows.linux_full_tests),
         ("windows-full-tests", workflows.windows_full_tests),
+        ("linux-full-build", workflows.linux_full_build),
+        ("windows-full-build", workflows.windows_full_build),
+        ("mrml-native-build", workflows.mrml_native_build),
+        ("mrml-uefi-build", workflows.mrml_uefi_build),
+        ("mrml-host-model-tests", workflows.mrml_host_model_tests),
+        ("mrml-qemu-guest-boot", workflows.mrml_guest_boot),
         ("cuda-feature-profile", workflows.cuda_profile),
         ("cuda-ptx-target", workflows.cuda_target),
         ("stage-zero-clippy", workflows.stage_zero_clippy),
@@ -594,6 +712,7 @@ fn unsafe_policy(root: &Path) -> Result<BTreeMap<String, UnsafeBudget>, String> 
                 externs: parse(fields[4], "externs")?,
                 traits: parse(fields[5], "traits")?,
                 undocumented_blocks: parse(fields[6], "undocumented-blocks")?,
+                unsafe_attributes: 0,
             },
             reason: fields[7].trim().to_owned(),
         };
@@ -615,36 +734,45 @@ fn validate_unsafe_policy(
     policy: &BTreeMap<String, UnsafeBudget>,
 ) -> Result<(), String> {
     for (path, counts) in actual {
-        let budget = policy
-            .get(path)
-            .ok_or_else(|| format!("UnsafeBoundaryUnadmitted {{ path: {path} }}"))?;
-        let checks = [
-            ("blocks", counts.blocks, budget.counts.blocks),
-            ("functions", counts.functions, budget.counts.functions),
-            (
-                "implementations",
-                counts.implementations,
-                budget.counts.implementations,
-            ),
-            ("externs", counts.externs, budget.counts.externs),
-            ("traits", counts.traits, budget.counts.traits),
-            (
-                "undocumented-blocks",
-                counts.undocumented_blocks,
-                budget.counts.undocumented_blocks,
-            ),
-        ];
-        for (kind, observed, admitted) in checks {
-            if observed > admitted {
-                return Err(format!(
-                    "UnsafeBoundaryGrowth {{ path: {path}, kind: {kind}, observed: {observed}, admitted: {admitted} }}"
-                ));
-            }
-        }
+        validate_unsafe_file(path, counts, policy)?;
     }
     for path in policy.keys() {
         if !root.join(path).is_file() {
             return Err(format!("UnsafeBoundaryPathMissing {{ path: {path} }}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_unsafe_file(
+    path: &str,
+    counts: &UnsafeCounts,
+    policy: &BTreeMap<String, UnsafeBudget>,
+) -> Result<(), String> {
+    let budget = policy
+        .get(path)
+        .ok_or_else(|| format!("UnsafeBoundaryUnadmitted {{ path: {path} }}"))?;
+    let checks = [
+        ("blocks", counts.blocks, budget.counts.blocks),
+        ("functions", counts.functions, budget.counts.functions),
+        (
+            "implementations",
+            counts.implementations,
+            budget.counts.implementations,
+        ),
+        ("externs", counts.externs, budget.counts.externs),
+        ("traits", counts.traits, budget.counts.traits),
+        (
+            "undocumented-blocks",
+            counts.undocumented_blocks,
+            budget.counts.undocumented_blocks,
+        ),
+    ];
+    for (kind, observed, admitted) in checks {
+        if observed > admitted {
+            return Err(format!(
+                "UnsafeBoundaryGrowth {{ path: {path}, kind: {kind}, observed: {observed}, admitted: {admitted} }}"
+            ));
         }
     }
     Ok(())
@@ -673,6 +801,15 @@ fn unsafe_counts(source: &str, path: &str) -> Result<UnsafeCounts, String> {
             "impl" => counts.implementations += 1,
             "extern" => counts.externs += 1,
             "trait" => counts.traits += 1,
+            "(" if tokens.get(index + 2).is_some_and(|attribute| {
+                matches!(
+                    attribute.text.as_str(),
+                    "no_mangle" | "export_name" | "link_section" | "naked"
+                )
+            }) =>
+            {
+                counts.unsafe_attributes += 1
+            }
             _ => {}
         }
     }
@@ -933,11 +1070,18 @@ const fn utf8_scalar_width(first: u8) -> Option<usize> {
 }
 
 fn has_safety_comment(lines: &[&str], line: usize) -> bool {
-    let start = line.saturating_sub(4);
-    let end = line.saturating_add(2).min(lines.len());
-    lines
-        .get(start..end)
-        .is_some_and(|window| window.iter().any(|value| value.contains("SAFETY:")))
+    // Only contiguous line comments immediately preceding the block count.
+    // Nearby strings, unrelated statements and later notes don't document it.
+    lines[..line.saturating_sub(1).min(lines.len())]
+        .iter()
+        .rev()
+        .map(|source| source.trim_start())
+        .take_while(|source| source.starts_with("//"))
+        .any(|source| {
+            source
+                .strip_prefix("//")
+                .is_some_and(|comment| comment.trim_start().starts_with("SAFETY:"))
+        })
 }
 
 fn render_status(
@@ -1034,15 +1178,19 @@ fn render_status(
         source.unsafe_total.traits
     ));
     output.push_str(&format!(
-        "| Unsafe blocks without a nearby `SAFETY:` note | {} |\n",
+        "| Unsafe blocks without a preceding `SAFETY:` line comment | {} |\n",
         source.unsafe_total.undocumented_blocks
     ));
 
+    output.push_str(&format!(
+        "| Unsafe attributes (manual review) | {} |\n",
+        source.unsafe_total.unsafe_attributes
+    ));
     output.push_str("\n## Enforced repository gates\n\n");
     output.push_str("- Build inputs are admitted by stable ID plus kind, repository path, and line-independent token fingerprint. Count-preserving substitution, stale declarations, duplicate identities, comments, strings, and multiline expressions have dedicated audit tests.\n");
     output.push_str("- Audited Rust source files are limited to 2 MiB; the compiler code generator is split into phase-oriented include units below that ceiling.\n");
     output.push_str("- Unsafe growth is fail-closed against `tools/ci/unsafe-policy.tsv`; reductions pass without increasing a budget. The detailed generated inventory is in [UNSAFE_INVENTORY.md](UNSAFE_INVENTORY.md).\n");
-    output.push_str("- CI checks canonical manifests and lock state, the exact-site audit, generated-document drift, local Markdown links, full native Linux and Windows tests, the host CUDA feature profile, the CUDA PTX target, stage-zero Clippy, and full Linux AddressSanitizer tests.\n");
+    output.push_str("- CI checks canonical manifests and lock state, exact-site inputs, generated-document drift, local Markdown links, full Linux and Windows builds/tests, MRML and UEFI builds, declared MRML host-model tests, authenticated QEMU guest boot, CUDA compilation, stage-zero Clippy, and Linux AddressSanitizer tests.\n");
 
     output.push_str("\n## CI configuration evidence\n\n");
     output.push_str("| Gate | Configured | Evidence level |\n| --- | --- | --- |\n");
@@ -1071,7 +1219,7 @@ fn render_unsafe_inventory(
     let mut output = String::new();
     output.push_str("# Generated unsafe-boundary inventory\n\n");
     output.push_str("> Generated by `mrml assurance generate` from Rust tokens and `tools/ci/unsafe-policy.tsv`. Reductions are accepted; new files or growth beyond a checked-in baseline budget fail `mrml assurance check`.\n\n");
-    output.push_str(&format!("Unsafe-bearing files: **{}**. Unsafe blocks: **{}**. Unsafe functions: **{}**. Unsafe implementations: **{}**. Unsafe extern blocks: **{}**. Unsafe traits: **{}**. Blocks without a nearby `SAFETY:` note: **{}**.\n\n", source.unsafe_by_path.len(), source.unsafe_total.blocks, source.unsafe_total.functions, source.unsafe_total.implementations, source.unsafe_total.externs, source.unsafe_total.traits, source.unsafe_total.undocumented_blocks));
+    output.push_str(&format!("Unsafe-bearing files: **{}**. Unsafe blocks: **{}**. Unsafe functions: **{}**. Unsafe implementations: **{}**. Unsafe extern blocks: **{}**. Unsafe traits: **{}**. Blocks without a preceding `SAFETY:` line comment: **{}**.\n\n", source.unsafe_by_path.len(), source.unsafe_total.blocks, source.unsafe_total.functions, source.unsafe_total.implementations, source.unsafe_total.externs, source.unsafe_total.traits, source.unsafe_total.undocumented_blocks));
     output.push_str("| Path | Blocks | Functions | Impls | Externs | Traits | Undocumented blocks | Admission rationale |\n");
     output.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
     for (path, counts) in &source.unsafe_by_path {
@@ -1371,6 +1519,35 @@ fn real() {
         assert_eq!(counts.implementations, 1);
         assert_eq!(counts.externs, 1);
         assert_eq!(counts.traits, 1);
+        assert_eq!(counts.undocumented_blocks, 1);
+    }
+
+    #[test]
+    fn unsafe_attributes_are_reported_separately() {
+        let source = r##"
+            #[unsafe(no_mangle)] fn a() {}
+            #[cfg_attr(test, unsafe(export_name = "test"))] fn b() {}
+            const TEXT: &str = "#[unsafe(link_section)]";
+            // #[unsafe(naked)]
+        "##;
+        let counts = unsafe_counts(source, "fixture.rs").expect("scan");
+        assert_eq!(counts.unsafe_attributes, 2);
+        assert!(!counts.any());
+    }
+
+    #[test]
+    fn safety_notes_cannot_be_reused_across_statements() {
+        let source = r#"
+fn example() {
+    // SAFETY: applies to the first block only.
+    unsafe { first(); }
+    let text = "SAFETY: not a comment";
+    unsafe { second(); }
+    // SAFETY: not a retroactive note.
+}
+"#;
+        let counts = unsafe_counts(source, "fixture.rs").expect("scan");
+        assert_eq!(counts.blocks, 2);
         assert_eq!(counts.undocumented_blocks, 1);
     }
 

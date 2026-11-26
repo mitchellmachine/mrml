@@ -32,18 +32,17 @@ only.
 ## Workspace checks and generated inventories
 
 Use `mrml list`, `mrml manifest check`, and `mrml manifest lock --check` for
-live package/graph facts. The checkout does not contain a tracked CI workflow
-under `.github/workflows` or `.gitea/workflows`. Historical workflow
-descriptions are not evidence of CI configured on GitHub today.
+live package/graph facts. The [CI coverage plan](build/CI.md) describes the tracked GitHub workflow,
+including Windows/Linux builds and tests and separate MRML build and guest
+coverage. Configuration is not evidence of a passing run.
 
 [Generated workspace status](STATUS.md) and the
 [generated unsafe inventory](UNSAFE_INVENTORY.md) are retained earlier
 snapshots, not live counts. The normal `mrml assurance generate` workflow
 cannot refresh them while the repository-wide unsafe-policy check fails.
-AES-GCM now meets its reduced budget. The next reported blocker is an
-unadmitted block in `packages/libraries/crypto/src/zeroize.rs`. Do not
-widen budgets or suppress gates just to
-regenerate documentation. A manifest check, local test, or historical receipt
+The remaining unsafe-policy backlog is recorded in the
+[audit remediation record](AUDIT_REMEDIATION.md). Do not widen budgets or
+suppress gates just to regenerate documentation. A manifest check, local test, or historical receipt
 does not imply that repository-wide assurance has passed.
 
 For the rest of the project, use the [documentation guide](human/DOCUMENTATION.md)
