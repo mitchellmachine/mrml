@@ -2228,6 +2228,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     pub fn receive_ipc(&mut self, task: TaskId) -> Result<Message, TaskRuntimeError> {
+        self.receive_ipc_envelope(task).map(ReceivedMessage::into_message)
+    }
+
+    fn receive_ipc_envelope(&mut self, task: TaskId) -> Result<ReceivedMessage, TaskRuntimeError> {
         self.ensure_no_device_quiescence()?;
         let slot = self.domain_slot(task)?;
         if !self.scheduler.contains(task) {
@@ -2246,7 +2250,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         domain.inbox_head = ((head + 1) % TASK_INBOX_MESSAGES) as u8;
         domain.inbox_count -= 1;
-        Ok(message.into_message())
+        Ok(message)
     }
 
     /// Consumes the next message only when both caller-supplied output
@@ -2257,11 +2261,22 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         payload_capacity: usize,
         capability_capacity: usize,
     ) -> Result<Message, TaskRuntimeError> {
+        self.receive_ipc_envelope_bounded(task, payload_capacity, capability_capacity)
+            .map(ReceivedMessage::into_message)
+    }
+
+    /// Like a bounded receive, preserving the kernel-authenticated sender.
+    pub fn receive_ipc_envelope_bounded(
+        &mut self,
+        task: TaskId,
+        payload_capacity: usize,
+        capability_capacity: usize,
+    ) -> Result<ReceivedMessage, TaskRuntimeError> {
         let shape = self.peek_ipc_shape(task)?;
         if shape.payload_length > payload_capacity || shape.capability_count > capability_capacity {
             return Err(TaskRuntimeError::ReceiveCapacity);
         }
-        self.receive_ipc(task)
+        self.receive_ipc_envelope(task)
     }
 
     /// Returns only the bounded shape of the next queued message without
@@ -5291,8 +5306,12 @@ mod tests {
                 capability_count: 1,
             }
         );
-        let message = runtime.receive_ipc_bounded(receiver, 1, 1).unwrap();
-        let derived = message.capabilities().next().unwrap();
+        let received = runtime.receive_ipc_envelope_bounded(receiver, 1, 1).unwrap();
+        assert_eq!(received.sender(), sender);
+        assert_eq!(received.sequence(), 1);
+        let completion = crate::BufferCompletion::from_received(&received, 1, 1).unwrap();
+        assert_eq!(completion.sender_token(), sender.token());
+        let derived = received.message().capabilities().next().unwrap();
         assert_eq!(
             runtime
                 .capabilities_mut(receiver)

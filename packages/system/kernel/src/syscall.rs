@@ -1,6 +1,7 @@
 use crate::arch::x86_64::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
 use crate::{
-    Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, ObjectId, ReceiveTimeout, Rights, TaskId,
+    Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, ObjectId, ReceiveTimeout, ReceivedMessage,
+    Rights, TaskId,
 };
 
 pub const X86_USER_CALL_VECTOR: u8 = 0x80;
@@ -90,6 +91,7 @@ pub struct CapabilityTransferDescriptor {
 pub struct BufferCompletion {
     payload_length: u16,
     capability_count: u8,
+    sender_token: u64,
 }
 
 impl BufferCompletion {
@@ -109,7 +111,27 @@ impl BufferCompletion {
         Ok(Self {
             payload_length: payload_length as u16,
             capability_count: capability_count as u8,
+            sender_token: 0,
         })
+    }
+
+    pub fn from_received(
+        received: &ReceivedMessage,
+        payload_capacity: usize,
+        capability_capacity: usize,
+    ) -> Result<Self, SyscallError> {
+        let mut completion = Self::new(
+            received.message().payload().len(),
+            received.message().capability_count(),
+            payload_capacity,
+            capability_capacity,
+        )?;
+        completion.sender_token = received.sender().token();
+        Ok(completion)
+    }
+
+    pub const fn sender_token(self) -> u64 {
+        self.sender_token
     }
 
     pub const fn payload_length(self) -> u16 {
@@ -236,7 +258,7 @@ impl UserCallFrame {
         self.rax = 0;
         self.rdx = u64::from(completion.payload_length());
         self.r10 = u64::from(completion.capability_count());
-        self.r8 = 0;
+        self.r8 = completion.sender_token();
         self.r9 = 0;
     }
 

@@ -96,7 +96,11 @@ policy generation; the data plane cannot substitute them. This is hosted
 unit/simulation evidence. A register-level userspace adapter emits the exact
 existing receive-buffer (5), shared-buffer read/write (7/8), capability-release
 (12), and send-buffer (4) frames; a full mock-trap test proves the bounded call
-and release-before-response order. The canonical provider now also builds a
+and release-before-response order. A successful buffered receive preserves the
+exact kernel-recorded sender task token in R8, for both immediate and blocked
+completion. The token identifies the sender; it does not grant authority.
+The FAT32 block client requires that token to match its launch-bound provider
+before copying shared bytes. The other buffered result fields are unchanged. The canonical provider now also builds a
 standalone x86-64 UEFI service binary containing that `int 0x80` implementation,
 one private 4 KiB scratch page, and immutable launch-register endpoint/caller/
 provider-generation inputs. Windows and Arch Linux target builds pass; Windows

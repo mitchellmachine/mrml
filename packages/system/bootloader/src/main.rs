@@ -1373,7 +1373,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     frame.complete_error();
                     return;
                 }
-                match runtime.receive_ipc_bounded(
+                match runtime.receive_ipc_envelope_bounded(
                     current,
                     pending.payload_capacity,
                     pending.capability_capacity,
@@ -5502,11 +5502,11 @@ unsafe fn active_receive_is_valid(root: PhysAddr, pending: PendingBufferReceive)
 unsafe fn write_buffer_current(
     root: PhysAddr,
     pending: PendingBufferReceive,
-    message: &mrml_kernel::Message,
+    received: &mrml_kernel::ReceivedMessage,
 ) -> mrml_kernel::BufferCompletion {
-    let completion = mrml_kernel::BufferCompletion::new(
-        message.payload().len(),
-        message.capability_count(),
+    let message = received.message();
+    let completion = mrml_kernel::BufferCompletion::from_received(
+        received,
         pending.payload_capacity,
         pending.capability_capacity,
     )
@@ -5548,10 +5548,10 @@ unsafe fn write_buffer_current(
 unsafe fn complete_buffer_current(
     root: PhysAddr,
     pending: PendingBufferReceive,
-    message: &mrml_kernel::Message,
+    received: &mrml_kernel::ReceivedMessage,
     frame: &mut UserCallFrame,
 ) {
-    let completion = unsafe { write_buffer_current(root, pending, message) };
+    let completion = unsafe { write_buffer_current(root, pending, received) };
     frame.complete_buffer(completion);
 }
 
@@ -5587,7 +5587,7 @@ unsafe fn complete_pending_buffer(
         }
     }
     unsafe { commit_pending_buffer_take(pending_slot, pending) };
-    let message = match runtime.receive_ipc_bounded(
+    let message = match runtime.receive_ipc_envelope_bounded(
         task,
         pending.payload_capacity,
         pending.capability_capacity,

@@ -236,7 +236,10 @@ impl<R: Fat32RawSyscall> BlockProviderReadTransport for Fat32BlockReadUserspaceT
             r9: 0,
         };
         self.invoke(&mut receive)?;
-        if receive.rdx != response.len() as u64 || receive.r10 != 0 {
+        if receive.rdx != response.len() as u64
+            || receive.r10 != 0
+            || receive.r8 != self.provider_task
+        {
             return Err(BlockProtocolError::Transport);
         }
         if let Ok(transferred) = decode_block_read_response(&response, decoded.output.length())? {
@@ -1731,6 +1734,7 @@ mod tests {
     }
 
     struct BlockReadRaw {
+        reply_sender: u64,
         response: [u8; BLOCK_READ_RESPONSE_BYTES],
         operations: [u64; 3],
         count: usize,
@@ -1769,6 +1773,7 @@ mod tests {
                     );
                     frame.rdx = self.response.len() as u64;
                     frame.r10 = 0;
+                    frame.r8 = self.reply_sender;
                 },
                 READ_SHARED_BUFFER => unsafe {
                     assert_eq!(frame.rsi, 16);
@@ -1786,6 +1791,7 @@ mod tests {
         unsafe {
             Fat32BlockReadUserspaceTransport::from_installed_projection(
                 BlockReadRaw {
+                    reply_sender: (8_u64 << 32) | 2,
                     response,
                     operations: [0; 3],
                     count: 0,
@@ -1837,6 +1843,31 @@ mod tests {
             raw.transferred_rights,
             Rights::MAP.union(Rights::WRITE).bits()
         );
+    }
+
+    #[test]
+    fn block_read_client_rejects_missing_and_previous_generation_reply_sender() {
+        use mrml_interface_storage_block_provider_v1::{
+            BorrowedWriteView, OpaqueHandle as BlockHandle, encode_read_request,
+            encode_read_response,
+        };
+
+        let request = encode_read_request(
+            BlockHandle::new(3, 4).unwrap(),
+            7,
+            1,
+            BorrowedWriteView::within(16, 512, 544).unwrap(),
+        )
+        .unwrap();
+        for sender in [0, (7_u64 << 32) | 2, (8_u64 << 32) | 3] {
+            let mut transport = block_read_transport(encode_read_response(Ok(512)));
+            transport.raw.reply_sender = sender;
+            let mut memory = [0xff; 544];
+            assert_eq!(transport.read(&request, &mut memory), Err(BlockProtocolError::Transport));
+            assert_eq!(memory, [0; 544]);
+            let raw = transport.into_raw();
+            assert_eq!(&raw.operations[..raw.count], &[SEND_BUFFER, RECEIVE_BUFFER]);
+        }
     }
 
     #[test]

@@ -242,7 +242,7 @@ impl UserContext {
         self.rax = 0;
         self.rdx = u64::from(completion.payload_length());
         self.r10 = u64::from(completion.capability_count());
-        self.r8 = 0;
+        self.r8 = completion.sender_token();
         self.r9 = 0;
     }
 
