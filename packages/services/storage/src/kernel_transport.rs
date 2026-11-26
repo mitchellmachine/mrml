@@ -812,6 +812,148 @@ mod tests {
     }
 
     #[test]
+    fn canonical_image_read_requires_live_sender_and_exact_write_projection() {
+        use crate::{ReadOnlyBlockDispatchError, ReadOnlyBlockImage};
+        use mrml_interface_storage_block_provider_v1::{
+            BorrowedWriteView, OpaqueHandle, ReadError, decode_read_response, encode_read_request,
+        };
+        use mrml_kernel::arch::x86_64::UserContext;
+        use mrml_kernel::{ControlEvent, Endpoint, TaskRuntime};
+
+        let mut runtime = TaskRuntime::<2, 4>::new(1000, 1).unwrap();
+        let mut spawn = |offset: u64| {
+            runtime
+                .create(
+                    Priority::NORMAL,
+                    UserContext::new(
+                        PhysAddr::new(0x20_0000 + offset).unwrap(),
+                        0x40_0000 + offset,
+                        0x7000_0000 + offset,
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+        };
+        let sender = spawn(0);
+        let provider = spawn(0x1000);
+        let source = runtime.capabilities_mut(sender).unwrap();
+        let object = ObjectId(46);
+        let rights = Rights::MAP.union(Rights::WRITE);
+        let root = source
+            .insert(object, rights.union(Rights::READ).union(Rights::DELEGATE))
+            .unwrap();
+        let control = source.insert(object, Rights::CONTROL).unwrap();
+        let mut endpoint = Endpoint::new(ObjectId(47));
+        let signal = source.insert(ObjectId(47), Rights::SIGNAL).unwrap();
+        let vm = VmTable::<1>::new().create(1).unwrap();
+        let mut memory = GuestMemory::<1>::new();
+        let mapping = memory
+            .map(GuestRegion::new(0x4000, PhysAddr::new(0x9000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let host = HostResourceHandle::new(146).unwrap();
+        let mut sources = SharedMemoryBindings::<1>::new();
+        let source_binding = sources
+            .bind(
+                source,
+                root,
+                &memory,
+                SharedEndpoint::new(vm, mapping, SharedAccess::ReadWrite),
+                host,
+            )
+            .unwrap();
+        let session = OpaqueHandle::new(3, 2).unwrap();
+        let request = encode_read_request(
+            session,
+            1,
+            1,
+            BorrowedWriteView::within(7, 512, 4096).unwrap(),
+        )
+        .unwrap();
+        runtime
+            .deliver_ipc(
+                sender,
+                provider,
+                &mut endpoint,
+                signal,
+                &request,
+                &[(root, rights)],
+            )
+            .unwrap();
+        let ControlEvent::Message(received) = runtime.receive_control(provider).unwrap() else {
+            panic!("expected canonical read request");
+        };
+        let receiver = runtime.capabilities(provider).unwrap();
+        let write = received.message().capabilities().next().unwrap();
+        let mut copies = SharedWriteCopyBindings::<1>::new();
+        let binding = copies
+            .bind(
+                &sources,
+                source_binding,
+                runtime.capabilities(sender).unwrap(),
+                control,
+                receiver,
+                write,
+                &memory,
+                vm,
+                provider,
+            )
+            .unwrap();
+        let mut image = [0x23; 1024];
+        image[512..].fill(0xb6);
+        let mut backend = BufferBackend {
+            handle: host,
+            bytes: [0xa5; BLOCK_SIZE],
+            calls: 0,
+        };
+        let dispatch = |expected,
+                        target,
+                        active_session,
+                        copies: &SharedWriteCopyBindings<1>,
+                        backend: &mut BufferBackend| {
+            ReadOnlyBlockImage::new(&image, 512, active_session)
+                .unwrap()
+                .dispatch_write_copy(
+                    expected, &received, receiver, &sources, copies, binding, &memory, vm, target,
+                    backend,
+                )
+        };
+        assert_eq!(
+            dispatch(provider, provider, session, &copies, &mut backend),
+            Err(ReadOnlyBlockDispatchError::WrongSender)
+        );
+        assert!(matches!(
+            dispatch(sender, sender, session, &copies, &mut backend),
+            Err(ReadOnlyBlockDispatchError::Buffer(
+                IpcSharedBufferIoError::Authorization(_)
+            ))
+        ));
+        let replacement = OpaqueHandle::new(3, 3).unwrap();
+        let reply = dispatch(sender, provider, replacement, &copies, &mut backend).unwrap();
+        assert_eq!(
+            decode_read_response(&reply, 512),
+            Ok(Err(ReadError::StaleObject))
+        );
+        assert_eq!(backend.calls, 0);
+        assert_eq!(backend.bytes, [0xa5; BLOCK_SIZE]);
+        let reply = dispatch(sender, provider, session, &copies, &mut backend).unwrap();
+        assert_eq!(decode_read_response(&reply, 512), Ok(Ok(512)));
+        assert_eq!(backend.calls, 1);
+        assert_eq!(backend.bytes[..7], [0xa5; 7]);
+        assert_eq!(backend.bytes[7..519], [0xb6; 512]);
+        assert_eq!(backend.bytes[519..], [0xa5; BLOCK_SIZE - 519]);
+        copies
+            .revoke(binding, runtime.capabilities(sender).unwrap(), control)
+            .unwrap();
+        assert!(matches!(
+            dispatch(sender, provider, session, &copies, &mut backend),
+            Err(ReadOnlyBlockDispatchError::Buffer(
+                IpcSharedBufferIoError::Authorization(_)
+            ))
+        ));
+        assert_eq!(backend.calls, 1);
+    }
+
+    #[test]
     fn denied_replayed_and_poisoned_requests_touch_no_bulk_buffer() {
         let (service, session) = service();
         let mut fixture = kernel_fixture(SharedAccess::ReadOnly, 43, 143);

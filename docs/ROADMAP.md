@@ -68,6 +68,15 @@ cleanup marker. The passing restart-request probe establishes a fresh
 authorized service generation; it does not execute the actual FAT32 provider
 or satisfy the live storage recovery gate.
 
+The immutable image adapter now accepts canonical block-provider v1 reads from
+an authenticated runtime receive and copies only the requested bytes through
+the exact task-bound write projection. The focused test exercises a nonzero
+copy offset and denies the wrong sender, wrong receiving task, stale block
+session, and revoked projection without touching the destination. This is a
+hosted runtime test. The signed guest still needs a separate block route with
+capability release and reply delivery, plus the real FAT32 caller and its
+supervised read-restart-read sequence.
+
 Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and generation-2
 `storage.filesystem` schemas define bounded opaque-handle operations for isolated

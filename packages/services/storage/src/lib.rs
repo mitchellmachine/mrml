@@ -34,7 +34,7 @@ mod service_loop;
 mod storage_module;
 mod transaction;
 
-pub use read_only_block_image::ReadOnlyBlockImage;
+pub use read_only_block_image::{ReadOnlyBlockDispatchError, ReadOnlyBlockImage};
 
 pub use allocation::{
     ALLOCATION_IMAGE_HEADER_BYTES, ALLOCATION_RECORD_BYTES, AllocationChange, AllocationError,
