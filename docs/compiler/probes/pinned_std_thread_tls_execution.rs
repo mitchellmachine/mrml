@@ -38,6 +38,7 @@ unsafe extern "system" fn thread_entry(_: *mut c_void) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn entry() -> u32 {
     VALUE.with(|value| value.set(value.get() + 1));
+    // SAFETY: thread_entry has the Win32 callback ABI and needs no parameter.
     let thread = unsafe {
         CreateThread(
             ptr::null_mut(),
@@ -52,8 +53,11 @@ pub extern "C" fn entry() -> u32 {
         return 1;
     }
     let mut child = 0u32;
+    // SAFETY: the thread handle is valid and owned until CloseHandle below.
     let wait = unsafe { WaitForSingleObject(thread, u32::MAX) };
+    // SAFETY: this handle is still open and child is a writable u32 out parameter.
     let read = unsafe { GetExitCodeThread(thread, &mut child) };
+    // SAFETY: this is the only close of the owned handle and there is no later use.
     let closed = unsafe { CloseHandle(thread) };
     let main = VALUE.with(Cell::get);
     if wait == 0 && read != 0 && closed != 0 && child == 42 && main == 41 {

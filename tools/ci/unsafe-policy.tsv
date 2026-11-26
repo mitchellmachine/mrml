@@ -7,6 +7,8 @@ docs/compiler/probes/debug_rlib_entry.rs	1	0	0	1	0	1	Oracle debug rlib probe req
 docs/compiler/probes/frontend_compile_elf.rs	1	0	0	0	0	1	Oracle ELF frontend probe requires one inline assembly termination boundary; count growth remains blocked.
 docs/compiler/probes/initializer_array.rs	10	2	0	1	0	10	Oracle initializer-array probe requires bounded mutable static and process-termination boundaries; count growth remains blocked.
 docs/compiler/probes/pinned_alloc_core_execution.rs	1	2	2	0	0	1	Pinned allocator core execution probe; counts remain fixed to the oracle allocator, panic, and exported execution boundaries.
+docs/compiler/probes/pinned_std_thread_tls_execution.rs	4	0	0	3	0	0	Pinned Windows TLS probe starts one native thread, waits for it, reads its result, then closes the owned handle.
+docs/compiler/probes/pinned_std_tls_destructor_execution.rs	4	0	0	3	0	0	Pinned Windows TLS destructor probe uses a single owned thread handle to verify that the TLS value is dropped at thread exit.
 docs/compiler/probes/public_rlib_entry.rs	1	0	0	1	0	1	Oracle public rlib entry probe requires one external function call boundary; count growth remains blocked.
 docs/compiler/probes/public_stateful_rlib_entry.rs	1	0	0	1	0	1	Oracle stateful rlib entry probe requires one external function call boundary; count growth remains blocked.
 docs/compiler/probes/public_stateful_rlib_library.rs	2	0	0	0	0	2	Oracle stateful rlib library probe requires two mutable static access boundaries; count growth remains blocked.
