@@ -20,10 +20,10 @@ const FORMAT: ObjectFormat = ObjectFormat::Coff;
 #[cfg(not(target_os = "windows"))]
 const FORMAT: ObjectFormat = ObjectFormat::Elf64;
 #[cfg(target_os = "windows")]
-const TOOLCHAIN: &str = "nightly-2026-08-29-x86_64-pc-windows-gnullvm";
+const TOOLCHAIN: &str = "nightly-2026-11-26-x86_64-pc-windows-gnullvm";
 #[cfg(not(target_os = "windows"))]
-const TOOLCHAIN: &str = "nightly-2026-08-29-x86_64-unknown-linux-gnu";
-const COMMIT: &str = "17fd5b8a37b6667b6cc137f3cc35f09759768a3b";
+const TOOLCHAIN: &str = "nightly-2026-11-26-x86_64-unknown-linux-gnu";
+const COMMIT: &str = "6c709eb428d472a3c3d93681c1ba37d44a1c27cf";
 static ORACLE: Once = Once::new();
 static ORACLE_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 

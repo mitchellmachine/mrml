@@ -44,12 +44,12 @@ the named commit and current source.
   (`Bound runtime place projection facts`), `308c781`
   (`Record stable runtime identifier reads`), and `099b11c` (`Retain bounded
   runtime place facts`).
-- Current build/oracle: `docs/compiler/oracles/ORACLE-0003.md`, rustc
-  `1.100.0-nightly`, full commit
-  `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`, dated 2026-08-28 and
-  distributed as `nightly-2026-08-29`. Preserve ORACLE-0001 and ORACLE-0002 as
-  prior generations. Native Arch and Wine-hosted gnullvm each pass 1,295
-  compiler tests; Wine is toolchain coverage, not native Windows evidence.
+- Current build/oracle: `docs/compiler/oracles/ORACLE-0004.md`, rustc
+  `1.102.0-nightly`, full commit `6c709eb428d472a3c3d93681c1ba37d44a1c27cf`,
+  dated 2026-11-25 and distributed as `nightly-2026-11-26`. Arch WSL2
+  passed all 1,357 compiler tests. Native Windows passed 1,339 core tests;
+  the driver build hits the same runtime blocker as ORACLE-0003. Prior
+  oracle records and historical probes remain unchanged.
 - Language direction: Rust 2024 is the edition floor. Contemporary and future
   Rust semantics are the target; obsolete editions, historical unsoundness,
   rustc internals, diagnostic wording, and unstable Rust ABI details are not
