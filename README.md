@@ -30,14 +30,6 @@ auditors are indexed separately in the
 [machine documentation](docs/machine/README.md). Those records preserve exact
 invariants and evidence without making this README difficult to read.
 
-## Current platform note
-
-Local native Windows and Windows VMM/WHP testing are suspended. The Windows
-toolchain may be exercised under Wine, but that is not evidence of native
-Windows, WHP, Hyper-V, VBS, or Windows hardware behavior. Do not attempt local
-Windows VMM testing from the Wine environment. Linux and KVM remain the active
-local development paths.
-
 ## Homepage, source, and contact
 
 - Homepage: [mrml.ca](https://mrml.ca)
