@@ -23,6 +23,7 @@ impl Drop for Qtest {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = fs::remove_file(self.directory.join("qtest.sock"));
+        let _ = fs::remove_file(self.directory.join("qmp.sock"));
         let _ = fs::remove_file(self.directory.join("media.img"));
         let _ = fs::remove_dir(&self.directory);
     }
@@ -122,6 +123,7 @@ fn exercise_qemu(super_speed: bool) {
     let dir = std::env::temp_dir().join(format!("mrml-xhci-qtest-{}", std::process::id()));
     fs::create_dir(&dir).unwrap();
     let sock = dir.join("qtest.sock");
+    let qmp_sock = dir.join("qmp.sock");
     let media = dir.join("media.img");
     fs::File::create_new(&media)
         .unwrap()
@@ -151,10 +153,12 @@ fn exercise_qemu(super_speed: bool) {
         ))
         .args([
             "-device",
-            "usb-storage,bus=xhci.0,port=1,drive=media",
+            "usb-storage,id=stick,bus=xhci.0,port=1,drive=media",
             "-qtest",
         ])
         .arg(format!("unix:{},server=on,wait=off", sock.display()))
+        .arg("-qmp")
+        .arg(format!("unix:{},server=on,wait=off", qmp_sock.display()))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -170,6 +174,7 @@ fn exercise_qemu(super_speed: bool) {
         let _ = child.kill();
         let _ = child.wait();
         let _ = fs::remove_file(&sock);
+        let _ = fs::remove_file(&qmp_sock);
         let _ = fs::remove_file(&media);
         let _ = fs::remove_dir(&dir);
         panic!("QEMU qtest socket not available");
@@ -189,6 +194,7 @@ fn exercise_qemu(super_speed: bool) {
         .get_ref()
         .set_write_timeout(Some(Duration::from_secs(2)))
         .unwrap();
+    let mut qmp = Qmp::open(&qmp_sock);
     // Configure only the explicitly created emulated controller.
     qtest.call("outl 0xcf8 0x80001808").unwrap();
     assert_eq!(qtest.value("inl 0xcfc").unwrap() >> 8, 0x0c0330);
@@ -267,6 +273,15 @@ fn exercise_qemu(super_speed: bool) {
         for pattern in 0x50..=0x5a {
             disk.write_sector_verified(3, &[pattern; 512]).unwrap();
         }
+        qmp.remove_stick();
+        assert!(matches!(
+            disk.write_sector_verified(4, &[0xc3; 512]),
+            Err(crate::Error::Transport(Error::InvalidPort))
+        ));
+        assert!(matches!(
+            disk.write_sector_verified(4, &[0x3c; 512]),
+            Err(crate::Error::Faulted)
+        ));
     }
     controller.halt(100).unwrap();
     let bytes = fs::read(&media).unwrap();
@@ -277,4 +292,53 @@ fn exercise_qemu(super_speed: bool) {
             .chain(&bytes[4 * 512..])
             .all(|&byte| byte == 0)
     );
+}
+
+/// QEMU's line-based monitor is used only to remove the synthetic USB disk.
+/// No monitor command is constructed from a device path or external input.
+struct Qmp(BufReader<UnixStream>);
+
+impl Qmp {
+    fn open(path: &std::path::Path) -> Self {
+        let stream = UnixStream::connect(path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut qmp = Self(BufReader::new(stream));
+        assert!(qmp.line().starts_with(r#"{"QMP":"#));
+        writeln!(qmp.0.get_mut(), r#"{{"execute":"qmp_capabilities"}}"#).unwrap();
+        assert!(qmp.line().starts_with(r#"{"return":"#));
+        qmp
+    }
+
+    fn line(&mut self) -> String {
+        let mut line = String::new();
+        assert_ne!(self.0.read_line(&mut line).unwrap(), 0);
+        line
+    }
+
+    fn remove_stick(&mut self) {
+        writeln!(
+            self.0.get_mut(),
+            r#"{{"execute":"device_del","arguments":{{"id":"stick"}}}}"#
+        )
+        .unwrap();
+        // Unplug notification may arrive before the command reply.
+        let mut removed = false;
+        let mut acknowledged = false;
+        for _ in 0..8 {
+            let line = self.line();
+            assert!(!line.starts_with(r#"{"error":"#), "{line}");
+            removed |= line.contains(r#""event": "DEVICE_DELETED""#)
+                && line.contains(r#""device": "stick""#);
+            acknowledged |= line.starts_with(r#"{"return":"#);
+            if removed && acknowledged {
+                return;
+            }
+        }
+        panic!("QEMU did not confirm deletion of the emulated USB disk");
+    }
 }

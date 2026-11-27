@@ -2888,9 +2888,12 @@ and independent cycle bits, only after exact, successful transfer completion
 and connection revalidation. The opt-in QEMU qtest performs capacity discovery,
 a sector read, and repeated write/cache synchronization/readback across multiple
 bulk and event ring wraps on disposable images in both modes. A separate host
-read verifies the intended sector
-changed and no other bytes did. This is emulated functional evidence, not
-hardware speed, durability under power loss, or certification evidence.
+read verifies that only the intended sector changed. After QEMU confirms
+removal of the emulated disk, the first write through the old session is
+rejected at the port check, later writes return a latched fault, and the
+target sector remains unchanged. This tests removal between requests, not
+mid-transfer removal, recovery, hardware speed, power-loss durability, or
+certification.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and FAT32 connection remain unimplemented. The
