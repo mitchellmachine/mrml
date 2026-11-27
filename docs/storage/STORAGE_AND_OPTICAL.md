@@ -2959,7 +2959,14 @@ including non-identity mappings, and intersects read/write permissions along
 the walk. A stale root, wrong unit, missing page, unexpected backing, or
 read-only ancestor cannot pass. This is a read-only check over existing
 mappings; it does not install or lock them, invalidate caches, or prove
-requester-alias isolation, and is not yet wired into xHCI activation.
+requester-alias isolation. The supervisor-facing xHCI VT-d startup entry
+point matches the route to the exact PCI location and invokes this verifier
+before programming, immediately before bus-master enable, and after PCI
+readback before queue-register writes or RUN. Tests inject failure at each
+gate. The trusted backend must still construct and retain the live
+assignment, pin and synchronize the tables, and implement withdrawal.
+The QEMU FAT32 fixture still uses synthetic guest DMA, not this physical
+VT-d path.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

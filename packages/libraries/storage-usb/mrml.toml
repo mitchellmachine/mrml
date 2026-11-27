@@ -41,5 +41,11 @@ source = "packages/libraries/storage-usb/src/lib.rs"
 target = "MRML_NATIVE"
 triple = "x86_64-unknown-uefi"
 
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]

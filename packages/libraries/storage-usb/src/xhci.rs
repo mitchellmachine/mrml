@@ -3,7 +3,7 @@
 
 mod activation;
 mod bulk;
-pub use activation::{DmaAssignment, PciActivation};
+pub use activation::{DmaAssignment, PciActivation, VtdActivation};
 mod lifecycle;
 pub mod pci;
 pub use bulk::{BulkDma, BulkPipe};
@@ -54,6 +54,7 @@ pub enum Error<E> {
     FirmwareOwned,
     InvalidDma,
     Pci(pci::PciError),
+    Vtd(mrml_kernel::arch::x86_64::VtdBindingError),
     Timeout,
     ControllerFault,
     UnexpectedEvent,

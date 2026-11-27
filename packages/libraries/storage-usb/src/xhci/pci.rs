@@ -97,6 +97,10 @@ impl PciController {
         }
     }
 
+    pub const fn location(&self) -> PciLocation {
+        self.location
+    }
+
     pub const fn bar0(&self) -> (u64, u32) {
         (self.bar0_base, self.bar0_bytes)
     }

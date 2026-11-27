@@ -259,13 +259,17 @@ impl PciActivation for Fake {
         }
         // Neither activation error may reach the actual run write. This
         // emulates the command remaining unchanged after a reported success.
-        Ok((activation_snapshot(), mapping))
+        let mut snapshot = activation_snapshot();
+        if self.activation_fault == 3 && self.activation_reads >= 3 {
+            snapshot.command |= 4;
+        }
+        Ok((snapshot, mapping))
     }
 
     fn enable_bus_master(&mut self, expected: DmaAssignment, before: u16) -> Result<(), ()> {
-        assert_eq!(
-            self.activation_fault, 2,
-            "must not arm a changed assignment"
+        assert!(
+            matches!(self.activation_fault, 2 | 3),
+            "must not arm after failed checks"
         );
         assert_eq!(expected, activation_assignment());
         assert_eq!(before, 2);
@@ -291,5 +295,42 @@ fn mapping_drift_or_missing_pci_readback_prevents_run_and_retains_cleanup() {
         };
         assert_eq!(pending.error(), &expected);
         pending.retry(5).unwrap().revoke().unwrap();
+    }
+}
+
+#[test]
+fn independent_translation_check_blocks_programming_or_running_at_each_stage() {
+    use mrml_kernel::arch::x86_64::VtdBindingError;
+
+    for stage in 1..=3 {
+        let mut backend = Fake::new();
+        backend.activation_fault = if stage == 3 { 3 } else { 0 };
+        backend.fail_run = true;
+        let mut checks = 0;
+        let error = Error::Vtd(VtdBindingError::TableSubstitution);
+        let result =
+            Controller::start_checked_pci(backend, activation_assignment(), DMA, 5, || {
+                checks += 1;
+                if checks == stage { Err(error) } else { Ok(()) }
+            });
+        assert_eq!(checks, stage);
+        if stage == 1 {
+            let Err(StartFailure::Untouched {
+                error: actual,
+                platform,
+            }) = result
+            else {
+                panic!("first translation check must precede controller writes");
+            };
+            assert_eq!(actual, error);
+            assert_eq!(platform.activation_reads, 1);
+            assert_eq!(platform.dma, [0xff; 1024]);
+        } else {
+            let Err(StartFailure::Programming(pending)) = result else {
+                panic!("late translation failure must preserve cleanup ownership");
+            };
+            assert_eq!(pending.error(), &error);
+            pending.retry(5).unwrap().revoke().unwrap();
+        }
     }
 }
