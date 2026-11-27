@@ -19,7 +19,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
 
 #[path = "usb_xhci_inventory.rs"]
 mod xhci_inventory;
@@ -27,6 +27,7 @@ mod xhci_inventory;
 #[derive(Clone, Copy)]
 enum DiagnosticImage {
     Fat32,
+    Vmx,
     Dma,
     Q35Mmio,
     SharedPreload,
@@ -41,6 +42,10 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
         [mode, file] if mode == "image" => {
             create(&load_workspace()?, Path::new(file), DiagnosticImage::Fat32)
         }
+        [mode, file] if mode == "image-vmx" => {
+            create(&load_workspace()?, Path::new(file), DiagnosticImage::Vmx)
+        }
+        [mode, image, code, vars, qemu] if mode == "test-vmx" => test_vmx(image, code, vars, qemu),
         [mode, code, vars, qemu] if mode == "test-dma-map" => test_dma_map(code, vars, qemu),
         [mode, code, vars, qemu] if mode == "test-shared-preload" => {
             let scratch = Scratch::new().map_err(|e| e.to_string())?;
@@ -112,6 +117,30 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
         }
         _ => device_command(args).map_err(|error| format!("mrml usb: {error}")),
     }
+}
+
+fn test_vmx(image: &str, code: &str, vars: &str, qemu: &str) -> Result<(), String> {
+    let scratch = Scratch::new().map_err(|error| error.to_string())?;
+    let source = Path::new(image);
+    let meta = fs::metadata(source).map_err(|error| error.to_string())?;
+    if !meta.is_file() || meta.len() != BYTES as u64 {
+        return Err("VMX test requires an exact-size MRML USB image".into());
+    }
+    // The loader updates its reserved boot report. Give each run a private
+    // image copy so the exact image supplied by the operator stays unchanged.
+    let staged = scratch.path("vmx.img");
+    let copy = || fs::copy(source, &staged).map(|_| ()).map_err(|error| error.to_string());
+    let run = |accelerator, name, expected| {
+        crate::qemu_boot::run_qemu(&words(&[
+            &string(&staged), code, vars, qemu, &string(&scratch.path(name)),
+            "--accelerator", accelerator, "--expect-hex", expected,
+            "--timeout-seconds", "60",
+        ]))
+    };
+    copy()?;
+    run("tcg", "vmx-absent.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0e0e6")?;
+    copy()?;
+    run("kvm", "vmx-present.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4dfd6")
 }
 
 fn test_dma_map(code: &str, vars: &str, qemu: &str) -> Result<(), String> {
@@ -677,10 +706,10 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
         "uefi-x86_64",
         words(&[
             "--feature-profile",
-            if matches!(profile, DiagnosticImage::Q35Mmio) {
-                "uefi_q35_mmio_probe"
-            } else {
-                "uefi_fat32_restart_probe"
+            match profile {
+                DiagnosticImage::Q35Mmio => "uefi_q35_mmio_probe",
+                DiagnosticImage::Vmx => "vmx_root_probe",
+                _ => "uefi_fat32_restart_probe",
             },
             "--compile-env",
             &format!("MRML_SERVICE_ROOT_DIGEST_HEX={sr}"),
@@ -694,7 +723,7 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
         words(&[
             "--feature-profile",
             match profile {
-                DiagnosticImage::Fat32 => "fat32_restart_boot",
+                DiagnosticImage::Fat32 | DiagnosticImage::Vmx => "fat32_restart_boot",
                 DiagnosticImage::SharedPreload => "usb_preload_probe",
                 DiagnosticImage::Dma => "boot_dma_probe",
                 DiagnosticImage::Q35Mmio => "q35_mmio_probe",

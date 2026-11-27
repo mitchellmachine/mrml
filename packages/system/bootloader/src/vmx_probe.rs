@@ -32,7 +32,7 @@ struct DescriptorTable {
     base: u64,
 }
 
-fn trace(stage: u8) {
+pub(super) fn trace(stage: u8) {
     unsafe { asm!("out dx, al", in("dx") 0xe9u16, in("al") stage, options(nomem, nostack)) };
 }
 

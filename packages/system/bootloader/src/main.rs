@@ -550,6 +550,62 @@ static mut FAT32_DATA_STATE: Option<fat32_data_probe::HostedFat32Data> = None;
 #[cfg(feature = "uefi-fat32-restart-probe")]
 mod native_fat32_probe;
 
+#[cfg(any(feature = "uefi-fat32-restart-probe", feature = "vmx-root-probe"))]
+fn paint_boot_diagnostic(info: mrml_kernel::FramebufferInfo, label: &[u8]) -> bool {
+    use mrml_kernel::{Color, FramebufferSurface};
+    // A complete one-pixel-scale label must fit even in a firmware fallback mode.
+    if label.is_empty()
+        || label.len() > 40
+        || info.width() < 16 + (label.len() as u32 * 6 - 1)
+        || info.height() < 45
+    {
+        return false;
+    }
+    // SAFETY: the loader mapped the validated framebuffer supervisor-only;
+    // the diagnostic retains the mapping and only the BSP draws on it.
+    let bytes = unsafe {
+        core::slice::from_raw_parts_mut(info.base().get() as *mut u8, info.byte_length() as usize)
+    };
+    FramebufferSurface::new(info, bytes)
+        .and_then(|mut surface| {
+            surface.fill_rectangle(
+                0,
+                0,
+                info.width(),
+                info.height(),
+                Color {
+                    red: 11,
+                    green: 59,
+                    blue: 90,
+                },
+            )?;
+            surface.draw_boot_label(
+                label,
+                Color {
+                    red: 255,
+                    green: 255,
+                    blue: 255,
+                },
+            )
+        })
+        .is_ok()
+}
+
+#[cfg(feature = "vmx-root-probe")]
+fn run_vmx_boot_diagnostic(framebuffer: mrml_kernel::FramebufferInfo) {
+    if !paint_boot_diagnostic(framebuffer, b"VMX PROBE START") {
+        halt();
+    }
+    // SAFETY: this opt-in boot probe runs on the BSP with validated early
+    // state, before AP startup or publication of any service mappings.
+    let passed = unsafe { vmx_probe::run() }.is_ok();
+    let label: &[u8] = if passed { b"VMX PROBE PASS" } else { b"VMX PROBE NOT PASSED" };
+    if paint_boot_diagnostic(framebuffer, label) {
+        vmx_probe::trace(if passed { 0xd6 } else { 0xe6 });
+    }
+    halt();
+}
+
 #[cfg(feature = "fat32-ready-probe")]
 struct HostedFat32Ready {
     provider: mrml_kernel::TaskId,
@@ -4153,8 +4209,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         halt();
     }
     #[cfg(feature = "uefi-fat32-restart-probe")]
-    let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML KERNEL ENTRY");
-    #[cfg(feature = "certificate-service-probe")]
+    let _ = paint_boot_diagnostic(handoff.framebuffer(), b"MRML KERNEL ENTRY");
+    #[cfg(any(feature = "certificate-service-probe", feature = "vmx-root-probe"))]
     let _ = &early;
     #[cfg(feature = "pci-configuration-probe")]
     unsafe {
@@ -4165,9 +4221,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         run_block_guest_driver_probe()
     }
     #[cfg(feature = "vmx-root-probe")]
-    if unsafe { vmx_probe::run() }.is_err() {
-        halt();
-    }
+    run_vmx_boot_diagnostic(handoff.framebuffer());
     if let Some(madt) = handoff.madt(encoded) {
         smp_trace(0x03);
         let topology = X86CpuTopology::parse_madt(madt).unwrap_or_else(|_| halt());
@@ -4188,7 +4242,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 if topology.len() > 1 {
                     smp_trace(0x04);
                     #[cfg(feature = "uefi-fat32-restart-probe")]
-                    let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML SMP START");
+                    let _ = paint_boot_diagnostic(handoff.framebuffer(), b"MRML SMP START");
                     unsafe { start_application_processors(&topology, &handoff) };
                     smp_trace(0x05);
                     #[cfg(feature = "smp-ipi-probe")]
@@ -4222,7 +4276,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     #[cfg(feature = "service-probe")]
     unsafe {
         #[cfg(feature = "uefi-fat32-restart-probe")]
-        let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML SMP READY");
+        let _ = paint_boot_diagnostic(handoff.framebuffer(), b"MRML SMP READY");
         run_service_probe(&handoff, |handoff| {
             let _ = handoff;
             #[cfg(feature = "scanout-service-probe")]

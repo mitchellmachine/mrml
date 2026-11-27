@@ -47,6 +47,50 @@ Secure Boot state and exact GOP mode were not recorded. The result verifies
 firmware handoff and the embedded FAT32 service restart on this machine,
 not native USB I/O, an installation, or Secure Boot trust for the image.
 
+### Dragonair Gigakernel VMX test
+
+Use the separate VMX image to test CPU virtualization on the Chromebook after
+the embedded FAT32 boot smoke test. This image never installs MRML. It does not
+take over the shared xHCI controller, enable DMA, use the internal disk, or run
+an installed storage service. The opt-in kernel performs one bounded VMX/EPT
+check before it starts any secondary CPUs: it launches a tiny guest, validates
+the expected read fault on an unmapped guest page, exits VMX, and restores CR4.
+
+Build and preflight the same image on a Linux system with working nested Intel
+VMX exposed through KVM:
+
+```text
+mrml usb image-vmx mrml-dragonair-vmx.img
+mrml usb test-vmx mrml-dragonair-vmx.img OVMF_CODE OVMF_VARS QEMU
+```
+
+The host test uses a private copy for each boot, verifies an explicit non-pass
+on TCG without VMX, and verifies the VMX lifecycle and framebuffer completion
+under nested KVM. It does not change the supplied file. Only after both runs
+pass, use `mrml usb burn mrml-dragonair-vmx.img` with a dedicated expendable
+USB stick and the interactive erase confirmation. Ordinary `autoburn` creates
+the FAT32 probe instead; it does not select the VMX image.
+
+The reference QEMU preflight reached `d0 e0 e6` without VMX (including the
+non-pass label) and `d0 d1 d2 d3 d4 df d6` with nested KVM (including the
+pass label). This is emulator-hosted evidence only; Dragonair has not run this
+VMX image yet.
+
+On the Dragonair, use its one-time boot menu or launch
+`fsN:\EFI\BOOT\BOOTX64.EFI` from the EFI Shell as in the FAT32 test. Preserve
+the machine's current Secure Boot policy. Record the exact image hash, firmware
+version, and last visible label:
+
+- `VMX PROBE PASS`: the probe verified the expected EPT fault and exited VMX.
+- `VMX PROBE NOT PASSED`: the platform or probe rejected the operation.
+- `VMX PROBE START` without a terminal label: record it as a non-pass; the probe
+  did not return to its caller with a terminal result.
+
+When recording a failure, also collect the reserved boot report described
+below if present. This test is scoped to the physical VMX/EPT mechanism. A pass
+does not qualify Total MicroVM, native USB I/O, persistent storage, or Secure
+Boot trust.
+
 ### Read-only xHCI inventory before native bring-up
 
 Build the standalone EFI application with

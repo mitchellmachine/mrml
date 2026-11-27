@@ -315,6 +315,9 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         format!("q35,accel={accelerator}")
     };
     let mut command = Command::new(qemu);
+    if accelerator == "kvm" {
+        command.args(["-cpu", "host"]);
+    }
     if intel_iommu && map_only_marker != Some(Q35FixtureCase::NoRemapper) {
         let remapper = if isolated {
             "intel-iommu,id=mrml_probe_vtd,aw-bits=48,intremap=off"

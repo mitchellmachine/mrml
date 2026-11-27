@@ -1,6 +1,6 @@
 //! Opt-in firmware boot of the signed embedded-media restart test.
 use super::*;
-use mrml_kernel::{Color, FramebufferInfo, FramebufferSurface, PAGE_SIZE, ServiceLaunch};
+use mrml_kernel::{FramebufferInfo, PAGE_SIZE, ServiceLaunch};
 
 type EraseRange = (u64, u64, u64, bool);
 
@@ -15,7 +15,7 @@ static mut DIAGNOSTIC: Option<Diagnostic> = None;
 
 pub(super) fn prepare(handoff: &BootHandoff) -> UserContext {
     let display = handoff.framebuffer();
-    if !paint(display, b"FAT32 RESTART: NOT PASSED") {
+    if !paint_boot_diagnostic(display, b"FAT32 RESTART: NOT PASSED") {
         halt();
     }
     trace(0xd0);
@@ -133,54 +133,16 @@ pub(super) fn restart_layout() -> (UserContext, u64, [EraseRange; 2]) {
 
 pub(super) fn finish(pass: bool) {
     if pass {
-        if !paint(diagnostic().display, b"FAT32 RESTART: PASS - 28 BYTES") {
+        if !paint_boot_diagnostic(diagnostic().display, b"FAT32 RESTART: PASS - 28 BYTES") {
             halt();
         }
         trace(0xd3);
     } else {
-        paint(diagnostic().display, b"FAT32 RESTART: FAIL");
+        paint_boot_diagnostic(diagnostic().display, b"FAT32 RESTART: FAIL");
         trace(0xdf);
     }
 }
 
-pub(super) fn paint(info: FramebufferInfo, label: &[u8]) -> bool {
-    // A complete one-pixel-scale label must fit even in a firmware fallback mode.
-    if label.is_empty()
-        || label.len() > 40
-        || info.width() < 16 + (label.len() as u32 * 6 - 1)
-        || info.height() < 45
-    {
-        return false;
-    }
-    // SAFETY: the loader mapped the validated framebuffer supervisor-only;
-    // both roots retain that mapping, and this probe draws only on the BSP.
-    let bytes = unsafe {
-        core::slice::from_raw_parts_mut(info.base().get() as *mut u8, info.byte_length() as usize)
-    };
-    FramebufferSurface::new(info, bytes)
-        .and_then(|mut surface| {
-            surface.fill_rectangle(
-                0,
-                0,
-                info.width(),
-                info.height(),
-                Color {
-                    red: 11,
-                    green: 59,
-                    blue: 90,
-                },
-            )?;
-            surface.draw_boot_label(
-                label,
-                Color {
-                    red: 255,
-                    green: 255,
-                    blue: 255,
-                },
-            )
-        })
-        .is_ok()
-}
 
 pub(super) fn dma_handoff_verified() {
     trace(0xd4);
