@@ -244,6 +244,21 @@ pub struct VerifiedVtdUnit<R> {
     invalidator: VtdInvalidator<R>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VtdDmaAperture {
+    pub route: VtdRequesterRoute,
+    pub hardware_domain: u16,
+    pub device_base: u64,
+    pub physical_base: PhysAddr,
+    pub pages: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VtdApertureRevokeError {
+    Rejected(VtdBindingError),
+    Uncertain(VtdBindingError),
+}
+
 impl VerifiedVtdUnit<NativeVtdMmio> {
     /// Constructs the native register adapter and consumes the mapping proof so
     /// it cannot authorize a second aliasing adapter.
@@ -335,21 +350,8 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
         {
             return Err(VtdBindingError::TableSubstitution);
         }
-        let bytes = u64::from(pages) * 4096;
-        if !(1..=256).contains(&pages)
-            || device_base == 0
-            || !device_base.is_multiple_of(4096)
-            || device_base
-                .checked_add(bytes)
-                .is_none_or(|end| end > 1 << 48)
-            || physical_base.get() == 0
-            || physical_base
-                .get()
-                .checked_add(bytes)
-                .is_none_or(|end| end > 1 << 52)
-        {
-            return Err(VtdBindingError::Table(VtdTableError::InvalidAperture));
-        }
+        let bytes =
+            aperture_bytes(device_base, physical_base, pages).map_err(VtdBindingError::Table)?;
         for offset in (0..bytes).step_by(4096) {
             let (_, _, permissions) = find_legacy_leaf(
                 memory,
@@ -358,6 +360,7 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
                 device_base + offset,
                 physical_base.get() + offset,
                 expected_domain,
+                false,
             )
             .map_err(VtdBindingError::Table)?;
             if permissions != 3 {
@@ -367,6 +370,66 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
             }
         }
         Ok(())
+    }
+
+    /// Withdraws exactly this aperture from one legacy VT-d domain after the
+    /// requester is stopped and PCI bus mastering is confirmed disabled.
+    /// The trusted owner must keep the table view and all backing pinned,
+    /// serialize table and root updates, and separately exclude device-side
+    /// translation caches (ATS) and requester aliases. This function never
+    /// releases memory. Any uncertain result requires quarantine until the
+    /// exact same withdrawal and draining invalidation succeed.
+    pub fn revoke_routed_dma_aperture<M: VtdTableMemory>(
+        &mut self,
+        memory: &mut M,
+        aperture: VtdDmaAperture,
+    ) -> Result<(), VtdApertureRevokeError> {
+        use VtdApertureRevokeError::{Rejected, Uncertain};
+
+        if !verified_unit_matches_route(&self.verified, aperture.route) {
+            return Err(Rejected(VtdBindingError::UnitSubstitution));
+        }
+        let root = self
+            .invalidator
+            .active_legacy_root()
+            .map_err(|error| Rejected(VtdBindingError::Unit(error)))?;
+        let provenance = memory.provenance();
+        if provenance.register_base() != aperture.route.register_base()
+            || provenance.root_table().get() != root
+        {
+            return Err(Rejected(VtdBindingError::TableSubstitution));
+        }
+        let bytes = aperture_bytes(aperture.device_base, aperture.physical_base, aperture.pages)
+            .map_err(|error| Rejected(VtdBindingError::Table(error)))?;
+
+        // Preflight the complete region before changing any entry. Keep the
+        // non-present leaf's address so retries prove the same pinned backing.
+        let mut slots = [None; 256];
+        for (index, offset) in (0..bytes).step_by(4096).enumerate() {
+            let (table, entry, _) = find_legacy_leaf(
+                memory,
+                root,
+                aperture.route.requester(),
+                aperture.device_base + offset,
+                aperture.physical_base.get() + offset,
+                aperture.hardware_domain,
+                true,
+            )
+            .map_err(|error| Rejected(VtdBindingError::Table(error)))?;
+            slots[index] = Some((table, entry));
+        }
+        self.invalidator
+            .ready_for_dma_drain()
+            .map_err(|error| Rejected(VtdBindingError::Unit(error)))?;
+
+        for (table, index) in slots.into_iter().flatten() {
+            let leaf = exclusive_leaf(memory, table, index)
+                .map_err(|error| Uncertain(VtdBindingError::Table(error)))?;
+            super::vtd::clear_dma_leaf_permissions(leaf);
+        }
+        self.invalidator
+            .invalidate_global()
+            .map_err(|error| Uncertain(VtdBindingError::Unit(error)))
     }
 
     #[cfg(test)]
@@ -560,10 +623,9 @@ pub fn bind_legacy_identity_leaf<'a, M: VtdTableMemory>(
         physical.get(),
         physical.get(),
         expected_domain,
+        false,
     )?;
-    // SAFETY: the unsafe trait contract requires the returned reference to be
-    // unique and tied to `memory`'s exclusive borrow.
-    let entry = unsafe { memory.leaf_mut(table, index)? };
+    let entry = exclusive_leaf(memory, table, index)?;
     Ok(VtdIdentityLeaf {
         physical,
         domain_id: expected_domain,
@@ -578,6 +640,7 @@ fn find_legacy_leaf<M: VtdTableMemory>(
     device_address: u64,
     backing_address: u64,
     expected_domain: u16,
+    allow_denied: bool,
 ) -> Result<(PhysAddr, usize, u64), VtdTableError> {
     if root_table_address & 0xc00 != 0 {
         return Err(VtdTableError::UnsupportedRootMode);
@@ -638,7 +701,7 @@ fn find_legacy_leaf<M: VtdTableMemory>(
     }
     let index = ((device_address >> 12) & 0x1ff) as usize;
     let leaf = memory.read64(table, index)?;
-    if leaf & 0x3 == 0 {
+    if leaf & 0x3 == 0 && !allow_denied {
         return Err(VtdTableError::MissingLeaf);
     }
     if leaf & (1 << 7) != 0 {
@@ -779,6 +842,40 @@ where
     Ok(VtdAuthorizedDmaSet { owner, set })
 }
 
+fn aperture_bytes(
+    device_base: u64,
+    physical_base: PhysAddr,
+    pages: u16,
+) -> Result<u64, VtdTableError> {
+    let bytes = u64::from(pages) * 4096;
+    if !(1..=256).contains(&pages)
+        || device_base == 0
+        || !device_base.is_multiple_of(4096)
+        || device_base
+            .checked_add(bytes)
+            .is_none_or(|end| end > 1 << 48)
+        || physical_base.get() == 0
+        || physical_base
+            .get()
+            .checked_add(bytes)
+            .is_none_or(|end| end > 1 << 52)
+    {
+        Err(VtdTableError::InvalidAperture)
+    } else {
+        Ok(bytes)
+    }
+}
+
+fn exclusive_leaf<M: VtdTableMemory>(
+    memory: &mut M,
+    table: PhysAddr,
+    index: usize,
+) -> Result<&mut u64, VtdTableError> {
+    // SAFETY: called with the exact, preflighted leaf coordinates under
+    // the exclusive table borrow required by VtdTableMemory.
+    unsafe { memory.leaf_mut(table, index) }
+}
+
 fn checked_table(address: u64) -> Result<PhysAddr, VtdTableError> {
     if address == 0 || address & !ADDRESS_MASK != 0 {
         return Err(VtdTableError::Storage);
@@ -904,6 +1001,8 @@ mod tests {
         status: u32,
         context: u64,
         iotlb: u64,
+        drain: bool,
+        bad_completion_once: bool,
     }
 
     impl UnitRegisters {
@@ -913,6 +1012,8 @@ mod tests {
                 status: (1 << 31) | (1 << 30),
                 context: 0,
                 iotlb: 0,
+                drain: true,
+                bad_completion_once: false,
             }
         }
     }
@@ -930,8 +1031,8 @@ mod tests {
 
         fn read64(&mut self, offset: usize) -> u64 {
             match offset {
-                0x08 => 0x40 << 24,
-                0x10 => 0x20 << 8,
+                0x08 => (0x40 << 24) | if self.drain { 3 << 54 } else { 0 },
+                0x10 => (0x20 << 8) | 1,
                 0x20 => self.root,
                 0x28 => self.context,
                 0x208 => self.iotlb,
@@ -941,7 +1042,11 @@ mod tests {
 
         fn write64(&mut self, offset: usize, value: u64) {
             match offset {
-                0x28 => self.context = (value & !(1 << 63)) | (1 << 59),
+                0x28 => {
+                    assert_eq!((value >> 61) & 3, 1);
+                    self.context = (value & !(1 << 63)) | (1 << 59);
+                }
+                0x208 if core::mem::take(&mut self.bad_completion_once) => self.iotlb = 0,
                 0x208 => self.iotlb = (value & !(1 << 63)) | (1 << 57),
                 _ => {}
             }
@@ -960,6 +1065,64 @@ mod tests {
 
     #[repr(align(4096))]
     struct RegisterPage([u64; 512]);
+
+    #[test]
+    fn routed_revocation_preflights_the_full_aperture_and_retries_uncertain_flush() {
+        let device = PhysAddr::new(0x20_0000).unwrap();
+        let backing = PhysAddr::new(0x80_0000).unwrap();
+        let register = PhysAddr::new(0xfed9_0000).unwrap();
+        let aperture = VtdDmaAperture {
+            route: VtdRequesterRoute::for_test(requester(), register),
+            hardware_domain: 9,
+            device_base: device.get(),
+            physical_base: backing,
+            pages: 2,
+        };
+        let mut registers = UnitRegisters::active(ROOT);
+        registers.bad_completion_once = true;
+        let mut unit = verified_unit(register, registers);
+        let mut tables = Tables::identity(device, 9);
+        tables.level1[0] = backing.get() | 3;
+        tables.level1[1] = (backing.get() + 8192) | 3;
+        tables.level1[2] = (backing.get() + 8192) | 3;
+        assert_eq!(
+            unit.revoke_routed_dma_aperture(&mut tables, aperture),
+            Err(VtdApertureRevokeError::Rejected(VtdBindingError::Table(
+                VtdTableError::AliasedLeaf
+            )))
+        );
+        assert_eq!(tables.level1[0], backing.get() | 3);
+        tables.level1[1] = (backing.get() + 4096) | 3;
+
+        let mut no_drain = UnitRegisters::active(ROOT);
+        no_drain.drain = false;
+        assert_eq!(
+            verified_unit(register, no_drain).revoke_routed_dma_aperture(&mut tables, aperture),
+            Err(VtdApertureRevokeError::Rejected(VtdBindingError::Unit(
+                VtdError::DrainUnsupported
+            )))
+        );
+        assert_eq!(tables.level1[0], backing.get() | 3);
+
+        assert_eq!(
+            unit.revoke_routed_dma_aperture(&mut tables, aperture),
+            Err(VtdApertureRevokeError::Uncertain(VtdBindingError::Unit(
+                VtdError::InvalidCompletion
+            )))
+        );
+        assert_eq!(
+            &tables.level1[..3],
+            &[
+                backing.get(),
+                backing.get() + 4096,
+                (backing.get() + 8192) | 3,
+            ]
+        );
+        assert_eq!(
+            unit.revoke_routed_dma_aperture(&mut tables, aperture),
+            Ok(())
+        );
+    }
 
     #[test]
     fn routed_aperture_checks_every_page_and_effective_permissions() {

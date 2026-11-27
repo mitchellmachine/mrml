@@ -2968,6 +2968,19 @@ assignment, pin and synchronize the tables, and implement withdrawal.
 The QEMU FAT32 fixture still uses synthetic guest DMA, not this physical
 VT-d path.
 
+The kernel now provides a bounded withdrawal operation for an existing
+legacy VT-d aperture. It verifies the entire window before editing, clears
+only the matched leaves' DMA permission bits, and requires context-cache
+and IOTLB invalidation with DMA reads and writes drained. The current
+profile requires coherent table walks and register-based invalidation.
+The context-cache and IOTLB registers use their distinct global request
+encodings, and both must report global completion.
+A late failure leaves the original pages quarantined; the exact aperture
+can be retried because denied entries retain their backing addresses.
+The operation does not stop the device, disable ATS, establish ownership,
+scrub memory, or release pins. The native backend must supply those steps
+and wire installation and withdrawal to the xHCI assignment lifecycle.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

@@ -13,7 +13,8 @@ const RTADDR_OFFSET: usize = 0x20;
 const GSTS_TRANSLATION_ENABLED: u32 = 1 << 31;
 const GSTS_ROOT_POINTER_ACTIVE: u32 = 1 << 30;
 const COMMAND_PENDING: u64 = 1 << 63;
-const GLOBAL_GRANULARITY: u64 = 1 << 60;
+const CCMD_GLOBAL_GRANULARITY: u64 = 1 << 61;
+const IOTLB_GLOBAL_GRANULARITY: u64 = 1 << 60;
 const CCMD_ACTUAL_SHIFT: u32 = 59;
 const IOTLB_ACTUAL_SHIFT: u32 = 57;
 const ACTUAL_MASK: u64 = 0b11;
@@ -35,6 +36,8 @@ const MAX_PHYSICAL_EXCLUSIVE: u64 = 1 << 52;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VtdError {
+    DrainUnsupported,
+    ApertureInvalidationUnsupported,
     InvalidRegisterLayout,
     InvalidLeaf,
     Busy,
@@ -966,20 +969,39 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
         Ok(())
     }
 
+    pub(super) fn ready_for_dma_drain(&mut self) -> Result<(), VtdError> {
+        // The bounded aperture backend requires explicit read/write drain
+        // support; other capability profiles are not admitted here.
+        let required = (1u64 << 55) | (1u64 << 54);
+        if self.registers.read64(CAP_OFFSET) & required != required {
+            return Err(VtdError::DrainUnsupported);
+        }
+
+        // This path has no cache-line writeback or queued invalidation
+        // backend. Require coherent table walks and register-based commands.
+        if (self.registers.read32(0) >> 4) & 0xf >= 6
+            || self.registers.read64(ECAP_OFFSET) & 1 == 0
+            || self.registers.read32(GSTS_OFFSET) & (1 << 26) != 0
+        {
+            return Err(VtdError::ApertureInvalidationUnsupported);
+        }
+        self.ready()
+    }
+
     pub fn invalidate_global(&mut self) -> Result<(), VtdError> {
         self.registers
-            .write64(CCMD_OFFSET, COMMAND_PENDING | GLOBAL_GRANULARITY);
+            .write64(CCMD_OFFSET, COMMAND_PENDING | CCMD_GLOBAL_GRANULARITY);
         let context = self.wait_clear(CCMD_OFFSET)?;
-        if (context >> CCMD_ACTUAL_SHIFT) & ACTUAL_MASK == 0 {
+        if (context >> CCMD_ACTUAL_SHIFT) & ACTUAL_MASK != 1 {
             return Err(VtdError::InvalidCompletion);
         }
 
         self.registers.write64(
             self.iotlb_offset,
-            COMMAND_PENDING | GLOBAL_GRANULARITY | IOTLB_DRAIN_READS | IOTLB_DRAIN_WRITES,
+            COMMAND_PENDING | IOTLB_GLOBAL_GRANULARITY | IOTLB_DRAIN_READS | IOTLB_DRAIN_WRITES,
         );
         let iotlb = self.wait_clear(self.iotlb_offset)?;
-        if (iotlb >> IOTLB_ACTUAL_SHIFT) & ACTUAL_MASK == 0 {
+        if (iotlb >> IOTLB_ACTUAL_SHIFT) & ACTUAL_MASK != 1 {
             return Err(VtdError::InvalidCompletion);
         }
         self.require_healthy()
@@ -1128,19 +1150,21 @@ impl<'a, R: VtdRegisterIo> VtdDmaIsolation<'a, R> {
     }
 
     fn revoke_leaf(&mut self) {
-        // SAFETY: construction requires the unique live leaf reference.
-        unsafe {
-            core::ptr::write_volatile(
-                self.leaf,
-                core::ptr::read_volatile(self.leaf) & !VTD_PERMISSION_MASK,
-            )
-        };
-        compiler_fence(Ordering::SeqCst);
+        clear_dma_leaf_permissions(self.leaf);
     }
 
     fn invalidate_after_revoke(&mut self) -> Result<(), VtdError> {
         self.invalidator.invalidate_global()
     }
+}
+
+pub(super) fn clear_dma_leaf_permissions(leaf: &mut u64) {
+    // SAFETY: exclusive pinned table backing is represented by the live
+    // mutable entry. No other software may change it concurrently.
+    unsafe {
+        core::ptr::write_volatile(leaf, core::ptr::read_volatile(leaf) & !VTD_PERMISSION_MASK)
+    };
+    compiler_fence(Ordering::SeqCst);
 }
 
 impl<R: VtdRegisterIo> DmaIsolation for VtdDmaIsolation<'_, R> {
