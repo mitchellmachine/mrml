@@ -3293,6 +3293,16 @@ at the same register offset. Firmware-owned or contended states, a mutated
 sample, or malformed readback fail before controller writes, PCI activation
 or DMA writes. This detects observed drift, not a handoff or a replacement
 for exclusive assignment and remapping.
+
+A test-only register model exercises the
+[xHCI legacy ownership handshake (§7.1)](https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/extensible-host-controler-interface-usb-xhci.pdf).
+It requires firmware exit, completion of boot-source access, the same controller
+lease, and blocked DMA before it models one OS-semaphore byte write. Success
+requires consecutive OS-owned, firmware-clear samples from the same capability.
+Timeout, a lost request, reclaim, and capability drift fail without a retry or
+forced clear. The model never writes an actual register and does not authorize
+controller reset, bus mastering, or DMA. Stock QEMU's absent legacy capability
+does not substitute for testing a real firmware response.
 The standalone [UEFI xHCI inventory](../platform/UEFI_BOOT_MANAGEMENT.md#read-only-xhci-inventory-before-native-bring-up)
 uses the same sampler through the firmware PCI I/O protocol. It also
 reports validated MCFG coverage and the DMAR route for that exact

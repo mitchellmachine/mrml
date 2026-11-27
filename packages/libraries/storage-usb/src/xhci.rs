@@ -811,4 +811,8 @@ fn validate_ranges<E>(
 }
 
 #[cfg(test)]
+#[path = "xhci/handoff_model.rs"]
+mod handoff_model;
+
+#[cfg(test)]
 mod tests;
