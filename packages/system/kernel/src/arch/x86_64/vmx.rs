@@ -359,23 +359,30 @@ impl VmxPrerequisites {
         }
     }
 
+    /// Bits that violate VMX host-control requirements, in this order:
+    /// missing CR0, forbidden CR0, missing CR4 (including VMXE), forbidden CR4.
+    pub const fn host_control_mismatch(self) -> [u64; 4] {
+        const CR4_VMXE: u64 = 1 << 13;
+        [
+            self.cr0_fixed_zero & !self.cr0,
+            self.cr0 & !self.cr0_fixed_one,
+            (self.cr4_fixed_zero | CR4_VMXE) & !self.cr4,
+            self.cr4 & !self.cr4_fixed_one,
+        ]
+    }
+
     pub const fn validate(self) -> Result<(), VmxError> {
         const FEATURE_LOCK: u64 = 1;
         const VMX_OUTSIDE_SMX: u64 = 1 << 2;
-        const CR4_VMXE: u64 = 1 << 13;
         if self.feature_control & (FEATURE_LOCK | VMX_OUTSIDE_SMX) != FEATURE_LOCK | VMX_OUTSIDE_SMX
         {
             return Err(VmxError::Unsupported);
         }
-        if self.cr4 & CR4_VMXE == 0
-            || (self.cr0 | self.cr0_fixed_zero) != self.cr0
-            || self.cr0 & !self.cr0_fixed_one != 0
-            || (self.cr4 | self.cr4_fixed_zero) != self.cr4
-            || self.cr4 & !self.cr4_fixed_one != 0
-        {
-            return Err(VmxError::InvalidControl);
+        if let [0, 0, 0, 0] = self.host_control_mismatch() {
+            Ok(())
+        } else {
+            Err(VmxError::InvalidControl)
         }
-        Ok(())
     }
 
     pub fn unrestricted_guest_controls(self) -> Result<(u64, u64), VmxError> {
@@ -1325,7 +1332,22 @@ mod tests {
 
     #[test]
     fn prerequisites_require_locked_policy_vmxe_and_fixed_bits() {
+        let invalid = VmxPrerequisites::new(
+            5,
+            1 << 30,
+            1 << 31,
+            1 << 5,
+            1 << 5,
+            1 << 9,
+            (1 << 9) | (1 << 13),
+        );
+        assert_eq!(
+            invalid.host_control_mismatch(),
+            [1 << 5, 1 << 30, (1 << 9) | (1 << 13), 1 << 31]
+        );
+        assert_eq!(invalid.validate(), Err(VmxError::InvalidControl));
         let valid = VmxPrerequisites::new(5, 0x21, 1 << 13, 0x21, u64::MAX, 0, u64::MAX);
+        assert_eq!(valid.host_control_mismatch(), [0; 4]);
         assert_eq!(valid.validate(), Ok(()));
         let guest = VmxPrerequisites::new(
             5,

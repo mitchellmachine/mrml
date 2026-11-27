@@ -220,8 +220,17 @@ impl<'a> FramebufferSurface<'a> {
 
     /// Draw a bounded early-boot label. Deliberately not a general text renderer.
     pub fn draw_boot_label(&mut self, label: &[u8], color: Color) -> Result<(), FramebufferError> {
+        self.draw_boot_label_row(label, color, 24)
+    }
+
+    /// Draw a bounded diagnostic label at a chosen row.
+    pub fn draw_boot_label_row(
+        &mut self,
+        label: &[u8],
+        color: Color,
+        y: u32,
+    ) -> Result<(), FramebufferError> {
         const X: u32 = 16;
-        const Y: u32 = 24;
         if label.is_empty()
             || label.len() > 40
             || label.iter().any(|&byte| boot_glyph(byte).is_none())
@@ -236,7 +245,10 @@ impl<'a> FramebufferSurface<'a> {
             .checked_div(columns)
             .unwrap_or(0)
             .min(3);
-        if zoom == 0 || self.info.height < Y + 7 * zoom {
+        if zoom == 0
+            || y.checked_add(7 * zoom)
+                .is_none_or(|bottom| bottom > self.info.height)
+        {
             return Ok(());
         }
         for (column, byte) in label.iter().copied().enumerate() {
@@ -246,7 +258,7 @@ impl<'a> FramebufferSurface<'a> {
                     if bits & (1 << (4 - bit)) != 0 {
                         self.fill_rectangle(
                             X + (column as u32 * 6 + bit) * zoom,
-                            Y + row as u32 * zoom,
+                            y + row as u32 * zoom,
                             zoom,
                             zoom,
                             color,
@@ -332,6 +344,44 @@ mod tests {
         let last = (24 * 200 + 16 + 29 * 6 + 1) * 4;
         assert_eq!(&surface.bytes[first..first + 4], &[255, 255, 255, 0]);
         assert_eq!(&surface.bytes[last..last + 4], &[255, 255, 255, 0]);
+    }
+
+    #[test]
+    fn boot_diagnostic_rows_render_separately() {
+        let info = FramebufferInfo::new(
+            0x1000,
+            208 * 144 * 4,
+            208,
+            144,
+            208,
+            PixelFormat::RedGreenBlueReserved,
+        )
+        .unwrap();
+        let mut bytes = [0; 208 * 144 * 4];
+        let mut surface = FramebufferSurface::new(info, &mut bytes).unwrap();
+        let white = Color {
+            red: 255,
+            green: 255,
+            blue: 255,
+        };
+        for (row, label) in [
+            (24, b"CR0 ADD   0000000000000020"),
+            (48, b"CR0 CLEAR 0000000000000000"),
+            (72, b"CR4 ADD   0000000000000000"),
+            (96, b"CR4 CLEAR 0000000000002000"),
+            (120, b"CR0 ADD   0000000000000020"),
+        ] {
+            surface
+                .draw_boot_label_row(label, white, row)
+                .unwrap();
+            let first_pixel = ((row as usize) * 208 + 17) * 4;
+            assert_eq!(
+                &surface.bytes[first_pixel..first_pixel + 4],
+                &[255, 255, 255, 0]
+            );
+        }
+        let gap = (40 * 208 + 17) * 4;
+        assert_eq!(&surface.bytes[gap..gap + 4], &[0; 4]);
     }
 
     #[test]

@@ -552,12 +552,19 @@ mod native_fat32_probe;
 
 #[cfg(any(feature = "uefi-fat32-restart-probe", feature = "vmx-root-probe"))]
 fn paint_boot_diagnostic(info: mrml_kernel::FramebufferInfo, label: &[u8]) -> bool {
+    paint_boot_diagnostic_lines(info, &[label])
+}
+
+#[cfg(any(feature = "uefi-fat32-restart-probe", feature = "vmx-root-probe"))]
+fn paint_boot_diagnostic_lines(info: mrml_kernel::FramebufferInfo, labels: &[&[u8]]) -> bool {
     use mrml_kernel::{Color, FramebufferSurface};
-    // A complete one-pixel-scale label must fit even in a firmware fallback mode.
-    if label.is_empty()
-        || label.len() > 40
-        || info.width() < 16 + (label.len() as u32 * 6 - 1)
-        || info.height() < 45
+    // Fit complete labels even at one-pixel scale; allocate 24 rows per line.
+    if labels.is_empty()
+        || labels.len() > 5
+        || info.height() < 45 + 24 * (labels.len() as u32 - 1)
+        || labels.iter().any(|label| {
+            label.is_empty() || label.len() > 40 || info.width() < 16 + (label.len() as u32 * 6 - 1)
+        })
     {
         return false;
     }
@@ -579,14 +586,14 @@ fn paint_boot_diagnostic(info: mrml_kernel::FramebufferInfo, label: &[u8]) -> bo
                     blue: 90,
                 },
             )?;
-            surface.draw_boot_label(
-                label,
-                Color {
-                    red: 255,
-                    green: 255,
-                    blue: 255,
-                },
-            )
+            for (index, label) in labels.iter().enumerate() {
+                surface.draw_boot_label_row(
+                    label,
+                    Color { red: 255, green: 255, blue: 255 },
+                    24 + 24 * index as u32,
+                )?;
+            }
+            Ok(())
         })
         .is_ok()
 }
@@ -598,9 +605,22 @@ fn run_vmx_boot_diagnostic(framebuffer: mrml_kernel::FramebufferInfo) {
     }
     // SAFETY: this opt-in boot probe runs on the BSP with validated early
     // state, before AP startup or publication of any service mappings.
-    match unsafe { vmx_probe::run() } {
+    let mut host_mismatch = None;
+    match unsafe { vmx_probe::run(&mut host_mismatch) } {
         Ok(()) if paint_boot_diagnostic(framebuffer, b"VMX PROBE PASS") => vmx_probe::trace(0xd6),
-        Err(fault) if paint_boot_diagnostic(framebuffer, &fault.label()) => vmx_probe::trace(0xe6),
+        Err(fault) => {
+            let label = fault.label();
+            let details_painted = host_mismatch.is_some_and(|masks| {
+                let [cr0_add, cr0_clear, cr4_add, cr4_clear] = vmx_probe::mismatch_labels(masks);
+                paint_boot_diagnostic_lines(
+                    framebuffer,
+                    &[&label, &cr0_add, &cr0_clear, &cr4_add, &cr4_clear],
+                )
+            });
+            if details_painted || paint_boot_diagnostic(framebuffer, &label) {
+                vmx_probe::trace(0xe6);
+            }
+        }
         _ => {}
     }
     halt();

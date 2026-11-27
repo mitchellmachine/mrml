@@ -184,6 +184,21 @@ pub(super) enum ProbeFault {
     Vmxoff = 0x11,
 }
 
+pub(super) fn mismatch_labels(masks: [u64; 4]) -> [[u8; 26]; 4] {
+    let mut labels = [
+        *b"CR0 ADD   0000000000000000",
+        *b"CR0 CLEAR 0000000000000000",
+        *b"CR4 ADD   0000000000000000",
+        *b"CR4 CLEAR 0000000000000000",
+    ];
+    for (label, mask) in labels.iter_mut().zip(masks) {
+        for (index, byte) in label[10..].iter_mut().enumerate() {
+            *byte = b"0123456789ABCDEF"[((mask >> (60 - index * 4)) & 15) as usize];
+        }
+    }
+    labels
+}
+
 impl ProbeFault {
     pub(super) fn label(self) -> [u8; 25] {
         let mut label = *b"VMX PROBE NOT PASSED - 00";
@@ -197,7 +212,7 @@ impl ProbeFault {
 
 /// Runs a controlled boot-time VMX/EPT proof. QEMU execution is evidence of
 /// this state machine only; it is not physical-platform or remote attestation.
-pub(super) unsafe fn run() -> Result<(), ProbeFault> {
+pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), ProbeFault> {
     trace(0xd0);
     if __cpuid(1).ecx & (1 << 5) == 0 {
         trace(0xe0);
@@ -238,9 +253,10 @@ pub(super) unsafe fn run() -> Result<(), ProbeFault> {
         unsafe { rdmsr(0x488) },
         unsafe { rdmsr(0x489) },
     );
-    prerequisites
-        .validate()
-        .map_err(|_| ProbeFault::HostControls)?;
+    if prerequisites.validate().is_err() {
+        *host_mismatch = Some(prerequisites.host_control_mismatch());
+        return Err(ProbeFault::HostControls);
+    }
     let (guest_cr0, guest_cr4) = prerequisites
         .unrestricted_guest_controls()
         .map_err(|_| ProbeFault::GuestControls)?;

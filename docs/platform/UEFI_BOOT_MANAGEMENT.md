@@ -107,7 +107,12 @@ version, and last visible label:
   | `10` | expected read-only EPT violation not observed |
   | `11` | VMXOFF failed |
 
-  The test never changes the firmware VMX policy.
+  Dragonair reported `07` in the first run with stage codes. The updated
+  probe reports four hex masks: `CR0 ADD`, `CR0 CLEAR`, `CR4 ADD`, and
+  `CR4 CLEAR`. These are missing required and set forbidden bits, not
+  instructions to change settings. Photograph the full screen. The probe
+  reports the masks without changing either register on this failure path.
+  It never changes the firmware VMX policy.
 - `VMX PROBE START` without a terminal label: record it as a non-pass; the probe
   did not return to its caller with a terminal result.
 
