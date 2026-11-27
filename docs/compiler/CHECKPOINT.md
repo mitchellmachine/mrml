@@ -18,6 +18,12 @@ compiler core and driver suites passed on both Windows gnullvm and Arch
 WSL2. This records that run's evidence; it does not explain the earlier
 Windows loader error 623.
 
+Signed commit `47dd97cf` adds exact two-digit hexadecimal escapes with the
+ASCII limit for `char` and the full `u8` range for byte literals. Its source
+checkpoint passed 1,349 core and 19 driver tests on both hosts, and eight
+public frontend probes matched ORACLE-0004. Accepted Windows outputs ran;
+the Linux check covered ELF emission.
+
 ## Integrated frontend checkpoint
 
 Commit `d2aeb100` on `main` includes four signed frontend changes:
