@@ -2404,8 +2404,14 @@ state and preserves a timer-preempted guest's x87 data and XMM value across a
 separate signed guest. The monitor checks that its own x87 rounding mode
 returns unchanged. The legacy-state profile does not admit additional CR4 state
 features such as OSXSAVE. This does not qualify extended vector state or
-general untrusted-guest CPU-state isolation. Bare-metal retesting remains
-deferred.
+general untrusted-guest CPU-state isolation. In the same diagnostic a
+separately signed Zstd service image now runs in a physically disjoint
+MicroVM and processes a canonical ABI-3 decompress request through the real
+native provider. The monitor supplies an NX read-only request and an NX
+writable reply, validates the exact trapped completion and decoded reply,
+and does not forward I/O. This is a one-shot monitor-to-service transaction;
+it does not exercise the installed service scheduler or capability transport.
+Bare-metal retesting remains deferred.
 
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and

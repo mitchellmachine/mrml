@@ -193,6 +193,13 @@ compile_name = "mrml-storage-usb"
 package = "org.mrml.library.storage.usb"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_interface_zstd_v3"
+compile_name = "mrml-interface-zstd-v3"
+package = "org.mrml.interface.compression.zstd"
+scope = "compile"
+targets = ["UEFI"]
+
 [[binary]]
 crate_name = "mrml_kernel_pe"
 output = "mrml-kernel-pe"
@@ -356,6 +363,12 @@ name = "MRML_APPLICATION_ROOT_DIGEST_HEX"
 name = "MRML_KERNEL_MIN_VERSION"
 
 [[absent_compile_env]]
+name = "MRML_VMX_SERVICE_BUNDLE"
+
+[[absent_compile_env]]
+name = "MRML_VMX_SERVICE_ROOT"
+
+[[absent_compile_env]]
 name = "MRML_VMX_KERNEL_BUNDLE"
 
 [[absent_compile_env]]
@@ -366,6 +379,30 @@ name = "MRML_SERVICE_MIN_VERSION"
 
 [[absent_compile_env]]
 name = "MRML_SERVICE_ROOT_DIGEST_HEX"
+
+[[build_input]]
+fingerprint = "fnv1a64:115344eae30c2060"
+id = "compile-env.nested-service-bundle-path"
+kind = "compile-env"
+line = 168
+path = "packages/system/bootloader/src/vmx_kernel_guest.rs"
+reason = "Select the independently signed diagnostic Zstd provider."
+
+[[build_input]]
+fingerprint = "fnv1a64:f44da3a1d427805c"
+id = "compile-env.nested-service-root"
+kind = "compile-env"
+line = 25
+path = "packages/system/bootloader/src/vmx_kernel_guest.rs"
+reason = "Pin a distinct disposable signer for the service diagnostic."
+
+[[build_input]]
+fingerprint = "fnv1a64:4213cb5501c87d9e"
+id = "included-file.nested-service-bundle"
+kind = "included-file"
+line = 168
+path = "packages/system/bootloader/src/vmx_kernel_guest.rs"
+reason = "Embed the signed service only in the opt-in nested monitor image."
 
 [[build_input]]
 fingerprint = "fnv1a64:9bbb591dec5a0a3e"

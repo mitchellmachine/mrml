@@ -1,4 +1,4 @@
-//! Opt-in signed L2 Gigakernel bootstrap. No installed services or device access.
+//! Opt-in signed L2 Gigakernel and service diagnostic. No installed devices.
 use core::{arch::asm, cell::UnsafeCell};
 
 use mrml_kernel::arch::x86_64::{
@@ -11,7 +11,18 @@ use mrml_kernel::{
     TrustRoot, encode_handoff,
 };
 
+use mrml_interface_zstd_v3::{
+    BorrowedReadView, BorrowedWriteView, DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES,
+    decode_decompress_response, encode_decompress_request,
+};
+
 const PAGE: usize = 4096;
+const ZSTD_CONTENT: usize = 3;
+const ZSTD_FRAME: usize = 12;
+const ZSTD_OUTPUT: usize = 32;
+const ZSTD_MEMORY: usize = 64;
+const KERNEL_ROOT: &str = env!("MRML_VMX_KERNEL_ROOT");
+const SERVICE_ROOT: &str = env!("MRML_VMX_SERVICE_ROOT");
 const GROUPS: usize = 5;
 const PAGES: usize = GROUPS * 512;
 const EPT_TABLES: usize = 3 + GROUPS;
@@ -26,6 +37,7 @@ const GDT: usize = 0x12_000;
 const ACPI: usize = 0x13_000;
 const FRAMEBUFFER: usize = 0x14_000;
 const STACK: usize = 0x40_000;
+const _: () = assert!(STACK + PRIVILEGE_STACK_ARENA_PAGES as usize * PAGE <= IMAGE);
 
 #[repr(C, align(4096))]
 struct Arena(UnsafeCell<[u8; ARENA_PAGES * PAGE]>);
@@ -33,19 +45,75 @@ struct Arena(UnsafeCell<[u8; ARENA_PAGES * PAGE]>);
 // SAFETY: exclusive BSP preparation before VMX entry; no AP or device access.
 unsafe impl Sync for Arena {}
 static ARENA: Arena = Arena(UnsafeCell::new([0; ARENA_PAGES * PAGE]));
+static SERVICE_ARENA: Arena = Arena(UnsafeCell::new([0; ARENA_PAGES * PAGE]));
 
-pub(super) struct KernelLaunch {
+#[derive(Clone, Copy)]
+enum Payload {
+    Kernel([u8; 32]),
+    Zstd([u8; ZSTD_CONTENT]),
+}
+
+struct GuestPlatform {
+    revision: u32,
+    controls: VmxControlPolicy,
+    host: VmxHostState,
+    guest_cr0: u64,
+    guest_cr4: u64,
+}
+
+pub(super) struct PreparedGuest {
     vmcs: PhysAddr,
     ept: EptPointer,
     launch: MinimalVmcsLaunch,
 }
 
-impl KernelLaunch {
+pub(super) struct ServiceLaunch {
+    guest: PreparedGuest,
+    expected: [u8; ZSTD_CONTENT],
+}
+
+impl ServiceLaunch {
     pub(super) fn run(
         self,
         controller: &mut VmxController<NativeVmx>,
         controls: VmxControlPolicy,
         ticks: u32,
+    ) -> Option<()> {
+        self.guest.run_to_exit(controller, controls, ticks, 0xe8)?;
+        // SAFETY: the exact service vCPU is stopped and only its own reply
+        // page can be written by the guest at this address. Copy the bounded
+        // reply before interpreting it on the monitor side.
+        let reply: [u8; DECOMPRESS_RESPONSE_BYTES + ZSTD_MEMORY] = unsafe {
+            let ptr = SERVICE_ARENA.0.get().cast::<u8>().add(RAM + FRAMEBUFFER);
+            ptr.cast::<[u8; DECOMPRESS_RESPONSE_BYTES + ZSTD_MEMORY]>()
+                .read_volatile()
+        };
+        let (wire, output) = reply.split_at(DECOMPRESS_RESPONSE_BYTES);
+        let decoded = decode_decompress_response(wire.try_into().ok()?)
+            .ok()?
+            .ok()?;
+        (decoded == ZSTD_CONTENT as u64
+            && output[ZSTD_OUTPUT..ZSTD_OUTPUT + ZSTD_CONTENT] == self.expected)
+            .then_some(())
+    }
+}
+
+impl PreparedGuest {
+    pub(super) fn run(
+        self,
+        controller: &mut VmxController<NativeVmx>,
+        controls: VmxControlPolicy,
+        ticks: u32,
+    ) -> Option<()> {
+        self.run_to_exit(controller, controls, ticks, 0xe7)
+    }
+
+    fn run_to_exit(
+        self,
+        controller: &mut VmxController<NativeVmx>,
+        controls: VmxControlPolicy,
+        ticks: u32,
+        port: u16,
     ) -> Option<()> {
         controller.clear_vmcs(self.vmcs).ok()?;
         controller.load_vmcs(self.vmcs, self.ept).ok()?;
@@ -74,7 +142,8 @@ impl KernelLaunch {
             return None;
         }
         let exit = controller.record_vm_exit_snapshot().ok()?;
-        (exit.reason() == 30 && exit.qualification() == (0xe7 << 16) | (1 << 6)).then_some(())
+        (exit.reason() == 30 && exit.qualification() == (u64::from(port) << 16) | (1 << 6))
+            .then_some(())
     }
 }
 
@@ -96,39 +165,91 @@ pub(super) fn prepare(
     guest_cr0: u64,
     guest_cr4: u64,
     entropy: [u8; 32],
-) -> Option<KernelLaunch> {
-    let bundle = include_bytes!(env!("MRML_VMX_KERNEL_BUNDLE"));
-    let root = root_digest(env!("MRML_VMX_KERNEL_ROOT"))?;
+) -> Option<PreparedGuest> {
+    prepare_payload(
+        GuestPlatform {
+            revision,
+            controls,
+            host,
+            guest_cr0,
+            guest_cr4,
+        },
+        Payload::Kernel(entropy),
+        include_bytes!(env!("MRML_VMX_KERNEL_BUNDLE")),
+        root_digest(KERNEL_ROOT)?,
+        root_digest(SERVICE_ROOT)?,
+    )
+}
+
+pub(super) fn prepare_service(
+    revision: u32,
+    controls: VmxControlPolicy,
+    host: VmxHostState,
+    guest_cr0: u64,
+    guest_cr4: u64,
+    entropy: [u8; 32],
+) -> Option<ServiceLaunch> {
+    let expected: [u8; ZSTD_CONTENT] = entropy[..ZSTD_CONTENT].try_into().ok()?;
+    let guest = prepare_payload(
+        GuestPlatform {
+            revision,
+            controls,
+            host,
+            guest_cr0,
+            guest_cr4,
+        },
+        Payload::Zstd(expected),
+        include_bytes!(env!("MRML_VMX_SERVICE_BUNDLE")),
+        root_digest(SERVICE_ROOT)?,
+        root_digest(KERNEL_ROOT)?,
+    )?;
+    Some(ServiceLaunch { guest, expected })
+}
+
+fn prepare_payload(
+    platform: GuestPlatform,
+    payload: Payload,
+    bundle: &[u8],
+    root: [u8; 64],
+    other_root: [u8; 64],
+) -> Option<PreparedGuest> {
+    let GuestPlatform {
+        revision,
+        controls,
+        host,
+        guest_cr0,
+        guest_cr4,
+    } = platform;
+    if root == other_root {
+        return None;
+    }
+    let kind = match payload {
+        Payload::Kernel(_) => ArtifactKind::Kernel,
+        Payload::Zstd(_) => ArtifactKind::ServiceImage,
+    };
     let signed = SignedArtifact::decode(bundle).ok()?;
-    let mut wrong = root;
-    wrong[0] ^= 1;
     if signed
-        .verify_executable(
-            &TrustRoot::new(ArtifactKind::Kernel, wrong, 1),
-            ArtifactKind::Kernel,
-        )
+        .verify_executable(&TrustRoot::new(kind, other_root, 1), kind)
         .is_ok()
     {
         return None;
     }
     let executable = signed
-        .verify_executable(
-            &TrustRoot::new(ArtifactKind::Kernel, root, 1),
-            ArtifactKind::Kernel,
-        )
+        .verify_executable(&TrustRoot::new(kind, root, 1), kind)
         .ok()?;
     let pe = executable.image();
     let end = IMAGE.checked_add(pe.image_size() as usize)?;
     if end > PAGES * PAGE {
         return None;
     }
-    // SAFETY: the entry is used once by the bootstrap CPU before guests run.
-    let arena = unsafe { &mut *ARENA.0.get() };
-    arena.fill(0);
+    let backing = match payload {
+        Payload::Kernel(_) => &ARENA,
+        Payload::Zstd(_) => &SERVICE_ARENA,
+    };
     // SAFETY: the UEFI loader installed this BSP's validated four-level tables.
     let active = unsafe { ActivePageTables::current() }.ok()?;
     let mut frames = [0u64; ARENA_PAGES];
-    let base = arena.as_ptr() as u64;
+    let base = backing.0.get() as u64;
     for (index, frame) in frames.iter_mut().enumerate() {
         let leaf = active
             .leaf(VirtAddr::new(base.checked_add((index * PAGE) as u64)?).ok()?)
@@ -147,57 +268,102 @@ pub(super) fn prepare(
     if sorted.windows(2).any(|w| w[0] == w[1]) {
         return None;
     }
+    if matches!(payload, Payload::Zstd(_)) {
+        let kernel_base = ARENA.0.get() as u64;
+        for index in 0..ARENA_PAGES {
+            let leaf = active
+                .leaf(VirtAddr::new(kernel_base + (index * PAGE) as u64).ok()?)
+                .ok()??;
+            if sorted.binary_search(&leaf.physical().get()).is_ok() {
+                return None;
+            }
+        }
+    }
+    // SAFETY: every host frame is validated and the service and kernel
+    // arenas cannot alias. The BSP's exclusive borrow ends before VM entry.
+    let arena = unsafe { &mut *backing.0.get() };
+    arena.fill(0);
     let entry = pe
         .materialize_at(&mut arena[RAM + IMAGE..RAM + end], HIGH + IMAGE as u64)
         .ok()?;
     let stacks =
         PrivilegeStackLayout::new(HIGH + STACK as u64, PRIVILEGE_STACK_ARENA_PAGES).ok()?;
     let stack_top = stacks.early_top().ok()?.checked_add(8)?;
-    let regions = [
-        MemoryRegion::new(PhysAddr::new(FRAMEBUFFER as u64).ok()?, 1, MemoryKind::Mmio).ok()?,
-        MemoryRegion::new(
-            PhysAddr::new(STACK as u64).ok()?,
-            PRIVILEGE_STACK_ARENA_PAGES,
-            MemoryKind::Kernel,
-        )
-        .ok()?,
-        MemoryRegion::new(
-            PhysAddr::new(IMAGE as u64).ok()?,
-            (pe.image_size() as u64).div_ceil(PAGE as u64),
-            MemoryKind::Kernel,
-        )
-        .ok()?,
-    ];
-    let framebuffer = FramebufferInfo::new(
-        FRAMEBUFFER as u64,
-        PAGE as u64,
-        16,
-        16,
-        16,
-        PixelFormat::BlueGreenRedReserved,
-    )
-    .ok()?;
-    let handoff_len = encode_handoff(
-        executable.artifact().version(),
-        entropy,
-        *executable.artifact().digest(),
-        true,
-        false,
-        false,
-        ACPI as u64,
-        framebuffer,
-        &regions,
-        &mut arena[RAM + HANDOFF..RAM + HANDOFF + PAGE],
-    )
-    .ok()?;
-    // Win64 ABI: RCX handoff, RDX length, R8/R9 guarded IST stack tops.
+    let (rdx, r8, r9) = match payload {
+        Payload::Kernel(entropy) => {
+            let regions = [
+                MemoryRegion::new(PhysAddr::new(FRAMEBUFFER as u64).ok()?, 1, MemoryKind::Mmio)
+                    .ok()?,
+                MemoryRegion::new(
+                    PhysAddr::new(STACK as u64).ok()?,
+                    PRIVILEGE_STACK_ARENA_PAGES,
+                    MemoryKind::Kernel,
+                )
+                .ok()?,
+                MemoryRegion::new(
+                    PhysAddr::new(IMAGE as u64).ok()?,
+                    (pe.image_size() as u64).div_ceil(PAGE as u64),
+                    MemoryKind::Kernel,
+                )
+                .ok()?,
+            ];
+            let framebuffer = FramebufferInfo::new(
+                FRAMEBUFFER as u64,
+                PAGE as u64,
+                16,
+                16,
+                16,
+                PixelFormat::BlueGreenRedReserved,
+            )
+            .ok()?;
+            let handoff_len = encode_handoff(
+                executable.artifact().version(),
+                entropy,
+                *executable.artifact().digest(),
+                true,
+                false,
+                false,
+                ACPI as u64,
+                framebuffer,
+                &regions,
+                &mut arena[RAM + HANDOFF..RAM + HANDOFF + PAGE],
+            )
+            .ok()?;
+            (
+                handoff_len as u64,
+                stacks.entry_top().ok()?,
+                stacks.double_fault_top().ok()?,
+            )
+        }
+        Payload::Zstd(expected) => {
+            let input = BorrowedReadView::within(0, ZSTD_FRAME as u64, ZSTD_MEMORY as u64)?;
+            let output = BorrowedWriteView::within(
+                ZSTD_OUTPUT as u64,
+                ZSTD_CONTENT as u64,
+                ZSTD_MEMORY as u64,
+            )?;
+            let wire = encode_decompress_request(input, output).ok()?;
+            let request = &mut arena[RAM + HANDOFF..RAM + HANDOFF + PAGE];
+            request[..DECOMPRESS_REQUEST_BYTES].copy_from_slice(&wire);
+            // Same single raw block as the tested ABI-3 vector, with the
+            // three output bytes selected from this boot's entropy.
+            let header = [0x28, 0xb5, 0x2f, 0xfd, 0x20, 3, 0x19, 0, 0];
+            request[DECOMPRESS_REQUEST_BYTES..DECOMPRESS_REQUEST_BYTES + header.len()]
+                .copy_from_slice(&header);
+            request[DECOMPRESS_REQUEST_BYTES + header.len()..DECOMPRESS_REQUEST_BYTES + ZSTD_FRAME]
+                .copy_from_slice(&expected);
+            (HIGH + FRAMEBUFFER as u64, 0, 0)
+        }
+    };
+    // Win64 ABI: RCX is the RO request/handoff, RDX is the RW service
+    // reply or handoff length, and R8/R9 are kernel-only IST tops.
     // Caller RSP is 16-byte aligned. Reserve home space before CALL.
     let mut pc = RAM + TRAMPOLINE;
     for (opcode, value) in [
         ([0x48, 0xb9], HIGH + HANDOFF as u64),
-        ([0x48, 0xba], handoff_len as u64),
-        ([0x49, 0xb8], stacks.entry_top().ok()?),
-        ([0x49, 0xb9], stacks.double_fault_top().ok()?),
+        ([0x48, 0xba], rdx),
+        ([0x49, 0xb8], r8),
+        ([0x49, 0xb9], r9),
         ([0x48, 0xb8], entry),
     ] {
         arena[pc..pc + 2].copy_from_slice(&opcode);
@@ -245,6 +411,9 @@ pub(super) fn prepare(
     map(TRAMPOLINE / PAGE, false, true, true);
     map(HANDOFF / PAGE, false, false, true);
     map(GDT / PAGE, true, false, true);
+    if matches!(payload, Payload::Zstd(_)) {
+        map(FRAMEBUFFER / PAGE, true, false, true);
+    }
     for (start, pages) in [
         (STACK / PAGE, stacks.early_pages()),
         (
@@ -287,7 +456,7 @@ pub(super) fn prepare(
         },
     )
     .ok()?;
-    Some(KernelLaunch {
+    Some(PreparedGuest {
         vmcs: PhysAddr::new(frames[VMCS]).ok()?,
         ept,
         launch,

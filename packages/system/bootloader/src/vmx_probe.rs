@@ -300,6 +300,8 @@ pub(super) enum ProbeFault {
     KernelExit = 0x19,
     #[cfg(feature = "vmx-kernel-monitor")]
     Timer = 0x1A,
+    #[cfg(feature = "vmx-kernel-monitor")]
+    Service = 0x1B,
 }
 
 pub(super) fn mismatch_labels(masks: [u64; 4]) -> [[u8; 26]; 4] {
@@ -460,7 +462,23 @@ pub(super) unsafe fn run(
         guest_cr4,
         _entropy,
     )
-    .ok_or(ProbeFault::KernelPrepare)?;
+    .ok_or_else(|| {
+        trace(ProbeFault::KernelPrepare as u8);
+        ProbeFault::KernelPrepare
+    })?;
+    #[cfg(feature = "vmx-kernel-monitor")]
+    let service = super::vmx_kernel_guest::prepare_service(
+        capabilities.revision_id(),
+        controls,
+        host,
+        guest_cr0,
+        guest_cr4,
+        _entropy,
+    )
+    .ok_or_else(|| {
+        trace(ProbeFault::Service as u8);
+        ProbeFault::Service
+    })?;
     if cr0 != original_cr0 {
         // SAFETY: in the BSP diagnostic, the validator allowed only the missing
         // required NE bit; every other CR0 bit retains its original value.
@@ -650,6 +668,10 @@ pub(super) unsafe fn run(
                 return Err(ProbeFault::Timer);
             }
             trace(0xc5);
+            service
+                .run(&mut controller, controls, ticks(1 << 32))
+                .ok_or(ProbeFault::Service)?;
+            trace(0xc6);
         }
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;
         Ok(())

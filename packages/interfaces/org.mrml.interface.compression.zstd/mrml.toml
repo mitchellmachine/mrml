@@ -35,3 +35,6 @@ name = "mrml_interface_zstd_v3"
 crate_name = "mrml_interface_zstd_v3"
 crate_type = "lib"
 source = "packages/interfaces/org.mrml.interface.compression.zstd/src/lib.rs"
+
+[[projected_build]]
+targets = ["UEFI"]

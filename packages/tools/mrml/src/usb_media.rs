@@ -147,7 +147,7 @@ fn test_vmx(image: &str, code: &str, vars: &str, qemu: &str, kernel: bool) -> Re
     run("tcg", "vmx-absent.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0e0e6")?;
     copy()?;
     let expected = if kernel {
-        "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1c2c4c3c5dfd6"
+        "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1c2c4c3c5c6dfd6"
     } else {
         "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1dfd6"
     };
@@ -748,7 +748,22 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
         build("org.mrml.system.bootloader", "uefi-x86_64", words(&["--feature-profile", "vmx_kernel_payload"]))?;
         let bundle = usb.path("nested.signed");
         signer(&sign, words(&["sign-bundle", "kernel", "1", &string(&kernel), &key("nested", "private"), &string(&bundle)]), false)?;
-        nested = words(&["--compile-env", &format!("MRML_VMX_KERNEL_BUNDLE={}", bundle.display()), "--compile-env", &format!("MRML_VMX_KERNEL_ROOT={root}")]);
+        let service_role = "nested-zstd";
+        signer(&sign, words(&["keygen", &key(service_role, "private"), &key(service_role, "public")]), false)?;
+        let service_root = digest(service_role)?;
+        if service_root == root {
+            return Err("Nested kernel and service must have distinct signing roots".into());
+        }
+        build("org.mrml.zstd", "native", words(&["--feature-profile", "vmx_service_probe"]))?;
+        let service_pe = native.join("mrml_native-x86_64-unknown-uefi/release/mrml-zstd-vmx-probe.efi");
+        let service_bundle = usb.path("nested-zstd.signed");
+        signer(&sign, words(&["sign-bundle", "service", "1", &string(&service_pe), &key(service_role, "private"), &string(&service_bundle)]), false)?;
+        nested = words(&[
+            "--compile-env", &format!("MRML_VMX_KERNEL_BUNDLE={}", bundle.display()),
+            "--compile-env", &format!("MRML_VMX_KERNEL_ROOT={root}"),
+            "--compile-env", &format!("MRML_VMX_SERVICE_BUNDLE={}", service_bundle.display()),
+            "--compile-env", &format!("MRML_VMX_SERVICE_ROOT={service_root}"),
+        ]);
     }
     build(
         "org.mrml.system.bootloader",
