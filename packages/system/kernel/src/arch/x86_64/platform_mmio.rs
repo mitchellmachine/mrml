@@ -16,6 +16,24 @@ pub enum PlatformMmioError {
     CpuProtection,
 }
 
+/// The two pages of the isolated q35 mapping test, never an authorization
+/// to access physical hardware. The fixture xHCI function is 00:1b.0.
+pub fn q35_fixture_probe_mappings() -> Result<[Mapping; 2], PlatformMmioError> {
+    let page = |virtual_start, physical| {
+        Mapping::new(
+            VirtAddr::new(virtual_start).map_err(|_| PlatformMmioError::InvalidRange)?,
+            PhysAddr::new(physical).map_err(|_| PlatformMmioError::InvalidRange)?,
+            1,
+            PagePermissions::KERNEL_MMIO_READ,
+        )
+        .map_err(|_| PlatformMmioError::InvalidRange)
+    };
+    Ok([
+        page(0xffff_d800_0010_0000, 0xfed9_0000)?,
+        page(0xffff_d800_0010_1000, 0xe00d_8000)?,
+    ])
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlatformMmioPurpose {
     VtdBootstrap {

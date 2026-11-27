@@ -198,6 +198,11 @@ pub(super) fn dma_mmio_coverage(covered: bool) {
     trace(if covered { 0xd6 } else { 0xd7 });
 }
 
+#[cfg(feature = "q35-mmio-probe")]
+pub(super) fn dma_fixture_leaves_verified() {
+    trace(0xdc);
+}
+
 fn trace(stage: u8) {
     // SAFETY: this diagnostic runs at CPL0 on x86 and port 0xe9 is the opt-in trace.
     unsafe { asm!("out dx, al", in("dx") 0xe9u16, in("al") stage, options(nomem, nostack)) };

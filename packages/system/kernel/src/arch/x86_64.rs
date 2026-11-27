@@ -20,7 +20,7 @@ mod trap;
 mod vmx;
 mod vtd;
 mod vtd_tables;
-pub use acpi::{AcpiError, AcpiMemory, copy_dmar, copy_madt, copy_mcfg};
+pub use acpi::{AcpiError, AcpiMemory, copy_dmar, copy_madt, copy_mcfg, q35_fixture_marker};
 pub use active_user_copy::{
     ActiveTaskUserCopy, ActiveTaskUserCopyError, ActiveUserMemory, DirectActiveUserMemory,
 };
@@ -64,7 +64,7 @@ pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{
     PlatformMmioError, PlatformMmioManifest, PlatformMmioPurpose, PlatformMmioRequirement,
     VerifiedPlatformMmio, check_boot_mmio_cpu_policy, extend_vtd_mmio_requirement,
-    verify_active_platform_mmio,
+    q35_fixture_probe_mappings, verify_active_platform_mmio,
 };
 pub use privilege_stack::{
     CpuPrivilegeStacks, EARLY_STACK_PAGES, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES,

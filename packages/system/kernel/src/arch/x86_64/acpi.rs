@@ -25,6 +25,9 @@ pub enum AcpiError {
     MissingMcfg,
     DuplicateMcfg,
     McfgTooLarge,
+    MissingQ35FixtureMarker,
+    DuplicateQ35FixtureMarker,
+    InvalidQ35FixtureMarker,
 }
 
 /// Read-only access to firmware-owned physical bytes. Implementations must
@@ -88,6 +91,29 @@ pub fn copy_mcfg<M: AcpiMemory>(
         AcpiError::DuplicateMcfg,
         AcpiError::McfgTooLarge,
     )
+}
+
+/// Test-only transport observation; this table is not platform MMIO authority.
+pub fn q35_fixture_marker<M: AcpiMemory>(
+    memory: &mut M,
+    rsdp_physical: u64,
+) -> Result<[u8; SDT_HEADER_BYTES], AcpiError> {
+    let mut marker = [0; SDT_HEADER_BYTES];
+    if copy_unique_sdt(
+        memory,
+        rsdp_physical,
+        &mut marker,
+        *b"MQ35",
+        AcpiError::MissingQ35FixtureMarker,
+        AcpiError::DuplicateQ35FixtureMarker,
+        AcpiError::InvalidQ35FixtureMarker,
+    )? != SDT_HEADER_BYTES
+        || marker[8] != 1
+        || &marker[10..] != b"MRMLQ3MMIOTEST\x01\x00\x00\x00MRML\x01\x00\x00\x00"
+    {
+        return Err(AcpiError::InvalidQ35FixtureMarker);
+    }
+    Ok(marker)
 }
 
 fn copy_unique_sdt<M: AcpiMemory>(
@@ -402,5 +428,44 @@ mod tests {
         let mut output = [0u8; 64];
         assert_eq!(copy_mcfg(&mut memory, 0x100, &mut output), Ok(60));
         assert_eq!(&output[..4], b"MCFG");
+    }
+
+    #[test]
+    fn fixture_marker_is_unique_exact_and_checksummed() {
+        let mut memory = memory();
+        assert_eq!(
+            q35_fixture_marker(&mut memory, 0x100),
+            Err(AcpiError::MissingQ35FixtureMarker)
+        );
+        memory.0[0x204..0x208].copy_from_slice(&52u32.to_le_bytes());
+        memory.0[0x22c..0x234].copy_from_slice(&0x380u64.to_le_bytes());
+        finalize(&mut memory.0[0x200..0x234], 9);
+        let marker = &mut memory.0[0x380..0x3a4];
+        marker[..4].copy_from_slice(b"MQ35");
+        marker[4..8].copy_from_slice(&36u32.to_le_bytes());
+        marker[8] = 1;
+        marker[10..].copy_from_slice(b"MRMLQ3MMIOTEST\x01\x00\x00\x00MRML\x01\x00\x00\x00");
+        finalize(marker, 9);
+        assert!(q35_fixture_marker(&mut memory, 0x100).is_ok());
+        memory.0[0x389] ^= 1;
+        assert_eq!(
+            q35_fixture_marker(&mut memory, 0x100),
+            Err(AcpiError::BadChecksum)
+        );
+        memory.0[0x388] = 2;
+        finalize(&mut memory.0[0x380..0x3a4], 9);
+        assert_eq!(
+            q35_fixture_marker(&mut memory, 0x100),
+            Err(AcpiError::InvalidQ35FixtureMarker)
+        );
+        memory.0[0x388] = 1;
+        finalize(&mut memory.0[0x380..0x3a4], 9);
+        memory.0[0x204..0x208].copy_from_slice(&60u32.to_le_bytes());
+        memory.0[0x234..0x23c].copy_from_slice(&0x380u64.to_le_bytes());
+        finalize(&mut memory.0[0x200..0x23c], 9);
+        assert_eq!(
+            q35_fixture_marker(&mut memory, 0x100),
+            Err(AcpiError::DuplicateQ35FixtureMarker)
+        );
     }
 }

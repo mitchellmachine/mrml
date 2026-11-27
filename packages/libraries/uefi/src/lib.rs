@@ -1851,6 +1851,46 @@ pub enum BootDmaBackingError {
     TooManyRegions,
 }
 
+/// Checks contradictions only. An empty map region or generic Reserved
+/// descriptor is never positive MMIO evidence.
+#[cfg(any(test, feature = "q35-mmio-probe"))]
+pub fn q35_fixture_has_no_memory_conflict(
+    raw: &[u8],
+    stride: usize,
+    page: u64,
+    framebuffer: (u64, u64),
+) -> bool {
+    let Some(end) = page.checked_add(PAGE_SIZE) else {
+        return false;
+    };
+    let Some(fb_end) = framebuffer.0.checked_add(framebuffer.1) else {
+        return false;
+    };
+    if raw.is_empty()
+        || stride < 40
+        || !raw.len().is_multiple_of(stride)
+        || (framebuffer.1 != 0 && page < fb_end && framebuffer.0 < end)
+    {
+        return false;
+    }
+    raw.chunks_exact(stride).all(|descriptor| {
+        let kind = u32::from_le_bytes(descriptor[..4].try_into().unwrap());
+        let start = u64::from_le_bytes(descriptor[8..16].try_into().unwrap());
+        let pages = u64::from_le_bytes(descriptor[24..32].try_into().unwrap());
+        let attributes = u64::from_le_bytes(descriptor[32..40].try_into().unwrap());
+        start.is_multiple_of(PAGE_SIZE)
+            && pages != 0
+            && pages
+                .checked_mul(PAGE_SIZE)
+                .and_then(|bytes| start.checked_add(bytes))
+                .is_some_and(|stop| {
+                    stop <= page
+                        || start >= end
+                        || (matches!(kind, 0 | 11) && attributes & (1u64 << 63) == 0)
+                })
+    })
+}
+
 /// Tags only the validated loader allocation in a normalized memory map.
 /// This must run after framebuffer overlay, so an overlapping MMIO range
 /// cannot silently become DMA backing.
@@ -4078,6 +4118,27 @@ mod tests {
         bytes[8..16].copy_from_slice(&start.to_le_bytes());
         bytes[24..32].copy_from_slice(&pages.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn q35_fixture_map_only_accepts_non_conflicting_snapshots() {
+        let page = 0xfed9_0000;
+        let check = |raw: &[u8], framebuffer| {
+            q35_fixture_has_no_memory_conflict(raw, 40, page, framebuffer)
+        };
+        assert!(check(&descriptor(7, page - 4096, 1), (0, 0)));
+        for kind in [0, 11] {
+            let mut raw = descriptor(kind, page, 1);
+            assert!(check(&raw, (page + 4096, 4096)));
+            assert!(!check(&raw, (page - 1, 2)));
+            raw[39] = 0x80;
+            assert!(!check(&raw, (0, 0)));
+        }
+        for kind in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 99] {
+            assert!(!check(&descriptor(kind, page - 4096, 2), (0, 0)));
+        }
+        assert!(!check(&descriptor(0, page, u64::MAX), (0, 0)));
+        assert!(!check(&descriptor(0, page, 1)[..39], (0, 0)));
     }
 
     #[test]

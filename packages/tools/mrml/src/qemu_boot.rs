@@ -81,14 +81,22 @@ pub fn create_media(args: &[String]) -> Result<(), String> {
 }
 
 pub fn run_qemu(args: &[String]) -> Result<(), String> {
-    run_qemu_config(args, false)
+    run_qemu_config(args, false, None)
 }
 
 pub(super) fn run_qemu_with_q35_evidence(args: &[String]) -> Result<(), String> {
-    run_qemu_config(args, true)
+    run_qemu_config(args, true, None)
 }
 
-fn run_qemu_config(args: &[String], verify_q35: bool) -> Result<(), String> {
+pub(super) fn run_q35_map_only_fixture(args: &[String], has_marker: bool) -> Result<(), String> {
+    run_qemu_config(args, true, Some(has_marker))
+}
+
+fn run_qemu_config(
+    args: &[String],
+    verify_q35: bool,
+    map_only_marker: Option<bool>,
+) -> Result<(), String> {
     if args.len() < 5 {
         return Err("PackageQemuBootUsage { expected: IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--accelerator tcg|whpx|kvm] [--iommu intel] [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX] }".into());
     }
@@ -164,6 +172,7 @@ fn run_qemu_config(args: &[String], verify_q35: bool) -> Result<(), String> {
         accelerator,
         intel_iommu,
         verify_q35,
+        map_only_marker,
     });
     let _ = fs::remove_file(vars);
     result
@@ -181,6 +190,7 @@ struct QemuChildOptions<'a> {
     accelerator: &'a str,
     intel_iommu: bool,
     verify_q35: bool,
+    map_only_marker: Option<bool>,
 }
 
 fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
@@ -196,6 +206,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         accelerator,
         intel_iommu,
         verify_q35,
+        map_only_marker,
     } = options;
     let machine = format!("q35,accel={accelerator}");
     let mut command = Command::new(qemu);
@@ -205,6 +216,40 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     if verify_q35 {
         command.args(["-no-user-config", "-qmp", "stdio"]);
     }
+    if let Some(has_marker) = map_only_marker {
+        let scratch = trace
+            .parent()
+            .filter(|p| p.is_absolute())
+            .ok_or("missing private q35 fixture directory")?;
+        command.current_dir(scratch).args([
+            "-nic",
+            "none",
+            "-device",
+            "qemu-xhci,bus=pcie.0,addr=0x1b,id=mrml_probe_xhci",
+        ]);
+        if has_marker {
+            let mut marker = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(scratch.join("q35-mmio.acpi"))
+                .map_err(|error| format!("create q35 marker: {error}"))?;
+            marker
+                .write_all(&crate::qemu_mmio::fixture_acpi_table())
+                .map_err(|error| format!("write q35 marker: {error}"))?;
+            command.args(["-acpitable", "file=q35-mmio.acpi"]);
+        }
+    }
+    let (boot_xhci, boot_disk) = if map_only_marker.is_some() {
+        (
+            "qemu-xhci,id=mrml_boot_xhci",
+            "usb-storage,bus=mrml_boot_xhci.0,drive=esp,removable=on,bootindex=1",
+        )
+    } else {
+        (
+            "qemu-xhci",
+            "usb-storage,drive=esp,removable=on,bootindex=1",
+        )
+    };
     let mut child = command
         .args(["-machine", &machine, "-m", "512M", "-display", "none"])
         .args(["-serial", "none", "-monitor", "none", "-no-reboot"])
@@ -214,8 +259,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         .arg(format!("if=pflash,format=raw,file={}", vars.display()))
         .arg("-drive")
         .arg(format!("if=none,id=esp,format=raw,file={image}"))
-        .args(["-device", "qemu-xhci"])
-        .args(["-device", "usb-storage,drive=esp,removable=on,bootindex=1"])
+        .args(["-device", boot_xhci])
+        .args(["-device", boot_disk])
         .args(["-device", "virtio-rng-pci"])
         .arg("-debugcon")
         .arg(format!("file:{}", trace.display()))
@@ -260,6 +305,11 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                     evidence?;
                     println!(
                         "qemu-mmio-model|status=PASS|ecam=0xe0000000..=0xefffffff|drhd=0xfed90000..=0xfed9022f|padding=unmapped"
+                    );
+                }
+                if let Some(has_marker) = map_only_marker {
+                    println!(
+                        "q35-mmio-map-only|status=PASS|marker={has_marker}|register_access=none"
                     );
                 }
                 println!(

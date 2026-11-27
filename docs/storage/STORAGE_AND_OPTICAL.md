@@ -3091,19 +3091,35 @@ CPU-visible flat resource map that PCI ECAM is the exact 256 MiB I/O window
 and the Intel remapper registers occupy only their expected byte extent.
 It also rejects any other visible resource in the rest of the remapper's
 4 KiB page. Unrecognized monitor output fails closed. This evidence is for
-the q35/TCG test fixture only: it is not guest firmware evidence, supplies
-no authority to a physical build, and is not yet passed to the guest.
+the q35/TCG test fixture only: it is not guest firmware evidence and supplies
+no authority to a physical build.
 
 Before secondary CPUs start, the DMA probe also reads the live CPU
 protection controls. The requirement is four-level paging, supervisor
-write protection, NX enabled and an architectural UC entry at PAT index 3
-(not UC-minus). A separate tested page-table verifier checks exact read-only
+write protection, NX enabled, and architectural UC at PAT index 3
+(not UC-minus). The loader clears PGE and PCIDE before loading the new root
+to retire firmware translations, and the BSP verifies those bits are off.
+A separate tested page-table verifier checks exact read-only
 supervisor NX device leaves and rejects another mapping of the same physical
 frame anywhere in the four-level hierarchy. It rejects table frames in the
 aperture, unsupported large leaves and excessive walks; it does not examine
 other roots or stale TLB entries. CPU policy and leaf checks do not establish
-that a claimed device resource exists. The signed boot only observes CPU
-policy; it does not install the device leaves or read the registers.
+that a claimed device resource exists. The ordinary DMA diagnostic images
+observe CPU policy but do not install device leaves or access registers.
+
+`mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU` uses separate signed
+test-only profiles and creates disposable media. The same profile must first
+halt before mapping if the private QEMU ACPI marker is absent. With the
+marker, the loader admits only the exact q35 topology, rejects conflicts
+with the firmware memory map or framebuffer, and rechecks the complete
+marker, DMAR, and MCFG snapshots against the final map after firmware exit.
+The protected root maps only the remapper's first page and the ECAM page of
+fixture function `00:1b.0`; the BSP independently checks the exclusive
+read-only, non-executable device leaves. The host runner checks the live
+q35 resource map on the same instance. There are no PCI or remapper register
+accesses and no MRML USB DMA in this test. The marker is an opt-in for the
+isolated model, not authenticated hardware provenance. Do not flash this
+profile or use it in a real hardware test.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

@@ -4016,6 +4016,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         // on the loader's dedicated root and before secondary CPUs start.
         let cpu_mmio_policy = unsafe { mrml_kernel::arch::x86_64::check_boot_mmio_cpu_policy() };
         native_fat32_probe::dma_cpu_policy(cpu_mmio_policy.is_ok());
+        #[cfg(feature = "q35-mmio-probe")]
+        if cpu_mmio_policy.is_err() {
+            halt();
+        }
         initialized
     });
     #[cfg(feature = "uefi-fat32-restart-probe")]
@@ -4034,6 +4038,23 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             }
             Err(_) => halt(),
         }
+    }
+    #[cfg(feature = "q35-mmio-probe")]
+    {
+        if _boot_dma.is_none() || handoff.dma_acpi(encoded).is_none() {
+            halt();
+        }
+        // SAFETY: this is the signed fixture's BSP and no secondary CPU has
+        // started. Loader tables are identity-mapped and not mutated here.
+        let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
+        for mapping in mrml_kernel::arch::x86_64::q35_fixture_probe_mappings()
+            .unwrap_or_else(|_| halt())
+        {
+            active
+                .verify_read_only_mmio_leaves(mapping)
+                .unwrap_or_else(|_| halt());
+        }
+        native_fat32_probe::dma_fixture_leaves_verified();
     }
     #[cfg(feature = "uefi-fat32-restart-probe")]
     let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML KERNEL ENTRY");

@@ -12,6 +12,16 @@ const ECAM: (u64, u64) = (0xe000_0000, 0xefff_ffff);
 const DRHD: (u64, u64) = (0xfed9_0000, 0xfed9_022f);
 const DRHD_PAGE: (u64, u64) = (DRHD.0, DRHD.0 + 4095);
 
+pub(super) fn fixture_acpi_table() -> [u8; 36] {
+    let mut table = [0u8; 36];
+    table[..4].copy_from_slice(b"MQ35");
+    table[4..8].copy_from_slice(&36u32.to_le_bytes());
+    table[8] = 1;
+    table[10..].copy_from_slice(b"MRMLQ3MMIOTEST\x01\x00\x00\x00MRML\x01\x00\x00\x00");
+    table[9] = 0u8.wrapping_sub(table.iter().copied().fold(0u8, u8::wrapping_add));
+    table
+}
+
 pub(super) fn verify_paused_q35_resources(child: &mut Child) -> Result<(), String> {
     let mut stdin = child.stdin.take().ok_or("missing QMP input")?;
     let stdout = child.stdout.take().ok_or("missing QMP output")?;

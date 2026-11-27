@@ -41,6 +41,9 @@ name = "fat32-restart-probe"
 [[feature]]
 name = "boot-dma-probe"
 
+[[feature]]
+name = "q35-mmio-probe"
+
 [[artifact]]
 kind = "lib"
 name = "mrml_uefi"
@@ -104,6 +107,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["uefi-image", "package-boot", "fat32-restart-probe", "boot-dma-probe"]
 name = "boot_dma_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["uefi-image", "package-boot", "fat32-restart-probe", "boot-dma-probe", "q35-mmio-probe"]
+name = "q35_mmio_probe"
 targets = ["UEFI"]
 
 [[feature_set]]

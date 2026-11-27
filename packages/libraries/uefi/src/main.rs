@@ -170,6 +170,8 @@ struct Framebuffer {
 struct Transition {
     root: u64,
     boot_dma: Option<u64>,
+    #[cfg(feature = "q35-mmio-probe")]
+    q35_snapshot: [u8; 64],
     stack_top: u64,
     entry_stack_top: u64,
     double_fault_stack_top: u64,
@@ -1096,6 +1098,11 @@ unsafe fn boot(
         .map_err(|_| LOAD_ERROR)?,
     };
     loader_trace(0xa6);
+    trace.at("ACPI root table");
+    let acpi_root = unsafe { find_acpi_root(system) }.map_err(|_| LOAD_ERROR)?;
+    if acpi_root == 0 {
+        return Err(LOAD_ERROR);
+    }
     trace.at("prepare kernel transition");
     let transition = prepare_transition(
         services,
@@ -1103,6 +1110,8 @@ unsafe fn boot(
         image_address,
         framebuffer,
         prepared_service,
+        #[cfg(feature = "q35-mmio-probe")]
+        acpi_root,
     )?;
     loader_trace(0xa7);
     let kernel_version = verified.artifact().version();
@@ -1111,11 +1120,6 @@ unsafe fn boot(
 
     paint(framebuffer, [0x14, 0x21, 0x35]);
 
-    trace.at("ACPI root table");
-    let acpi_root = unsafe { find_acpi_root(system) }.map_err(|_| LOAD_ERROR)?;
-    if acpi_root == 0 {
-        return Err(LOAD_ERROR);
-    }
     trace.at("rollback policy and installed recovery");
     let legacy_rollback_protected = enforce_rollback_counter(services, kernel_version)?;
     let rollback_protected = prepared_release.is_some() || legacy_rollback_protected;
@@ -1365,6 +1369,19 @@ unsafe fn launch_after_exit(
     } else {
         None
     };
+    #[cfg(feature = "q35-mmio-probe")]
+    {
+        let verified = dma_acpi.and_then(|(dmar, mcfg)| {
+            let marker = mrml_kernel::arch::x86_64::q35_fixture_marker(&mut acpi_memory, acpi_root)
+                .ok()?;
+            q35_mmio_snapshot(dmar, mcfg, &marker, map_bytes, descriptor_size, framebuffer)
+        });
+        if verified != Some(transition.q35_snapshot) {
+            loader_trace(0xed);
+            halt();
+        }
+        loader_trace(0xec);
+    }
     loader_trace(0xb2);
     paint_boot_stage(framebuffer, b"MRML MADT PASS");
     if enter_kernel(
@@ -2337,6 +2354,7 @@ fn prepare_transition(
     image_address: u64,
     framebuffer: Framebuffer,
     service: PreparedService,
+    #[cfg(feature = "q35-mmio-probe")] acpi_root: u64,
 ) -> Result<Transition, Status> {
     let stack_allocation_pages = MAX_X86_64_CPUS
         .checked_mul(PRIVILEGE_STACK_ARENA_PAGES as usize)
@@ -2526,6 +2544,21 @@ fn prepare_transition(
     } else {
         None
     };
+    #[cfg(feature = "q35-mmio-probe")]
+    let q35_snapshot = {
+        let snapshot = prepare_q35_mmio_snapshot(services, acpi_root, framebuffer)
+            .unwrap_or_else(|| {
+                loader_trace(0xed);
+                halt();
+            });
+        for mapping in mrml_kernel::arch::x86_64::q35_fixture_probe_mappings()
+            .map_err(|_| LOAD_ERROR)?
+        {
+            tables.map(mapping).map_err(|_| LOAD_ERROR)?;
+        }
+        loader_trace(0xea);
+        snapshot
+    };
     let mut frame_index = 0usize;
     while frame_index < tables.store().count {
         let frame = tables.store().frames[frame_index];
@@ -2540,12 +2573,123 @@ fn prepare_transition(
     Ok(Transition {
         root: tables.root().get(),
         boot_dma,
+        #[cfg(feature = "q35-mmio-probe")]
+        q35_snapshot,
         stack_top,
         entry_stack_top: stack_layout.entry_top().map_err(|_| LOAD_ERROR)?,
         double_fault_stack_top: stack_layout.double_fault_top().map_err(|_| LOAD_ERROR)?,
         ap_trampoline,
         ap_stack_arena: stack_base,
     })
+}
+
+#[cfg(feature = "q35-mmio-probe")]
+fn prepare_q35_mmio_snapshot(
+    services: &BootServices,
+    acpi_root: u64,
+    framebuffer: Framebuffer,
+) -> Option<[u8; 64]> {
+    use mrml_kernel::arch::x86_64::{AcpiError, copy_dmar, copy_mcfg, q35_fixture_marker};
+    // SAFETY: Boot Services are live on the BSP. The static scratch buffers
+    // have no other users here and references do not escape this function.
+    unsafe {
+        let buffer = MEMORY_MAP.0.get().cast::<MemoryDescriptor>();
+        let mut size = MAP_BYTES;
+        let (mut key, mut stride, mut version) = (0, 0, 0);
+        if (services.get_memory_map)(&mut size, buffer, &mut key, &mut stride, &mut version)
+            != SUCCESS
+            || version != 1
+            || size > MAP_BYTES
+        {
+            return None;
+        }
+        let raw = core::slice::from_raw_parts(buffer.cast::<u8>(), size);
+        let regions = &mut *REGIONS.0.get();
+        let count = normalize_memory_map(
+            raw,
+            stride,
+            framebuffer.base,
+            framebuffer.size as u64,
+            regions,
+        ).ok()?;
+        let mut memory = FirmwareAcpiMemory {
+            regions: &regions[..count],
+        };
+        let mut dmar = [0; MAX_HANDOFF_DMA_ACPI_TABLE_BYTES];
+        let mut mcfg = [0; MAX_HANDOFF_DMA_ACPI_TABLE_BYTES];
+        let dmar_len = copy_dmar(&mut memory, acpi_root, &mut dmar)
+            .map_err(|_| loader_trace(0xe2)).ok()?;
+        let mcfg_len = copy_mcfg(&mut memory, acpi_root, &mut mcfg)
+            .map_err(|_| loader_trace(0xe3)).ok()?;
+        let marker = q35_fixture_marker(&mut memory, acpi_root).map_err(|error| {
+            loader_trace(match error {
+                AcpiError::MissingQ35FixtureMarker => 0xe4,
+                _ => 0xe5,
+            });
+        }).ok()?;
+        q35_mmio_snapshot(
+            &dmar[..dmar_len],
+            &mcfg[..mcfg_len],
+            &marker,
+            raw,
+            stride,
+            framebuffer,
+        )
+    }
+}
+
+#[cfg(feature = "q35-mmio-probe")]
+fn q35_mmio_snapshot(
+    dmar_bytes: &[u8],
+    mcfg_bytes: &[u8],
+    marker: &[u8; 36],
+    raw: &[u8],
+    stride: usize,
+    framebuffer: Framebuffer,
+) -> Option<[u8; 64]> {
+    use mrml_kernel::arch::x86_64::{DmarTopology, McfgTopology, q35_fixture_probe_mappings};
+    let dmar = DmarTopology::<1, 64>::parse(dmar_bytes)
+        .map_err(|_| loader_trace(0xe2)).ok()?;
+    let unit = dmar.units().next()?;
+    let mcfg = McfgTopology::<1>::parse(mcfg_bytes)
+        .map_err(|_| loader_trace(0xe3)).ok()?;
+    let allocation = mcfg.allocations().next()?;
+    let exact_requesters = dmar.scopes(unit).filter(|scope| {
+        scope.scope_type == 1
+            && scope.start_bus == 0
+            && scope.path_len == 1
+            && scope.path[0].device == 0x1b
+            && scope.path[0].function == 0
+    }).count();
+    if unit.segment != 0
+        || unit.include_all
+        || exact_requesters != 1
+        || unit.register_base.get() != 0xfed9_0000
+        || dmar.reserved_regions().next().is_some()
+        || allocation.segment != 0
+        || allocation.start_bus != 0
+        || allocation.end_bus != 255
+        || allocation.physical_start() != 0xe000_0000
+    {
+        loader_trace(0xe6);
+        return None;
+    }
+    for mapping in q35_fixture_probe_mappings().ok()? {
+        if !q35_fixture_has_no_memory_conflict(
+            raw,
+            stride,
+            mapping.physical_start().get(),
+            (framebuffer.base, framebuffer.size as u64),
+        ) {
+            loader_trace(0xe7);
+            return None;
+        }
+    }
+    let mut digest = Sha3_512::new();
+    digest.update(marker);
+    digest.update(dmar_bytes);
+    digest.update(mcfg_bytes);
+    Some(digest.finalize())
 }
 
 fn map_containing_identity(
