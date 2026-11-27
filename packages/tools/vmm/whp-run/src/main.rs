@@ -4057,6 +4057,13 @@ fn application_main() -> Result<()> {
                     }
                     cleanup_stage += 1;
                     if value == 0x40 {
+                        let retired_recovered_domains = installed_total_runtime
+                            .take()
+                            .ok_or_else(|| anyhow!("missing recovered WHP runtime owner"))?
+                            .withdraw_for_shutdown()
+                            .map_err(|error| {
+                                anyhow!("WHP recovered runtime withdrawal failed: {:?}", error)
+                            })?;
                         guest.finish()?;
                         let (
                             mut memory,
@@ -4273,18 +4280,9 @@ fn application_main() -> Result<()> {
                             .map_err(|error| {
                                 anyhow!("component CPU root retirement failed: {:?}", error)
                             })?;
-                        let admission = installed_total_runtime
-                            .as_ref()
-                            .map(RecoveredDeploymentTotalRuntime::admission)
-                            .or_else(|| isolation_admission.as_ref().map(|value| &**value))
-                            .ok_or_else(|| anyhow!("missing component isolation admission"))?;
-                        let report = admission.total_microvm_report();
                         println!(
-                            "isolation|requested=total-microvm|status=satisfied|backend=whp|policy_generation={}|eligible={}|microvm={}|native_fallback={}",
-                            admission.policy_generation(),
-                            report.running_microvm_eligible,
-                            report.running_in_microvm,
-                            report.native_fallback
+                            "isolation-shutdown|status=PASS|backend=whp|runtime=withdrawn|retired_domains={}",
+                            retired_recovered_domains
                         );
                         println!(
                             "verified exact-generation ZIM/Zstd component data path and lifecycle cleanup under WHP: cpu_runtime={}us logical_cpu=0 affinity=host-enforced priority=host-normal verify={}us prepare={}us execute={}us total={}us",
@@ -4886,11 +4884,7 @@ fn application_main() -> Result<()> {
             return Err(anyhow!("restarted WHP service proof mismatch: {:?}", exit));
         }
         guest.finish()?;
-        if let Some(admission) = installed_total_runtime
-            .as_ref()
-            .map(RecoveredDeploymentTotalRuntime::admission)
-            .or_else(|| isolation_admission.as_ref().map(|value| &**value))
-        {
+        if let Some(admission) = isolation_admission.as_ref().map(|value| &**value) {
             let report = admission.total_microvm_report();
             println!(
                 "isolation|requested=total-microvm|status=satisfied|backend=whp|policy_generation={}|eligible={}|microvm={}|native_fallback={}",

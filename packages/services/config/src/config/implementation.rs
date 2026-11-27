@@ -4111,6 +4111,20 @@ impl<
     pub const fn proof(&self) -> &mrml_kernel::TotalMicrovmRuntimeProof {
         self.runtime.proof()
     }
+
+    /// Withdraws the complete recovered runtime before its backend endpoint
+    /// owners are stopped. The result is only a logical retirement count:
+    /// it cannot authorize a route, a restart, or claim backend destruction.
+    pub fn withdraw_for_shutdown(self) -> Result<usize, mrml_kernel::IsolationLaunchError> {
+        let RecoveredInstalledTotalRuntime { mut total, proof: _ } = self.runtime;
+        let mut retired = 0;
+        loop {
+            let next = total.admission().running().next().map(|entry| entry.domain());
+            let Some(domain) = next else { return Ok(retired) };
+            total.admission_mut().retire(domain)?;
+            retired += 1;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

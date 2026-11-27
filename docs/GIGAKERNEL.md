@@ -2466,6 +2466,16 @@ are injected at the host adapter; no backend-native stop failure was forced.
 The release-mode component probes still use one domain for the existing ZIM
 and Zstd pair. This change does not alter the Chromebook boot path.
 
+Controlled shutdown of a recovered component probe now consumes the complete
+runtime authorization and withdraws every running admission before stopping
+the guest owner. KVM and WHP report readiness during startup and a distinct
+`isolation-shutdown` event after the hosted cleanup path succeeds, rather
+than reporting the stopped guest as running. Withdrawal produces only a
+count of retired logical admissions, never a backend destruction proof or a
+restart authority. The explicit live KVM test withdraws both admissions,
+then retires the exact endpoints. This does not add crash supervision,
+installed-media service restarts, or physical device/DMA teardown.
+
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and
 operation-specific unused fields must be zero, sequences are exact and advance

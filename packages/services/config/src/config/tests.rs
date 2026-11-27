@@ -460,20 +460,23 @@ mod tests {
     #[test]
     fn hosted_recovery_distinct_policy_binds_every_release_member_to_its_own_domain() {
         let (release, release_length, key_id, _) = two_domain_release_records();
-        let mut release_output = [0; mrml_package_format::MAX_SYSTEM_RELEASE_BYTES];
         let (handoff_bytes, handoff_length) = hosted_total_handoff(8, Some([0x51; 16]), 14);
         let handoff = BootHandoff::decode(&handoff_bytes[..handoff_length], |_| {}).unwrap();
-        // SAFETY: this is the helper's private controlled hosted fixture. It
-        // establishes no owner presence, durable recovery, or backend guest.
-        let total = unsafe {
-            hosted_recovery_probe::recover_distinct_total_control_plane(
-                &handoff,
-                &release[..release_length],
-                &key_id,
-                &mut release_output,
-            )
-        }
-        .unwrap();
+        let recover = || {
+            let mut release_output = [0; mrml_package_format::MAX_SYSTEM_RELEASE_BYTES];
+            // SAFETY: the helper's private controlled hosted fixture does not
+            // establish owner presence, durable recovery, or a backend guest.
+            unsafe {
+                hosted_recovery_probe::recover_distinct_total_control_plane(
+                    &handoff,
+                    &release[..release_length],
+                    &key_id,
+                    &mut release_output,
+                )
+            }
+            .unwrap()
+        };
+        let total = recover();
         let entries: std::vec::Vec<_> = total
             .installed_admission()
             .release()
@@ -495,6 +498,39 @@ mod tests {
             total.authorize_runtime(),
             Err(mrml_kernel::TotalMicrovmRuntimeError::RequiredDomainMissing)
         ));
+
+        // A recovered runtime that did successfully publish a complete set
+        // can be consumed for shutdown, but cannot return a proof or a starter.
+        let mut total = recover();
+        let bounds = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::Microvm,
+            true,
+            true,
+        )
+        .unwrap();
+        let bindings = [
+            (hosted_recovery_probe::HOSTED_TOTAL_COMPONENT_DOMAIN, 5),
+            (hosted_recovery_probe::HOSTED_TOTAL_SECONDARY_DOMAIN, 6),
+        ]
+        .map(|(domain, version)| {
+            TotalServicePreparationBinding::new(
+                bounds,
+                IsolationServiceIdentity::new(
+                    domain, ObjectId(version), 1, version, TotalMicrovmClass::MicrovmEligible,
+                )
+                .unwrap(),
+            )
+        });
+        let prepared = total.prepare_complete_service_set(&bindings).unwrap();
+        let (runtime, routes) = total
+            .start_prepared_services(prepared, |spec| Ok::<_, ()>(spec.domain()), |_, _| Ok(()))
+            .unwrap();
+        assert_eq!(runtime.proof().running_in_microvm(), 2);
+        assert_eq!(runtime.withdraw_for_shutdown(), Ok(2));
+        // Logical withdrawal does not masquerade as physical teardown.
+        assert_eq!(routes.into_endpoints().iter().flatten().count(), 2);
     }
 
     const SYSTEM_GENERATION: u64 = 108;

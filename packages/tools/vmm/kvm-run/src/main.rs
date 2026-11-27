@@ -5182,6 +5182,17 @@ fn application_main() -> Result<()> {
         }
         _ => {}
     }
+    let retired_recovered_domains = if component_service_mode {
+        Some(
+            installed_total_runtime
+                .take()
+                .ok_or_else(|| anyhow!("missing recovered KVM runtime owner"))?
+                .withdraw_for_shutdown()
+                .map_err(|error| anyhow!("KVM recovered runtime withdrawal failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
     guest.finish()?;
     if let Some((
         mut memory,
@@ -5357,11 +5368,12 @@ fn application_main() -> Result<()> {
             cpu_runtime_total
         );
     }
-    if let Some(admission) = installed_total_runtime
-        .as_ref()
-        .map(RecoveredDeploymentTotalRuntime::admission)
-        .or_else(|| isolation_admission.as_ref().map(|value| &**value))
-    {
+    if let Some(retired) = retired_recovered_domains {
+        println!(
+            "isolation-shutdown|status=PASS|backend=kvm|runtime=withdrawn|retired_domains={}",
+            retired
+        );
+    } else if let Some(admission) = isolation_admission.as_ref().map(|value| &**value) {
         let report = admission.total_microvm_report();
         println!(
             "isolation|requested=total-microvm|status=satisfied|backend=kvm|policy_generation={}|eligible={}|microvm={}|native_fallback={}",
@@ -6145,6 +6157,7 @@ mod tests {
                 value: 0x53,
             }
         );
+        assert_eq!(runtime.withdraw_for_shutdown().unwrap(), 2);
         first.revoke_microvm(&live).unwrap();
         // The other real VM continues independently after retirement.
         assert_eq!(
