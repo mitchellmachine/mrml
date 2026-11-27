@@ -92,7 +92,7 @@ fn inspect_qmp(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":77}\n",
         )?;
-        validate_fixture_bar(&read_monitor(&mut *reader, 77)?, bar)?;
+        validate_fixture_bar(&read_monitor(&mut *reader, 77)?, bar, isolated)?;
         Some(sample_xhci_state(stdin, reader, bar)?)
     } else {
         None
@@ -294,10 +294,10 @@ pub(super) fn register_snapshot(
     if data.first() == Some(&0xdb) {
         return Err("q35 guest rejected the VT-d extent or exact xHCI PCI identity".into());
     }
-    if data.len() < 50 {
+    if data.len() < 62 {
         return Ok(None);
     }
-    if data.len() != 50 || data[49] != 0xda {
+    if data.len() != 62 || data[61] != 0xda {
         return Err("wrong q35 fixed-register report length or trailer".into());
     }
     let long = |at| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
@@ -311,6 +311,15 @@ pub(super) fn register_snapshot(
         || (!isolated && (bridge_command != 0 || bridge_buses != 0))
     {
         return Err("unexpected signed xHCI bridge or remapper state".into());
+    }
+    let guest_xhci = [long(49), long(53), long(57)];
+    let expected_xhci = if isolated {
+        [state.cap0, state.command, state.status]
+    } else {
+        [0; 3]
+    };
+    if guest_xhci != expected_xhci {
+        return Err("signed guest xHCI operational state disagrees with the paused host".into());
     }
     let bar = state.bar;
     let (bar0, bar1) = (long(35), long(39));
@@ -328,7 +337,7 @@ pub(super) fn register_snapshot(
         return Err("q35 fixed-register report disagrees with the exact fixture".into());
     }
     Ok(Some(format!(
-        "q35-read-only-registers|status=PASS|ver={ver:#x}|cap={cap:#018x}|ecap={ecap:#018x}|gsts={gsts:#010x}|pci={pci:#010x}|command={command:#06x}|class_revision={class:#010x}|bme={}|bar0={:#x}..={:#x}|xhci_cap0={:#010x}|xhci_usbcmd={:#010x}|xhci_usbsts={:#010x}|xhci_run={}|xhci_halted={}|isolated={isolated}|bridge_command={bridge_command:#06x}|bridge_buses={bridge_buses:#010x}",
+        "q35-read-only-registers|status=PASS|ver={ver:#x}|cap={cap:#018x}|ecap={ecap:#018x}|gsts={gsts:#010x}|pci={pci:#010x}|command={command:#06x}|class_revision={class:#010x}|bme={}|bar0={:#x}..={:#x}|xhci_cap0={:#010x}|xhci_usbcmd={:#010x}|xhci_usbsts={:#010x}|xhci_run={}|xhci_halted={}|isolated={isolated}|bridge_command={bridge_command:#06x}|bridge_buses={bridge_buses:#010x}|guest_xhci_match={isolated}",
         command & (1 << 2) != 0,
         bar.start,
         bar.end,
@@ -485,30 +494,51 @@ fn fixture_bar(pci: &str, isolated: bool) -> Result<FixtureBar, String> {
     bar.ok_or("missing assigned fixture BAR0".into())
 }
 
-fn validate_fixture_bar(map: &str, bar: FixtureBar) -> Result<(), String> {
-    let mut observed = [false; 2];
-    let expected = [(0, 0x3f, "capabilities"), (0x40, 0x43f, "operational")];
+fn validate_fixture_bar(map: &str, bar: FixtureBar, isolated: bool) -> Result<(), String> {
+    const OWNER: &str = " owner:{dev path=/machine/peripheral/mrml_probe_xhci/xhci-core}";
+    const REGIONS: &[(u64, u64, &str)] = &[
+        (0, 0x3f, "capabilities"),
+        (0x40, 0x43f, "operational"),
+        (0x440, 0x44f, "usb3 port #1"),
+        (0x450, 0x45f, "usb3 port #2"),
+        (0x460, 0x46f, "usb3 port #3"),
+        (0x470, 0x47f, "usb3 port #4"),
+        (0x480, 0x48f, "usb2 port #1"),
+        (0x490, 0x49f, "usb2 port #2"),
+        (0x4a0, 0x4af, "usb2 port #3"),
+        (0x4b0, 0x4bf, "usb2 port #4"),
+    ];
+    if isolated && bar.start != 0x8120_0000 {
+        return Err("changed isolated model BAR0 base".into());
+    }
+    let (expected, last_byte) = if isolated {
+        (REGIONS, 0xfff)
+    } else {
+        (&REGIONS[..2], 0x43f)
+    };
+    let mut observed = 0usize;
     for line in cpu_ranges(map)? {
         let (start, end, kind, description) = flat_range(line)?;
-        if start > bar.start + 0x43f || end < bar.start {
+        if start > bar.start + last_byte || end < bar.start {
             continue;
         }
         let Some(index) = expected.iter().position(|&(lo, hi, name)| {
             (start, end) == (bar.start + lo, bar.start + hi)
                 && kind == "0, i/o"
-                && description.strip_prefix(name)
-                    == Some(" owner:{dev path=/machine/peripheral/mrml_probe_xhci/xhci-core}")
+                && description.strip_prefix(name) == Some(OWNER)
         }) else {
             return Err(format!(
                 "unexpected CPU-visible xHCI register range: {line}"
             ));
         };
-        if std::mem::replace(&mut observed[index], true) {
-            return Err("duplicate xHCI capability or operational register range".into());
+        let bit = 1usize << index;
+        if observed & bit != 0 {
+            return Err("duplicate xHCI register range".into());
         }
+        observed |= bit;
     }
-    if observed != [true; 2] {
-        return Err("missing CPU-visible xHCI capability or operational register range".into());
+    if observed != (1usize << expected.len()) - 1 {
+        return Err("missing CPU-visible xHCI register range".into());
     }
     Ok(())
 }
@@ -725,6 +755,35 @@ mod tests {
     }
 
     #[test]
+    fn isolated_bar_proof_covers_all_port_extents_and_rejects_padding_overlap() {
+        let bar = FixtureBar {
+            start: 0x8120_0000,
+            end: 0x8120_3fff,
+        };
+        let mut page = XHCI_MAP.replace("000000c000004", "0000000081200");
+        for port in 0..8 {
+            let start = bar.start + 0x440 + 16 * port;
+            let protocol = if port < 4 { 3 } else { 2 };
+            let number = port % 4 + 1;
+            page.push_str(&format!(
+                "  {start:016x}-{:016x} (prio 0, i/o): usb{protocol} port #{number} owner:{{dev path=/machine/peripheral/mrml_probe_xhci/xhci-core}}\n",
+                start + 15,
+            ));
+        }
+        let exact = format!("{VIEW}{page}");
+        assert!(validate_fixture_bar(&exact, bar, true).is_ok());
+        assert!(
+            validate_fixture_bar(&exact.replace("usb3 port #4", "usb2 port #4"), bar, true)
+                .is_err()
+        );
+        assert!(validate_fixture_bar(&exact.replace("8120049f", "8120049e"), bar, true).is_err());
+        let unexpected =
+            format!("{exact} 0000000081200ff0-0000000081200fff (prio 1, ram): conflict\n");
+        assert!(validate_fixture_bar(&unexpected, bar, true).is_err());
+        assert!(validate_fixture_bar(&format!("{exact}{page}"), bar, true).is_err());
+    }
+
+    #[test]
     fn fixed_xhci_reads_stop_on_an_unproven_geometry_or_bad_reply() {
         let bar = fixture_bar(PCI, false).unwrap();
         let cap = "{\"return\": \"c000004000: 0x01000040\\r\\n\", \"id\": 78}\n";
@@ -779,7 +838,7 @@ mod tests {
             &[0],
             &0x4004_u32.to_le_bytes(),
             &0xc0_u32.to_le_bytes(),
-            &[0; 6],
+            &[0; 18],
             &[0xda],
         ]
         .concat();
@@ -795,7 +854,7 @@ mod tests {
                 .unwrap()
                 .contains("|bme=true")
         );
-        for at in [0, 1, 2, 26, 35, 36, 37, 41, 45, 48, 51] {
+        for at in [0, 1, 2, 26, 35, 36, 37, 41, 45, 48, 51, 55, 60, 63] {
             let mut wrong = data.clone();
             wrong[at] ^= 0xff;
             assert!(register_snapshot(&prefix, &wrong, state, false).is_err());

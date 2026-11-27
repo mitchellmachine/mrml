@@ -229,14 +229,14 @@ pub(super) fn dma_fixture_rendezvous() -> bool {
     false
 }
 
-/// Samples only aligned fixed RO registers of the two verified fixture pages.
+/// Samples only aligned fixed RO registers of the verified fixture pages.
 /// The caller must keep the verified root active throughout these reads.
 #[cfg(feature = "q35-mmio-probe")]
 pub(super) unsafe fn dma_fixture_register_snapshot(
-    mappings: [Option<mrml_kernel::arch::x86_64::Mapping>; 3],
+    mappings: [Option<mrml_kernel::arch::x86_64::Mapping>; 4],
 ) {
     use mrml_kernel::arch::x86_64::VtdRegisterLayout;
-    let [Some(drhd), Some(ecam), bridge] =
+    let [Some(drhd), Some(ecam), bridge, xhci] =
         mappings.map(|mapping| mapping.map(|page| page.virtual_start().get() as usize))
     else {
         trace(0xdb);
@@ -297,6 +297,35 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
             (command, buses)
         }
     };
+    let (xhci_cap0, xhci_command, xhci_status) = match (bridge, xhci) {
+        (None, None) => (0u32, 0u32, 0u32),
+        (Some(_), Some(xhci)) => {
+            if bar0 != 0x8120_0004 || bar1 != 0 {
+                trace(0xdb);
+                return;
+            }
+            // SAFETY: the signed isolated fixture checked the exact active
+            // RO/NX UC BAR page and a matching live PCI assignment. The host
+            // verified this entire page before releasing the sole boot CPU.
+            let (cap0, command, status) = unsafe {
+                let cap0 = core::ptr::read_volatile(xhci as *const u32);
+                if cap0 != 0x0100_0040 {
+                    trace(0xdb);
+                    return;
+                }
+                (
+                    cap0,
+                    core::ptr::read_volatile((xhci + 0x40) as *const u32),
+                    core::ptr::read_volatile((xhci + 0x44) as *const u32),
+                )
+            };
+            (cap0, command, status)
+        }
+        _ => {
+            trace(0xdb);
+            return;
+        }
+    };
     for bytes in [
         &version.to_le_bytes()[..],
         &cap.to_le_bytes(),
@@ -310,6 +339,9 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         &bar1.to_le_bytes(),
         &bridge_command.to_le_bytes(),
         &bridge_buses.to_le_bytes(),
+        &xhci_cap0.to_le_bytes(),
+        &xhci_command.to_le_bytes(),
+        &xhci_status.to_le_bytes(),
     ] {
         for &byte in bytes {
             trace(byte);

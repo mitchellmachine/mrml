@@ -3113,8 +3113,8 @@ halt before mapping if the private QEMU ACPI marker is absent. With the
 marker, the loader admits only the exact q35 topology, rejects conflicts
 with the firmware memory map or framebuffer, and rechecks the complete
 marker, DMAR, and MCFG snapshots against the final map after firmware exit.
-The protected root maps only the remapper's first page and the ECAM page of
-fixture function `00:1b.0`; the BSP independently checks the exclusive
+In the control case, the protected root maps only the remapper's first
+page and the ECAM page of fixture function `00:1b.0`; the BSP independently checks the exclusive
 read-only, non-executable device leaves. The BSP waits at a bounded
 rendezvous before AP startup. The host runner pauses the same instance
 and checks the exact live q35 memory map and dedicated emulated UART. For
@@ -3136,8 +3136,8 @@ fixed VT-d version, capability, extended capability and global status
 registers, and the exact xHCI function's PCI identity, command, class,
 header type and assigned BAR0 pair. The guest BAR base must match the
 paused host's observation. Neither side writes a BAR sizing probe, and the
-guest does not map or read through the BAR. The guest checks the capability-derived VT-d
-arrays against the proven byte extent without reading them. The report
+control guest does not map or read through the BAR. The guest checks the
+capability-derived VT-d arrays against the proven byte extent without reading them. The report
 includes the observed bus-master bit, not an ownership or shutdown proof.
 There are no device register writes or MRML USB DMA in this test. The marker
 is an opt-in for the isolated model, not authenticated hardware provenance.
@@ -3147,9 +3147,15 @@ USB and firmware devices stay on the bypassed default bus; test xHCI
 remapped host bridge. The signed boot checks that DMAR describes precisely
 that sub-hierarchy plus the IOAPIC with interrupt remapping disabled, with
 no include-all unit or reserved ranges. It independently verifies the
-three read-only pages and reads the exact root port identity, bus numbers
-and inherited command bits after the valid release. The paused host also
-checks the live QEMU bypass settings and exact PCI inventory of the
+four read-only pages and reads the exact root port identity, bus numbers
+and inherited command bits after the valid release. Only the isolated
+case maps the first BAR page. Before release the host checks all ten
+rendered ranges on that page (capabilities, operational registers and
+eight port ranges) and rejects overlap in the unmapped tail. After release
+the guest requires the exact live PCI BAR assignment before reading
+CAPLENGTH, USBCMD and USBSTS, and the host rejects any disagreement with
+its paused sample. There are no port, runtime or doorbell register reads
+or writes by the guest. The paused host also checks the live QEMU bypass settings and exact PCI inventory of the
 remapped branch before accepting the signed report. The wrong-release
 case stops before touching PCI or VT-d registers in the guest. This shows
 the intended remapping scope and identifies the inherited firmware state;

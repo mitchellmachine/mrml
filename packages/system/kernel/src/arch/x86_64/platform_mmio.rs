@@ -69,11 +69,11 @@ impl Q35FixtureTopology {
     }
 }
 
-/// Exact read-only pages, in DRHD / endpoint / optional bridge order.
+/// Exact read-only pages in DRHD / endpoint / bridge / BAR0 order.
 /// These are addresses in the signed model fixture, not physical authority.
 pub fn q35_fixture_probe_mappings(
     topology: Q35FixtureTopology,
-) -> Result<[Option<Mapping>; 3], PlatformMmioError> {
+) -> Result<[Option<Mapping>; 4], PlatformMmioError> {
     let page = |virtual_start, physical| {
         Mapping::new(
             VirtAddr::new(virtual_start).map_err(|_| PlatformMmioError::InvalidRange)?,
@@ -93,6 +93,10 @@ pub fn q35_fixture_probe_mappings(
         Some(page(0xffff_d800_0010_0000, 0xfed9_0000)?),
         Some(page(0xffff_d800_0010_1000, endpoint)?),
         bridge,
+        match topology {
+            Q35FixtureTopology::Control => None,
+            Q35FixtureTopology::Isolated => Some(page(0xffff_d800_0010_3000, 0x8120_0000)?),
+        },
     ])
 }
 
@@ -129,7 +133,7 @@ mod q35_fixture_tests {
         let pages = q35_fixture_probe_mappings(Q35FixtureTopology::Isolated).unwrap();
         assert_eq!(
             pages.map(|page| page.unwrap().physical_start().get()),
-            [0xfed9_0000, 0xe410_0000, 0xe400_0000]
+            [0xfed9_0000, 0xe410_0000, 0xe400_0000, 0x8120_0000]
         );
         assert!(
             pages
