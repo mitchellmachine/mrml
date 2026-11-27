@@ -132,7 +132,7 @@ packages/system/kernel/src/arch/x86_64/context.rs	3	2	0	1	0	3	Baseline-admitted 
 packages/system/kernel/src/arch/x86_64/descriptors.rs	29	11	0	0	0	29	Baseline-admitted kernel, virtualization, mapping, or device boundary; count growth is blocked pending focused file-level invariant review.
 packages/system/kernel/src/arch/x86_64/ept.rs	5	2	1	0	0	4	Baseline-admitted kernel, virtualization, mapping, or device boundary; count growth is blocked pending focused file-level invariant review.
 packages/system/kernel/src/arch/x86_64/local_apic.rs	41	9	0	0	0	41	Baseline-admitted kernel, virtualization, mapping, or device boundary; count growth is blocked pending focused file-level invariant review.
-packages/system/kernel/src/arch/x86_64/page_table.rs	24	12	2	0	0	19	X86 page-table boundary; current count includes reviewed task-local device additions, and further growth remains blocked pending file-wide review.
+packages/system/kernel/src/arch/x86_64/page_table.rs	27	14	2	0	0	19	X86 page-table carry-forward debt; boot DMA adds a fully preflighted exclusive RAM clear, its bounded volatile word writer and guarded RAM fixture.
 packages/system/kernel/src/arch/x86_64/service_space.rs	2	2	0	0	0	2	Baseline-admitted kernel, virtualization, mapping, or device boundary; count growth is blocked pending focused file-level invariant review.
 packages/system/kernel/src/arch/x86_64/topology.rs	1	0	0	0	0	0	Baseline-admitted kernel, virtualization, mapping, or device boundary; count growth is blocked pending focused file-level invariant review.
 packages/system/kernel/src/arch/x86_64/trap.rs	3	1	0	0	0	3	Baseline-admitted kernel, virtualization, mapping, or device boundary; count growth is blocked pending focused file-level invariant review.

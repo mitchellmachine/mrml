@@ -56,7 +56,7 @@ pub use local_apic::{
 pub use page_table::{
     AccountedPageTableStoreError, AccountedPreallocatedPageTableStore, ActiveLeaf,
     ActiveMappingRevocationError, ActivePageTables, ActiveServiceMappingRevoker, ActiveUserBuffer,
-    InactivePageTableMappingBackend, InactivePageTableMappingError, PageTableBuildError,
+    InactivePageTableMappingBackend, InactivePageTableMappingError, InitializedBootDma, PageTableBuildError,
     PageTableBuilder, PageTableStore, PreallocatedPageTableStore,
 };
 pub use pe_mapping::{PeMappingError, map_pe_image};

@@ -5,9 +5,10 @@ use super::{
     UserBufferError, VirtAddr,
 };
 use crate::{
-    Capability, CapabilitySpace, GuestMappingRevoker, MemoryBackingKind, MemoryMappingBackend,
-    MemoryMappingBackendRequest, MemoryMappingRevocationBackend, MemoryObjectId, MemoryPoolId,
-    MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE, PhysAddr, Rights,
+    BootDmaReservation, Capability, CapabilitySpace, GuestMappingRevoker, MemoryBackingKind,
+    MemoryMappingBackend, MemoryMappingBackendRequest, MemoryMappingRevocationBackend,
+    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
+    PhysAddr, Rights,
 };
 
 const LEAF_ACCESSED_DIRTY: u64 = (1 << 5) | (1 << 6);
@@ -1078,6 +1079,30 @@ pub struct ActivePageTables {
     root: PhysAddr,
 }
 
+/// Boot-lifetime RAM after a complete CPU mapping check and initial zeroing.
+/// This is not a runtime pin, a live mapping guard or permission for device DMA.
+#[must_use]
+#[derive(Debug, Eq, PartialEq)]
+pub struct InitializedBootDma {
+    reservation: BootDmaReservation,
+    root: PhysAddr,
+    mapping: Mapping,
+}
+
+impl InitializedBootDma {
+    pub const fn reservation(&self) -> &BootDmaReservation {
+        &self.reservation
+    }
+
+    pub const fn root(&self) -> PhysAddr {
+        self.root
+    }
+
+    pub const fn mapping(&self) -> Mapping {
+        self.mapping
+    }
+}
+
 const fn interrupts_disabled(flags: u64) -> bool {
     flags & (1 << 9) == 0
 }
@@ -1259,6 +1284,43 @@ impl ActivePageTables {
         )
     }
 
+    /// Checks the exact preinstalled supervisor RW/NX mapping and clears all
+    /// of the reserved RAM before returning it as initialized.
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep this root current and its table access valid as
+    /// required by `current`. The checked translations must be live (no stale
+    /// TLB entries) and stable, and the entire range must be exclusively
+    /// writable, naturally aligned normal RAM with no conflicting CPU
+    /// aliases, Rust references or DMA accesses throughout the clear. The
+    /// platform must establish the RAM cache type independently of the PTE
+    /// check. Later device publication has its own coherency and ordering rules.
+    pub unsafe fn initialize_boot_dma(
+        &mut self,
+        expected_root: PhysAddr,
+        virtual_start: VirtAddr,
+        reservation: BootDmaReservation,
+    ) -> Result<InitializedBootDma, PageTableBuildError> {
+        initialize_boot_dma_from_store(
+            &IdentityMappedPageTables,
+            self.root,
+            expected_root,
+            virtual_start,
+            reservation,
+            |mapping| {
+                // SAFETY: all leaves have been checked; their current,
+                // exclusive normal-RAM translations are the caller's contract.
+                unsafe {
+                    zero_boot_dma_words(
+                        mapping.virtual_start().get() as *mut u64,
+                        (mapping.pages() * (PAGE_SIZE / 8)) as usize,
+                    );
+                }
+            },
+        )
+    }
+
     /// Validates every active leaf touched by a bounded user copy. The caller
     /// must keep page-table mutation excluded through the subsequent copy.
     pub fn resolve_user_buffer(
@@ -1347,6 +1409,42 @@ impl ActivePageTables {
         let mut tables = PageTableBuilder::from_existing_root(IdentityMappedPageTables, self.root);
         tables.unmap_exact(expected)?;
         invalidate_mapping(expected)
+    }
+}
+
+fn initialize_boot_dma_from_store<S: PageTableStore>(
+    store: &S,
+    root: PhysAddr,
+    expected_root: PhysAddr,
+    virtual_start: VirtAddr,
+    reservation: BootDmaReservation,
+    zero: impl FnOnce(Mapping),
+) -> Result<InitializedBootDma, PageTableBuildError> {
+    let mapping = Mapping::new(
+        virtual_start,
+        reservation.physical_base(),
+        u64::from(reservation.pages()),
+        PagePermissions::KERNEL_READ_WRITE,
+    )
+    .map_err(|_| PageTableBuildError::MappingMismatch)?;
+    verify_active_mapping_from_store(store, root, expected_root, mapping)?;
+    zero(mapping);
+    Ok(InitializedBootDma {
+        reservation,
+        root,
+        mapping,
+    })
+}
+
+/// # Safety
+///
+/// The aligned pointer must cover `words` exclusively writable normal RAM
+/// words for the duration of the clear.
+unsafe fn zero_boot_dma_words(start: *mut u64, words: usize) {
+    for word in 0..words {
+        // SAFETY: the caller guarantees the whole extent; one aligned word
+        // is written per iteration and the initialization cannot be elided.
+        unsafe { start.wrapping_add(word).write_volatile(0) };
     }
 }
 
@@ -1989,6 +2087,121 @@ mod tests {
             },
             Err(ActiveMappingRevocationError::WrongRoot)
         ));
+    }
+
+    #[test]
+    fn boot_dma_zeroes_the_complete_verified_extent_only() {
+        let reservation = boot_dma_test_reservation();
+        let virtual_start = VirtAddr::new(0xffff_9000_0000_0000).unwrap();
+        let mapping = Mapping::new(
+            virtual_start,
+            reservation.physical_base(),
+            2,
+            PagePermissions::KERNEL_READ_WRITE,
+        )
+        .unwrap();
+        let mut builder = PageTableBuilder::new(Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        })
+        .unwrap();
+        builder.map(mapping).unwrap();
+        let root = builder.root();
+        let mut memory = [u64::MAX; 1026];
+        let initialized = initialize_boot_dma_from_store(
+            builder.store(),
+            root,
+            root,
+            virtual_start,
+            reservation,
+            |checked| {
+                assert_eq!(checked, mapping);
+                let backing = &mut memory[1..1025];
+                // SAFETY: the test owns the writable aligned slice for its
+                // full length, and the guard words lie outside the slice.
+                unsafe { zero_boot_dma_words(backing.as_mut_ptr(), backing.len()) };
+            },
+        )
+        .unwrap();
+        assert_eq!(initialized.reservation().bytes(), 2 * PAGE_SIZE);
+        assert_eq!(initialized.root(), root);
+        assert_eq!(initialized.mapping(), mapping);
+        assert!(memory[1..1025].iter().all(|&word| word == 0));
+        assert_eq!(memory[0], u64::MAX);
+        assert_eq!(memory[1025], u64::MAX);
+    }
+
+    fn boot_dma_test_reservation() -> BootDmaReservation {
+        use crate::{FrameAllocator, MemoryKind, MemoryMap, MemoryRegion};
+
+        let memory =
+            [MemoryRegion::new(PhysAddr::new(0x40_0000).unwrap(), 2, MemoryKind::Free).unwrap()];
+        FrameAllocator::new(MemoryMap::new(&memory).unwrap())
+            .reserve_boot_dma(2, 32)
+            .unwrap()
+    }
+
+    #[test]
+    fn boot_dma_rejects_bad_root_or_later_leaf_before_any_clear() {
+        let virtual_start = VirtAddr::new(0xffff_9000_0000_0000).unwrap();
+        for case in 0..5 {
+            let reservation = boot_dma_test_reservation();
+            let physical_start = reservation.physical_base();
+            let mut builder = PageTableBuilder::new(Tables {
+                pages: [[0; 512]; 8],
+                used: 0,
+            })
+            .unwrap();
+            builder
+                .map(
+                    Mapping::new(
+                        virtual_start,
+                        physical_start,
+                        1,
+                        PagePermissions::KERNEL_READ_WRITE,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            if case != 0 {
+                let second_physical =
+                    PhysAddr::new(physical_start.get() + if case == 1 { 3 } else { 1 } * PAGE_SIZE)
+                        .unwrap();
+                let second_permissions = match case {
+                    2 => PagePermissions::KERNEL_READ,
+                    3 => PagePermissions::KERNEL_READ_EXECUTE,
+                    _ => PagePermissions::KERNEL_READ_WRITE,
+                };
+                builder
+                    .map(
+                        Mapping::new(
+                            VirtAddr::new(virtual_start.get() + PAGE_SIZE).unwrap(),
+                            second_physical,
+                            1,
+                            second_permissions,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            let root = builder.root();
+            let expected_root = if case == 4 {
+                PhysAddr::new(root.get() + PAGE_SIZE).unwrap()
+            } else {
+                root
+            };
+            assert_eq!(
+                initialize_boot_dma_from_store(
+                    builder.store(),
+                    root,
+                    expected_root,
+                    virtual_start,
+                    reservation,
+                    |_| panic!("must preflight the complete mapping before clearing"),
+                ),
+                Err(PageTableBuildError::MappingMismatch),
+            );
+        }
     }
 
     #[test]

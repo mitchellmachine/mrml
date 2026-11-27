@@ -3025,8 +3025,12 @@ pages from validated free RAM, excluding physical page zero and honoring the
 verified host address width supplied by the caller. The allocator is
 monotonic: dropping the reservation does not put pages back into circulation.
 This is a boot-lifetime reservation, not a runtime pin or a device mapping.
-The supervisor still needs to zero and map the backing, issue resource
-capabilities, and connect them to native xHCI startup and teardown.
+Given a preinstalled CPU mapping, the kernel initializer verifies the root
+and every 4 KiB leaf against the exact reservation and supervisor RW/NX RAM
+permissions before clearing any bytes. This check does not establish alias
+exclusion, cache type or DMA coherency. The boot path still needs to install
+and retain the mapping, issue scoped resource capabilities, and connect the
+backing to native xHCI startup and teardown.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
