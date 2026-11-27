@@ -417,8 +417,10 @@ Normal kernel boot does not paint the framebuffer. Post-boot drawing belongs
 to the compositor, using a scoped output grant and a bounded scanout view
 rather than a physical address. For microVM placement, the guest renders
 into its own frame; the trusted output projection copies only visible pixels
-and never lends the hardware mapping to the guest. The tested copy primitive
-is not yet wired to a live service. Explicit firmware recovery and bring-up diagnostics do not
+and never lends the hardware mapping to the guest. The projection checks the
+exact committed microVM launch against the admission table again before it
+requests the guest’s frame. A retired route cannot regain access when its slot
+is reused. This is tested control-plane wiring, not live guest execution. Explicit firmware recovery and bring-up diagnostics do not
 constitute a parallel production display implementation.
 
 Native USB has no privileged runtime fallback. The kernel may retain device

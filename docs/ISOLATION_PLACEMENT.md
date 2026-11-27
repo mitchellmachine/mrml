@@ -1,5 +1,11 @@
 # MRML adaptive isolation placement
 
+Strict Total MicroVM is MRML’s primary production operating model. Native
+placement exists for explicitly selected development or compatibility use; it
+cannot substitute for an unavailable ordinary service in Total mode. Keep
+only the documented, justified platform, boot and recovery exceptions. This
+is the architecture target, not a statement that today’s image satisfies it.
+
 Status: **PARTIALLY IMPLEMENTED**. Manifest V2 parses a typed placement policy,
 rejects unknown fields/tokens, contradictory bounds, duplicates, and cross-class
 placements, and requires a reason for fixed platform policy. Current application

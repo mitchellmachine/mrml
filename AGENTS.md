@@ -87,6 +87,11 @@ Architectural invariants:
   remain separate; network credentials/bonds are non-exported; offline operation
   remains viable; AI and first-party UI have no bypass;
 
+- treat strict Total MicroVM isolation as the primary production operating
+  model. New ordinary service paths must work in admitted microVMs without
+  native fallback; do not count unavailability or diagnostic native execution
+  as Total satisfaction. Preserve only documented, justified substrate, boot
+  and recovery exceptions;
 - keep the privileged microkernel small and mechanism-focused;
 - put storage, networking, firewall policy, configuration, consent UI,
   monitoring, supervision policy, ordinary drivers, and AI policy in isolated

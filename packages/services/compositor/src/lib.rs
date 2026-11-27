@@ -3,7 +3,7 @@
 mod boot_scanout;
 mod transport;
 
-pub use boot_scanout::{BootScanoutError, paint_boot_ready, publish_guest_scanout};
+pub use boot_scanout::{BootScanoutError, paint_boot_ready, publish_total_guest_scanout};
 
 use core::array;
 use mrml_interface_gui_surface_v1::OpaqueHandle;

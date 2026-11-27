@@ -8,7 +8,10 @@ MRML is AI-led and human-directed. Its goals include owner sovereignty,
 capability-based security, accessible computing, isolated services, and a small
 trusted dependency surface. It is research software, not a production-ready
 operating system or a complete replacement for Rust, established codecs, or
-existing inference systems.
+existing inference systems. MRML’s primary operating model is strict
+[Total MicroVM isolation](docs/ISOLATION_PLACEMENT.md): ordinary services and
+applications run in supervised microVMs, without native fallback. Full-system
+Total operation is not yet implemented.
 
 The project is dedicated to the public domain under [CC0](LICENSE).
 

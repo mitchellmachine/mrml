@@ -2861,6 +2861,8 @@ pub enum IsolationServiceRouteError<E, Endpoint> {
 #[derive(Debug, Eq, PartialEq)]
 pub struct RoutedIsolationService<E> {
     endpoint: E,
+    slot: usize,
+    slot_generation: u64,
     domain: ObjectId,
     interface: ObjectId,
     interface_generation: u32,
@@ -2966,6 +2968,8 @@ impl PreparedIsolationServiceRoute {
         }
         Ok(RoutedIsolationService {
             endpoint,
+            slot: self.launch.slot,
+            slot_generation: self.launch.slot_generation,
             domain: self.spec.domain,
             interface: self.spec.interface,
             interface_generation: self.spec.interface_generation,
@@ -3298,6 +3302,20 @@ pub fn prepare_isolation_service_route<const DOMAINS: usize>(
 }
 
 impl<E> RoutedIsolationService<E> {
+    /// Recheck this exact launch in the authoritative table that admitted it.
+    /// A matching domain identifier after retirement and reuse is not enough.
+    pub fn is_live_in<const N: usize>(&self, admission: &IsolationAdmissionTable<N>) -> bool {
+        admission.slots.get(self.slot).and_then(Option::as_ref).is_some_and(|slot| {
+            slot.state == LaunchState::Running
+                && slot.generation == self.slot_generation
+                && slot.record.domain == self.domain
+                && slot.record.system_generation == self.system_generation
+                && slot.record.policy_generation == self.policy_generation
+                && slot.record.class == self.class
+                && slot.record.placement == self.placement
+        })
+    }
+
     pub const fn endpoint(&self) -> &E {
         &self.endpoint
     }
@@ -3313,6 +3331,8 @@ impl<E> RoutedIsolationService<E> {
     pub fn map_endpoint<M>(self, map: impl FnOnce(E) -> M) -> RoutedIsolationService<M> {
         RoutedIsolationService {
             endpoint: map(self.endpoint),
+            slot: self.slot,
+            slot_generation: self.slot_generation,
             domain: self.domain,
             interface: self.interface,
             interface_generation: self.interface_generation,
@@ -4673,6 +4693,24 @@ mod tests {
             .commit(&retry, IsolationLaunchEvidence::MicrovmReady)
             .unwrap();
         assert!(table.total_microvm_report().satisfied());
+    }
+
+    #[test]
+    fn committed_service_route_stales_on_retirement_and_identical_relaunch() {
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
+        let mut backend = backend();
+        let spec = service_spec(IsolationPlacement::Microvm);
+        let first = route_isolation_service(&mut table, &mut backend, spec)
+            .unwrap()
+            .map_endpoint(|_| ());
+        assert!(first.is_live_in(&table));
+        table.retire(spec.domain()).unwrap();
+        assert!(!first.is_live_in(&table));
+        let second = route_isolation_service(&mut table, &mut backend, spec).unwrap();
+        assert!(second.is_live_in(&table));
+        assert!(!first.is_live_in(&table));
     }
 
     #[test]
