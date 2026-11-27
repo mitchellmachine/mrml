@@ -1952,7 +1952,9 @@ kernel using the expanded evidence contract still reached the QEMU GOP marker.
 The standalone image also has a `production-policy` feature. Such builds embed
 `MRML_KERNEL_MIN_VERSION` independently of the loader and validate the decoded
 handoff with `BootPolicy::production` before touching the framebuffer or
-starting subsystems. Missing or malformed compile-time policy fails closed. A
+starting subsystems. Missing or malformed compile-time policy fails closed.
+The build rejects combinations of `production-policy` with diagnostic kernel
+features. Probe images remain standalone test fixtures, not OS boot modes. A
 properly hash-signed version-6 production image transferred under loader-owned
 CR3/GDT/IDT but refused the deliberately unmeasured, non-Secure-Boot QEMU
 handoff, leaving the loader's `RGB(20,33,53)` stage unchanged. All terminal

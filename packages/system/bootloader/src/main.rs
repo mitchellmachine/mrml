@@ -16,6 +16,58 @@ compile_error!("ahci-service-manager-probe requires the direct TaskRuntime servi
 ))]
 compile_error!("deadline receive cancellation denial and replay probes are mutually exclusive");
 
+// A release-policy kernel must not compile an entry point for a diagnostic
+// workload. Probe images are separate fixtures, never an alternate OS session.
+#[cfg(all(
+    feature = "production-policy",
+    any(
+        feature = "ap-startup-trace",
+        feature = "application-probe",
+        feature = "ahci-service-manager-probe",
+        feature = "block-guest-driver-probe",
+        feature = "block-service-probe",
+        feature = "component-service-probe",
+        feature = "deadline-receive-probe",
+        feature = "deadline-receive-message-probe",
+        feature = "deadline-receive-cancel-probe",
+        feature = "deadline-receive-cancel-denied-probe",
+        feature = "deadline-receive-cancel-replay-probe",
+        feature = "emulated-ap-timing",
+        feature = "fault-probe",
+        feature = "gpu-benchmark",
+        feature = "invalid-return-probe",
+        feature = "buffer-drift-probe",
+        feature = "pci-configuration-probe",
+        feature = "preemption-probe",
+        feature = "service-preemption-probe",
+        feature = "fat32-data-probe",
+        feature = "fat32-restart-probe",
+        feature = "uefi-fat32-restart-probe",
+        feature = "q35-mmio-probe",
+        feature = "fat32-ready-probe",
+        feature = "scanout-service-probe",
+        feature = "service-probe",
+        feature = "certificate-service-probe",
+        feature = "service-restart-request-probe",
+        feature = "smp-ipi-probe",
+        feature = "smp-periodic-balance-probe",
+        feature = "smp-probe",
+        feature = "smp-scheduler-probe",
+        feature = "smp-service-migration-probe",
+        feature = "timer-probe",
+        feature = "uefi-service-preemption-probe",
+        feature = "user-probe",
+        feature = "vmx-root-probe",
+        feature = "whp-gpu-benchmark",
+        feature = "whp-smp-ipi-probe",
+        feature = "whp-smp-periodic-balance-probe",
+        feature = "whp-smp-probe",
+        feature = "whp-smp-scheduler-probe",
+        feature = "whp-smp-service-migration-probe",
+    )
+))]
+compile_error!("production-policy cannot be combined with diagnostic kernel features");
+
 #[cfg(feature = "vmx-root-probe")]
 mod vmx_probe;
 
