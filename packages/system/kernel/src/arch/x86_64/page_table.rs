@@ -1366,6 +1366,18 @@ impl ActivePageTables {
         Ok(())
     }
 
+    /// Rechecks the separately addressed storage diagnostic root.
+    pub fn verify_q35_storage_leaves(&self) -> Result<(), PageTableBuildError> {
+        for mapping in super::q35_fixture_storage_mappings()
+            .map_err(|_| PageTableBuildError::MappingMismatch)?
+            .into_iter()
+            .flatten()
+        {
+            verify_exclusive_mapping_from_store(&IdentityMappedPageTables, self.root, mapping)?;
+        }
+        Ok(())
+    }
+
     /// Rechecks the command model's entire exact UC/NX mapping set.
     pub fn verify_q35_command_leaves(&self) -> Result<(), PageTableBuildError> {
         for mapping in super::q35_fixture_command_mappings()

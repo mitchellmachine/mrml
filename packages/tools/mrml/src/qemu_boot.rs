@@ -105,6 +105,8 @@ pub(super) enum Q35FixtureCase {
     CommandWrongRelease,
     CommandDenied,
     CommandCompleted,
+    StorageDenied,
+    StorageRead,
 }
 
 impl Q35FixtureCase {
@@ -123,6 +125,8 @@ impl Q35FixtureCase {
                 | Self::CommandWrongRelease
                 | Self::CommandDenied
                 | Self::CommandCompleted
+                | Self::StorageDenied
+                | Self::StorageRead
         )
     }
     fn profile(self) -> u8 {
@@ -131,14 +135,15 @@ impl Q35FixtureCase {
             Self::ShutdownWrongRelease | Self::ShutdownValidRelease => 2,
             Self::BarWrongRelease | Self::BarValidRelease => 4,
             Self::CommandWrongRelease | Self::CommandDenied | Self::CommandCompleted => 5,
+            Self::StorageDenied | Self::StorageRead => 6,
             _ => 1,
         }
     }
 
     fn cold(self) -> Option<bool> {
         match self {
-            Self::ColdDenyActivation | Self::CommandDenied => Some(false),
-            Self::ColdActivate | Self::CommandCompleted => Some(true),
+            Self::ColdDenyActivation | Self::CommandDenied | Self::StorageDenied => Some(false),
+            Self::ColdActivate | Self::CommandCompleted | Self::StorageRead => Some(true),
             _ => None,
         }
     }
@@ -226,7 +231,9 @@ fn run_qemu_config(
             | Q35FixtureCase::ColdActivate
             | Q35FixtureCase::BarValidRelease
             | Q35FixtureCase::CommandDenied
-            | Q35FixtureCase::CommandCompleted,
+            | Q35FixtureCase::CommandCompleted
+            | Q35FixtureCase::StorageDenied
+            | Q35FixtureCase::StorageRead,
         ) => Some([0xdc, 0xde]),
         _ => None,
     };
@@ -276,6 +283,14 @@ struct QemuChildOptions<'a> {
     map_only_marker: Option<Q35FixtureCase>,
 }
 
+pub(super) fn scratch_read_seed() -> Vec<u8> {
+    let mut image = vec![0; 1_048_576];
+    for (i, byte) in image[17 * 512..18 * 512].iter_mut().enumerate() {
+        *byte = ((i ^ (i >> 3)) as u8).wrapping_mul(29) ^ 0xa7;
+    }
+    image
+}
+
 fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     let QemuChildOptions {
         qemu,
@@ -315,6 +330,19 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             .filter(|p| p.is_absolute())
             .ok_or("missing private q35 fixture directory")?;
         command.current_dir(scratch).args(["-nic", "none"]);
+        if case.profile() == 6 {
+            use std::io::Write as _;
+            std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(scratch.join("mrml-read.img"))
+                .and_then(|mut file| file.write_all(&scratch_read_seed()))
+                .map_err(|e| format!("create private scratch: {e}"))?;
+            command.args([
+                "-drive",
+                "if=none,id=mrml_read,file=mrml-read.img,format=raw,readonly=on",
+            ]);
+        }
         if isolated {
             command.args([
                 "-nodefaults",
@@ -417,6 +445,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::ColdDenyActivation | Q35FixtureCase::ColdActivate => Some(0xa8),
         Q35FixtureCase::BarValidRelease => Some(0xa9),
         Q35FixtureCase::CommandDenied | Q35FixtureCase::CommandCompleted => Some(0xaa),
+        Q35FixtureCase::StorageDenied | Q35FixtureCase::StorageRead => Some(0xab),
     });
     let cold = map_only_marker.and_then(Q35FixtureCase::cold);
     let mut released = false;
@@ -430,7 +459,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         &mut child,
                         valid,
                         isolated,
-                        matches!(valid, 0xa7 | 0xa8 | 0xaa).then_some((trace, expected)),
+                        matches!(valid, 0xa7 | 0xa8 | 0xaa | 0xab).then_some((trace, expected)),
                         cold,
                     ) {
                         Ok(bar) => bar,

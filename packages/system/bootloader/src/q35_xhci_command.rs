@@ -11,7 +11,7 @@ use mrml_storage_usb::xhci::pci::{PciController, PciLocation, PciSnapshot};
 
 const ECAM: usize = 0xffff_d800_0010_1000;
 const BRIDGE: usize = 0xffff_d800_0010_2000;
-const BAR: usize = 0xffff_d800_0010_3000;
+const BAR: u64 = 0xffff_d800_0010_3000;
 const PAGE: u64 = 4096;
 const TICKS: u32 = 1_000_000;
 
@@ -34,12 +34,17 @@ impl Owner {
         {
             return Err(());
         }
-        Ok((BAR + offset as usize) as *mut u32)
+        Ok((self.bar.virtual_start().get() + u64::from(offset)) as *mut u32)
     }
 
     fn payload(&self, address: u64, len: usize) -> Result<*mut u8, ()> {
         let offset = address.checked_sub(self.aperture.device_base).ok_or(())?;
-        if self.retired || len == 0 || offset.checked_add(len as u64).is_none_or(|end| end > PAGE) {
+        if self.retired
+            || len == 0
+            || offset
+                .checked_add(len as u64)
+                .is_none_or(|end| end > PAGE * self.dma.pages())
+        {
             return Err(());
         }
         Ok((self.dma.virtual_start().get() + offset) as *mut u8)
@@ -119,16 +124,16 @@ impl Platform for Owner {
 impl VtdPciPlatform for Owner {
     fn validate_aperture(&self, aperture: VtdDmaAperture) -> Result<(), ()> {
         (aperture == self.aperture
-            && aperture.pages == 1
+            && u64::from(aperture.pages) == self.dma.pages()
             && aperture.physical_base == self.dma.physical_start()
-            && self.dma.pages() == 1)
-            .then_some(())
-            .ok_or(())
+            && matches!(self.dma.pages(), 1 | 4))
+        .then_some(())
+        .ok_or(())
     }
     fn live_pci(&mut self, expected: DmaAssignment) -> Result<PciSnapshot, ()> {
         if expected.mapping_generation != 1
             || expected.device_base != self.aperture.device_base
-            || expected.bytes != PAGE
+            || expected.bytes != PAGE * self.dma.pages()
         {
             return Err(());
         }
@@ -184,8 +189,9 @@ impl VtdPciPlatform for Owner {
             if ((BRIDGE + 4) as *const u16).read_volatile() != 3 {
                 return Err(());
             }
-            let page = self.payload(self.aperture.device_base, PAGE as usize)?;
-            for i in 0..PAGE as usize {
+            let bytes = (PAGE * self.dma.pages()) as usize;
+            let page = self.payload(self.aperture.device_base, bytes)?;
+            for i in 0..bytes {
                 page.add(i).write_volatile(0);
             }
             let mut active = ActivePageTables::current().map_err(|_| ())?;
@@ -195,6 +201,64 @@ impl VtdPciPlatform for Owner {
         self.retired = true;
         Ok(())
     }
+}
+
+fn read_scratch<P: Platform>(controller: &mut Controller<P>, base: u64) -> Option<()> {
+    use mrml_storage_usb::xhci::{BulkDma, DeviceDma};
+    use mrml_storage_usb::{UsbDisk, find_bulk_interface};
+    let mut found = None;
+    for port in 1..=8 {
+        let state = controller.port_status(port).ok()?;
+        if state.connected {
+            if found.replace(port).is_some() {
+                return None;
+            }
+        }
+    }
+    controller
+        .address_device(
+            found?,
+            DeviceDma {
+                input_context: base + 0x1000,
+                output_context: base + 0x2000,
+                control_ring: base + 0x2800,
+                control_buffer: base + 0x2900,
+            },
+            TICKS,
+        )
+        .ok()?;
+    super::native_fat32_probe::trace(0x91);
+    let mut short = [0; 9];
+    controller.read_descriptor(2, 0, &mut short, TICKS).ok()?;
+    let size = usize::from(u16::from_le_bytes([short[2], short[3]]));
+    let mut descriptor = [0; 256];
+    let descriptor = descriptor.get_mut(..size)?;
+    controller.read_descriptor(2, 0, descriptor, TICKS).ok()?;
+    find_bulk_interface(descriptor).ok()?;
+    super::native_fat32_probe::trace(0x92);
+    let pipe = controller
+        .configure_bulk(
+            descriptor,
+            BulkDma {
+                input_ring: base + 0x3000,
+                output_ring: base + 0x3100,
+                buffer: base + 0x3400,
+            },
+            TICKS,
+        )
+        .ok()?;
+    let mut disk = UsbDisk::probe(pipe).ok()?;
+    super::native_fat32_probe::trace(0x93);
+    if disk.sectors() != 2048 {
+        return None;
+    }
+    let mut sector = [0; 512];
+    disk.read_sector(17, &mut sector).ok()?;
+    sector
+        .iter()
+        .enumerate()
+        .all(|(i, &byte)| byte == ((i ^ (i >> 3)) as u8).wrapping_mul(29) ^ 0xa7)
+        .then_some(())
 }
 
 /// # Safety
@@ -208,7 +272,8 @@ pub(super) unsafe fn run<M: VtdTableMemory, R: VtdRegisterIo>(
     bar: Mapping,
 ) -> bool {
     let attempt = (|| {
-        if bar.virtual_start().get() != BAR as u64 || bar.pages() != 3 {
+        let media = aperture.pages == 4;
+        if bar.virtual_start().get() != BAR + if media { 0x4000 } else { 0 } || bar.pages() != 3 {
             return None;
         }
         let owner = Owner {
@@ -226,7 +291,7 @@ pub(super) unsafe fn run<M: VtdTableMemory, R: VtdRegisterIo>(
             controller,
             mapping_generation: 1,
             device_base: base,
-            bytes: PAGE,
+            bytes: PAGE * u64::from(aperture.pages),
         };
         let dma = DmaLayout {
             device_contexts: base,
@@ -248,10 +313,14 @@ pub(super) unsafe fn run<M: VtdTableMemory, R: VtdRegisterIo>(
                 return None;
             }
         };
-        let completed = controller.no_op(TICKS).is_ok();
+        let completed = if media {
+            read_scratch(&mut controller, base).is_some()
+        } else {
+            controller.no_op(TICKS).is_ok()
+        };
         let mut approved = false;
         if completed {
-            super::native_fat32_probe::trace(0xc6);
+            super::native_fat32_probe::trace(if media { 0xc8 } else { 0xc6 });
             for _ in 0..100_000_000 {
                 match super::native_fat32_probe::fixture_scratch() {
                     0xb8 => core::hint::spin_loop(),

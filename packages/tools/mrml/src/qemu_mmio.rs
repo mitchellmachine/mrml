@@ -92,7 +92,7 @@ fn inspect_qmp(
     )?;
     let map = read_monitor(&mut *reader, 73)?;
     validate(&map)?;
-    let bar = if matches!(release, Some(0xa6..=0xaa)) {
+    let bar = if matches!(release, Some(0xa6..=0xab)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
         }
@@ -105,7 +105,7 @@ fn inspect_qmp(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":77}\n",
         )?;
-        let preflight = matches!(release, Some(0xa9 | 0xaa));
+        let preflight = matches!(release, Some(0xa9..=0xab));
         validate_fixture_bar(&read_monitor(&mut *reader, 77)?, bar, isolated, preflight)?;
         if preflight {
             for (id, offset, mask, expected) in [
@@ -130,7 +130,7 @@ fn inspect_qmp(
     } else {
         None
     };
-    let shutdown = matches!(release, Some(0xa7 | 0xa8 | 0xaa));
+    let shutdown = matches!(release, Some(0xa7 | 0xa8 | 0xaa | 0xab));
     let before = if shutdown {
         let state = bar
             .filter(|_| isolated)
@@ -151,7 +151,7 @@ fn inspect_qmp(
     }
     if let Some(byte) = release {
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xaa | 0x5a) {
+        if !matches!(byte, 0xa6..=0xab | 0x5a) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -173,7 +173,7 @@ fn inspect_qmp(
                 (path, prefix),
                 state,
                 before,
-                (allow, release == Some(0xaa)),
+                (allow, release.unwrap_or(0)),
             )?;
             return Ok(bar);
         }
@@ -245,7 +245,10 @@ fn wait_cold_trace(
             || bytes[ready - 1] != 0xc2
             || &bytes[ready..] != stages
         {
-            return Err("unexpected signed cold activation trace".into());
+            return Err(format!(
+                "unexpected signed activation stages: {:02x?}, expected {stages:02x?}",
+                &bytes[report_end..]
+            ));
         }
         let sample = register_snapshot(prefix, &bytes[..report_end], state, true, true)?
             .ok_or("missing cold shutdown sample")?;
@@ -281,7 +284,7 @@ fn verify_root_ram(map: &str, root: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn verify_root_page(text: &str, root: u64, page: u64, leaf: u64) -> Result<(), String> {
+fn verify_root_page(text: &str, root: u64, page: u64, leaf: u64, pages: u8) -> Result<(), String> {
     let address = root + page * 4096;
     let mut index = 0u64;
     for line in text.lines() {
@@ -299,7 +302,7 @@ fn verify_root_page(text: &str, root: u64, page: u64, leaf: u64) -> Result<(), S
                 (0, 130) | (1, 0) => (address + 4096) | 1,
                 (1, 1) => 0x102,
                 (2 | 3, 0) | (4, 1) => (address + 4096) | 3,
-                (5, 0) => leaf,
+                (5, slot) if slot < u64::from(pages) && leaf != 0 => leaf + 4096 * slot,
                 _ => 0,
             };
             if actual != expected {
@@ -320,6 +323,7 @@ fn check_live_leaf(
     reader: &mut impl std::io::BufRead,
     root: u64,
     leaf: u64,
+    pages: u8,
 ) -> Result<(), String> {
     qmp_write(
         stdin,
@@ -328,7 +332,7 @@ fn check_live_leaf(
             root + 5 * 4096,
         ),
     )?;
-    verify_root_page(&read_monitor(reader, 112)?, root, 5, leaf)
+    verify_root_page(&read_monitor(reader, 112)?, root, 5, leaf, pages)
 }
 
 fn read_root_pointer(
@@ -347,9 +351,11 @@ fn inspect_cold_activation(
     trace: (&std::path::Path, &[u8]),
     state: FixtureState,
     firmware: ShutdownSample,
-    mode: (bool, bool),
+    mode: (bool, u8),
 ) -> Result<(), String> {
-    let (allow, command) = mode;
+    let (allow, release) = mode;
+    let command = matches!(release, 0xaa | 0xab);
+    let media = release == 0xab;
     let (path, prefix) = trace;
     let (root, _) = wait_cold_trace(path, prefix, state, &[])?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
@@ -375,7 +381,17 @@ fn inspect_cold_activation(
                 root + page * 4096,
             ),
         )?;
-        verify_root_page(&read_monitor(&mut *reader, 105)?, root, page, 0)?;
+        verify_root_page(&read_monitor(&mut *reader, 105)?, root, page, 0, 1)?;
+    }
+    if media {
+        verify_scratch_read(stdin, reader, path, false)?;
+        if allow {
+            qmp_write(
+                stdin,
+                "{\"execute\":\"device_add\",\"arguments\":{\"driver\":\"usb-storage\",\"id\":\"mrml_read_disk\",\"bus\":\"mrml_probe_xhci.0\",\"port\":\"1\",\"drive\":\"mrml_read\",\"removable\":true},\"id\":122}\n",
+            )?;
+            ack(reader, "{\"return\": {}, \"id\": 122}")?;
+        }
     }
     let byte = if allow { 0xb8 } else { 0x5b };
     qmp_write(
@@ -393,6 +409,8 @@ fn inspect_cold_activation(
         state,
         if !allow {
             &[0xc4]
+        } else if media {
+            &[0x91, 0x92, 0x93, 0xc8]
         } else if command {
             &[0xc6]
         } else {
@@ -405,7 +423,7 @@ fn inspect_cold_activation(
         if after_root != root {
             return Err("xHCI root changed during the command".into());
         }
-        return inspect_command_completion(stdin, reader, trace, root, state, firmware);
+        return inspect_command_completion(stdin, reader, trace, root, state, firmware, media);
     }
     let expected = ShutdownSample {
         gsts: if allow { 0xc000_0000 } else { 0 },
@@ -419,9 +437,12 @@ fn inspect_cold_activation(
     {
         return Err("paused QEMU did not confirm the exact cold remapper state".into());
     }
+    if media {
+        verify_scratch_read(stdin, reader, path, false)?;
+    }
     if allow {
         let payload = root + 6 * 4096;
-        check_live_leaf(stdin, reader, root, payload | 3)?;
+        check_live_leaf(stdin, reader, root, payload | 3, 1)?;
         qmp_write(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"o /b 0x2ff 0xb9\"},\"id\":109}\n",
@@ -440,7 +461,7 @@ fn inspect_cold_activation(
         {
             return Err("unexpected remapper or PCI state after DMA leaf withdrawal".into());
         }
-        check_live_leaf(stdin, reader, root, payload)?;
+        check_live_leaf(stdin, reader, root, payload, 1)?;
     }
     println!(
         "q35-vtd-cold|status=PASS|activated={allow}|root={root:#x}|aperture_installed_and_revoked={allow}|no_present_dma_leaves=true|bme=false"
@@ -455,6 +476,7 @@ fn inspect_command_completion(
     root: u64,
     initial: FixtureState,
     firmware: ShutdownSample,
+    media: bool,
 ) -> Result<(), String> {
     let (path, prefix) = trace;
     let command = sample_xhci_state(stdin, reader, initial.bar)?;
@@ -471,14 +493,19 @@ fn inspect_command_completion(
     {
         return Err("command fixture lacks live authority or has an xHCI/VT-d fault".into());
     }
-    check_live_leaf(stdin, reader, root, payload | 3)?;
-    for (index, expected) in [0x20_0100, 0, 1 << 24, (33 << 10) | 1]
-        .into_iter()
-        .enumerate()
-    {
-        if read_model_dword(stdin, reader, payload + 0x300 + 4 * index as u64, 117)? != expected {
-            return Err("no matching DMA-written xHCI command completion event".into());
+    check_live_leaf(stdin, reader, root, payload | 3, if media { 4 } else { 1 })?;
+    if !media {
+        for (index, expected) in [0x20_0100, 0, 1 << 24, (33 << 10) | 1]
+            .into_iter()
+            .enumerate()
+        {
+            if read_model_dword(stdin, reader, payload + 0x300 + 4 * index as u64, 117)? != expected
+            {
+                return Err("no matching DMA-written xHCI command completion event".into());
+            }
         }
+    } else {
+        verify_scratch_read(stdin, reader, path, true)?;
     }
     qmp_write(
         stdin,
@@ -487,7 +514,12 @@ fn inspect_command_completion(
     ack(reader, "{\"return\": \"\", \"id\": 118}")?;
     qmp_write(stdin, "{\"execute\":\"cont\",\"id\":119}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 119}")?;
-    let (after_root, _) = wait_cold_trace(path, prefix, initial, &[0xc6, 0xc7])?;
+    let stages: &[u8] = if media {
+        &[0x91, 0x92, 0x93, 0xc8, 0xc7]
+    } else {
+        &[0xc6, 0xc7]
+    };
+    let (after_root, _) = wait_cold_trace(path, prefix, initial, stages)?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":120}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 120}")?;
     let stopped = sample_xhci_state(stdin, reader, initial.bar)?;
@@ -505,19 +537,122 @@ fn inspect_command_completion(
     {
         return Err("xHCI shutdown did not leave the exact halted BME-off state".into());
     }
-    check_live_leaf(stdin, reader, root, payload)?;
-    qmp_write(
-        stdin,
-        &format!(
-            "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"xp /512gx {payload:#x}\"}},\"id\":121}}\n",
-        ),
-    )?;
-    verify_root_page(&read_monitor(reader, 121)?, root, 6, 0)?;
+    check_live_leaf(stdin, reader, root, payload, if media { 4 } else { 1 })?;
+    for page in 6..if media { 10 } else { 7 } {
+        let address = root + page * 4096;
+        qmp_write(
+            stdin,
+            &format!(
+                "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"xp /512gx {address:#x}\"}},\"id\":121}}\n",
+            ),
+        )?;
+        verify_root_page(&read_monitor(&mut *reader, 121)?, root, page, 0, 1)?;
+    }
+    if media {
+        verify_scratch_read(stdin, reader, path, true)?;
+        println!("q35-xhci-storage|status=PASS|read=512|write_operations=0|unchanged=true");
+    }
     println!(
         "q35-xhci-command|status=PASS|completion=success|payload={payload:#x}|halted=true|bme=false|aperture_revoked=true|payload_zero=true"
     );
     Ok(())
 }
+fn scratch_stats(stats: &str) -> Result<[u64; 4], String> {
+    let stats = stats.replace("\r\n", "\n");
+    let mut entries = stats
+        .split("\n\n")
+        .filter_map(|entry| entry.trim().strip_prefix("mrml_read:"));
+    let (entry, structured) = match entries.next() {
+        Some(entry) if entry.lines().any(|row| row.starts_with("Read:")) => {
+            if entries.next().is_some() {
+                return Err("duplicate scratch statistics".into());
+            }
+            (entry, true)
+        }
+        _ => {
+            let mut lines = stats
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("mrml_read:"));
+            let entry = lines.next().ok_or("missing named scratch statistics")?;
+            if lines.next().is_some() {
+                return Err("duplicate scratch statistics".into());
+            }
+            (entry, false)
+        }
+    };
+    let mut counters = [0; 4];
+    if structured {
+        for (index, label) in [(0, "Read:"), (2, "Write:")] {
+            let mut rows = entry.lines().filter_map(|line| line.strip_prefix(label));
+            let row = rows.next().ok_or("missing scratch stats row")?;
+            let mut fields = row.split_whitespace();
+            if rows.next().is_some() {
+                return Err("duplicate scratch stats row".into());
+            }
+            for out in &mut counters[index..index + 2] {
+                *out = fields
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .ok_or("bad scratch stats row")?;
+            }
+        }
+    } else {
+        for (out, field) in
+            counters
+                .iter_mut()
+                .zip(["rd_bytes", "rd_operations", "wr_bytes", "wr_operations"])
+        {
+            let mut values = entry.split_whitespace().filter_map(|word| {
+                let (key, value) = word.split_once('=')?;
+                (key == field).then_some(value)
+            });
+            *out = values
+                .next()
+                .and_then(|value| value.parse().ok())
+                .ok_or("bad scratch stats field")?;
+            if values.next().is_some() {
+                return Err("duplicate scratch stats field".into());
+            }
+        }
+    }
+    Ok(counters)
+}
+
+fn verify_scratch_read(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    path: &std::path::Path,
+    read: bool,
+) -> Result<(), String> {
+    qmp_write(
+        stdin,
+        "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info blockstats\"},\"id\":123}\n",
+    )?;
+    let stats = read_monitor(reader, 123)?;
+    let [read_bytes, reads, write_bytes, writes] =
+        scratch_stats(&stats).map_err(|e| format!("{e}: {stats}"))?;
+    if write_bytes != 0
+        || writes != 0
+        || (read && (read_bytes < 512 || reads == 0))
+        || (!read && (read_bytes != 0 || reads != 0))
+    {
+        return Err(format!(
+            "unexpected scratch counters: {read_bytes}/{reads} reads, {write_bytes}/{writes} writes"
+        ));
+    }
+    let bytes = std::fs::File::open(path.with_file_name("mrml-read.img"))
+        .and_then(|file| {
+            let mut bytes = Vec::new();
+            file.take(1_048_577).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        })
+        .map_err(|e| format!("scratch readback: {e}"))?;
+    if bytes != crate::qemu_boot::scratch_read_seed() {
+        return Err("scratch image bytes changed".into());
+    }
+    Ok(())
+}
+
 fn await_shutdown_report(
     path: &std::path::Path,
     prefix: &[u8],
@@ -1056,6 +1191,16 @@ fn validate(map: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn scratch_counters_are_tied_to_exact_backend_and_do_not_hide_writes() {
+        let old = "esp: rd_bytes=99 rd_operations=1 wr_bytes=1 wr_operations=1\nmrml_read: rd_bytes=512 rd_operations=1 wr_bytes=512 wr_operations=1\n";
+        assert_eq!(scratch_stats(old).unwrap(), [512, 1, 512, 1]);
+        assert!(scratch_stats(&old.replace("mrml_read:", "mrml_read_other:")).is_err());
+        let new = "esp: idle_time_ns=0\nRead: 98 1 2 0\nWrite: 0 0 0 0\n\nmrml_read: idle_time_ns=0\nRead: 512 1 2 0\nWrite: 0 0 0 0\n";
+        assert_eq!(scratch_stats(new).unwrap(), [512, 1, 0, 0]);
+        assert!(scratch_stats(&new.replace("Read: 512", "Read: nope")).is_err());
+    }
+
     const VIEW: &str = concat!(
         "FlatView #0\n AS \"memory\", root: system\n AS \"cpu-memory-0\", root: system\n",
         " Root memory region: system\n",
@@ -1079,18 +1224,19 @@ mod tests {
         for word in 0..512 {
             writeln!(dump, "{:08x}: 0x0000000000000000", 0x405000 + word * 8).unwrap();
         }
-        assert!(verify_root_page(&dump, 0x400000, 5, 0).is_ok());
+        assert!(verify_root_page(&dump, 0x400000, 5, 0, 1).is_ok());
         assert!(
             verify_root_page(
                 &dump.replacen("0000000000000000", "0000000000406003", 1),
                 0x400000,
                 5,
-                0
+                0,
+                1
             )
             .is_err()
         );
-        assert!(verify_root_page(&dump[1..], 0x400000, 5, 0).is_err());
-        assert!(verify_root_page(&dump[..dump.len() - 4], 0x400000, 5, 0).is_err());
+        assert!(verify_root_page(&dump[1..], 0x400000, 5, 0, 1).is_err());
+        assert!(verify_root_page(&dump[..dump.len() - 4], 0x400000, 5, 0, 1).is_err());
     }
 
     #[test]

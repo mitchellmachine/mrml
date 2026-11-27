@@ -4058,6 +4058,13 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let preflight = mrml_kernel::arch::x86_64::q35_fixture_bar_preflight_mappings()
             .unwrap_or_else(|_| halt());
         let (mappings, release) = if topology == Q35FixtureTopology::Isolated
+            && active.verify_q35_storage_leaves().is_ok()
+        {
+            let fourth = VirtAddr::new(0xffff_d800_0010_a000).unwrap_or_else(|_| halt());
+            if !matches!(active.leaf(fourth), Ok(None)) { halt(); }
+            (mrml_kernel::arch::x86_64::q35_fixture_storage_mappings()
+                .unwrap_or_else(|_| halt()), 0xab)
+        } else if topology == Q35FixtureTopology::Isolated
             && active.verify_q35_command_leaves().is_ok()
         {
             let fourth = VirtAddr::new(0xffff_d800_0010_6000).unwrap_or_else(|_| halt());
@@ -4090,7 +4097,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             halt();
         };
         let dma = _boot_dma.as_ref().unwrap_or_else(|| halt());
-        if matches!(release, 0xa7 | 0xa8 | 0xaa) {
+        if matches!(release, 0xa7 | 0xa8 | 0xaa | 0xab) {
             // SAFETY: the signed fixture runs with this dedicated root on
             // the BSP only, before enabling interrupts or configuring DMA.
             if unsafe { active.verify_boot_dma_write_back(dma) }.is_err() {
@@ -4104,9 +4111,9 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             // translated aperture before its driver can enable bus mastering.
             unsafe {
                 native_fat32_probe::dma_fixture_register_snapshot(
-                    mappings, matches!(release, 0xa7 | 0xa8 | 0xaa), matches!(release, 0xa9 | 0xaa),
-                    matches!(release, 0xa8 | 0xaa).then_some((&active, dma, dmar)),
-                    release == 0xaa,
+                    mappings, matches!(release, 0xa7 | 0xa8 | 0xaa | 0xab), matches!(release, 0xa9 | 0xaa | 0xab),
+                    matches!(release, 0xa8 | 0xaa | 0xab).then_some((&active, dma, dmar)),
+                    release,
                 )
             };
         }

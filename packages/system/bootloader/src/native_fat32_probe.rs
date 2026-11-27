@@ -243,7 +243,7 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         &mrml_kernel::arch::x86_64::InitializedBootDma,
         &[u8],
     )>,
-    command: bool,
+    release: u8,
 ) {
     use mrml_kernel::arch::x86_64::VtdRegisterLayout;
     let [Some(drhd), Some(ecam), bridge, xhci] =
@@ -432,7 +432,12 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
             dmar,
             pci_id,
             bridge_buses,
-            if command { mappings[3] } else { None },
+            if matches!(release, 0xaa | 0xab) {
+                mappings[3]
+            } else {
+                None
+            },
+            release == 0xab,
         )
     {
         trace(0xdb);
@@ -447,6 +452,7 @@ fn fixture_activate(
     endpoint_id: u32,
     bridge_buses: u32,
     command_bar: Option<mrml_kernel::arch::x86_64::Mapping>,
+    media: bool,
 ) -> bool {
     use mrml_kernel::arch::x86_64::{
         DmarTopology, PciConfigSpace, SINGLE_REQUESTER_VTD_TABLE_PAGES, VerifiedVtdUnit,
@@ -502,7 +508,7 @@ fn fixture_activate(
             hardware_domain: 1,
             device_base: 0x20_0000,
             physical_base: payload,
-            pages: 1,
+            pages: if media { 4 } else { 1 },
         };
         // SAFETY: the sole BSP just checked the exact exclusive WB mapping
         // and owns the dedicated 16-page boot-lifetime allocation. Both
@@ -521,7 +527,7 @@ fn fixture_activate(
         trace(0xc2);
         for _ in 0..100_000_000 {
             match fixture_scratch() {
-                0xa8 | 0xaa => core::hint::spin_loop(),
+                0xa8 | 0xaa | 0xab => core::hint::spin_loop(),
                 0xb8 => {
                     // SAFETY: signed cold mode, checked exact live branch
                     // and cleared PCI BME bits, then independently verified
@@ -546,7 +552,7 @@ fn fixture_activate(
                             let payload = Mapping::new(
                                 cpu,
                                 aperture.physical_base,
-                                1,
+                                u64::from(aperture.pages),
                                 PagePermissions::KERNEL_READ_WRITE,
                             )
                             .ok()?;

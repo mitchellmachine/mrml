@@ -3246,6 +3246,20 @@ non-present leaf and zeroed payload. The boot allocation stays reserved for
 the life of the diagnostic VM. A denied release does not start the driver.
 This exercises controller DMA, not USB media, on the emulator only.
 
+A sixth profile adds native USB mass-storage reads, still only in the
+signed emulator diagnostic. The host creates a deterministic 1 MiB
+read-only image without a boot index, then attaches it to the isolated
+controller only after firmware exit and the exact PCI shutdown checks.
+The driver maps four payload pages, addresses the sole connected port,
+reads and validates its configuration, and uses the existing BOT/SCSI
+implementation to read sector 17. The guest checks every byte and the
+reported capacity. The monitor verifies reads on the named scratch backend,
+zero bytes and operations written, and byte-for-byte image identity before
+and after cleanup. A denied second release leaves the test disk unattached
+and its counters at zero. The four payload pages are scrubbed and unmapped
+after halt and revocation. This is not physical USB, filesystem or write
+support evidence.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The
