@@ -279,6 +279,8 @@ pub enum PreparedMicrovmConfigurationError<E, D = core::convert::Infallible> {
 pub enum PreparedMicrovmConfigurationAccessError {
     WrongEndpoint,
     DeviceLeaseRequired,
+    DeviceAuthorityChanged,
+    DeviceProjectionChanged,
     Retiring,
 }
 
@@ -325,6 +327,13 @@ pub enum ConfigurationMicrovmLeaseAttachError {
     AlreadyAttached,
 }
 
+struct AttachedConfigurationDevice<Lease> {
+    lease: Lease,
+    projection: DeviceDmaProjection,
+    device: Capability,
+    dma_memory: Capability,
+}
+
 /// Owns one backend-prepared configuration microVM from successful construction
 /// through confirmed destruction. Failed destruction retains both the guest and
 /// endpoint for an exact retry; there is no native-service fallback.
@@ -332,7 +341,7 @@ pub struct PreparedMicrovmConfigurationLauncher<
     Factory: ConfigurationMicrovmFactory,
     Lease: ConfigurationMicrovmDeviceLease = NoConfigurationMicrovmDeviceLease,
 > {
-    device_lease: Option<Lease>,
+    device_lease: Option<AttachedConfigurationDevice<Lease>>,
     active: Option<(ConfigurationMicrovmEndpoint, Factory::Guest)>,
     factory: Factory,
     retiring: bool,
@@ -403,7 +412,12 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
             Ok(_) => return Err((Error::WrongAuthorityObject, lease)),
             Err(error) => return Err((Error::DmaAuthority(error), lease)),
         }
-        self.device_lease = Some(lease);
+        self.device_lease = Some(AttachedConfigurationDevice {
+            lease,
+            projection: expected,
+            device,
+            dma_memory,
+        });
         Ok(())
     }
 
@@ -427,7 +441,7 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
             Some((active, _)) if *active == endpoint && self.retiring => {
                 Err(PreparedMicrovmConfigurationAccessError::Retiring)
             }
-            Some((active, _)) if *active == endpoint && self.device_required && self.device_lease.is_none() => {
+            Some((active, _)) if *active == endpoint && (self.device_required || self.device_lease.is_some()) => {
                 Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired)
             }
             Some((active, guest)) if *active == endpoint => Ok(guest),
@@ -443,12 +457,65 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
             Some((active, _)) if *active == endpoint && self.retiring => {
                 Err(PreparedMicrovmConfigurationAccessError::Retiring)
             }
-            Some((active, _)) if *active == endpoint && self.device_required && self.device_lease.is_none() => {
+            Some((active, _)) if *active == endpoint && (self.device_required || self.device_lease.is_some()) => {
                 Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired)
             }
             Some((active, guest)) if *active == endpoint => Ok(guest),
             _ => Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint),
         }
+    }
+    /// Device-bound execution uses only this path. The live capability table
+    /// must be the same authoritative table used by the supervisor at attach.
+    /// It is borrowed for the same interval as the guest so the supervisor
+    /// cannot revoke it during a synchronous guest entry.
+    pub fn active_device_guest_mut<'a, const C: usize>(
+        &'a mut self,
+        endpoint: ConfigurationMicrovmEndpoint,
+        capabilities: &'a CapabilitySpace<C>,
+    ) -> Result<&'a mut Factory::Guest, PreparedMicrovmConfigurationAccessError> {
+        self.validate_device_guest(endpoint, capabilities)?;
+        self.active
+            .as_mut()
+            .map(|(_, guest)| guest)
+            .ok_or(PreparedMicrovmConfigurationAccessError::WrongEndpoint)
+    }
+
+    pub fn active_device_guest<'a, const C: usize>(
+        &'a self,
+        endpoint: ConfigurationMicrovmEndpoint,
+        capabilities: &'a CapabilitySpace<C>,
+    ) -> Result<&'a Factory::Guest, PreparedMicrovmConfigurationAccessError> {
+        self.validate_device_guest(endpoint, capabilities)?;
+        self.active
+            .as_ref()
+            .map(|(_, guest)| guest)
+            .ok_or(PreparedMicrovmConfigurationAccessError::WrongEndpoint)
+    }
+
+    fn validate_device_guest<const C: usize>(
+        &self,
+        endpoint: ConfigurationMicrovmEndpoint,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<(), PreparedMicrovmConfigurationAccessError> {
+        use PreparedMicrovmConfigurationAccessError as Error;
+        if self.active() != Some(endpoint) {
+            return Err(Error::WrongEndpoint);
+        }
+        if self.retiring {
+            return Err(Error::Retiring);
+        }
+        let attached = self.device_lease.as_ref().ok_or(Error::DeviceLeaseRequired)?;
+        if attached.lease.endpoint() != endpoint || attached.lease.projection() != attached.projection {
+            return Err(Error::DeviceProjectionChanged);
+        }
+        if capabilities.authorize_exact(attached.device, DeviceDmaProjection::DEVICE_RIGHTS)
+            != Ok(attached.projection.device)
+            || capabilities.authorize_exact(attached.dma_memory, DeviceDmaProjection::DMA_RIGHTS)
+                != Ok(attached.projection.dma_memory)
+        {
+            return Err(Error::DeviceAuthorityChanged);
+        }
+        Ok(())
     }
 }
 
@@ -501,7 +568,7 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
         // a failed guest destruction never retries a completed withdrawal.
         self.retiring = true;
         if let Some(lease) = self.device_lease.as_mut() {
-            lease.withdraw().map_err(PreparedMicrovmConfigurationError::DeviceLease)?;
+            lease.lease.withdraw().map_err(PreparedMicrovmConfigurationError::DeviceLease)?;
             self.device_lease = None;
         }
         self.factory

@@ -3359,7 +3359,10 @@ and its cleanup. No test yet establishes a DMA mapping from xHCI to an
 executing service MicroVM. A device-dependent MicroVM can now be staged
 without allowing the supervisor to enter it before a matching lease is
 attached. The live KVM rollback test observes its first boot marker only
-after attaching a modeled lease. The adapter is not an installed provider and does not authenticate
+after attaching a modeled lease. The supervisor now revalidates both retained
+capability generations and the exact lease projection on each device-bound
+guest access. Revocation or replacement of the DMA handle blocks later guest
+access without discarding the lease needed for teardown. The adapter is not an installed provider and does not authenticate
 IPC or retire DMA leases by itself. The kernel grants and
 revokes scoped device, interrupt, and DMA resources; it does not run USB
 commands or implement a fallback transport. Until a service can receive and

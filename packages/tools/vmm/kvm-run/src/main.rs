@@ -6353,7 +6353,7 @@ mod tests {
                 assert_eq!(Some(endpoint), stale.get());
                 stops.set(stops.get() + 1);
                 if stops.get() == 1 {
-                    assert!(launcher.active_guest(endpoint).is_ok());
+                    assert!(launcher.active_device_guest(endpoint, &lease_caps).is_ok());
                     assert_eq!(
                         launcher.revoke_microvm(&endpoint),
                         Err(PreparedMicrovmConfigurationError::DeviceLease(()))
@@ -6381,7 +6381,7 @@ mod tests {
                     launched.0.attach_device_lease(ProbeDeviceLease {
                         endpoint: launched.1, projection, pending: true,
                     }, projection, &lease_caps, device, dma).unwrap();
-                    observe_boot(launched.0.active_guest_mut(launched.1).unwrap(), spec.domain());
+                    observe_boot(launched.0.active_device_guest_mut(launched.1, &lease_caps).unwrap(), spec.domain());
                     stale.set(Some(launched.1));
                     Ok(launched)
                 },
