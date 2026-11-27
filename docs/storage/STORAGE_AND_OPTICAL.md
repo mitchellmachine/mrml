@@ -3012,6 +3012,15 @@ address and transfer completions and the descriptor independently, scrubs the
 queues and contexts, and compares the untouched image. This is enumeration,
 not a guest-controlled bulk storage read or write.
 
+`--ignored --nocapture live_kvm_guest_configures_qemu_usb_bulk_endpoints`
+runs the next stage. The guest reads the configuration header and the full
+descriptor, configures the descriptor-selected bulk endpoints, and issues
+SET_CONFIGURATION. Before permitting endpoint configuration the broker compares
+the full input context against the exact discovered device and assigned ring
+addresses. After retirement the host checks the descriptor, command and
+control-transfer completions, confirms both bulk rings stayed empty, and
+verifies an unchanged image. This mode issues no bulk transfer or SCSI command.
+
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See
 [review log](../patents/REVIEW_LOG.md).

@@ -318,7 +318,7 @@ pub(super) fn exercise_preflight() {
 pub(super) fn exercise_command() {
     for super_speed in [false, true] {
         mrml_usb_fat32_qtest::with_emulated_command_probe(super_speed, &mut |io| {
-            run_signed_probe(ProbeMode::Command(io, false));
+            run_signed_probe(ProbeMode::Command(io, 0));
         });
     }
     mrml_runtime::mrml_println!(
@@ -329,11 +329,22 @@ pub(super) fn exercise_command() {
 pub(super) fn exercise_enumeration() {
     for fast in [false, true] {
         mrml_usb_fat32_qtest::with_emulated_enumeration_probe(fast, &mut |io| {
-            run_signed_probe(ProbeMode::Command(io, true));
+            run_signed_probe(ProbeMode::Command(io, 1));
         });
     }
     mrml_runtime::mrml_println!(
         "usb-enumeration-guest|status=PASS|backend=kvm|xhci=qemu|speeds=2,3|descriptor=device"
+    );
+}
+
+pub(super) fn exercise_bulk_setup() {
+    for fast in [false, true] {
+        mrml_usb_fat32_qtest::with_emulated_bulk_setup_probe(fast, &mut |io| {
+            run_signed_probe(ProbeMode::Command(io, 2));
+        });
+    }
+    mrml_runtime::mrml_println!(
+        "usb-bulk-setup-guest|status=PASS|backend=kvm|xhci=qemu|speeds=2,3"
     );
 }
 
@@ -387,7 +398,7 @@ enum ProbeMode<'a> {
     Synthetic,
     Bulk(&'a mut dyn BulkTransport<Error = ()>),
     Preflight(&'a mut (dyn mrml_usb_fat32_qtest::PreflightIo + 'a)),
-    Command(&'a mut (dyn mrml_usb_fat32_qtest::CommandIo + 'a), bool),
+    Command(&'a mut (dyn mrml_usb_fat32_qtest::CommandIo + 'a), u8),
 }
 
 fn run_signed_probe(mut mode: ProbeMode<'_>) {
@@ -485,8 +496,9 @@ fn run_signed_probe(mut mode: ProbeMode<'_>) {
         ProbeMode::Synthetic => (false, 1, 0),
         ProbeMode::Bulk(_) => (true, MAX_EXITS, 0x60),
         ProbeMode::Preflight(_) => (true, 72, 0x61),
-        ProbeMode::Command(_, false) => (true, 1024, 0x62),
-        ProbeMode::Command(_, true) => (true, 4096, 0x63),
+        ProbeMode::Command(_, 0) => (true, 1024, 0x62),
+        ProbeMode::Command(_, 1) => (true, 4096, 0x63),
+        ProbeMode::Command(_, _) => (true, 4096, 0x64),
     };
     observed[0] = kind;
     peer.write_first(&observed).unwrap();
@@ -503,7 +515,11 @@ fn run_signed_probe(mut mode: ProbeMode<'_>) {
         }
         assert!(observed[3..8].iter().all(|&byte| byte == 0));
         let address = u64::from_le_bytes(observed[8..PAYLOAD].try_into().unwrap());
-        let max_payload = if kind == 0x63 { 2112 } else { 512 };
+        let max_payload = if matches!(kind, 0x63 | 0x64) {
+            2112
+        } else {
+            512
+        };
         assert!(
             observed[PAYLOAD + max_payload..]
                 .iter()

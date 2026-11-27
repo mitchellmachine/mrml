@@ -15,8 +15,9 @@ extern "efiapi" fn efi_main() -> ! {
     let passed = match read_byte(0) {
         0x60 => mrml_usb_guest_probe::exercise_transport(Relay),
         0x61 => preflight(),
-        0x62 => command_probe::exercise(false),
-        0x63 => command_probe::exercise(true),
+        0x62 => command_probe::exercise(0),
+        0x63 => command_probe::exercise(1),
+        0x64 => command_probe::exercise(2),
         _ => mrml_usb_guest_probe::exercise(),
     };
     let result = if passed { 0x51 } else { 0x52 };

@@ -1,8 +1,8 @@
 //! Diagnostic guest transport. Only the test broker can enable or revoke PCI.
 use super::{PAYLOAD, read_byte, request_address, transfer, write_byte};
 use mrml_usb_guest_probe::{
-    Controller, DeviceDma, DmaAssignment, DmaLayout, PciActivation, PciController, PciLocation,
-    PciSnapshot, Platform, RevocablePlatform,
+    BulkDma, Controller, DeviceDma, DmaAssignment, DmaLayout, PciActivation, PciController,
+    PciLocation, PciSnapshot, Platform, RevocablePlatform,
 };
 
 const DMA: DmaLayout = DmaLayout {
@@ -114,7 +114,7 @@ impl RevocablePlatform for Channel {
     }
 }
 
-pub(super) fn exercise(enumerate: bool) -> bool {
+pub(super) fn exercise(level: u8) -> bool {
     let mut channel = Channel;
     let Ok((_, assignment)) = channel.activation_state() else {
         return false;
@@ -123,7 +123,7 @@ pub(super) fn exercise(enumerate: bool) -> bool {
         return false;
     };
     let passed = controller.no_op(100).is_ok()
-        && (!enumerate
+        && (level == 0
             || (|| {
                 let port = (1..=u8::MAX).find(|&port| {
                     controller
@@ -146,7 +146,34 @@ pub(super) fn exercise(enumerate: bool) -> bool {
                 controller
                     .read_descriptor(1, 0, &mut descriptor, 100)
                     .ok()?;
-                (descriptor[..2] == [18, 1]).then_some(())
+                if descriptor[..2] != [18, 1] {
+                    return None;
+                }
+                if level == 2 {
+                    let mut configuration = [0; 256];
+                    controller
+                        .read_descriptor(2, 0, &mut configuration[..9], 100)
+                        .ok()?;
+                    let len = usize::from(u16::from_le_bytes([configuration[2], configuration[3]]));
+                    if !(9..=256).contains(&len) {
+                        return None;
+                    }
+                    controller
+                        .read_descriptor(2, 0, &mut configuration[..len], 100)
+                        .ok()?;
+                    controller
+                        .configure_bulk(
+                            &configuration[..len],
+                            BulkDma {
+                                input_ring: 0x10_5000,
+                                output_ring: 0x10_6000,
+                                buffer: 0x10_7000,
+                            },
+                            100,
+                        )
+                        .ok()?;
+                }
+                Some(())
             })()
             .is_some());
     let retired = controller
