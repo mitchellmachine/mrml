@@ -97,6 +97,71 @@ impl<P: Platform> ScopedXhci<P> {
     }
 }
 
+impl<L: super::NativePciLease> ScopedXhci<super::NativePciOwner<L>> {
+    /// Reconcile the broker choice against the exact retained native binding
+    /// before providing any register or DMA operations. On failure the caller
+    /// still owns the original lease and must retire or quarantine it.
+    pub fn from_native_owner(
+        owner: super::NativePciOwner<L>,
+        projection: mrml_kernel::DeviceDmaProjection,
+    ) -> Result<
+        Self,
+        (
+            ProjectionError<super::NativePciOwnerError<L::Error>>,
+            super::NativePciOwner<L>,
+        ),
+    > {
+        if let Err(error) = owner.validate_projection(projection) {
+            return Err((ProjectionError::Backend(error), owner));
+        }
+        let assignment = owner.retained_binding().dma;
+        Self::for_device_projection(owner, assignment, projection)
+    }
+}
+
+impl<P: super::VtdPciPlatform> super::VtdPciPlatform for ScopedXhci<P> {
+    fn validate_aperture(
+        &self,
+        aperture: mrml_kernel::arch::x86_64::VtdDmaAperture,
+    ) -> Result<(), Self::Error> {
+        self.backend
+            .validate_aperture(aperture)
+            .map_err(ProjectionError::Backend)
+    }
+
+    fn live_pci(&mut self, expected: DmaAssignment) -> Result<PciSnapshot, Self::Error> {
+        if expected != self.assignment {
+            return Err(ProjectionError::Assignment);
+        }
+        self.backend
+            .live_pci(expected)
+            .map_err(ProjectionError::Backend)
+    }
+
+    fn set_bus_master(
+        &mut self,
+        expected: DmaAssignment,
+        before: u16,
+        enabled: bool,
+    ) -> Result<(), Self::Error> {
+        if expected != self.assignment {
+            return Err(ProjectionError::Assignment);
+        }
+        self.backend
+            .set_bus_master(expected, before, enabled)
+            .map_err(ProjectionError::Backend)
+    }
+
+    fn release_revoked(&mut self, expected: DmaAssignment) -> Result<(), Self::Error> {
+        if expected != self.assignment {
+            return Err(ProjectionError::Assignment);
+        }
+        self.backend
+            .release_revoked(expected)
+            .map_err(ProjectionError::Backend)
+    }
+}
+
 impl<P: Platform> Platform for ScopedXhci<P> {
     type Error = ProjectionError<P::Error>;
 

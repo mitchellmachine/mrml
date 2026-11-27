@@ -3302,7 +3302,11 @@ The xHCI adapter checks the same descriptor against the discovered
 controller and DMA assignment. The native lease owner independently checks
 it against the retained backing, including the exact BAR pages and pin generation. Live KVM exercises attachment with a
 modeled lease; QEMU exercises the controller and descriptor checks.
-No test yet establishes a DMA mapping from xHCI to an executing service MicroVM. The adapter is not an installed provider and does not authenticate
+The projected native installer now takes that retained lease, applies the
+BAR/DMA bounds before activation, and installs only the VT-d aperture taken
+from the same lease. The native-owner regression covers the scoped adapter
+and its cleanup. No test yet establishes a DMA mapping from xHCI to an
+executing service MicroVM. The adapter is not an installed provider and does not authenticate
 IPC or retire DMA leases by itself. The kernel grants and
 revokes scoped device, interrupt, and DMA resources; it does not run USB
 commands or implement a fallback transport. Until a service can receive and

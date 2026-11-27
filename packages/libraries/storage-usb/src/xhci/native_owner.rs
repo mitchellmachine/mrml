@@ -119,6 +119,10 @@ impl<L: NativePciLease> NativePciOwner<L> {
         Ok(())
     }
 
+    pub(super) const fn retained_binding(&self) -> NativePciBinding {
+        self.binding
+    }
+
     fn check(&self, expected: DmaAssignment) -> Result<(), NativePciOwnerError<L::Error>> {
         if self.released || expected != self.binding.dma || self.lease.binding() != self.binding {
             Err(NativePciOwnerError::Binding)

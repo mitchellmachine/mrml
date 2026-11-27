@@ -58,6 +58,31 @@ pub struct ManagedVtd<'a, P, M, R> {
     operational: u32,
 }
 
+pub type ProjectedNativeXhci<'a, L, M, R> =
+    ManagedVtd<'a, super::ScopedXhci<super::NativePciOwner<L>>, M, R>;
+
+/// Install VT-d only after enforcing the supervisor's exact projection against
+/// the native retained lease. No independent aperture can be substituted.
+pub fn install_projected_native_xhci<'a, L, M, R>(
+    owner: super::NativePciOwner<L>,
+    projection: mrml_kernel::DeviceDmaProjection,
+    tables: &'a mut M,
+    unit: &'a mut VerifiedVtdUnit<R>,
+) -> Result<
+    ProjectedNativeXhci<'a, L, M, R>,
+    ManagedVtdError<super::ProjectionError<super::NativePciOwnerError<L::Error>>>,
+>
+where
+    L: super::NativePciLease,
+    M: VtdTableMemory,
+    R: VtdRegisterIo,
+{
+    let binding = owner.retained_binding();
+    let scoped = super::ScopedXhci::from_native_owner(owner, projection)
+        .map_err(|(error, _owner)| ManagedVtdError::Platform(error))?;
+    ManagedVtd::install(scoped, tables, unit, binding.dma, binding.aperture)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Cleanup {
     Active,

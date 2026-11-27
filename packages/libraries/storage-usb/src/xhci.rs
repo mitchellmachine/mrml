@@ -9,7 +9,7 @@ pub use ecam_lease::{EcamLeaseError, EcamPciLease, NativePciBacking};
 mod lifecycle;
 mod managed_vtd;
 mod native_owner;
-pub use managed_vtd::{ManagedVtd, ManagedVtdError, VtdPciPlatform};
+pub use managed_vtd::{ManagedVtd, ManagedVtdError, ProjectedNativeXhci, VtdPciPlatform, install_projected_native_xhci};
 pub use native_owner::{NativePciBinding, NativePciLease, NativePciOwner, NativePciOwnerError};
 pub mod pci;
 mod projection;

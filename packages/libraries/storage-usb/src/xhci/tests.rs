@@ -687,7 +687,7 @@ fn native_owner_binds_capabilities_generations_and_exact_command_write() {
     let mut fake = Fake::new();
     fake.native_binding = Some(binding);
     fake.pci_command = 0x402;
-    let mut owner = NativePciOwner::admit(&caps, device, memory, binding, fake)
+    let owner = NativePciOwner::admit(&caps, device, memory, binding, fake)
         .ok()
         .unwrap();
     let (bar_base, bar_bytes) = dma.controller.bar0();
@@ -715,25 +715,32 @@ fn native_owner_binds_capabilities_generations_and_exact_command_write() {
         }),
         Err(NativePciOwnerError::Binding)
     );
+    let Err((ProjectionError::Backend(NativePciOwnerError::Binding), owner)) =
+        ScopedXhci::from_native_owner(owner, mrml_kernel::DeviceDmaProjection {
+            bar_pages: [0, RT, 0x3000], ..projection
+        })
+    else { panic!("substituted BAR page must not reach the native lease"); };
+    let mut owner = ScopedXhci::from_native_owner(owner, projection)
+        .unwrap_or_else(|(error, _)| panic!("native projection failed: {error:?}"));
+    assert_eq!(owner.read32(0x3000), Err(ProjectionError::MmioRange));
     assert_eq!(owner.validate_aperture(binding.aperture), Ok(()));
     assert_eq!(
         owner.validate_aperture(VtdDmaAperture {
             physical_base: PhysAddr::new(0x21_0000).unwrap(),
             ..binding.aperture
         }),
-        Err(NativePciOwnerError::Binding)
+        Err(ProjectionError::Backend(NativePciOwnerError::Binding))
     );
     assert_eq!(
         owner.set_bus_master(dma, 2, true),
-        Err(NativePciOwnerError::Pci(pci::PciError::CommandMismatch))
+        Err(ProjectionError::Backend(NativePciOwnerError::Pci(pci::PciError::CommandMismatch)))
     );
     owner.set_bus_master(dma, 0x402, true).unwrap();
     assert_eq!(owner.live_pci(dma).unwrap().command, 0x406);
     owner.set_bus_master(dma, 0x406, false).unwrap();
     assert_eq!(owner.live_pci(dma).unwrap().command, 0x402);
     owner.release_revoked(dma).unwrap();
-    assert_eq!(owner.validate_projection(projection), Err(NativePciOwnerError::Binding));
-    assert_eq!(owner.live_pci(dma), Err(NativePciOwnerError::Binding));
+    assert_eq!(owner.live_pci(dma), Err(ProjectionError::Backend(NativePciOwnerError::Binding)));
 
     let mut fake = Fake::new();
     fake.native_binding = Some(binding);
