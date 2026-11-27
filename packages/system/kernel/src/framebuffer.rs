@@ -231,6 +231,8 @@ fn boot_glyph(byte: u8) -> Option<[u8; 7]> {
         b'P' => [30, 17, 17, 30, 16, 16, 16],
         b'I' => [14, 4, 4, 4, 4, 4, 14],
         b'B' => [30, 17, 17, 30, 17, 17, 30],
+        b'G' => [14, 17, 16, 23, 17, 17, 15],
+        b'V' => [17, 17, 17, 17, 17, 10, 4],
         b'8' => [14, 17, 17, 14, 17, 17, 14],
         b':' => [0, 4, 4, 0, 4, 4, 0],
         b'-' => [0, 0, 0, 31, 0, 0, 0],
@@ -278,10 +280,10 @@ mod tests {
     fn handoff_stage_labels_render_at_small_framebuffer_size() {
         let info = FramebufferInfo::new(
             0x1000,
-            38_400,
-            200,
+            39_936,
+            208,
             48,
-            200,
+            208,
             PixelFormat::BlueGreenRedReserved,
         )
         .unwrap();
@@ -294,8 +296,17 @@ mod tests {
             b"MRML KERNEL ENTRY",
             b"MRML SMP START",
             b"MRML SMP READY",
+            b"MRML MAP EMPTY - SEND MEMMAP",
+            b"MRML MAP STRIDE - SEND MEMMAP",
+            b"MRML MAP TAIL - SEND MEMMAP",
+            b"MRML MAP ALIGN - SEND MEMMAP",
+            b"MRML MAP NO PAGES - SEND MEMMAP",
+            b"MRML MAP RANGE - SEND MEMMAP",
+            b"MRML MAP OVERLAP - SEND MEMMAP",
+            b"MRML MAP LIMIT - SEND MEMMAP",
+            b"MRML MAP FRAME - SEND MEMMAP",
         ];
-        let mut bytes = [0; 38_400];
+        let mut bytes = [0; 39_936];
         for label in labels {
             bytes.fill(0);
             FramebufferSurface::new(info, &mut bytes)
@@ -309,7 +320,7 @@ mod tests {
                     },
                 )
                 .unwrap();
-            assert_eq!(&bytes[(24 * 200 + 16) * 4..][..4], &[255, 255, 255, 0]);
+            assert_eq!(&bytes[(24 * 208 + 16) * 4..][..4], &[255, 255, 255, 0]);
         }
     }
 

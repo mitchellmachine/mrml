@@ -38,7 +38,7 @@ use mrml_uefi::tpm::{
 };
 use mrml_uefi::*;
 
-const MAP_BYTES: usize = 64 * 1024;
+const MAP_BYTES: usize = MAX_MEMORY_MAP_BYTES;
 
 struct FirmwareBuffer(UnsafeCell<[u8; MAP_BYTES]>);
 unsafe impl Sync for FirmwareBuffer {}
@@ -1070,6 +1070,9 @@ unsafe fn boot(
     let coherent_release = prepared_release.is_some();
 
     loader_trace(0xa8);
+    trace.line(format_args!(
+        "If MRML MAP fails, reboot to EFI Shell. On USB FS0: run memmap >a FS0:\\MRML-MAP.TXT"
+    ));
     trace.at("final memory map; console ends at ExitBootServices");
     paint_boot_stage(framebuffer, b"MRML EFI END START");
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services, trace) }?;
@@ -1135,12 +1138,10 @@ unsafe fn launch_after_exit(
         framebuffer.size as u64,
         regions,
     ) {
-        Ok(count) => count,
-        Err(_) => halt(),
+        Ok(count) if count != 0 => count,
+        Ok(_) => map_failure(framebuffer, NormalizeError::Empty),
+        Err(error) => map_failure(framebuffer, error),
     };
-    if region_count == 0 {
-        halt();
-    }
     loader_trace(0xb1);
     paint_boot_stage(framebuffer, b"MRML MAP PASS");
     let mut acpi_memory = FirmwareAcpiMemory {
@@ -1176,6 +1177,22 @@ unsafe fn launch_after_exit(
     {
         halt();
     }
+    halt()
+}
+
+fn map_failure(framebuffer: Framebuffer, error: NormalizeError) -> ! {
+    let label: &[u8] = match error {
+        NormalizeError::Empty => b"MRML MAP EMPTY - SEND MEMMAP",
+        NormalizeError::BadDescriptorSize => b"MRML MAP STRIDE - SEND MEMMAP",
+        NormalizeError::Truncated => b"MRML MAP TAIL - SEND MEMMAP",
+        NormalizeError::Unaligned => b"MRML MAP ALIGN - SEND MEMMAP",
+        NormalizeError::ZeroPages => b"MRML MAP NO PAGES - SEND MEMMAP",
+        NormalizeError::Overflow => b"MRML MAP RANGE - SEND MEMMAP",
+        NormalizeError::Overlap => b"MRML MAP OVERLAP - SEND MEMMAP",
+        NormalizeError::TooManyRegions => b"MRML MAP LIMIT - SEND MEMMAP",
+        NormalizeError::FramebufferConflict => b"MRML MAP FRAME - SEND MEMMAP",
+    };
+    paint_boot_stage(framebuffer, label);
     halt()
 }
 

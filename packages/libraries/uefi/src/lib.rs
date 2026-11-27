@@ -1711,7 +1711,11 @@ pub struct MemoryDescriptor {
     pub attributes: u64,
 }
 
+pub const MAX_MEMORY_MAP_BYTES: usize = 64 * 1024;
 pub const MAX_NORMALIZED_REGIONS: usize = 128;
+const MAX_MEMORY_DESCRIPTORS: usize =
+    MAX_MEMORY_MAP_BYTES / core::mem::size_of::<MemoryDescriptor>();
+const _: () = assert!(MAX_MEMORY_DESCRIPTORS <= u16::MAX as usize);
 const PAGE_SIZE: u64 = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1752,7 +1756,6 @@ pub enum NormalizeError {
     Unaligned,
     ZeroPages,
     Overflow,
-    Unsorted,
     Overlap,
     TooManyRegions,
     FramebufferConflict,
@@ -1761,6 +1764,7 @@ pub enum NormalizeError {
 /// Converts an untrusted variable-stride UEFI map into the fixed MRML memory
 /// model. Only conventional memory becomes free; boot-service and loader pages
 /// remain reserved until a later kernel phase can prove they are reclaimable.
+/// Physical ordering is canonicalized without changing the raw firmware bytes.
 pub fn normalize_memory_map(
     bytes: &[u8],
     descriptor_size: usize,
@@ -1787,10 +1791,25 @@ pub fn normalize_memory_map(
         .checked_add(PAGE_SIZE - 1)
         .map(|end| end & !(PAGE_SIZE - 1))
         .ok_or(NormalizeError::Overflow)?;
+    if bytes.len() > MAX_MEMORY_MAP_BYTES {
+        return Err(NormalizeError::TooManyRegions);
+    }
+    let mut order = [0u16; MAX_MEMORY_DESCRIPTORS];
+    let order = &mut order[..bytes.len() / descriptor_size];
+    for (index, slot) in order.iter_mut().enumerate() {
+        *slot = index as u16;
+    }
+    let descriptor_at = |index: u16| {
+        let offset = usize::from(index) * descriptor_size;
+        &bytes[offset..offset + descriptor_size]
+    };
+    order.sort_unstable_by_key(|&index| {
+        u64::from_le_bytes(descriptor_at(index)[8..16].try_into().unwrap())
+    });
     let mut count = 0usize;
-    let mut previous_start = 0u64;
     let mut previous_end = 0u64;
-    for (index, descriptor) in bytes.chunks_exact(descriptor_size).enumerate() {
+    for &index in order.iter() {
+        let descriptor = descriptor_at(index);
         let kind = u32::from_le_bytes(descriptor[..4].try_into().unwrap());
         let start = u64::from_le_bytes(descriptor[8..16].try_into().unwrap());
         let pages = u64::from_le_bytes(descriptor[24..32].try_into().unwrap());
@@ -1804,13 +1823,9 @@ pub fn normalize_memory_map(
             .checked_mul(PAGE_SIZE)
             .and_then(|length| start.checked_add(length))
             .ok_or(NormalizeError::Overflow)?;
-        if index != 0 && start < previous_start {
-            return Err(NormalizeError::Unsorted);
-        }
-        if index != 0 && start < previous_end {
+        if start < previous_end {
             return Err(NormalizeError::Overlap);
         }
-        previous_start = start;
         previous_end = end;
         let normalized_kind = match kind {
             7 => NormalizedMemoryKind::Free,
@@ -3839,6 +3854,66 @@ mod tests {
         bytes[8..16].copy_from_slice(&start.to_le_bytes());
         bytes[24..32].copy_from_slice(&pages.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn sorts_firmware_order_before_merging_and_rejects_overlaps() {
+        // Firmware may list high available RAM before low reserved ranges.
+        let high = descriptor(7, 0x1_0000_0000, 2);
+        let low = descriptor(0, 0, 1);
+        let mmio = descriptor(11, 0xa0000, 4);
+        let middle = descriptor(7, 0x1000, 2);
+        let padded = |descriptors: [[u8; 40]; 4]| {
+            let mut bytes = [0xa5; 192];
+            for (slot, source) in bytes.chunks_exact_mut(48).zip(descriptors) {
+                slot[..40].copy_from_slice(&source);
+            }
+            bytes
+        };
+        let mut output = [NormalizedRegion::EMPTY; MAX_NORMALIZED_REGIONS];
+        let mut expected = output;
+        assert_eq!(
+            normalize_memory_map(
+                &padded([low, middle, mmio, high]),
+                48,
+                0xa0000,
+                4096,
+                &mut expected
+            ),
+            Ok(4)
+        );
+        assert_eq!(
+            normalize_memory_map(
+                &padded([middle, high, low, mmio]),
+                48,
+                0xa0000,
+                4096,
+                &mut output
+            ),
+            Ok(4)
+        );
+        assert_eq!(output, expected);
+        let overlap = descriptor(7, 0, 2);
+        assert_eq!(
+            normalize_memory_map(
+                &padded([middle, high, overlap, mmio]),
+                48,
+                0xa0000,
+                4096,
+                &mut output
+            ),
+            Err(NormalizeError::Overlap)
+        );
+        assert_eq!(
+            normalize_memory_map(
+                &padded([middle, high, low, low]),
+                48,
+                0xa0000,
+                4096,
+                &mut output
+            ),
+            Err(NormalizeError::Overlap)
+        );
     }
 
     #[test]

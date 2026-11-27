@@ -69,6 +69,13 @@ to the framebuffer:
 
 Only the terminal `FAT32 RESTART: PASS - 28 BYTES` label confirms the test.
 
+A `MRML MAP … - SEND MEMMAP` label reports why the loader rejected the
+final memory map after leaving firmware. Reboot into the UEFI Shell and run
+`memmap >a FS0:\MRML-MAP.TXT`, replacing `FS0:` with the USB mapping, then
+share the file and the exact label. The shell dump is an earlier snapshot,
+not the rejected map itself. The loader sorts descriptors by physical start
+before checking for overlaps and emits only a bounded canonical map.
+
 ### Create and write the diagnostic USB image
 
 In a trusted checkout with the [MRML toolchain](../human/GETTING_STARTED.md)
