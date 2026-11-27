@@ -608,6 +608,77 @@ impl<P: Platform> Controller<P> {
     }
 }
 
+/// Sampled xHCI USB Legacy Support semaphore state. This is only evidence,
+/// not authority to reset the controller or perform a firmware handoff.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LegacyOwnership {
+    Absent,
+    Unclaimed,
+    Firmware,
+    OperatingSystem,
+    Contended,
+}
+
+/// Reads only xHCI capability dwords through the caller's validated BAR
+/// reader. Never reads the legacy SMI control dword or changes either owner.
+pub fn inspect_legacy_ownership<E>(
+    bar_bytes: u32,
+    mut read: impl FnMut(u32) -> Result<u32, E>,
+) -> Result<LegacyOwnership, Error<E>> {
+    if bar_bytes < 0x20 {
+        return Err(Error::InvalidBar);
+    }
+    let hcc1 = read(0x10).map_err(Error::Platform)?;
+    legacy_capability_chain(hcc1, bar_bytes, &mut |offset| {
+        read(offset).map_err(Error::Platform)
+    })
+}
+
+fn legacy_capability_chain<E>(
+    hcc1: u32,
+    bar_bytes: u32,
+    read: &mut impl FnMut(u32) -> Result<u32, Error<E>>,
+) -> Result<LegacyOwnership, Error<E>> {
+    if hcc1 == u32::MAX {
+        return Err(Error::InvalidBar);
+    }
+    let mut offset = (hcc1 >> 16) * 4;
+    let mut ownership = LegacyOwnership::Absent;
+    for _ in 0..64 {
+        if offset == 0 {
+            return Ok(ownership);
+        }
+        if offset < 0x20 || offset.checked_add(4).is_none_or(|end| end > bar_bytes) {
+            return Err(Error::InvalidBar);
+        }
+        let raw = read(offset)?;
+        let next = ((raw >> 8) & 0xff) * 4;
+        if matches!(raw & 0xff, 0 | 0xff) {
+            return Err(Error::InvalidBar);
+        }
+        if raw & 0xff == 1 {
+            if ownership != LegacyOwnership::Absent
+                || offset.checked_add(8).is_none_or(|end| end > bar_bytes)
+                || next == 4
+            {
+                return Err(Error::InvalidBar);
+            }
+            ownership = match (raw & (1 << 16) != 0, raw & (1 << 24) != 0) {
+                (false, false) => LegacyOwnership::Unclaimed,
+                (true, false) => LegacyOwnership::Firmware,
+                (false, true) => LegacyOwnership::OperatingSystem,
+                (true, true) => LegacyOwnership::Contended,
+            };
+        }
+        offset = if next == 0 {
+            0
+        } else {
+            offset.checked_add(next).ok_or(Error::InvalidBar)?
+        };
+    }
+    Err(Error::InvalidBar)
+}
+
 fn discover<P: Platform>(platform: &mut P, bar_bytes: u32) -> Result<Registers, Error<P::Error>> {
     if bar_bytes < 0x20 {
         return Err(Error::InvalidBar);
@@ -644,35 +715,21 @@ fn discover<P: Platform>(platform: &mut P, bar_bytes: u32) -> Result<Registers, 
             return Err(Error::InvalidBar);
         }
     }
-    let mut ext = (hcc1 >> 16) * 4;
-    for _ in 0..64 {
-        if ext == 0 {
-            return Ok(Registers {
-                operational: op,
-                runtime,
-                doorbell,
-                ports,
-                address64: hcc1 & 1 != 0,
-                context_bytes: if hcc1 & 4 != 0 { 64 } else { 32 },
-            });
-        }
-        if ext < 0x20 || ext.checked_add(4).is_none_or(|end| end > bar_bytes) {
-            return Err(Error::InvalidBar);
-        }
-        let header = read(ext)?;
-        if header & 0xff == 1 && header & (1 << 16) != 0 {
-            return Err(Error::FirmwareOwned);
-        }
-        let next = ((header >> 8) & 0xff) * 4;
-        ext = if next == 0 {
-            0
-        } else {
-            ext.checked_add(next).ok_or(Error::InvalidBar)?
-        };
+    if matches!(
+        legacy_capability_chain(hcc1, bar_bytes, &mut read)?,
+        LegacyOwnership::Firmware | LegacyOwnership::Contended
+    ) {
+        return Err(Error::FirmwareOwned);
     }
-    Err(Error::InvalidBar)
+    Ok(Registers {
+        operational: op,
+        runtime,
+        doorbell,
+        ports,
+        address64: hcc1 & 1 != 0,
+        context_bytes: if hcc1 & 4 != 0 { 64 } else { 32 },
+    })
 }
-
 fn validate_dma<E>(
     dma: DmaLayout,
     address64: bool,

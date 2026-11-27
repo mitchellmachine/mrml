@@ -1,5 +1,60 @@
 use super::*;
 
+#[test]
+fn read_only_legacy_inventory_reports_exact_semaphore_states() {
+    for (bits, expected) in [
+        (0, LegacyOwnership::Unclaimed),
+        (1 << 16, LegacyOwnership::Firmware),
+        (1 << 24, LegacyOwnership::OperatingSystem),
+        ((1 << 16) | (1 << 24), LegacyOwnership::Contended),
+    ] {
+        let mut offsets = [0; 3];
+        let mut index = 0;
+        let result = inspect_legacy_ownership(0x40, |offset| {
+            offsets[index] = offset;
+            index += 1;
+            Ok::<_, ()>(match offset {
+                0x10 => 8 << 16,
+                0x20 => (4 << 8) | 2,
+                0x30 => 1 | bits,
+                _ => panic!("unexpected MMIO read: {offset:#x}"),
+            })
+        });
+        assert_eq!(result, Ok(expected));
+        assert_eq!(offsets, [0x10, 0x20, 0x30]);
+    }
+    assert_eq!(
+        inspect_legacy_ownership(0x20, |offset| {
+            assert_eq!(offset, 0x10);
+            Ok::<_, ()>(0)
+        }),
+        Ok(LegacyOwnership::Absent)
+    );
+}
+
+#[test]
+fn read_only_legacy_inventory_rejects_malformed_or_ambiguous_capabilities() {
+    for (bar, caps, expected_reads) in [
+        (0x24, [1, 0], 1),
+        (0x40, [1 | (1 << 8), 0], 1),
+        (0x40, [1 | (4 << 8), 1], 2),
+        (0x40, [u32::MAX, 0], 1),
+        (0x40, [2 | (32 << 8), 0], 1),
+    ] {
+        let mut reads = 0;
+        let result = inspect_legacy_ownership(bar, |offset| {
+            if offset == 0x10 {
+                return Ok::<_, ()>(8 << 16);
+            }
+            let value = caps[reads];
+            reads += 1;
+            Ok(value)
+        });
+        assert_eq!(result, Err(Error::InvalidBar));
+        assert_eq!(reads, expected_reads);
+    }
+}
+
 const DMA: DmaLayout = DmaLayout {
     device_contexts: 0x10_0000,
     command_ring: 0x10_0100,

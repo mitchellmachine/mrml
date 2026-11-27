@@ -341,14 +341,22 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
             trace(0xdb);
             return;
         };
-        // SAFETY: exact read-only three-page BAR mapping and host release,
-        // matching live BAR base and capability length. Fixed dwords
-        // only; never follow dynamically supplied offsets.
-        let extended = unsafe {
-            [0x14, 0x18, 0x1020, 0x2000]
-                .map(|offset| core::ptr::read_volatile((xhci + offset) as *const u32))
+        use mrml_storage_usb::xhci::{LegacyOwnership, inspect_legacy_ownership};
+        // SAFETY: exact three-page BAR and host release. The four
+        // fixed dwords are within the proved subregions; the capability
+        // walker can read aligned dwords only inside the first 0x40 bytes.
+        let (extended, ownership) = unsafe {
+            let extended = [0x14, 0x18, 0x1020, 0x2000]
+                .map(|offset| core::ptr::read_volatile((xhci + offset) as *const u32));
+            let ownership = inspect_legacy_ownership(0x40, |offset| {
+                Ok::<_, ()>(core::ptr::read_volatile(
+                    (xhci + offset as usize) as *const u32,
+                ))
+            });
+            (extended, ownership)
         };
-        if extended[0] != 0x2000
+        if !matches!(ownership, Ok(LegacyOwnership::Absent))
+            || extended[0] != 0x2000
             || extended[1] != 0x1000
             || extended[2] & !3 != 0
             || extended[3] != 0

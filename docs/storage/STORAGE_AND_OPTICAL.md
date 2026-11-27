@@ -3280,6 +3280,14 @@ verifies the DRHD resource is absent and the unattached writable scratch
 backend has zero reads and writes and identical bytes. The firmware's
 prior PCI command state is not treated as a native device assignment.
 
+The driver and the read-only ownership sampler share one bounded xHCI
+extended-capability walker. It reports absent, unclaimed, firmware-owned,
+OS-owned, or contended semaphores and rejects malformed, duplicate, or
+out-of-range legacy capabilities. It never reads the adjacent legacy SMI
+control dword or writes ownership state. The sealed QEMU preflight
+independently expects no legacy interface. A semaphore observation alone
+is not authority for reset, DMA, or firmware handoff.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The
