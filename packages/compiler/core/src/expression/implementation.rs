@@ -6517,6 +6517,15 @@ fn decode_integer(token: Token<'_>) -> Result<IntegerLiteral<'_>, ExpressionErro
     })
 }
 
+fn decode_hex_character_escape(escaped: &str) -> Option<u8> {
+    let [b'x', high, low] = escaped.as_bytes() else {
+        return None;
+    };
+    let high = char::from(*high).to_digit(16)?;
+    let low = char::from(*low).to_digit(16)?;
+    Some(((high << 4) | low) as u8)
+}
+
 fn decode_character(token: Token<'_>) -> Result<u32, ExpressionError> {
     let invalid = || ExpressionError {
         kind: ExpressionErrorKind::InvalidCharacter,
@@ -6536,9 +6545,10 @@ fn decode_character(token: Token<'_>) -> Result<u32, ExpressionError> {
             "\\" => Ok(u32::from(b'\\')),
             "'" => Ok(u32::from(b'\'')),
             "\"" => Ok(u32::from(b'\"')),
-            value if value.starts_with('x') && value.len() == 3 => {
-                u32::from_str_radix(&value[1..], 16).map_err(|_| invalid())
-            }
+            value if value.starts_with('x') => decode_hex_character_escape(value)
+                .filter(u8::is_ascii)
+                .map(u32::from)
+                .ok_or_else(invalid),
             value if value.starts_with("u{") && value.ends_with('}') => {
                 let mut bytes = value[2..value.len() - 1].bytes();
                 let mut scalar = bytes
@@ -6586,8 +6596,8 @@ fn decode_byte_character(token: Token<'_>) -> Result<u8, ExpressionError> {
             "\\" => Ok(b'\\'),
             "'" => Ok(b'\''),
             "\"" => Ok(b'\"'),
-            value if value.starts_with('x') && value.len() == 3 => {
-                u8::from_str_radix(&value[1..], 16).map_err(|_| invalid())
+            value if value.starts_with('x') => {
+                decode_hex_character_escape(value).ok_or_else(invalid)
             }
             _ => Err(invalid()),
         };

@@ -94,6 +94,31 @@ mod tests {
     }
 
     #[test]
+    fn hexadecimal_character_escapes_require_two_digits_and_respect_literal_kind() {
+        for (source, value) in [
+            (r"'\x41'", 0x41),
+            (r"'\x7F'", 0x7f),
+            (r"'\u{80}'", 0x80),
+            (r"b'\x80'", 0x80),
+            (r"b'\xFF'", 0xff),
+        ] {
+            assert_eq!(evaluate(source), Ok(value));
+        }
+        for source in [
+            r"'\x80'",
+            r"'\x+A'",
+            r"b'\x+A'",
+            r"b'\xG1'",
+            r"'\x4'",
+            r"b'\x041'",
+        ] {
+            let error = ExpressionParser::<4>::new(source).parse().unwrap_err();
+            assert_eq!(error.kind, ExpressionErrorKind::InvalidCharacter);
+            assert_eq!(&source[error.span.start..error.span.end], source);
+        }
+    }
+
+    #[test]
     fn unicode_character_escapes_count_hex_digits_and_validate_scalars() {
         for (source, scalar) in [
             (r"'\u{41}'", 0x41),
