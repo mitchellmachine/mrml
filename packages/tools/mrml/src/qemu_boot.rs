@@ -311,16 +311,20 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::ValidRelease => Some(true),
     });
     let mut released = false;
+    let mut fixture_bar = None;
     loop {
         if let Ok(bytes) = fs::read(trace) {
             if let Some(valid) = release {
                 let ready = &expected[..expected.len() - 1];
                 if !released && bytes == ready {
-                    if let Err(error) = crate::qemu_mmio::release_q35_fixture(&mut child, valid) {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Err(error);
-                    }
+                    fixture_bar = match crate::qemu_mmio::release_q35_fixture(&mut child, valid) {
+                        Ok(bar) => bar,
+                        Err(error) => {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return Err(error);
+                        }
+                    };
                     released = true;
                 } else if !released && !ready.starts_with(&bytes) {
                     let _ = child.kill();
@@ -344,8 +348,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 );
                 return Ok(());
             }
-            let report = if released && release == Some(true) {
-                match crate::qemu_mmio::register_snapshot(expected, &bytes) {
+            let report = if let Some(bar) = fixture_bar {
+                match crate::qemu_mmio::register_snapshot(expected, &bytes, bar) {
                     Ok(report) => report,
                     Err(error) => {
                         let _ = child.kill();

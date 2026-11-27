@@ -3117,14 +3117,20 @@ The protected root maps only the remapper's first page and the ECAM page of
 fixture function `00:1b.0`; the BSP independently checks the exclusive
 read-only, non-executable device leaves. The BSP waits at a bounded
 rendezvous before AP startup. The host runner pauses the same instance
-and checks both the exact live q35 memory map and the dedicated emulated
-UART's port range. Only then does it set the UART scratch byte over private
-QMP pipes and resume. The same signed image rejects the wrong release byte
-without touching either mapped device. With the right byte, it samples only
+and checks the exact live q35 memory map and dedicated emulated UART. For
+a valid release it also locates the assigned, aligned 16 KiB BAR0 of the
+separate fixture controller via the PCI monitor and confirms the exact
+capability and operational register subranges belong to that controller
+in the CPU FlatView. This is not proof for the remaining BAR bytes.
+Only then does it set the UART scratch byte over private QMP pipes and
+resume. The same signed image rejects the wrong release byte without
+touching either mapped device. With the right byte, it samples only
 fixed VT-d version, capability, extended capability and global status
-registers, and the exact xHCI function's PCI identity, command and class.
-It checks both capability-derived register arrays against the proven byte
-extent before admitting the report; it does not read the arrays. The report
+registers, and the exact xHCI function's PCI identity, command, class,
+header type and assigned BAR0 pair. The guest BAR base must match the
+paused host's observation. Neither side writes a BAR sizing probe or
+reads through the BAR. The guest checks the capability-derived VT-d
+arrays against the proven byte extent without reading them. The report
 includes the observed bus-master bit, not an ownership or shutdown proof.
 There are no device register writes or MRML USB DMA in this test. The marker
 is an opt-in for the isolated model, not authenticated hardware provenance.

@@ -239,7 +239,7 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
     let [drhd, ecam] = mappings.map(|mapping| mapping.virtual_start().get() as usize);
     // SAFETY: the caller establishes the current, exact, alias-free UC leaves
     // and release. Only fixed aligned widths inside the proven apertures.
-    let (version, cap, ecap, status, pci_id, pci_command, pci_class) = unsafe {
+    let (version, cap, ecap, status, pci_id, pci_command, pci_class, header, bar0, bar1) = unsafe {
         (
             core::ptr::read_volatile((drhd) as *const u32),
             core::ptr::read_volatile((drhd + 0x08) as *const u64),
@@ -248,6 +248,9 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
             core::ptr::read_volatile(ecam as *const u32),
             core::ptr::read_volatile((ecam + 0x04) as *const u16),
             core::ptr::read_volatile((ecam + 0x08) as *const u32),
+            core::ptr::read_volatile((ecam + 0x0e) as *const u8),
+            core::ptr::read_volatile((ecam + 0x10) as *const u32),
+            core::ptr::read_volatile((ecam + 0x14) as *const u32),
         )
     };
     if version != 0x10
@@ -256,6 +259,9 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
             .is_err()
         || pci_id != 0x000d_1b36
         || pci_class >> 8 != 0x0c0330
+        || header & 0x7f != 0
+        || pci_command & 2 == 0
+        || bar0 & 0xf != 4
     {
         trace(0xdb);
         return;
@@ -268,6 +274,9 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         &pci_id.to_le_bytes(),
         &pci_command.to_le_bytes(),
         &pci_class.to_le_bytes(),
+        &[header],
+        &bar0.to_le_bytes(),
+        &bar1.to_le_bytes(),
     ] {
         for &byte in bytes {
             trace(byte);
