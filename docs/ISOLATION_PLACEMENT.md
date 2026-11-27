@@ -42,8 +42,11 @@ RAM-backed block-service probe exercises a supervised Total MicroVM guest. Its
 client and service are separate CPL3 tasks within that one diagnostic guest;
 the fixture does not establish production inter-VM transport or physical I/O.
 The next transport slice carries a canonical 512-byte READ over the existing
-peer-page call queue between distinct hosted guest mappings. The hosted tests
-execute the queue endpoints on the host, not inside the guest workloads. The
+peer-page call queue between distinct hosted guest mappings. In the focused
+signed-payload test, the provider guest checks the request and produces the
+sector, and the consumer guest checks every response byte. The host still
+runs the typed queue endpoints and delivers notification checks separately;
+this is not a guest interrupt handler or production service launch. The
 provider retirement/rebind simulation rejects old notifications and sessions
 before backend I/O. Wiring the installed service, guest interrupt consumers,
 and real block providers remains open. The former direct FAT32 provider

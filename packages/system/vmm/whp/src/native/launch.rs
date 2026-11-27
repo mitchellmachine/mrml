@@ -3494,13 +3494,18 @@ mod tests {
 
     #[inline(never)]
     fn write_signed_payload_kind(payload: [u8; 1024], kind: ArtifactKind, encoded: &mut [u8]) {
+        write_signed_fixture(payload, kind, encoded, 0);
+    }
+
+    #[inline(never)]
+    fn write_signed_fixture(payload: [u8; 1024], kind: ArtifactKind, encoded: &mut [u8], test_salt: u8) {
         assert_eq!(
             encoded.len(),
             SIGNED_ARTIFACT_OVERHEAD_BYTES + payload.len()
         );
         let mut private = [0u8; LAMPORT_PRIVATE_KEY_BYTES];
         for (index, byte) in private.iter_mut().enumerate() {
-            *byte = (index as u64).wrapping_mul(73).wrapping_add(29) as u8;
+            *byte = (index as u64).wrapping_mul(73).wrapping_add(29 + u64::from(test_salt)) as u8;
         }
         let mut public = [0u8; LAMPORT_PUBLIC_KEY_BYTES];
         lamport_public_key(&private, &mut public).unwrap();
@@ -3958,13 +3963,57 @@ mod tests {
         assert_distinct_signed_services(first, second, &kernel, &service_root, layout);
     }
 
+
+    // The queue remains owned by the host-side typed endpoints in this
+    // diagnostic. Independently signed guest code supplies the payload in a
+    // reserved test scratch range, and the consumer reads all 512 bytes from
+    // the canonical response through its own page-table mapping.
+    fn peer_block_probe_pe(provider: bool, virtual_page: u64) -> [u8; 1024] {
+        let mut pe = valid_pe();
+        let mut code = [0; 512];
+        let mut at = 0;
+        if provider {
+            // Check the READ LBA in the existing wire (112-byte queue header
+            // and 80-byte offset in the block ABI), then fill the scratch.
+            emit_mov(&mut code, &mut at, 0xbf, virtual_page + 192);
+            emit(&mut code, &mut at, &[0x48, 0x83, 0x3f, 1, 0x74, 1, 0xcc]);
+            emit_mov(&mut code, &mut at, 0xbf, virtual_page + 1024);
+        } else {
+            // Queue header followed by the 16-byte canonical read response.
+            emit_mov(&mut code, &mut at, 0xbf, virtual_page + 128);
+        }
+        emit_mov(&mut code, &mut at, 0xb8, 0xa6a6_a6a6_a6a6_a6a6);
+        emit(&mut code, &mut at, &[0xfc, 0xb9, 64, 0, 0, 0]); // cld; mov ecx, 64
+        if provider {
+            emit(&mut code, &mut at, &[0xf3, 0x48, 0xab]); // rep stosq
+        } else {
+            emit(&mut code, &mut at, &[0xf3, 0x48, 0xaf, 0x74, 1, 0xcc]); // repe scasq; je; int3
+        }
+        emit(&mut code, &mut at, &[0xf4]); // hlt
+        let section = 0x98 + 240;
+        pe[section + 8..section + 12].copy_from_slice(&(at as u32).to_le_bytes());
+        pe[0x200..0x200 + at].copy_from_slice(&code[..at]);
+        pe
+    }
+
     #[test]
     fn live_two_partition_peer_page_shares_and_retires_exact_backing() {
+        use mrml_kernel::VmDeadlineOutcome;
+
         let system = WhpSystem::open().unwrap();
         if !system.hypervisor_present().unwrap() {
+            mrml_runtime::mrml_println!("peer-block-guest|status=SKIP|backend=whp|reason=no-hypervisor");
             return;
         }
-        let encoded = signed_pe();
+        let peer_virtual = 0xffff_8001_400f_0000;
+        let encoded = signed_payload(peer_block_probe_pe(false, peer_virtual));
+        let mut provider_encoded = [0u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024];
+        write_signed_fixture(
+            peer_block_probe_pe(true, peer_virtual),
+            ArtifactKind::VmImage,
+            &mut provider_encoded,
+            1,
+        );
         let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
         let root = TrustRoot::new(
             ArtifactKind::VmImage,
@@ -3975,6 +4024,16 @@ mod tests {
         let executable = signed
             .verify_executable(&root, ArtifactKind::VmImage)
             .unwrap();
+        let provider_root = TrustRoot::new(
+            ArtifactKind::VmImage,
+            Sha3_512::digest(&provider_encoded[public_at..public_at + LAMPORT_PUBLIC_KEY_BYTES]),
+            1,
+        );
+        let provider_signed = SignedArtifact::decode(&provider_encoded).unwrap();
+        let provider_executable = provider_signed
+            .verify_executable(&provider_root, ArtifactKind::VmImage)
+            .unwrap();
+        assert_ne!(executable.artifact().digest(), provider_executable.artifact().digest());
         let layout = WhpLaunchLayout::new(
             0x10_0000,
             16,
@@ -3991,12 +4050,17 @@ mod tests {
         let mut first = system
             .prepare_boot_kernel(&executable, &valid_handoff(), layout)
             .unwrap();
-        let mut second = match system.prepare_boot_kernel(&executable, &valid_handoff(), layout) {
+        let mut second = match system.prepare_boot_kernel(
+            &provider_executable, &valid_handoff(), layout,
+        ) {
             Ok(second) => second,
             // Some nested WHP hosts admit only one active partition and return
             // the documented VID identity collision for a second. Total mode
             // must classify that as unavailable rather than use one VM twice.
-            Err(WhpError::PartitionAlreadyExists) => return,
+            Err(WhpError::PartitionAlreadyExists) => {
+                mrml_runtime::mrml_println!("peer-block-guest|status=SKIP|backend=whp|reason=second-partition-unavailable");
+                return;
+            }
             Err(error) => panic!("second WHP partition failed: {error:?}"),
         };
 
@@ -4022,7 +4086,6 @@ mod tests {
             &mut capabilities,
         )
         .unwrap();
-        let peer_virtual = 0xffff_8001_400f_0000;
         first.install_peer_page(peer_virtual, 0x20_0000).unwrap();
         let failure = PreparedWhpPeerPage::prepare(
             &mut first,
@@ -4114,6 +4177,10 @@ mod tests {
             .unwrap();
         request_route.publish(request_notification).unwrap();
         peer.write_first(&consumer_page).unwrap();
+        assert_eq!(
+            DeadlineVmBackend::run_with_deadline(peer.second, 0, 1_000_000).unwrap(),
+            VmDeadlineOutcome::Exit(VmExit::Halted)
+        );
         let request_notification = peer
             .deliver_request_interrupt(
                 &mut request_route,
@@ -4127,7 +4194,8 @@ mod tests {
         let mut provider_page = [0_u8; PAGE_SIZE as usize];
         peer.read_second(&mut provider_page).unwrap();
         let mut sectors = [0x37; 1024];
-        sectors[512..].fill(0xa6);
+        sectors[512..].copy_from_slice(&provider_page[1024..1536]);
+        assert_eq!(sectors[512..], [0xa6; 512]);
         let mut storage = ReadOnlyBlockImage::new(&sectors, 512, session).unwrap();
         let response_notification = provider_queue
             .serve(
@@ -4140,6 +4208,10 @@ mod tests {
             .unwrap();
         response_route.publish(response_notification).unwrap();
         peer.write_second(&provider_page).unwrap();
+        assert_eq!(
+            DeadlineVmBackend::run_with_deadline(peer.first, 0, 1_000_000).unwrap(),
+            VmDeadlineOutcome::Exit(VmExit::Halted)
+        );
         let response_notification = peer
             .deliver_response_interrupt(
                 &mut response_route,
@@ -4197,6 +4269,7 @@ mod tests {
         let usage = memory.usage(pool, pool_capability, &capabilities).unwrap();
         assert_eq!(usage.object_pages(), 0);
         assert_eq!(usage.active_mappings(), 0);
+        mrml_runtime::mrml_println!("peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512");
     }
 
     #[test]

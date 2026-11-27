@@ -774,8 +774,14 @@ the existing request, canonical status, and exact-length data on success. The
 adapter rejects stale sessions before backend dispatch and requires exact
 response length before publishing bytes to the caller. The retirement simulation
 checks that stale request and completion notifications do not reach the
-replacement provider or change the caller's buffer. This reuses the existing
-slot and adds no mapping or service authority. Release fences precede request, response, and idle publication;
+replacement provider or change the caller's buffer. The focused signed guest
+payloads now generate and check the sector through their own page tables.
+Nested KVM reached both guest payloads and verified native mapping retirement.
+The WHP test compiles but skipped the live body on the local host because it
+could not create the second partition. The host coordinates the canonical queue
+and its interrupt routing separately; the guest payloads do not consume
+injected interrupts. This reuses the
+existing slot and adds no mapping or service authority. Release fences precede request, response, and idle publication;
 matching acquire fences follow state observation before consuming metadata or
 payload. Backend interrupt/event delivery, a race-tested atomic shared-state
 representation, signed component execution, and recovery integration remain
