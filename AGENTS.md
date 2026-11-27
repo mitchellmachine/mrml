@@ -4,6 +4,18 @@ These instructions apply to the entire repository. The Git repository is the
 durable source of truth; chat history, agent memory, local notes, and benchmark
 claims outside the repository are not authoritative.
 
+## Rust-only implementation
+
+Use Rust for all project implementation, tooling, tests, and automation. The
+only exceptions are the setup of `rustc` and the initial build of the MRML
+frontend. Do not add or extend Python, shell, PowerShell, or any other
+non-Rust executable implementation, including when hidden behind a Rust
+wrapper or in CI. Use the compiled MRML tool for subsequent project
+operations. Declarative manifests, CI job wiring, and prose are not
+implementations. Use operating-system interfaces for host services rather
+than outsourcing project logic to a script. Existing legacy code does not
+create a new exception; migrate the affected workflow when changing it.
+
 Before changing kernel, VMM, boot, signing, protected-execution, capability,
 IPC, device, or security code, read completely:
 
