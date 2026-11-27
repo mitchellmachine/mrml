@@ -3122,14 +3122,21 @@ a valid release it also locates the assigned, aligned 16 KiB BAR0 of the
 separate fixture controller via the PCI monitor and confirms the exact
 capability and operational register subranges belong to that controller
 in the CPU FlatView. This is not proof for the remaining BAR bytes.
+Before sending the valid release, the paused host reads only the proved
+CAPLENGTH/HCIVERSION dword (requiring the operational base at offset 0x40),
+USBCMD and USBSTS. This records Run/Stop and HCHalted independently of the
+later PCI bus-master sample. In the signed q35 run, USBCMD was zero and
+USBSTS reported HCHalted even though PCI bus mastering was still enabled.
+These reads are observations; they neither halt
+the controller nor prove that it is safe to touch the full BAR or clear BME.
 Only then does it set the UART scratch byte over private QMP pipes and
 resume. The same signed image rejects the wrong release byte without
 touching either mapped device. With the right byte, it samples only
 fixed VT-d version, capability, extended capability and global status
 registers, and the exact xHCI function's PCI identity, command, class,
 header type and assigned BAR0 pair. The guest BAR base must match the
-paused host's observation. Neither side writes a BAR sizing probe or
-reads through the BAR. The guest checks the capability-derived VT-d
+paused host's observation. Neither side writes a BAR sizing probe, and the
+guest does not map or read through the BAR. The guest checks the capability-derived VT-d
 arrays against the proven byte extent without reading them. The report
 includes the observed bus-master bit, not an ownership or shutdown proof.
 There are no device register writes or MRML USB DMA in this test. The marker

@@ -29,11 +29,11 @@ pub(super) fn verify_paused_q35_resources(child: &mut Child) -> Result<(), Strin
 pub(super) fn release_q35_fixture(
     child: &mut Child,
     valid: bool,
-) -> Result<Option<FixtureBar>, String> {
+) -> Result<Option<FixtureState>, String> {
     inspect_q35(child, Some(valid))
 }
 
-fn inspect_q35(child: &mut Child, release: Option<bool>) -> Result<Option<FixtureBar>, String> {
+fn inspect_q35(child: &mut Child, release: Option<bool>) -> Result<Option<FixtureState>, String> {
     let mut stdin = child.stdin.take().ok_or("missing QMP input")?;
     let stdout = child.stdout.take().ok_or("missing QMP output")?;
     let (send, receive) = mpsc::sync_channel(1);
@@ -61,7 +61,7 @@ fn inspect_qmp(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
     release: Option<bool>,
-) -> Result<Option<FixtureBar>, String> {
+) -> Result<Option<FixtureState>, String> {
     qmp_write(stdin, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 71}")?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":72}\n")?;
@@ -83,7 +83,7 @@ fn inspect_qmp(
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":77}\n",
         )?;
         validate_fixture_bar(&read_monitor(&mut *reader, 77)?, bar)?;
-        Some(bar)
+        Some(sample_xhci_state(stdin, reader, bar)?)
     } else {
         None
     };
@@ -100,6 +100,61 @@ fn inspect_qmp(
         ack(reader, "{\"return\": {}, \"id\": 75}")?;
     }
     Ok(bar)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FixtureState {
+    bar: FixtureBar,
+    cap0: u32,
+    command: u32,
+    status: u32,
+}
+
+fn sample_xhci_state(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    bar: FixtureBar,
+) -> Result<FixtureState, String> {
+    // validate_fixture_bar has proved these precise, aligned 32-bit windows in
+    // the paused VM. Never derive an address from an unchecked register word.
+    let cap0 = read_xhci_dword(stdin, reader, bar.start, 78)?;
+    if cap0 & 0xffff != 0x40 || !matches!(cap0 >> 16, 0x100 | 0x110 | 0x120) {
+        return Err("unexpected xHCI CAPLENGTH or HCIVERSION".into());
+    }
+    let command = read_xhci_dword(stdin, reader, bar.start + 0x40, 79)?;
+    let status = read_xhci_dword(stdin, reader, bar.start + 0x44, 80)?;
+    if command == u32::MAX || status == u32::MAX {
+        return Err("invalid xHCI operational register sample".into());
+    }
+    Ok(FixtureState {
+        bar,
+        cap0,
+        command,
+        status,
+    })
+}
+
+fn read_xhci_dword(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    address: u64,
+    id: u8,
+) -> Result<u32, String> {
+    qmp_write(
+        stdin,
+        &format!(
+            "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"xp /1wx {address:#x}\"}},\"id\":{id}}}\n"
+        ),
+    )?;
+    let text = read_monitor(reader, id)?;
+    let (at, word) = text
+        .trim_end()
+        .split_once(": 0x")
+        .ok_or("malformed QEMU xHCI register readout")?;
+    if at != format!("{address:08x}") || word.len() != 8 {
+        return Err("unexpected address or width in QEMU xHCI register readout".into());
+    }
+    u32::from_str_radix(word, 16).map_err(|_| "bad QEMU xHCI register value".into())
 }
 
 fn qmp_write(out: &mut impl std::io::Write, message: &str) -> Result<(), String> {
@@ -193,7 +248,7 @@ fn validate_scratch_uart(map: &str) -> Result<(), String> {
 pub(super) fn register_snapshot(
     prefix: &[u8],
     bytes: &[u8],
-    bar: FixtureBar,
+    state: FixtureState,
 ) -> Result<Option<String>, String> {
     if prefix.starts_with(bytes) {
         return Ok(None);
@@ -215,6 +270,7 @@ pub(super) fn register_snapshot(
     let (ver, cap, ecap, gsts, pci, class) =
         (long(0), quad(4), quad(12), long(20), long(24), long(30));
     let command = u16::from_le_bytes(data[28..30].try_into().unwrap());
+    let bar = state.bar;
     let (bar0, bar1) = (long(35), long(39));
     let guest_base = u64::from(bar1) << 32 | u64::from(bar0 & !0xf);
     if ver != 0x10
@@ -230,10 +286,15 @@ pub(super) fn register_snapshot(
         return Err("q35 fixed-register report disagrees with the exact fixture".into());
     }
     Ok(Some(format!(
-        "q35-read-only-registers|status=PASS|ver={ver:#x}|cap={cap:#018x}|ecap={ecap:#018x}|gsts={gsts:#010x}|pci={pci:#010x}|command={command:#06x}|class_revision={class:#010x}|bme={}|bar0={:#x}..={:#x}",
+        "q35-read-only-registers|status=PASS|ver={ver:#x}|cap={cap:#018x}|ecap={ecap:#018x}|gsts={gsts:#010x}|pci={pci:#010x}|command={command:#06x}|class_revision={class:#010x}|bme={}|bar0={:#x}..={:#x}|xhci_cap0={:#010x}|xhci_usbcmd={:#010x}|xhci_usbsts={:#010x}|xhci_run={}|xhci_halted={}",
         command & (1 << 2) != 0,
         bar.start,
-        bar.end
+        bar.end,
+        state.cap0,
+        state.command,
+        state.status,
+        state.command & 1 != 0,
+        state.status & 1 != 0,
     )))
 }
 
@@ -510,7 +571,7 @@ mod tests {
             let pci = encode(&pci);
             let mapped = encode(&format!("{VIEW}{mapped}"));
             let replies = format!(
-                "{{\"return\": {{}}, \"id\": 71}}\n{{\"return\": {{}}, \"id\": 72}}\n{{\"return\": \"{base}\", \"id\": 73}}\n{{\"return\": \"{pci}\", \"id\": 76}}\n{{\"return\": \"{mapped}\", \"id\": 77}}\n{{\"return\": \"\", \"id\": 74}}\n{{\"return\": {{}}, \"id\": 75}}\n"
+                "{{\"return\": {{}}, \"id\": 71}}\n{{\"return\": {{}}, \"id\": 72}}\n{{\"return\": \"{base}\", \"id\": 73}}\n{{\"return\": \"{pci}\", \"id\": 76}}\n{{\"return\": \"{mapped}\", \"id\": 77}}\n{{\"return\": \"c000004000: 0x01000040\\r\\n\", \"id\": 78}}\n{{\"return\": \"c000004040: 0x00000000\\r\\n\", \"id\": 79}}\n{{\"return\": \"c000004044: 0x00000001\\r\\n\", \"id\": 80}}\n{{\"return\": \"\", \"id\": 74}}\n{{\"return\": {{}}, \"id\": 75}}\n"
             );
             let mut sent = Vec::new();
             let result = inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(true));
@@ -526,11 +587,47 @@ mod tests {
     }
 
     #[test]
+    fn fixed_xhci_reads_stop_on_an_unproven_geometry_or_bad_reply() {
+        let bar = fixture_bar(PCI).unwrap();
+        let cap = "{\"return\": \"c000004000: 0x01000040\\r\\n\", \"id\": 78}\n";
+        let cmd = "{\"return\": \"c000004040: 0x00000001\\r\\n\", \"id\": 79}\n";
+        let sts = "{\"return\": \"c000004044: 0x00000000\\r\\n\", \"id\": 80}\n";
+        for (cap, reads) in [
+            (cap.to_owned(), 3),
+            (cap.replace("01000040", "01000044"), 1),
+            (cap.replace("c000004000", "c000008000"), 1),
+            (cap.replace("01000040", "4001000040"), 1),
+            (cap.replace("01000040", "ffffffff"), 1),
+        ] {
+            let replies = format!("{cap}{cmd}{sts}");
+            let mut sent = Vec::new();
+            let state = sample_xhci_state(&mut sent, &mut replies.as_bytes(), bar);
+            match reads {
+                3 => {
+                    let state = state.unwrap();
+                    assert_eq!(state.command, 1);
+                    assert_eq!(state.status, 0);
+                }
+                _ => assert!(state.is_err()),
+            }
+            let sent = String::from_utf8(sent).unwrap();
+            assert_eq!(sent.matches("xp /1wx").count(), reads);
+            assert!(!sent.contains("o /b"));
+        }
+    }
+
+    #[test]
     fn snapshot_requires_the_release_prefix_and_a_complete_exact_report() {
         let prefix = [0xdc, 0xde];
         let bar = FixtureBar {
             start: 0xc000004000,
             end: 0xc000007fff,
+        };
+        let state = FixtureState {
+            bar,
+            cap0: 0x01000040,
+            command: 0,
+            status: 1,
         };
         let data = [
             &prefix[..],
@@ -548,10 +645,13 @@ mod tests {
         ]
         .concat();
         for end in 0..data.len() {
-            assert_eq!(register_snapshot(&prefix, &data[..end], bar).unwrap(), None);
+            assert_eq!(
+                register_snapshot(&prefix, &data[..end], state).unwrap(),
+                None
+            );
         }
         assert!(
-            register_snapshot(&prefix, &data, bar)
+            register_snapshot(&prefix, &data, state)
                 .unwrap()
                 .unwrap()
                 .contains("|bme=true")
@@ -559,9 +659,9 @@ mod tests {
         for at in [0, 1, 2, 26, 35, 36, 37, 41, 45] {
             let mut wrong = data.clone();
             wrong[at] ^= 0xff;
-            assert!(register_snapshot(&prefix, &wrong, bar).is_err());
+            assert!(register_snapshot(&prefix, &wrong, state).is_err());
         }
-        assert!(register_snapshot(&prefix, &[0xdc, 0xde, 0xdb], bar).is_err());
-        assert!(register_snapshot(&prefix, &[data.as_slice(), &[0]].concat(), bar).is_err());
+        assert!(register_snapshot(&prefix, &[0xdc, 0xde, 0xdb], state).is_err());
+        assert!(register_snapshot(&prefix, &[data.as_slice(), &[0]].concat(), state).is_err());
     }
 }
