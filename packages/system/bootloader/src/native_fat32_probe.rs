@@ -199,8 +199,33 @@ pub(super) fn dma_mmio_coverage(covered: bool) {
 }
 
 #[cfg(feature = "q35-mmio-probe")]
-pub(super) fn dma_fixture_leaves_verified() {
+pub(super) fn dma_fixture_rendezvous() {
+    let scratch = || {
+        let byte: u8;
+        // SAFETY: this signed QEMU-only BSP fixture reads only the dedicated
+        // emulated ISA serial scratch register. No interrupt or UART setup.
+        unsafe { asm!("in al, dx", in("dx") 0x2ffu16, out("al") byte, options(nomem, nostack)) };
+        byte
+    };
+    if scratch() != 0 {
+        trace(0xdf);
+        return;
+    }
     trace(0xdc);
+    for _ in 0..100_000_000 {
+        match scratch() {
+            0 => core::hint::spin_loop(),
+            0xa6 => {
+                trace(0xde);
+                return;
+            }
+            _ => {
+                trace(0xdd);
+                return;
+            }
+        }
+    }
+    trace(0xdf);
 }
 
 fn trace(stage: u8) {

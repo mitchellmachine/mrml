@@ -3115,9 +3115,13 @@ with the firmware memory map or framebuffer, and rechecks the complete
 marker, DMAR, and MCFG snapshots against the final map after firmware exit.
 The protected root maps only the remapper's first page and the ECAM page of
 fixture function `00:1b.0`; the BSP independently checks the exclusive
-read-only, non-executable device leaves. The host runner checks the live
-q35 resource map on the same instance. There are no PCI or remapper register
-accesses and no MRML USB DMA in this test. The marker is an opt-in for the
+read-only, non-executable device leaves. The BSP waits at a bounded
+rendezvous before AP startup. The host runner pauses the same instance
+and checks both the exact live q35 memory map and the dedicated emulated
+UART's port range. Only then does it set the UART scratch byte over private
+QMP pipes and resume. The same signed image rejects the wrong release byte
+and stops after accepting the right one. There are no PCI or remapper
+register accesses and no MRML USB DMA in this test. The marker is an opt-in for the
 isolated model, not authenticated hardware provenance. Do not flash this
 profile or use it in a real hardware test.
 

@@ -4041,6 +4041,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     #[cfg(feature = "q35-mmio-probe")]
     {
+        let _ = &early;
         if _boot_dma.is_none() || handoff.dma_acpi(encoded).is_none() {
             halt();
         }
@@ -4054,7 +4055,9 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 .verify_read_only_mmio_leaves(mapping)
                 .unwrap_or_else(|_| halt());
         }
-        native_fat32_probe::dma_fixture_leaves_verified();
+        native_fat32_probe::dma_fixture_rendezvous();
+        // This fixture ends on the BSP before any PCI or DRHD register access.
+        halt();
     }
     #[cfg(feature = "uefi-fat32-restart-probe")]
     let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML KERNEL ENTRY");

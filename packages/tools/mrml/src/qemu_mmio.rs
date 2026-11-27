@@ -2,7 +2,7 @@
 //! QEMU's flat monitor format is not a stable ABI; unfamiliar output fails
 //! closed. This module never issues guest mapping authority.
 
-use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+use std::io::{BufRead as _, BufReader, Read as _};
 use std::process::Child;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -23,19 +23,24 @@ pub(super) fn fixture_acpi_table() -> [u8; 36] {
 }
 
 pub(super) fn verify_paused_q35_resources(child: &mut Child) -> Result<(), String> {
+    inspect_q35(child, None)
+}
+
+pub(super) fn release_q35_fixture(child: &mut Child, valid: bool) -> Result<(), String> {
+    inspect_q35(child, Some(valid))
+}
+
+fn inspect_q35(child: &mut Child, release: Option<bool>) -> Result<(), String> {
     let mut stdin = child.stdin.take().ok_or("missing QMP input")?;
     let stdout = child.stdout.take().ok_or("missing QMP output")?;
-    // Send only fixed requests. Stop freezes the firmware-initialized model
-    // before we inspect CPU-visible resources.
-    stdin.write_all(concat!(
-        "{\"execute\":\"qmp_capabilities\"}\n",
-        "{\"execute\":\"stop\"}\n",
-        "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f\"},\"id\":73}\n"
-    ).as_bytes()).map_err(|e| format!("QMP write: {e}"))?;
     let (send, receive) = mpsc::sync_channel(1);
     let worker = std::thread::Builder::new()
         .spawn(move || {
-            let _ = send.send(read_map(BufReader::new(stdout)));
+            let _ = send.send(inspect_qmp(
+                &mut stdin,
+                &mut BufReader::new(stdout),
+                release,
+            ));
         })
         .map_err(|e| format!("QMP reader: {e}"))?;
     // The caller always kills/reaps QEMU, including on timeout, which closes
@@ -46,20 +51,79 @@ pub(super) fn verify_paused_q35_resources(child: &mut Child) -> Result<(), Strin
     if result.is_ok() {
         worker.join().map_err(|_| "QMP reader panicked")?;
     }
-    validate(&result??)
+    result?
+}
+
+fn inspect_qmp(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    release: Option<bool>,
+) -> Result<(), String> {
+    qmp_write(stdin, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 71}")?;
+    qmp_write(stdin, "{\"execute\":\"stop\",\"id\":72}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 72}")?;
+    qmp_write(
+        stdin,
+        "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f\"},\"id\":73}\n",
+    )?;
+    let map = read_map(&mut *reader)?;
+    validate(&map)?;
+    if let Some(valid) = release {
+        validate_scratch_uart(&map)?;
+        let write = if valid {
+            "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"o /b 0x2ff 0xa6\"},\"id\":74}\n"
+        } else {
+            "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"o /b 0x2ff 0x5a\"},\"id\":74}\n"
+        };
+        qmp_write(stdin, write)?;
+        ack(reader, "{\"return\": \"\", \"id\": 74}")?;
+        qmp_write(stdin, "{\"execute\":\"cont\",\"id\":75}\n")?;
+        ack(reader, "{\"return\": {}, \"id\": 75}")?;
+    }
+    Ok(())
+}
+
+fn qmp_write(out: &mut impl std::io::Write, message: &str) -> Result<(), String> {
+    out.write_all(message.as_bytes())
+        .map_err(|e| format!("QMP write: {e}"))
+}
+
+fn ack(reader: &mut impl std::io::BufRead, expected: &str) -> Result<(), String> {
+    for _ in 0..12 {
+        let line = qmp_line(reader)?;
+        if line.trim_end() == expected {
+            return Ok(());
+        }
+        if !line.starts_with("{\"event\"")
+            && !line.starts_with("{\"QMP\"")
+            && !line.contains(", \"event\":")
+        {
+            return Err(format!(
+                "unexpected QMP acknowledgment: {}",
+                line.trim_end()
+            ));
+        }
+    }
+    Err("missing QMP acknowledgment".into())
+}
+
+fn qmp_line(reader: &mut impl std::io::BufRead) -> Result<String, String> {
+    let mut raw = String::new();
+    let bytes = reader
+        .by_ref()
+        .take(MAX_LINE as u64 + 1)
+        .read_line(&mut raw)
+        .map_err(|e| format!("QMP read: {e}"))?;
+    if bytes == 0 || bytes > MAX_LINE || !raw.ends_with('\n') {
+        return Err("invalid QMP reply length".into());
+    }
+    Ok(raw)
 }
 
 fn read_map(mut reader: impl std::io::BufRead) -> Result<String, String> {
     for _ in 0..12 {
-        let mut raw = String::new();
-        let bytes = reader
-            .by_ref()
-            .take(MAX_LINE as u64 + 1)
-            .read_line(&mut raw)
-            .map_err(|e| format!("QMP read: {e}"))?;
-        if bytes == 0 || bytes > MAX_LINE || !raw.ends_with('\n') {
-            return Err("invalid QMP reply length".into());
-        }
+        let raw = qmp_line(&mut reader)?;
         let line = raw.trim_end();
         if line.starts_with("{\"error\"") {
             return Err("QEMU rejected a resource query".into());
@@ -73,6 +137,39 @@ fn read_map(mut reader: impl std::io::BufRead) -> Result<String, String> {
         }
     }
     Err("missing QMP resource reply".into())
+}
+
+fn validate_scratch_uart(map: &str) -> Result<(), String> {
+    let mut views = map.split("FlatView #").filter(|view| {
+        view.lines()
+            .any(|line| line.trim() == "AS \"I/O\", root: io")
+    });
+    let view = views.next().ok_or("missing QEMU I/O FlatView")?;
+    if views.next().is_some() {
+        return Err("ambiguous QEMU I/O FlatView".into());
+    }
+    let root = "Root memory region: io";
+    let tail = view.split_once(root).ok_or("missing QEMU I/O root")?.1;
+    let mut uart = false;
+    for line in tail.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let (extent, meta) = line.split_once(" (prio ").ok_or("bad QEMU I/O range")?;
+        let (start, end) = extent.split_once('-').ok_or("bad QEMU I/O extent")?;
+        let start = u64::from_str_radix(start, 16).map_err(|_| "bad QEMU I/O start")?;
+        let end = u64::from_str_radix(end, 16).map_err(|_| "bad QEMU I/O end")?;
+        if start > end {
+            return Err("reversed QEMU I/O extent".into());
+        }
+        if start <= 0x2ff && end >= 0x2f8 {
+            if uart || start != 0x2f8 || end != 0x2ff || meta != "0, i/o): serial" {
+                return Err("unexpected QEMU serial scratch range or overlap".into());
+            }
+            uart = true;
+        }
+    }
+    if !uart {
+        return Err("missing QEMU serial scratch range".into());
+    }
+    Ok(())
 }
 
 fn decode_map(data: &str) -> Result<String, String> {
@@ -185,5 +282,37 @@ mod tests {
         assert!(read_map(&line[..line.len() - 1]).is_err());
         assert!(read_map(&b"{\"return\": \"x\", \"id\": 61}\n"[..]).is_err());
         assert!(read_map(&b"{\"error\": {}}\n"[..]).is_err());
+    }
+
+    #[test]
+    fn qmp_release_requires_stop_and_both_exact_resource_views() {
+        let uart = concat!(
+            "FlatView #1\n AS \"I/O\", root: io\n Root memory region: io\n",
+            "  00000000000002f8-00000000000002ff (prio 0, i/o): serial\n",
+        );
+        for (stop, map, allowed) in [
+            (72, format!("{VIEW}{uart}"), true),
+            (90, format!("{VIEW}{uart}"), false),
+            (72, VIEW.into(), false),
+            (72, format!("{VIEW}{uart}{uart}"), false),
+            (
+                72,
+                format!("{}{uart}", VIEW.replace("intel_iommu", "unknown")),
+                false,
+            ),
+        ] {
+            let frame = map.replace('"', "\\\"").replace('\n', "\\n");
+            let replies = format!(
+                "{{\"return\": {{}}, \"id\": 71}}\n{{\"return\": {{}}, \"id\": {stop}}}\n{{\"return\": \"{frame}\", \"id\": 73}}\n{{\"return\": \"\", \"id\": 74}}\n{{\"return\": {{}}, \"id\": 75}}\n"
+            );
+            let mut sent = Vec::new();
+            assert_eq!(
+                inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(true)).is_ok(),
+                allowed
+            );
+            let sent = String::from_utf8(sent).unwrap();
+            assert_eq!(sent.contains("o /b"), allowed);
+            assert_eq!(sent.contains("\"cont\""), allowed);
+        }
     }
 }

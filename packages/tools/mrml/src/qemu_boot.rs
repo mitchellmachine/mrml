@@ -88,14 +88,24 @@ pub(super) fn run_qemu_with_q35_evidence(args: &[String]) -> Result<(), String> 
     run_qemu_config(args, true, None)
 }
 
-pub(super) fn run_q35_map_only_fixture(args: &[String], has_marker: bool) -> Result<(), String> {
-    run_qemu_config(args, true, Some(has_marker))
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Q35FixtureCase {
+    NoMarker,
+    WrongRelease,
+    ValidRelease,
+}
+
+pub(super) fn run_q35_map_only_fixture(
+    args: &[String],
+    case: Q35FixtureCase,
+) -> Result<(), String> {
+    run_qemu_config(args, true, Some(case))
 }
 
 fn run_qemu_config(
     args: &[String],
     verify_q35: bool,
-    map_only_marker: Option<bool>,
+    map_only_marker: Option<Q35FixtureCase>,
 ) -> Result<(), String> {
     if args.len() < 5 {
         return Err("PackageQemuBootUsage { expected: IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--accelerator tcg|whpx|kvm] [--iommu intel] [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX] }".into());
@@ -150,6 +160,14 @@ fn run_qemu_config(
     if expected.is_empty() || expected.len() > 256 {
         return Err("PackageQemuExpectedTraceSize".into());
     }
+    let fixture_end = match map_only_marker {
+        Some(Q35FixtureCase::WrongRelease) => Some([0xdc, 0xdd]),
+        Some(Q35FixtureCase::ValidRelease) => Some([0xdc, 0xde]),
+        _ => None,
+    };
+    if fixture_end.is_some_and(|suffix| !expected.ends_with(&suffix)) {
+        return Err("unexpected q35 rendezvous trace contract".into());
+    }
 
     let vars = trace.with_extension("vars.fd");
     if vars.exists() {
@@ -190,7 +208,7 @@ struct QemuChildOptions<'a> {
     accelerator: &'a str,
     intel_iommu: bool,
     verify_q35: bool,
-    map_only_marker: Option<bool>,
+    map_only_marker: Option<Q35FixtureCase>,
 }
 
 fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
@@ -216,7 +234,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     if verify_q35 {
         command.args(["-no-user-config", "-qmp", "stdio"]);
     }
-    if let Some(has_marker) = map_only_marker {
+    if let Some(case) = map_only_marker {
         let scratch = trace
             .parent()
             .filter(|p| p.is_absolute())
@@ -227,7 +245,15 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             "-device",
             "qemu-xhci,bus=pcie.0,addr=0x1b,id=mrml_probe_xhci",
         ]);
-        if has_marker {
+        if case != Q35FixtureCase::NoMarker {
+            command.args([
+                "-smp",
+                "1",
+                "-chardev",
+                "null,id=mrml_release",
+                "-device",
+                "isa-serial,index=1,iobase=0x2f8,chardev=mrml_release",
+            ]);
             let mut marker = fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
@@ -279,8 +305,32 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         .spawn()
         .map_err(|error| format!("PackageQemuLaunchError {{ detail: {error} }}"))?;
     let start = Instant::now();
+    let release = map_only_marker.and_then(|case| match case {
+        Q35FixtureCase::NoMarker => None,
+        Q35FixtureCase::WrongRelease => Some(false),
+        Q35FixtureCase::ValidRelease => Some(true),
+    });
+    let mut released = false;
     loop {
         if let Ok(bytes) = fs::read(trace) {
+            if let Some(valid) = release {
+                let ready = &expected[..expected.len() - 1];
+                if !released && bytes == ready {
+                    if let Err(error) = crate::qemu_mmio::release_q35_fixture(&mut child, valid) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(error);
+                    }
+                    released = true;
+                } else if !released && !ready.starts_with(&bytes) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "unexpected trace before QMP release: {}",
+                        encode_hex(&bytes)
+                    ));
+                }
+            }
             if rejection.is_some_and(|prefix| rejected_twice(&bytes, prefix)) {
                 child
                     .kill()
@@ -295,8 +345,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 return Ok(());
             }
             if rejection.is_none() && bytes == expected {
-                let evidence =
-                    verify_q35.then(|| crate::qemu_mmio::verify_paused_q35_resources(&mut child));
+                let evidence = (verify_q35 && !released)
+                    .then(|| crate::qemu_mmio::verify_paused_q35_resources(&mut child));
                 child
                     .kill()
                     .map_err(|error| format!("PackageQemuStopError {{ detail: {error} }}"))?;
@@ -307,10 +357,12 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         "qemu-mmio-model|status=PASS|ecam=0xe0000000..=0xefffffff|drhd=0xfed90000..=0xfed9022f|padding=unmapped"
                     );
                 }
-                if let Some(has_marker) = map_only_marker {
+                if let Some(case) = map_only_marker {
                     println!(
-                        "q35-mmio-map-only|status=PASS|marker={has_marker}|register_access=none"
+                        "q35-mmio-map-only|status=PASS|case={case:?}|qmp_release={released}|register_access=none|trace={}",
+                        encode_hex(&bytes)
                     );
+                    return Ok(());
                 }
                 println!(
                     "package-qemu-boot|status=QEMU_UEFI_BOOT_PASS|accelerator={accelerator}|stage={}|trace={}|bytes={}",

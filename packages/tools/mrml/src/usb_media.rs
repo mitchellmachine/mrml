@@ -83,6 +83,7 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
 }
 
 fn test_dma_map(code: &str, vars: &str, qemu: &str) -> Result<(), String> {
+    use crate::qemu_boot::Q35FixtureCase;
     let scratch = Scratch::new().map_err(|error| error.to_string())?;
     let image = scratch.path("q35-map-only.img");
     create(&load_workspace()?, &image, DiagnosticImage::Q35Mmio)?;
@@ -98,24 +99,30 @@ fn test_dma_map(code: &str, vars: &str, qemu: &str) -> Result<(), String> {
     };
     // First show that the exact same authenticated image refuses to map
     // anything when the dedicated hypervisor-supplied table is missing.
-    for (has_marker, trace, expected) in [
+    for (case, trace, expected) in [
         (
-            false,
+            Q35FixtureCase::NoMarker,
             "q35-no-marker.trace",
             "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6e4ed",
         ),
         (
-            true,
+            Q35FixtureCase::WrongRelease,
+            "q35-wrong-release.trace",
+            "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6eaa7a8e1f1b1ecb2b3d4d8d5d7dcdd",
+        ),
+        (
+            Q35FixtureCase::ValidRelease,
             "q35-map.trace",
-            "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6eaa7a8e1f1b1ecb2b3d4d8d5d7dcd0d1d2d3",
+            "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6eaa7a8e1f1b1ecb2b3d4d8d5d7dcde",
         ),
     ] {
+        let case_dir = Scratch::new().map_err(|error| error.to_string())?;
         let arguments = words(&[
             &string(&image),
             &absolute(code)?,
             &absolute(vars)?,
             &executable,
-            &string(&scratch.path(trace)),
+            &string(&case_dir.path(trace)),
             "--expect-hex",
             expected,
             "--timeout-seconds",
@@ -123,7 +130,7 @@ fn test_dma_map(code: &str, vars: &str, qemu: &str) -> Result<(), String> {
             "--iommu",
             "intel",
         ]);
-        crate::qemu_boot::run_q35_map_only_fixture(&arguments, has_marker)?;
+        crate::qemu_boot::run_q35_map_only_fixture(&arguments, case)?;
     }
     Ok(())
 }
