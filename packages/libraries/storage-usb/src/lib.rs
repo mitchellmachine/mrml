@@ -4,6 +4,7 @@
 //! Controller discovery, DMA, endpoint recovery and device ownership belong
 //! below this layer. A session never retries an uncertain write.
 
+pub mod block_provider;
 pub mod xhci;
 
 pub const SECTOR_BYTES: usize = 512;

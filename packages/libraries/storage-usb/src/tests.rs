@@ -237,3 +237,109 @@ fn superspeed_companions_bind_to_their_exact_endpoints() {
         Err(DescriptorError::Unsupported)
     );
 }
+
+/// Exercise the canonical protocol through the existing BOT implementation.
+#[test]
+fn usb_provider_enumerates_read_only_and_reads_exact_subrange() {
+    use crate::block_provider::UsbReadProvider;
+    use mrml_interface_storage_block_provider_v1::{
+        BLOCK_DEVICE_FLAG_READ_ONLY, BlockProviderReadTransport, BlockProviderTransport,
+        BorrowedWriteView, OpaqueHandle, decode_enumerate_response, decode_read_response,
+        encode_enumerate_request, encode_read_request,
+    };
+
+    let mut transport = EmulatedDisk::new();
+    transport.sector.fill(0x4f);
+    let session = OpaqueHandle::new(4, 8).unwrap();
+    let mut provider =
+        UsbReadProvider::new(UsbDisk::probe(transport).unwrap(), session, 11).unwrap();
+    let range = BorrowedWriteView::within(7, 48, 64).unwrap();
+    let mut catalog = [0xa5; 64];
+    let request = encode_enumerate_request(range).unwrap();
+    let response = provider.enumerate(&request, &mut catalog).unwrap();
+    assert_eq!(decode_enumerate_response(&response, 48), Ok(Ok(48)));
+    assert_eq!(&catalog[7..15], b"MRMLBLK\0");
+    assert_eq!(&catalog[31..35], &512u32.to_le_bytes());
+    assert_eq!(&catalog[35..39], &BLOCK_DEVICE_FLAG_READ_ONLY.to_le_bytes());
+    assert_eq!(&catalog[39..47], &16u64.to_le_bytes());
+    assert_eq!(&catalog[47..55], &11u64.to_le_bytes());
+    assert_eq!(&catalog[..7], &[0xa5; 7]);
+    assert_eq!(&catalog[55..], &[0xa5; 9]);
+
+    let output = BorrowedWriteView::within(9, 512, 528).unwrap();
+    let mut memory = [0xa5; 528];
+    let request = encode_read_request(session, 3, 1, output).unwrap();
+    let response = provider.read(&request, &mut memory).unwrap();
+    assert_eq!(decode_read_response(&response, 512), Ok(Ok(512)));
+    assert_eq!(&memory[..9], &[0xa5; 9]);
+    assert_eq!(&memory[9..521], &[0x4f; 512]);
+    assert_eq!(&memory[521..], &[0xa5; 7]);
+    assert_eq!(&provider.into_disk().endpoint.commands[..2], &[0x25, 0x28]);
+}
+
+#[test]
+fn usb_provider_rejects_stale_and_invalid_reads_before_device_access() {
+    use crate::block_provider::UsbReadProvider;
+    use mrml_interface_storage_block_provider_v1::{
+        BlockProviderReadTransport, BorrowedWriteView, OpaqueHandle, ReadError,
+        decode_read_response, encode_read_request,
+    };
+
+    let session = OpaqueHandle::new(4, 8).unwrap();
+    let older = OpaqueHandle::new(4, 7).unwrap();
+    let mut provider =
+        UsbReadProvider::new(UsbDisk::probe(EmulatedDisk::new()).unwrap(), session, 11).unwrap();
+    let output = BorrowedWriteView::within(9, 512, 528).unwrap();
+    let mut memory = [0xa5; 528];
+    for (session, lba, count, view, error) in [
+        (older, 3, 1, output, ReadError::StaleObject),
+        (session, 16, 1, output, ReadError::InvalidRequest),
+        (session, 3, 2, output, ReadError::InvalidRequest),
+        (
+            session,
+            3,
+            1,
+            BorrowedWriteView::within(9, 511, 528).unwrap(),
+            ReadError::InvalidRequest,
+        ),
+    ] {
+        let request = encode_read_request(session, lba, count, view).unwrap();
+        let response = provider.read(&request, &mut memory).unwrap();
+        assert_eq!(decode_read_response(&response, 512), Ok(Err(error)));
+        assert_eq!(memory, [0xa5; 528]);
+    }
+    provider.invalidate_session();
+    let request = encode_read_request(session, 3, 1, output).unwrap();
+    let response = provider.read(&request, &mut memory).unwrap();
+    assert_eq!(
+        decode_read_response(&response, 512),
+        Ok(Err(ReadError::StaleObject))
+    );
+    assert_eq!(memory, [0xa5; 528]);
+    assert_eq!(provider.into_disk().endpoint.count, 1);
+}
+
+#[test]
+fn usb_provider_does_not_publish_failed_data_or_retry_faulted_session() {
+    use crate::block_provider::UsbReadProvider;
+    use mrml_interface_storage_block_provider_v1::{
+        BlockProviderReadTransport, BorrowedWriteView, OpaqueHandle, ReadError,
+        decode_read_response, encode_read_request,
+    };
+
+    let mut transport = EmulatedDisk::new();
+    transport.inject = Inject::Residue;
+    transport.sector.fill(0x4f);
+    let session = OpaqueHandle::new(4, 8).unwrap();
+    let mut provider =
+        UsbReadProvider::new(UsbDisk::probe(transport).unwrap(), session, 11).unwrap();
+    let output = BorrowedWriteView::within(0, 512, 512).unwrap();
+    let request = encode_read_request(session, 3, 1, output).unwrap();
+    let mut memory = [0xa5; 512];
+    for error in [ReadError::IoFailure, ReadError::StaleObject] {
+        let response = provider.read(&request, &mut memory).unwrap();
+        assert_eq!(decode_read_response(&response, 512), Ok(Err(error)));
+        assert_eq!(memory, [0xa5; 512]);
+    }
+    assert_eq!(provider.into_disk().endpoint.count, 2);
+}

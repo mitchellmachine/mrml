@@ -4,7 +4,7 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 222
+compile_edges = 223
 build_tool_edges = 0
 runtime_interface_edges = 5
 package_edges = 200
@@ -524,7 +524,7 @@ isolation_default = "native-service"
 isolation_minimum = "native-service"
 isolation_maximum = "microvm"
 isolation_supported = ["native-service", "microvm"]
-compile_dependencies = ["org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.system.kernel"]
 boot_bound = []

@@ -412,6 +412,13 @@ services. A service failure should revoke its authority and resources, notify
 affected peers, permit bounded restart, and leave unrelated services and the
 kernel running.
 
+UEFI selects the boot display mode and passes validated scanout geometry.
+Normal kernel boot does not paint the framebuffer. Post-boot drawing belongs
+to the compositor, using a scoped output grant and a bounded scanout view
+rather than a physical address. The hosted renderer does not yet have a live
+service mapping. Explicit firmware recovery and bring-up diagnostics do not
+constitute a parallel production display implementation.
+
 Native USB has no privileged runtime fallback. The kernel may retain device
 quiescence, requester isolation, and capability binding and revocation. USB
 controller operation and mass-storage commands belong to one isolated block

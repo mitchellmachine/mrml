@@ -122,7 +122,9 @@ pub use device_service::{
     retire_current_native_device_service_task,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
-pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};
+pub use framebuffer::{
+    Color, FramebufferError, FramebufferInfo, FramebufferLayout, FramebufferSurface, PixelFormat,
+};
 pub use grant::{DirectoryGrant, GrantError, GrantMode, MAX_HOST_PATH};
 pub use graphics::{
     AdmittedSurfaceCommit, DisplayOutputIdentity, GraphicsBufferDescriptor, GraphicsFormat,

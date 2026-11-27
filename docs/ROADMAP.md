@@ -31,9 +31,10 @@ not physical-device evidence or a general production storage launcher.
 Early-boot display is separate from the storage gate. The UEFI loader prefers
 the selected output's checksummed EDID base-block preferred timing if GOP
 offers a supported linear mode of that size. It otherwise tries 1024x768,
-retains a usable live mode, or tries another supported linear mode. The kernel
-draws its own `MRML KERNEL READY` marker after firmware exit in the default
-boot profile. The opt-in `mrml usb test` path exercises two disjoint instances
+retains a usable live mode, or tries another supported linear mode. Normal
+boot does not draw into the framebuffer after firmware exit. The compositor
+has a bounded scanout renderer; it is not yet launched with a live framebuffer
+mapping. The opt-in `mrml usb test` path exercises two disjoint instances
 of the signed service through the UEFI loader. It shows
 `FAT32 RESTART: PASS - 28 BYTES` only after
 cleanup, stale-handle denial and exact reread. QEMU/OVMF verified the full

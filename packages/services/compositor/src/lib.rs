@@ -1,6 +1,9 @@
 #![no_std]
 
+mod boot_scanout;
 mod transport;
+
+pub use boot_scanout::{BootScanoutError, paint_boot_ready};
 
 use core::array;
 use mrml_interface_gui_surface_v1::OpaqueHandle;

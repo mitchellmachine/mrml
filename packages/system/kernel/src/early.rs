@@ -1,6 +1,6 @@
 use crate::{
-    BootHandoff, BootIsolationOverride, Color, FramebufferError, FramebufferInfo,
-    FramebufferSurface, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
+    BootHandoff, BootIsolationOverride, FramebufferInfo, InstalledRecoveryBootIdentity,
+    InstalledRecoverySataRoute,
     InstalledRecoverySource, MemoryError, MemoryKind, MemoryMap, MemoryRegion,
     RecoveryStateMetadata,
 };
@@ -12,7 +12,6 @@ pub enum EarlyKernelError {
     InvalidMemoryMap(MemoryError),
     FramebufferOutsideMmio,
     MissingInstalledRecoveryRoute,
-    Framebuffer(FramebufferError),
 }
 
 /// Architecture-neutral state admitted at the first kernel instruction after
@@ -21,7 +20,6 @@ pub enum EarlyKernelError {
 pub struct EarlyKernelContext<'a> {
     entropy: [u8; 32],
     acpi_root: u64,
-    framebuffer: FramebufferInfo,
     memory: MemoryMap<'a>,
     isolation_override: Option<BootIsolationOverride>,
     recovery_state: Option<RecoveryStateMetadata>,
@@ -53,7 +51,6 @@ impl<'a> EarlyKernelContext<'a> {
         Ok(Self {
             entropy,
             acpi_root,
-            framebuffer,
             memory,
             isolation_override: None,
             recovery_state: None,
@@ -125,40 +122,6 @@ impl<'a> EarlyKernelContext<'a> {
         self.installed_recovery_sata_route
     }
 
-    /// Visible proof that execution crossed into validated kernel code. A
-    /// later console replaces this solid bring-up marker with glyph rendering.
-    pub fn render_booted(&self, bytes: &mut [u8]) -> Result<(), EarlyKernelError> {
-        let mut surface = FramebufferSurface::new(self.framebuffer, bytes)
-            .map_err(EarlyKernelError::Framebuffer)?;
-        surface
-            .fill_rectangle(
-                0,
-                0,
-                self.framebuffer.width(),
-                self.framebuffer.height(),
-                Color {
-                    red: 0x16,
-                    green: 0x61,
-                    blue: 0x3a,
-                },
-            )
-            .map_err(EarlyKernelError::Framebuffer)?;
-        let marker_width = self.framebuffer.width().min(64);
-        let marker_height = self.framebuffer.height().min(8);
-        surface
-            .fill_rectangle(
-                0,
-                0,
-                marker_width,
-                marker_height,
-                Color {
-                    red: 0xf2,
-                    green: 0xf2,
-                    blue: 0xf2,
-                },
-            )
-            .map_err(EarlyKernelError::Framebuffer)
-    }
 }
 
 #[cfg(test)]
@@ -171,7 +134,7 @@ mod tests {
     };
 
     #[test]
-    fn early_entry_requires_mmio_and_renders_marker() {
+    fn early_entry_requires_mmio() {
         let framebuffer = FramebufferInfo::new(
             0xa0000,
             PAGE_SIZE,
@@ -185,11 +148,11 @@ mod tests {
             MemoryRegion::new(PhysAddr::new(0x1000).unwrap(), 4, MemoryKind::Free).unwrap(),
             MemoryRegion::new(PhysAddr::new(0xa0000).unwrap(), 1, MemoryKind::Mmio).unwrap(),
         ];
-        let context = EarlyKernelContext::new([1; 32], 0x1234, framebuffer, &regions).unwrap();
-        let mut bytes = [0u8; PAGE_SIZE as usize];
-        context.render_booted(&mut bytes).unwrap();
-        assert_eq!(&bytes[..4], &[0xf2, 0xf2, 0xf2, 0]);
-        assert_eq!(&bytes[8 * 16 * 4..8 * 16 * 4 + 4], &[0x16, 0x61, 0x3a, 0]);
+        assert!(EarlyKernelContext::new([1; 32], 0x1234, framebuffer, &regions).is_ok());
+        assert!(matches!(
+            EarlyKernelContext::new([1; 32], 0x1234, framebuffer, &regions[..1]),
+            Err(EarlyKernelError::FramebufferOutsideMmio)
+        ));
     }
 
     #[test]

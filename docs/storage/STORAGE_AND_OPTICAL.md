@@ -3274,10 +3274,14 @@ test covers a controller with and without a remapper and an absent controller.
 The single xHCI transport implementation remains in `storage-usb`. Its
 runtime caller must be an isolated block-provider service implementing the
 existing generation-1 block-provider protocol; FAT32 stays in its separate
-filesystem service. The kernel grants and revokes scoped device, interrupt,
-and DMA resources; it does not run USB commands or implement a fallback
-transport. Until a service can receive and retire such a lease, native USB
-storage is unavailable. The driver library has one slot, no scratchpads,
+filesystem service. A read-only adapter now implements canonical enumeration
+and one-sector reads over the existing BOT/SCSI driver. Hosted tests check
+stale-session denial, invalid range and buffer rejection, and no publication
+after a transport failure. This adapter is not an installed provider and does
+not authenticate IPC or retire DMA leases by itself. The kernel grants and
+revokes scoped device, interrupt, and DMA resources; it does not run USB
+commands or implement a fallback transport. Until a service can receive and
+retire such a lease, native USB storage is unavailable. The driver library has one slot, no scratchpads,
 nonwrapping command and control queues, and no hub support. Dragonair boot
 exercises firmware USB access and embedded FAT32, not native USB I/O.
 

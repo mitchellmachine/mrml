@@ -154,15 +154,7 @@ use mrml_kernel::{
     BootHandoff, EarlyKernelContext, HANDOFF_HEADER_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_REGIONS,
     MemoryKind, MemoryRegion, PhysAddr,
 };
-#[cfg(all(
-    not(feature = "fault-probe"),
-    not(feature = "timer-probe"),
-    not(feature = "preemption-probe"),
-    not(feature = "service-preemption-probe"),
-    not(feature = "application-probe"),
-    not(feature = "user-probe"),
-    not(feature = "service-probe")
-))]
+#[cfg(all(not(feature = "fault-probe"), feature = "gpu-benchmark"))]
 use mrml_kernel::{Color, FramebufferSurface};
 #[cfg(feature = "smp-ipi-probe")]
 use mrml_kernel::{DetachedTaskDomain, OwnershipMailbox, SchedulerLoad};
@@ -5097,65 +5089,36 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 halt();
             }
         }
-        let framebuffer = handoff.framebuffer();
-        let framebuffer_bytes = unsafe {
-            core::slice::from_raw_parts_mut(
-                framebuffer.base().get() as *mut u8,
-                framebuffer.byte_length() as usize,
-            )
-        };
-        let mut surface = match FramebufferSurface::new(framebuffer, framebuffer_bytes) {
-            Ok(value) => value,
-            Err(_) => halt(),
-        };
-        if surface
-            .fill_rectangle(
-                0,
-                0,
-                framebuffer.width(),
-                framebuffer.height(),
-                Color {
-                    red: 0x0b,
-                    green: 0x3b,
-                    blue: 0x5a,
-                },
-            )
-            .is_err()
+        // Normal boot leaves the firmware-selected scanout alone. Only the
+        // explicitly selected benchmark paints its legacy completion marker.
+        #[cfg(feature = "gpu-benchmark")]
         {
-            halt();
+            if run_gpu_benchmark(handoff.evidence().entropy()).is_err() {
+                halt();
+            }
+            let framebuffer = handoff.framebuffer();
+            // SAFETY: this opt-in standalone benchmark runs on the BSP
+            // with the validated boot framebuffer and no display service.
+            let bytes = unsafe {
+                core::slice::from_raw_parts_mut(
+                    framebuffer.base().get() as *mut u8,
+                    framebuffer.byte_length() as usize,
+                )
+            };
+            let mut surface = FramebufferSurface::new(framebuffer, bytes)
+                .unwrap_or_else(|_| halt());
+            let _ = surface.fill_rectangle(
+                0,
+                0,
+                framebuffer.width().min(96),
+                framebuffer.height().min(12),
+                Color {
+                    red: 0x46,
+                    green: 0xe0,
+                    blue: 0x78,
+                },
+            );
         }
-        let _ = surface.fill_rectangle(
-            0,
-            0,
-            framebuffer.width().min(96),
-            framebuffer.height().min(12),
-            Color {
-                red: 0xff,
-                green: 0xc8,
-                blue: 0x57,
-            },
-        );
-        let _ = surface.mark_kernel_ready(Color {
-            red: 0xff,
-            green: 0xff,
-            blue: 0xff,
-        });
-        #[cfg(feature = "gpu-benchmark")]
-        if run_gpu_benchmark(handoff.evidence().entropy()).is_err() {
-            halt();
-        }
-        #[cfg(feature = "gpu-benchmark")]
-        let _ = surface.fill_rectangle(
-            0,
-            0,
-            framebuffer.width().min(96),
-            framebuffer.height().min(12),
-            Color {
-                red: 0x46,
-                green: 0xe0,
-                blue: 0x78,
-            },
-        );
         #[cfg(feature = "whp-gpu-benchmark")]
         unsafe {
             asm!("out dx, eax", in("dx") GPU_DOORBELL_PORT, in("eax") 2u32, options(nomem, nostack))

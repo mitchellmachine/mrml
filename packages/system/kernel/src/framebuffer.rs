@@ -26,6 +26,12 @@ pub enum FramebufferError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FramebufferInfo {
     base: PhysAddr,
+    layout: FramebufferLayout,
+}
+
+/// Validated scanout geometry, without a physical address or mapping authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FramebufferLayout {
     byte_length: u64,
     width: u32,
     height: u32,
@@ -46,6 +52,55 @@ impl FramebufferInfo {
             return Err(FramebufferError::Missing);
         }
         let base = PhysAddr::new(base).map_err(|_| FramebufferError::Unaligned)?;
+        if base.get().checked_add(byte_length).is_none() {
+            return Err(FramebufferError::InvalidLength);
+        }
+        Ok(Self {
+            base,
+            layout: FramebufferLayout::new(byte_length, width, height, stride, format)?,
+        })
+    }
+
+    pub const fn base(self) -> PhysAddr {
+        self.base
+    }
+    pub const fn byte_length(self) -> u64 {
+        self.layout.byte_length()
+    }
+    pub const fn width(self) -> u32 {
+        self.layout.width()
+    }
+    pub const fn height(self) -> u32 {
+        self.layout.height()
+    }
+    pub const fn stride(self) -> u32 {
+        self.layout.stride()
+    }
+    pub const fn pixel_format(self) -> PixelFormat {
+        self.layout.format()
+    }
+    pub const fn format(self) -> PixelFormat {
+        self.layout.format()
+    }
+    pub const fn end(self) -> u64 {
+        self.base.get() + self.layout.byte_length()
+    }
+    pub const fn layout(self) -> FramebufferLayout {
+        self.layout
+    }
+}
+
+impl FramebufferLayout {
+    pub fn new(
+        byte_length: u64,
+        width: u32,
+        height: u32,
+        stride: u32,
+        format: PixelFormat,
+    ) -> Result<Self, FramebufferError> {
+        if byte_length == 0 {
+            return Err(FramebufferError::Missing);
+        }
         if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
             return Err(FramebufferError::InvalidDimensions);
         }
@@ -56,14 +111,10 @@ impl FramebufferInfo {
             .checked_mul(u64::from(height))
             .and_then(|pixels| pixels.checked_mul(BYTES_PER_PIXEL))
             .ok_or(FramebufferError::Overflow)?;
-        if byte_length < required
-            || byte_length > isize::MAX as u64
-            || base.get().checked_add(byte_length).is_none()
-        {
+        if byte_length < required || byte_length > isize::MAX as u64 {
             return Err(FramebufferError::InvalidLength);
         }
         Ok(Self {
-            base,
             byte_length,
             width,
             height,
@@ -72,9 +123,6 @@ impl FramebufferInfo {
         })
     }
 
-    pub const fn base(self) -> PhysAddr {
-        self.base
-    }
     pub const fn byte_length(self) -> u64 {
         self.byte_length
     }
@@ -87,14 +135,8 @@ impl FramebufferInfo {
     pub const fn stride(self) -> u32 {
         self.stride
     }
-    pub const fn pixel_format(self) -> PixelFormat {
-        self.format
-    }
     pub const fn format(self) -> PixelFormat {
         self.format
-    }
-    pub const fn end(self) -> u64 {
-        self.base.get() + self.byte_length
     }
 }
 
@@ -108,12 +150,19 @@ pub struct Color {
 /// Safe renderer over a framebuffer mapping established by architecture code.
 /// It cannot access row padding or bytes beyond the validated GOP allocation.
 pub struct FramebufferSurface<'a> {
-    info: FramebufferInfo,
+    info: FramebufferLayout,
     bytes: &'a mut [u8],
 }
 
 impl<'a> FramebufferSurface<'a> {
     pub fn new(info: FramebufferInfo, bytes: &'a mut [u8]) -> Result<Self, FramebufferError> {
+        Self::from_layout(info.layout(), bytes)
+    }
+
+    pub fn from_layout(
+        info: FramebufferLayout,
+        bytes: &'a mut [u8],
+    ) -> Result<Self, FramebufferError> {
         let declared =
             usize::try_from(info.byte_length).map_err(|_| FramebufferError::BufferTooSmall)?;
         if bytes.len() < declared {
