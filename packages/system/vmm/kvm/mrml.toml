@@ -56,6 +56,13 @@ package = "org.mrml.service.storage"
 scope = "compile"
 test_only = true
 
+[[dependency]]
+alias = "mrml_storage_usb"
+compile_name = "mrml-storage-usb"
+package = "org.mrml.library.storage.usb"
+scope = "compile"
+test_only = true
+
 [[build_input]]
 fingerprint = "fnv1a64:07cfb9d8b9ec012a"
 id = "native-link.native.c"

@@ -3141,6 +3141,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires live KVM for the signed diagnostic USB guest"]
+    fn live_kvm_guest_supplies_usb_write_payload() {
+        usb_write_probe::exercise();
+    }
+
+    mod usb_write_probe;
+
+    #[test]
     fn live_two_vm_peer_page_shares_and_retires_exact_backing() {
         use mrml_kernel::VmDeadlineOutcome;
 

@@ -2942,6 +2942,18 @@ queue and checks the persisted disk. It rejects an earlier completion and
 refuses further writes through that consumer. The peers in this test are synthetic:
 it does not launch the USB provider in a MicroVM or map hardware DMA.
 
+A separate KVM diagnostic now maps a shared page into two independently
+signed guests. One changes the three marker bytes in the submitted USB write
+request and the other observes the exact successful completion through its
+own mapping. The real USB queue and BOT disk code run in the hosted test
+harness with a synthetic backing sector; the fixture requires a cache flush
+before readback and checks the untouched sector bytes. Run
+`mrml test org.mrml.system.vmm-kvm --target linux` and then
+`target/mrml-native/linux/debug/mrml_kvm_tests --ignored --nocapture live_kvm_guest_supplies_usb_write_payload`
+on a Linux host with KVM. The live guest test and the QEMU/xHCI FAT32 test
+are distinct: the KVM test does not put the USB driver inside a guest or
+access physical flash media.
+
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See
 [review log](../patents/REVIEW_LOG.md).
