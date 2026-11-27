@@ -2,7 +2,9 @@
 //! This controller session does not grant PCI or DMA access to its caller.
 
 mod bulk;
+mod lifecycle;
 pub use bulk::{BulkDma, BulkPipe};
+pub use lifecycle::{Halted, RevocablePlatform, RevocationFailure, StartFailure, StopFailure};
 
 const RUN: u32 = 1;
 const RESET: u32 = 2;
@@ -26,8 +28,8 @@ const PORT_STATUS_CHANGE: u32 = 34;
 /// Owns the controller assignment and the DMA mappings for its entire life.
 /// MMIO accesses must be ordered and restricted to the assigned BAR. DMA access
 /// must be coherent and confined to the reserved device aperture. The backend
-/// must not release or reuse mappings after an error until it proves the
-/// controller is quiescent, or quarantines it behind DMA isolation.
+/// must quarantine live or uncertain assignments if dropped, and must not
+/// release or reuse mappings until hardware access has been revoked.
 pub trait Platform {
     type Error;
     fn read32(&mut self, byte_offset: u32) -> Result<u32, Self::Error>;
@@ -120,9 +122,13 @@ impl<P: Platform> Controller<P> {
         bar_bytes: u32,
         dma: DmaLayout,
         ticks: u32,
-    ) -> Result<Self, Error<P::Error>> {
-        let registers = discover(&mut platform, bar_bytes)?;
-        validate_dma::<P::Error>(dma, registers.address64)?;
+    ) -> Result<Self, StartFailure<P>> {
+        let registers = match discover(&mut platform, bar_bytes).and_then(|registers| {
+            validate_dma::<P::Error>(dma, registers.address64).map(|()| registers)
+        }) {
+            Ok(registers) => registers,
+            Err(error) => return Err(StartFailure::Untouched { error, platform }),
+        };
         let mut this = Self {
             platform,
             registers,
@@ -134,8 +140,10 @@ impl<P: Platform> Controller<P> {
             faulted: false,
             bulk_configured: false,
         };
-        this.initialize(ticks)?;
-        Ok(this)
+        match this.initialize(ticks) {
+            Ok(()) => Ok(this),
+            Err(error) => Err(StartFailure::Programming(StopFailure::new(error, this))),
+        }
     }
 
     fn initialize(&mut self, ticks: u32) -> Result<(), Error<P::Error>> {
@@ -507,13 +515,25 @@ impl<P: Platform> Controller<P> {
         Ok(Some((control, fields)))
     }
 
-    /// Puts the controller back in the halted state. The platform still owns
-    /// mappings and must handle teardown even when this method fails.
-    pub fn halt(&mut self, ticks: u32) -> Result<(), Error<P::Error>> {
-        self.faulted = true;
+    /// Consumes the session. Only a confirmed halt permits the next step,
+    /// withdrawing the backend's assignment and mappings.
+    pub fn stop(mut self, ticks: u32) -> Result<Halted<P>, StopFailure<P>> {
+        match self.confirm_halt(ticks) {
+            Ok(()) => Ok(Halted::new(self.platform)),
+            Err(error) => Err(StopFailure::new(error, self)),
+        }
+    }
+
+    fn confirm_halt(&mut self, ticks: u32) -> Result<(), Error<P::Error>> {
         let op = self.registers.operational;
+        self.wait(op + 4, NOT_READY, 0, ticks)?;
+        self.wait(op, RESET, 0, ticks)?;
         self.write(op, 0)?;
-        self.wait(op + 4, HALTED, HALTED, ticks)
+        self.wait(op + 4, HALTED, HALTED, ticks)?;
+        if self.read(op)? & (RUN | RESET) != 0 {
+            return Err(Error::ControllerFault);
+        }
+        Ok(())
     }
 
     fn read(&mut self, offset: u32) -> Result<u32, Error<P::Error>> {

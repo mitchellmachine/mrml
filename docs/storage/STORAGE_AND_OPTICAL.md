@@ -2906,9 +2906,23 @@ Run the opt-in fixture on Linux with QEMU installed from the repository root:
 ```
 
 The partition bounds and exclusivity in this test are supplied by its private
-synthetic image, not by a native storage authority. Native PCI/DMA assignment
-and revocation, bulk endpoint recovery, writable partition admission, and
-connection to the native FAT32 service remain unimplemented. The
+synthetic image, not by a native storage authority.
+
+The xHCI lifecycle now retains the original assignment on untouched startup
+failure, and a shutdown-only owner after partially programmed startup or
+uncertain halt. Confirming a halt consumes the live controller and exposes
+only revocation, not another I/O session. Revocation failure retains the same
+owner for retry. Its backend contract requires disabling bus mastering,
+revoking and invalidating DMA, scrubbing reusable memory, and withdrawing the
+exact MMIO mapping; abandoned live or uncertain assignments must quarantine.
+The QEMU fixture verifies the halt and PCI command-bit readback for the
+emulated function only. Tests with a synthetic backend cover an uncertain
+start write, halt timeout, and failed revocation. This does not prove physical
+DMA isolation or implement the native assignment backend.
+
+Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
+partition admission, and connection to the native FAT32 service remain
+unimplemented. The
 controller has one slot, no scratchpads, nonwrapping command and control
 queues, and no hub support. The existing Dragonair test exercises
 firmware USB access and embedded FAT32, not this native path.

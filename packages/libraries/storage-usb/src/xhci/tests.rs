@@ -16,6 +16,9 @@ struct Fake {
     completion: bool,
     corrupt_event: bool,
     bell: u64,
+    fail_run: bool,
+    ignore_stop_once: bool,
+    fail_revoke_once: bool,
 }
 
 impl Fake {
@@ -26,6 +29,9 @@ impl Fake {
             completion: true,
             corrupt_event: false,
             bell: 0,
+            fail_run: false,
+            ignore_stop_once: false,
+            fail_revoke_once: false,
         };
         fake.regs[0] = 0x0110_0040;
         fake.regs[1] = 0x0200_0108;
@@ -45,10 +51,17 @@ impl Platform for Fake {
         Ok(self.regs[offset as usize / 4])
     }
     fn write32(&mut self, offset: u32, value: u32) -> Result<(), ()> {
+        if offset == OP && value == 0 && self.ignore_stop_once {
+            self.ignore_stop_once = false;
+            return Ok(());
+        }
         self.regs[offset as usize / 4] = value;
         if offset == OP {
             self.regs[(OP as usize + 4) / 4] = if value == RUN { 0 } else { HALTED };
             self.regs[OP as usize / 4] = if value == RESET { 0 } else { value };
+        }
+        if offset == OP && value == RUN && self.fail_run {
+            return Err(());
         }
         if offset == DB && self.completion {
             assert_eq!(
@@ -97,6 +110,17 @@ impl Platform for Fake {
     }
 }
 
+impl RevocablePlatform for Fake {
+    fn revoke_after_halt(&mut self) -> Result<(), ()> {
+        assert_eq!(self.regs[OP as usize / 4], 0);
+        assert_ne!(self.regs[(OP as usize + 4) / 4] & HALTED, 0);
+        if core::mem::take(&mut self.fail_revoke_once) {
+            return Err(());
+        }
+        Ok(())
+    }
+}
+
 #[test]
 fn programs_rings_and_requires_exact_command_completion() {
     let mut controller = Controller::start(Fake::new(), 0x2400, DMA, 10).unwrap();
@@ -114,8 +138,7 @@ fn programs_rings_and_requires_exact_command_completion() {
         controller.no_op(5).unwrap();
     }
     assert_eq!(controller.no_op(5), Err(Error::QueueExhausted));
-    controller.halt(5).unwrap();
-    assert_eq!(controller.no_op(5), Err(Error::Faulted));
+    controller.stop(5).unwrap().revoke().unwrap();
 }
 
 #[test]
@@ -126,23 +149,34 @@ fn rejects_invalid_resources_or_unreleased_firmware() {
     };
     assert!(matches!(
         Controller::start(Fake::new(), 0x2400, bad_dma, 10),
-        Err(Error::InvalidDma)
+        Err(StartFailure::Untouched {
+            error: Error::InvalidDma,
+            ..
+        })
     ));
     assert!(matches!(
         Controller::start(Fake::new(), 0x1800, DMA, 10),
-        Err(Error::InvalidBar)
+        Err(StartFailure::Untouched {
+            error: Error::InvalidBar,
+            ..
+        })
     ));
     let mut fake = Fake::new();
     fake.regs[4] |= (0x900 / 4) << 16;
     fake.regs[0x900 / 4] = 1 | (1 << 16);
     assert!(matches!(
         Controller::start(fake, 0x2400, DMA, 10),
-        Err(Error::FirmwareOwned)
+        Err(StartFailure::Untouched {
+            error: Error::FirmwareOwned,
+            ..
+        })
     ));
-    assert!(matches!(
-        Controller::start(Fake::new(), 0x2400, DMA, 0),
-        Err(Error::Timeout)
-    ));
+    let Err(StartFailure::Programming(pending)) = Controller::start(Fake::new(), 0x2400, DMA, 0)
+    else {
+        panic!("expected a retryable startup failure");
+    };
+    assert_eq!(pending.error(), &Error::Timeout);
+    pending.retry(5).unwrap().revoke().unwrap();
 }
 
 #[test]
@@ -154,6 +188,32 @@ fn a_timeout_or_wrong_command_pointer_faults_the_session() {
         let mut controller = Controller::start(fake, 0x2400, DMA, 10).unwrap();
         assert_eq!(controller.no_op(3), Err(expected));
         assert_eq!(controller.no_op(3), Err(Error::Faulted));
-        controller.halt(5).unwrap();
+        controller.stop(5).unwrap().revoke().unwrap();
     }
+}
+
+#[test]
+fn failed_start_keeps_ownership_after_the_run_write() {
+    let mut fake = Fake::new();
+    fake.fail_run = true;
+    let Err(StartFailure::Programming(pending)) = Controller::start(fake, 0x2400, DMA, 5) else {
+        panic!("expected ownership of the partially programmed controller");
+    };
+    assert_eq!(pending.error(), &Error::Platform(()));
+    pending.retry(5).unwrap().revoke().unwrap();
+}
+
+#[test]
+fn halt_timeout_and_revocation_failure_allow_only_their_own_retry() {
+    let mut controller = Controller::start(Fake::new(), 0x2400, DMA, 5).unwrap();
+    controller.platform.ignore_stop_once = true;
+    controller.platform.fail_revoke_once = true;
+    let Err(pending) = controller.stop(5) else {
+        panic!("must not release a running device");
+    };
+    assert_eq!(pending.error(), &Error::Timeout);
+    let halted = pending.retry(5).unwrap();
+    let failed = halted.revoke().unwrap_err();
+    assert_eq!(failed.error(), &());
+    failed.retry().unwrap();
 }

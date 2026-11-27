@@ -2,7 +2,9 @@ use mrml_storage_fat32::{
     Fat32EntryReader, FixedFileWriteError, VerifiedSectorDevice, overwrite_fixed_file,
     parse_fat32_boot_sector, parse_fat32_short_directory, read_fat32_cluster_chain,
 };
-use mrml_storage_usb::xhci::{BulkDma, Controller, DeviceDma, DmaLayout, Error, Platform};
+use mrml_storage_usb::xhci::{
+    BulkDma, Controller, DeviceDma, DmaLayout, Error, Platform, RevocablePlatform,
+};
 use std::{
     format, fs,
     io::{self, BufRead, BufReader, Write},
@@ -25,17 +27,23 @@ const BAR: u32 = 0xfeb0_0000;
 struct Qtest {
     socket: BufReader<UnixStream>,
     child: Child,
-    directory: std::path::PathBuf,
 }
 
 impl Drop for Qtest {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = fs::remove_file(self.directory.join("qtest.sock"));
-        let _ = fs::remove_file(self.directory.join("qmp.sock"));
-        let _ = fs::remove_file(self.directory.join("media.img"));
-        let _ = fs::remove_dir(&self.directory);
+    }
+}
+
+struct FixtureDir(std::path::PathBuf);
+
+impl Drop for FixtureDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(self.0.join("qtest.sock"));
+        let _ = fs::remove_file(self.0.join("qmp.sock"));
+        let _ = fs::remove_file(self.0.join("media.img"));
+        let _ = fs::remove_dir(&self.0);
     }
 }
 
@@ -117,6 +125,18 @@ impl Platform for Qtest {
     }
 }
 
+impl RevocablePlatform for Qtest {
+    fn revoke_after_halt(&mut self) -> io::Result<()> {
+        // Synthetic PCI device only: turn off memory decoding and bus
+        // mastering. The fixture's isolated guest RAM is destroyed at drop.
+        self.config(4, 0)?;
+        if self.value("inl 0xcfc")? & 6 != 0 {
+            return Err(io::Error::other("emulated PCI command bits still enabled"));
+        }
+        Ok(())
+    }
+}
+
 #[test]
 #[ignore = "requires qemu-system-x86_64 and an available Unix socket"]
 fn qemu_controller_command_round_trip() {
@@ -132,6 +152,7 @@ fn exercise_qemu(super_speed: bool) {
     };
     let dir = std::env::temp_dir().join(format!("mrml-xhci-qtest-{}", std::process::id()));
     fs::create_dir(&dir).unwrap();
+    let _fixture = FixtureDir(dir.clone());
     let sock = dir.join("qtest.sock");
     let qmp_sock = dir.join("qmp.sock");
     let media = dir.join("media.img");
@@ -184,16 +205,11 @@ fn exercise_qemu(super_speed: bool) {
     let Some(socket) = socket else {
         let _ = child.kill();
         let _ = child.wait();
-        let _ = fs::remove_file(&sock);
-        let _ = fs::remove_file(&qmp_sock);
-        let _ = fs::remove_file(&media);
-        let _ = fs::remove_dir(&dir);
         panic!("QEMU qtest socket not available");
     };
     let mut qtest = Qtest {
         socket: BufReader::new(socket),
         child,
-        directory: dir,
     };
     qtest
         .socket
@@ -287,7 +303,7 @@ fn exercise_qemu(super_speed: bool) {
             Err(mrml_storage_usb::Error::Faulted)
         ));
     }
-    controller.halt(100).unwrap();
+    controller.stop(100).unwrap().revoke().unwrap();
     sector_mut(&mut expected, FILE_SECTOR)[..3].copy_from_slice(b"new");
     let bytes = fs::read(&media).unwrap();
     assert_eq!(bytes.len(), expected.len());
