@@ -4285,7 +4285,7 @@ mod tests {
         provider_digest: &[u8; 64],
         exit_pending: bool,
         ledger: &mut PeerWorkerLedger,
-        stale: Option<&mrml_storage::MicrovmBlockReadConsumer>,
+        mut stale: Option<&mut mrml_storage::MicrovmBlockReadConsumer>,
     ) -> Option<mrml_storage::MicrovmBlockReadConsumer> {
         use mrml_interface_storage_block_provider_v1::OpaqueHandle;
         use mrml_kernel::{CapabilityError, MicrovmInterfaceQueueError, VmDeadlineOutcome};
@@ -4311,10 +4311,18 @@ mod tests {
             memory, pool, quota, consumer, provider,
             virtual_page / PAGE_SIZE, virtual_page / PAGE_SIZE, caps,
         ).unwrap();
-        let session = OpaqueHandle::new(1, 14).unwrap();
-        let (_, mut client, mut server) = bind_microvm_block_read(
-            14, 9, 7, binding, session, &projection, consumer, provider, caps,
-        ).unwrap();
+        let generation = if stale.is_some() { 15 } else { 14 };
+        let session = OpaqueHandle::new(1, generation).unwrap();
+        let (_, mut client, mut server) = if let Some(stale_endpoint) = stale.as_deref_mut() {
+            stale_endpoint.replace_after_retirement(
+                u64::from(generation), binding, session, memory, &projection,
+                object_capability, consumer, provider, caps,
+            )
+        } else {
+            bind_microvm_block_read(
+                u64::from(generation), 9, 7, binding, session, &projection, consumer, provider, caps,
+            )
+        }.unwrap();
 
         let physical = 0x70_0000;
         let view = backing.view;
@@ -4545,7 +4553,7 @@ mod tests {
         virtual_page: u64,
         provider_digest: &[u8; 64],
         ledger: &mut PeerWorkerLedger,
-        stale: Option<&mrml_storage::MicrovmBlockReadConsumer>,
+        stale: Option<&mut mrml_storage::MicrovmBlockReadConsumer>,
     ) -> Option<mrml_storage::MicrovmBlockReadConsumer> {
         let first = system.prepare_boot_kernel(executable, &valid_handoff(), layout).unwrap();
         run_peer_block_in_worker(first, virtual_page, provider_digest, stale.is_none(), ledger, stale)
@@ -4574,11 +4582,11 @@ mod tests {
         ).unwrap();
         let mut ledger = PeerWorkerLedger::new();
         let provider_digest = Sha3_512::digest(&peer_block_probe_pe(true, virtual_page));
-        let stale = worker_loss_attempt(
+        let mut stale = worker_loss_attempt(
             &system, &executable, layout, virtual_page, &provider_digest, &mut ledger, None,
         ).expect("retain old test endpoint after worker loss");
         assert!(worker_loss_attempt(
-            &system, &executable, layout, virtual_page, &provider_digest, &mut ledger, Some(&stale),
+            &system, &executable, layout, virtual_page, &provider_digest, &mut ledger, Some(&mut stale),
         ).is_none());
         mrml_runtime::mrml_println!(
             "peer-block-worker-loss|status=PASS|backend=whp|read=not-published|retry_bytes=512|ledger=retired|stale_endpoint=rejected"

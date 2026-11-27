@@ -10,7 +10,8 @@ use mrml_interface_storage_block_provider_v1::{
     decode_read_request, decode_read_response, encode_read_request, encode_read_response,
 };
 use mrml_kernel::{
-    Capability, CapabilitySpace, MicrovmInterfaceQueueConsumer, MicrovmInterfaceQueueError,
+    Capability, CapabilitySpace, MemoryObjectId, MemoryPoolTable, MemoryResourceError,
+    MicrovmInterfaceQueueConsumer, MicrovmInterfaceQueueError,
     MicrovmInterfaceQueueIdentity, MicrovmInterfaceQueuePair, MicrovmInterfaceQueueProvider,
     MicrovmInterfaceRequestNotification, MicrovmInterfaceResponseNotification,
     MicrovmPeerPageProjection,
@@ -24,6 +25,9 @@ pub enum MicrovmBlockReadError {
     Queue(MicrovmInterfaceQueueError),
     Wire(ProtocolError),
     Provider(ReadError),
+    PreviousBindingLive,
+    NonAdvancingReplacement,
+    ReplacementAlreadyIssued,
 }
 
 impl From<MicrovmInterfaceQueueError> for MicrovmBlockReadError {
@@ -41,6 +45,12 @@ impl From<ProtocolError> for MicrovmBlockReadError {
 pub struct MicrovmBlockReadConsumer {
     queue: MicrovmInterfaceQueueConsumer,
     session: OpaqueHandle,
+    object: MemoryObjectId,
+    provider_generation: u64,
+    system_generation: u64,
+    policy_generation: u64,
+    binding_generation: u64,
+    replacement_issued: bool,
 }
 
 pub struct MicrovmBlockReadProvider {
@@ -85,6 +95,12 @@ pub fn bind_microvm_block_read<const C: usize>(
         MicrovmBlockReadConsumer {
             queue: consumer,
             session,
+            object: projection.object(),
+            provider_generation,
+            system_generation,
+            policy_generation,
+            binding_generation,
+            replacement_issued: false,
         },
         MicrovmBlockReadProvider {
             queue: provider,
@@ -94,6 +110,64 @@ pub fn bind_microvm_block_read<const C: usize>(
 }
 
 impl MicrovmBlockReadConsumer {
+    /// Builds fresh READ endpoints only after the old page is gone and a new
+    /// one is reserved. Pass the same authoritative ledger used to provision
+    /// this binding. Never substitute a snapshot or unrelated ledger.
+    ///
+    /// This does not start a worker, retire host mappings, authorize a new
+    /// provider, or retry any I/O. The supervisor supplies the newly admitted
+    /// provider and session and keeps the ledger live until native teardown.
+    #[allow(clippy::too_many_arguments)]
+    pub fn replace_after_retirement<
+        const P: usize,
+        const O: usize,
+        const M: usize,
+        const C: usize,
+    >(
+        &mut self,
+        provider_generation: u64,
+        binding_generation: u64,
+        session: OpaqueHandle,
+        table: &MemoryPoolTable<P, O, M>,
+        projection: &MicrovmPeerPageProjection,
+        object: Capability,
+        consumer: Capability,
+        provider: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<
+        (MicrovmInterfaceQueueIdentity, Self, MicrovmBlockReadProvider),
+        MicrovmBlockReadError,
+    > {
+        if self.replacement_issued {
+            return Err(MicrovmBlockReadError::ReplacementAlreadyIssued);
+        }
+        if provider_generation <= self.provider_generation
+            || binding_generation <= self.binding_generation
+            || session.generation() <= self.session.generation()
+        {
+            return Err(MicrovmBlockReadError::NonAdvancingReplacement);
+        }
+        if table.object_backing(self.object) != Err(MemoryResourceError::InvalidObject) {
+            return Err(MicrovmBlockReadError::PreviousBindingLive);
+        }
+        projection
+            .validate_live_reservations(table, consumer, provider, object, capabilities)
+            .map_err(MicrovmInterfaceQueueError::Authority)?;
+        let replacement = bind_microvm_block_read(
+            provider_generation,
+            self.system_generation,
+            self.policy_generation,
+            binding_generation,
+            session,
+            projection,
+            consumer,
+            provider,
+            capabilities,
+        )?;
+        self.replacement_issued = true;
+        Ok(replacement)
+    }
+
     pub fn initialize<const C: usize>(
         &self,
         page: &mut [u8],
@@ -256,7 +330,7 @@ mod tests {
         let client = caps.insert(ObjectId(0x92), target).unwrap();
         let server = caps.insert(ObjectId(0x93), target).unwrap();
 
-        let (old, _) = reserve_microvm_peer_page_projection(
+        let (old, old_cap) = reserve_microvm_peer_page_projection(
             &mut memory,
             pool,
             quota,
@@ -268,7 +342,7 @@ mod tests {
         )
         .unwrap();
         let old_session = OpaqueHandle::new(1, 7).unwrap();
-        let (_, old_client, mut old_server) =
+        let (_, mut old_client, mut old_server) =
             bind_microvm_block_read(7, 1, 1, 1, old_session, &old, client, server, &caps).unwrap();
         let mut old_page = [0; PAGE_SIZE as usize];
         let original_bytes = [0x71; 512];
@@ -282,17 +356,23 @@ mod tests {
             .serve(&mut old_page, &old, &caps, stale_request, &mut original)
             .unwrap();
         assert_eq!(original.accesses, 1);
-        // Retire the old queue's authority before binding any replacement.
-        caps.revoke(server).unwrap();
+        let new_session = OpaqueHandle::new(1, 8).unwrap();
         assert!(matches!(
-            old_server.serve(&mut old_page, &old, &caps, stale_request, &mut original),
-            Err(MicrovmBlockReadError::Queue(
-                MicrovmInterfaceQueueError::Authority(_)
-            ))
+            old_client.replace_after_retirement(
+                8, 2, new_session, &memory, &old, old_cap, client, server, &caps,
+            ),
+            Err(MicrovmBlockReadError::PreviousBindingLive)
         ));
-        assert_eq!(original.accesses, 1);
+        // Retire the old queue's authority before binding any replacement.
+        // SAFETY: the test uses stack arrays, not native guest mappings.
+        unsafe {
+            mrml_kernel::release_microvm_peer_page_projection(
+                &mut memory, old, old_cap, client, server, &mut caps,
+            )
+        }.unwrap();
+        caps.revoke(server).unwrap();
         let server = caps.insert(ObjectId(0x94), target).unwrap();
-        let (new, _) = reserve_microvm_peer_page_projection(
+        let (new, new_cap) = reserve_microvm_peer_page_projection(
             &mut memory,
             pool,
             quota,
@@ -303,9 +383,34 @@ mod tests {
             &mut caps,
         )
         .unwrap();
-        let new_session = OpaqueHandle::new(1, 8).unwrap();
-        let (identity, mut new_client, mut new_server) =
-            bind_microvm_block_read(8, 1, 1, 2, new_session, &new, client, server, &caps).unwrap();
+        for (provider_generation, binding_generation, session) in [
+            (7, 2, new_session),
+            (8, 1, new_session),
+            (8, 2, old_session),
+        ] {
+            assert!(matches!(
+                old_client.replace_after_retirement(
+                    provider_generation, binding_generation, session, &memory, &new,
+                    new_cap, client, server, &caps,
+                ),
+                Err(MicrovmBlockReadError::NonAdvancingReplacement)
+            ));
+        }
+        assert!(matches!(
+            old_client.replace_after_retirement(
+                8, 2, new_session, &memory, &new, old_cap, client, server, &caps,
+            ),
+            Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::Authority(_)))
+        ));
+        let (identity, mut new_client, mut new_server) = old_client.replace_after_retirement(
+            8, 2, new_session, &memory, &new, new_cap, client, server, &caps,
+        ).unwrap();
+        assert!(matches!(
+            old_client.replace_after_retirement(
+                8, 2, new_session, &memory, &new, new_cap, client, server, &caps,
+            ),
+            Err(MicrovmBlockReadError::ReplacementAlreadyIssued)
+        ));
         let mut page = [0; PAGE_SIZE as usize];
         let new_bytes = [0x82; 512];
         let mut replacement = Counted {
@@ -365,7 +470,7 @@ mod tests {
             .unwrap();
         let mut raw_client = MicrovmBlockReadConsumer {
             queue: raw_client,
-            session: new_session,
+            ..new_client
         };
         assert_eq!(
             raw_client.complete(&mut page, &new, &caps, completion, &mut output),

@@ -120,6 +120,7 @@ packages/services/storage/src/filesystem_mount.rs	0	0	1	0	0	0	Storage filesystem
 packages/services/storage/src/filesystem_open.rs	5	1	0	0	0	4	Storage filesystem open adapter; counts remain fixed to bounded component copying and exact file-session publication.
 packages/services/storage/src/filesystem_provider_launch.rs	11	1	5	0	2	4	Native filesystem service launch and retirement; exact carry-forward baseline authorized to restore regression tracking, not a completed safety review.
 packages/services/storage/src/kernel_transport.rs	0	0	2	0	0	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
+packages/services/storage/src/microvm_block_read.rs	1	0	0	0	0	0	Test-only retirement of an uninstalled shared page; stack fixtures never create native aliases.
 packages/services/storage/src/object_id_allocator.rs	0	0	3	0	1	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/services/storage/src/recovery.rs	2	0	7	0	2	2	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/services/storage/src/recovery_journal.rs	0	0	1	0	1	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
