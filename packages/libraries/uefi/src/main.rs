@@ -2664,12 +2664,14 @@ fn q35_mmio_snapshot(
         loader_trace(0xe6);
         return None;
     }
-    let mappings = if matches!(marker[32], 2 | 3) {
+    let mappings = if matches!(marker[32], 2..=4) {
         if topology != Q35FixtureTopology::Isolated {
             loader_trace(0xe6);
             return None;
         }
-        if marker[32] == 3 {
+        if marker[32] == 4 {
+            mrml_kernel::arch::x86_64::q35_fixture_bar_preflight_mappings().ok()?
+        } else if marker[32] == 3 {
             mrml_kernel::arch::x86_64::q35_fixture_activation_mappings().ok()?
         } else {
             mrml_kernel::arch::x86_64::q35_fixture_shutdown_mappings().ok()?
@@ -2678,14 +2680,14 @@ fn q35_mmio_snapshot(
         q35_fixture_probe_mappings(topology).ok()?
     };
     for mapping in mappings.into_iter().flatten() {
-        if !q35_fixture_has_no_memory_conflict(
-            raw,
-            stride,
-            mapping.physical_start().get(),
-            (framebuffer.base, framebuffer.size as u64),
-        ) {
-            loader_trace(0xe7);
-            return None;
+        for page in 0..mapping.pages() {
+            let physical = mapping.physical_start().get().checked_add(page.checked_mul(mrml_kernel::PAGE_SIZE)?)?;
+            if !q35_fixture_has_no_memory_conflict(
+                raw, stride, physical, (framebuffer.base, framebuffer.size as u64),
+            ) {
+                loader_trace(0xe7);
+                return None;
+            }
         }
     }
     let mut digest = Sha3_512::new();

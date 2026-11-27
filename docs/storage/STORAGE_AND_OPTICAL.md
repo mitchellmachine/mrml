@@ -3221,6 +3221,18 @@ draining invalidation; the host confirms the leaf is non-present, the root
 is unchanged, and bus mastering is still off. The boot allocation remains
 pinned; no hardware or data transfer is implied.
 
+A fourth sealed profile adds a read-only preflight for the runtime and
+doorbell access needed by the native xHCI driver. The signed loader checks
+firmware-memory conflicts on every mapped page before and after exit from
+boot services. Only the first three BAR pages are mapped, with no aliases.
+The paused QEMU monitor attributes the exact capabilities, operational,
+port, runtime and doorbell ranges to the intended controller and rejects
+extra overlaps in the three mapped pages, including their padding. The fourth
+BAR page contains MSI-X resources and remains unmapped. Both sides verify DBOFF,
+RTSOFF, halted controller state, IMAN reserved bits, and doorbell readback.
+A distinct release is required. This preflight adds no xHCI or PCI writes,
+does not program queues, and does not start a transfer.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

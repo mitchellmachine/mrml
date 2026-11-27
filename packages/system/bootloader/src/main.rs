@@ -4053,7 +4053,18 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let topology = Q35FixtureTopology::from_dmar(dmar).unwrap_or_else(|| halt());
         let mappings = mrml_kernel::arch::x86_64::q35_fixture_probe_mappings(topology)
             .unwrap_or_else(|_| halt());
-        let (mappings, release) = if mappings.into_iter().flatten().all(|mapping|
+        let preflight = mrml_kernel::arch::x86_64::q35_fixture_bar_preflight_mappings()
+            .unwrap_or_else(|_| halt());
+        let (mappings, release) = if topology == Q35FixtureTopology::Isolated
+            && preflight.into_iter().flatten().all(|mapping|
+                active.verify_read_only_mmio_leaves(mapping).is_ok()
+            ) {
+            let fourth = VirtAddr::new(0xffff_d800_0010_6000).unwrap_or_else(|_| halt());
+            if !matches!(active.leaf(fourth), Ok(None)) {
+                halt();
+            }
+            (preflight, 0xa9)
+        } else if mappings.into_iter().flatten().all(|mapping|
             active.verify_read_only_mmio_leaves(mapping).is_ok()
         ) {
             (mappings, 0xa6)
@@ -4070,7 +4081,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             halt();
         };
         let dma = _boot_dma.as_ref().unwrap_or_else(|| halt());
-        if release != 0xa6 {
+        if matches!(release, 0xa7 | 0xa8) {
             // SAFETY: the signed fixture runs with this dedicated root on
             // the BSP only, before enabling interrupts or configuring DMA.
             if unsafe { active.verify_boot_dma_write_back(dma) }.is_err() {
@@ -4084,7 +4095,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             // any remapper write. No mode can enable bus mastering.
             unsafe {
                 native_fat32_probe::dma_fixture_register_snapshot(
-                    mappings, release != 0xa6,
+                    mappings, matches!(release, 0xa7 | 0xa8), release == 0xa9,
                     (release == 0xa8).then_some((&active, dma, dmar)),
                 )
             };

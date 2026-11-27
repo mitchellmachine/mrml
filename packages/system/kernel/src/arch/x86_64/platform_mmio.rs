@@ -83,6 +83,23 @@ pub fn q35_fixture_shutdown_mappings() -> Result<[Option<Mapping>; 4], PlatformM
     q35_fixture_mappings(Q35FixtureTopology::Isolated, true)
 }
 
+/// Read-only preflight for the three pages needed by the emulator driver.
+/// The fourth BAR page is deliberately absent.
+pub fn q35_fixture_bar_preflight_mappings() -> Result<[Option<Mapping>; 4], PlatformMmioError> {
+    let mut mappings = q35_fixture_probe_mappings(Q35FixtureTopology::Isolated)?;
+    let bar = mappings[3].ok_or(PlatformMmioError::InvalidRange)?;
+    mappings[3] = Some(
+        Mapping::new(
+            bar.virtual_start(),
+            bar.physical_start(),
+            3,
+            PagePermissions::KERNEL_MMIO_READ,
+        )
+        .map_err(|_| PlatformMmioError::MappingMismatch)?,
+    );
+    Ok(mappings)
+}
+
 /// Writable DRHD page only for the separately released, isolated model.
 pub fn q35_fixture_activation_mappings() -> Result<[Option<Mapping>; 4], PlatformMmioError> {
     let mut mappings = q35_fixture_shutdown_mappings()?;

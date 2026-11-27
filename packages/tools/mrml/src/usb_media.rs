@@ -150,6 +150,16 @@ fn test_dma_map(code: &str, vars: &str, qemu: &str) -> Result<(), String> {
             "q35-cold-activate.trace",
             "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6eaa7a8e1f1b1ecb2b3d4d8d5d7dcde",
         ),
+        (
+            Q35FixtureCase::BarWrongRelease,
+            "q35-bar-wrong-release.trace",
+            "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6eaa7a8e1f1b1ecb2b3d4d8d5d7dcdd",
+        ),
+        (
+            Q35FixtureCase::BarValidRelease,
+            "q35-bar-preflight.trace",
+            "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6eaa7a8e1f1b1ecb2b3d4d8d5d7dcde",
+        ),
     ] {
         let case_dir = Scratch::new().map_err(|error| error.to_string())?;
         let arguments = words(&[

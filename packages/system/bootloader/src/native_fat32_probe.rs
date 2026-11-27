@@ -237,6 +237,7 @@ pub(super) fn dma_fixture_rendezvous(expected: u8) -> bool {
 pub(super) unsafe fn dma_fixture_register_snapshot(
     mappings: [Option<mrml_kernel::arch::x86_64::Mapping>; 4],
     shutdown: bool,
+    bar_preflight: bool,
     cold: Option<(
         &ActivePageTables,
         &mrml_kernel::arch::x86_64::InitializedBootDma,
@@ -334,6 +335,29 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
             return;
         }
     };
+    if bar_preflight {
+        let Some(xhci) = xhci else {
+            trace(0xdb);
+            return;
+        };
+        // SAFETY: exact read-only three-page BAR mapping and host release,
+        // matching live BAR base and capability length. Fixed dwords
+        // only; never follow dynamically supplied offsets.
+        let extended = unsafe {
+            [0x14, 0x18, 0x1020, 0x2000]
+                .map(|offset| core::ptr::read_volatile((xhci + offset) as *const u32))
+        };
+        if extended[0] != 0x2000
+            || extended[1] != 0x1000
+            || extended[2] & !3 != 0
+            || extended[3] != 0
+            || xhci_command != 0
+            || xhci_status != 1
+        {
+            trace(0xdb);
+            return;
+        }
+    }
     let (endpoint_after, bridge_after) = if shutdown {
         let Some(bridge) = bridge else {
             trace(0xdb);

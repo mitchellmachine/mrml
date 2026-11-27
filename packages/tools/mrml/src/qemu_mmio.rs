@@ -92,7 +92,7 @@ fn inspect_qmp(
     )?;
     let map = read_monitor(&mut *reader, 73)?;
     validate(&map)?;
-    let bar = if matches!(release, Some(0xa6..=0xa8)) {
+    let bar = if matches!(release, Some(0xa6..=0xa9)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
         }
@@ -105,8 +105,28 @@ fn inspect_qmp(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":77}\n",
         )?;
-        validate_fixture_bar(&read_monitor(&mut *reader, 77)?, bar, isolated)?;
-        Some(sample_xhci_state(stdin, reader, bar)?)
+        let preflight = release == Some(0xa9);
+        validate_fixture_bar(&read_monitor(&mut *reader, 77)?, bar, isolated, preflight)?;
+        if preflight {
+            for (id, offset, mask, expected) in [
+                (113, 0x14, u32::MAX, 0x2000),
+                (114, 0x18, u32::MAX, 0x1000),
+                (115, 0x1020, !3, 0),
+                (116, 0x2000, u32::MAX, 0),
+            ] {
+                let actual = read_model_dword(stdin, reader, bar.start + offset, id)?;
+                if actual & mask != expected {
+                    return Err(format!(
+                        "unexpected xHCI readback at +{offset:#x}: {actual:#x}, expected {expected:#x}"
+                    ));
+                }
+            }
+        }
+        let state = sample_xhci_state(stdin, reader, bar)?;
+        if preflight && (state.command != 0 || state.status != 1) {
+            return Err("controller is not halted with interrupts off".into());
+        }
+        Some(state)
     } else {
         None
     };
@@ -131,7 +151,7 @@ fn inspect_qmp(
     }
     if let Some(byte) = release {
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6 | 0xa7 | 0xa8 | 0x5a) {
+        if !matches!(byte, 0xa6..=0xa9 | 0x5a) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -817,7 +837,12 @@ fn fixture_bar(pci: &str, isolated: bool) -> Result<FixtureBar, String> {
     bar.ok_or("missing assigned fixture BAR0".into())
 }
 
-fn validate_fixture_bar(map: &str, bar: FixtureBar, isolated: bool) -> Result<(), String> {
+fn validate_fixture_bar(
+    map: &str,
+    bar: FixtureBar,
+    isolated: bool,
+    preflight: bool,
+) -> Result<(), String> {
     const OWNER: &str = " owner:{dev path=/machine/peripheral/mrml_probe_xhci/xhci-core}";
     const REGIONS: &[(u64, u64, &str)] = &[
         (0, 0x3f, "capabilities"),
@@ -830,12 +855,19 @@ fn validate_fixture_bar(map: &str, bar: FixtureBar, isolated: bool) -> Result<()
         (0x490, 0x49f, "usb2 port #2"),
         (0x4a0, 0x4af, "usb2 port #3"),
         (0x4b0, 0x4bf, "usb2 port #4"),
+        (0x1000, 0x121f, "runtime"),
+        (0x2000, 0x281f, "doorbell"),
     ];
     if isolated && bar.start != 0x8120_0000 {
         return Err("changed isolated model BAR0 base".into());
     }
-    let (expected, last_byte) = if isolated {
-        (REGIONS, 0xfff)
+    let (expected, last_byte) = if preflight {
+        if !isolated {
+            return Err("extended xHCI BAR requires the isolated model".into());
+        }
+        (REGIONS, 0x2fff)
+    } else if isolated {
+        (&REGIONS[..10], 0xfff)
     } else {
         (&REGIONS[..2], 0x43f)
     };
@@ -1139,16 +1171,43 @@ mod tests {
             ));
         }
         let exact = format!("{VIEW}{page}");
-        assert!(validate_fixture_bar(&exact, bar, true).is_ok());
-        assert!(
-            validate_fixture_bar(&exact.replace("usb3 port #4", "usb2 port #4"), bar, true)
-                .is_err()
+        assert!(validate_fixture_bar(&exact, bar, true, false).is_ok());
+        assert!(validate_fixture_bar(&exact, bar, true, true).is_err());
+        let full = format!(
+            concat!(
+                "{} 0000000081201000-000000008120121f (prio 0, i/o): runtime owner:{{dev path=/machine/peripheral/mrml_probe_xhci/xhci-core}}\n",
+                "  0000000081202000-000000008120281f (prio 0, i/o): doorbell owner:{{dev path=/machine/peripheral/mrml_probe_xhci/xhci-core}}\n",
+            ),
+            exact
         );
-        assert!(validate_fixture_bar(&exact.replace("8120049f", "8120049e"), bar, true).is_err());
+        assert!(validate_fixture_bar(&full, bar, true, true).is_ok());
+        assert!(
+            validate_fixture_bar(
+                &full.replace("runtime owner", "unexpected owner"),
+                bar,
+                true,
+                true
+            )
+            .is_err()
+        );
+        let padding = format!("{full} 0000000081202ff0-0000000081202fff (prio 0, ram): conflict\n");
+        assert!(validate_fixture_bar(&padding, bar, true, true).is_err());
+        assert!(
+            validate_fixture_bar(
+                &exact.replace("usb3 port #4", "usb2 port #4"),
+                bar,
+                true,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            validate_fixture_bar(&exact.replace("8120049f", "8120049e"), bar, true, false).is_err()
+        );
         let unexpected =
             format!("{exact} 0000000081200ff0-0000000081200fff (prio 1, ram): conflict\n");
-        assert!(validate_fixture_bar(&unexpected, bar, true).is_err());
-        assert!(validate_fixture_bar(&format!("{exact}{page}"), bar, true).is_err());
+        assert!(validate_fixture_bar(&unexpected, bar, true, false).is_err());
+        assert!(validate_fixture_bar(&format!("{exact}{page}"), bar, true, false).is_err());
     }
 
     #[test]

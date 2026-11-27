@@ -100,6 +100,8 @@ pub(super) enum Q35FixtureCase {
     ColdWrongRelease,
     ColdDenyActivation,
     ColdActivate,
+    BarWrongRelease,
+    BarValidRelease,
 }
 
 impl Q35FixtureCase {
@@ -113,12 +115,15 @@ impl Q35FixtureCase {
                 | Self::ColdWrongRelease
                 | Self::ColdDenyActivation
                 | Self::ColdActivate
+                | Self::BarWrongRelease
+                | Self::BarValidRelease
         )
     }
     fn profile(self) -> u8 {
         match self {
             Self::ColdWrongRelease | Self::ColdDenyActivation | Self::ColdActivate => 3,
             Self::ShutdownWrongRelease | Self::ShutdownValidRelease => 2,
+            Self::BarWrongRelease | Self::BarValidRelease => 4,
             _ => 1,
         }
     }
@@ -202,14 +207,16 @@ fn run_qemu_config(
             Q35FixtureCase::WrongRelease
             | Q35FixtureCase::IsolatedWrongRelease
             | Q35FixtureCase::ShutdownWrongRelease
-            | Q35FixtureCase::ColdWrongRelease,
+            | Q35FixtureCase::ColdWrongRelease
+            | Q35FixtureCase::BarWrongRelease,
         ) => Some([0xdc, 0xdd]),
         Some(
             Q35FixtureCase::ValidRelease
             | Q35FixtureCase::IsolatedValidRelease
             | Q35FixtureCase::ShutdownValidRelease
             | Q35FixtureCase::ColdDenyActivation
-            | Q35FixtureCase::ColdActivate,
+            | Q35FixtureCase::ColdActivate
+            | Q35FixtureCase::BarValidRelease,
         ) => Some([0xdc, 0xde]),
         _ => None,
     };
@@ -392,10 +399,12 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::WrongRelease
         | Q35FixtureCase::IsolatedWrongRelease
         | Q35FixtureCase::ShutdownWrongRelease
-        | Q35FixtureCase::ColdWrongRelease => Some(0x5a),
+        | Q35FixtureCase::ColdWrongRelease
+        | Q35FixtureCase::BarWrongRelease => Some(0x5a),
         Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease => Some(0xa6),
         Q35FixtureCase::ShutdownValidRelease => Some(0xa7),
         Q35FixtureCase::ColdDenyActivation | Q35FixtureCase::ColdActivate => Some(0xa8),
+        Q35FixtureCase::BarValidRelease => Some(0xa9),
     });
     let cold = map_only_marker.and_then(Q35FixtureCase::cold);
     let mut released = false;
@@ -467,7 +476,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             } else {
                 None
             };
-            let exact_trace = if matches!(release, Some(0xa6 | 0xa7)) {
+            let exact_trace = if matches!(release, Some(0xa6 | 0xa7 | 0xa9)) {
                 report.is_some()
             } else {
                 bytes == expected
@@ -491,6 +500,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                     }
                     let access = if release == Some(0xa7) {
                         "pci-bme-only-verified"
+                    } else if release == Some(0xa9) {
+                        "fixed-read-only-three-bar-pages"
                     } else if release == Some(0xa6) {
                         "fixed-read-only"
                     } else {
@@ -511,7 +522,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 return Ok(());
             }
             if rejection.is_none()
-                && !matches!(release, Some(0xa6 | 0xa7))
+                && !matches!(release, Some(0xa6 | 0xa7 | 0xa9))
                 && bytes.len() >= expected.len()
             {
                 let _ = child.kill();
