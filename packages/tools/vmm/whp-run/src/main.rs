@@ -3535,7 +3535,7 @@ fn application_main() -> Result<()> {
         let configured = configured_total_policy
             .as_ref()
             .ok_or_else(|| anyhow!("missing WHP recovered component policy"))?;
-        let total = match isolation_admission.as_mut() {
+        let total = match isolation_admission.take() {
             Some(WhpTotalAdmission::Recovered(total)) => total,
             _ => {
                 return Err(anyhow!(
@@ -3546,44 +3546,43 @@ fn application_main() -> Result<()> {
         let prepared = complete_isolation_preparation
             .take()
             .ok_or_else(|| anyhow!("missing WHP complete component preparation"))?;
+        if prepared.len() != 1 {
+            return Err(anyhow!("WHP runner expects one recovered component domain"));
+        }
         let spec = prepared
             .spec(configured.identity.domain())
             .ok_or_else(|| anyhow!("WHP complete component preparation lost its route"))?;
         let mut provisional_guest = Some(guest);
-        let (prepared, endpoints) = prepared
-            .construct_complete_endpoints(total.admission_mut(), |route_spec| {
+        let (runtime, mut routed) = total.start_prepared_services(
+            prepared,
+            |route_spec| {
                 if route_spec != spec {
-                    return Err("prepared WHP component identity changed");
+                    return Err(anyhow!("prepared WHP component identity changed"));
                 }
-                provisional_guest
-                    .take()
-                    .ok_or("WHP component endpoint was constructed more than once")
-            })
-            .map_err(|failure| {
-                anyhow!("WHP complete component construction failed: {:?}", failure.error())
-            })?;
-        let routed = prepared
-            .commit_complete(total.admission_mut(), endpoints)
-            .map_err(|failure| {
-                anyhow!("WHP complete component publication failed: {:?}", failure.error())
-            })?;
-        let mut endpoints = routed.into_endpoints().into_iter().flatten();
-        let admitted_guest = endpoints
-            .next()
-            .filter(|binding| binding.domain() == configured.identity.domain())
+                let guest = provisional_guest.take()
+                    .ok_or_else(|| anyhow!("WHP component endpoint was already constructed"))?;
+                let mut launcher = PreparedMicrovmConfigurationLauncher::new(
+                    AdmittedConfigurationGuestFactory::new(spec, guest),
+                );
+                let endpoint = launcher.launch_microvm(spec)
+                    .map_err(|(_, error)| anyhow!("WHP configuration lifecycle failed: {:?}", error))?;
+                Ok((launcher, endpoint))
+            },
+            |_, (mut launcher, endpoint)| {
+                if launcher.revoke_microvm(&endpoint).is_ok() {
+                    Ok(())
+                } else {
+                    Err((launcher, endpoint))
+                }
+            },
+        ).map_err(|failure| anyhow!(
+            "WHP complete component startup failed: {:?}; unconfirmed endpoints={}",
+            failure.error(), failure.pending_count(),
+        ))?;
+        let (launcher, endpoint) = routed.take(configured.identity.domain())
             .ok_or_else(|| anyhow!("WHP complete publication omitted component endpoint"))?
             .into_endpoint();
-        if endpoints.next().is_some() {
-            return Err(anyhow!("WHP complete publication returned an excess endpoint"));
-        }
-        let runtime = match isolation_admission.take() {
-            Some(WhpTotalAdmission::Recovered(total)) => {
-                total.authorize_runtime().map_err(|error| {
-                    anyhow!("WHP recovered runtime authorization failed: {:?}", error)
-                })?
-            }
-            _ => return Err(anyhow!("WHP component route lost installed Total owner")),
-        };
+        debug_assert!(routed.is_empty());
         let proof = runtime.proof();
         println!(
             "component-total-inventory|status=PASS|backend=whp|classified={}|eligible={}|microvm={}|native_fallback={}",
@@ -3593,12 +3592,6 @@ fn application_main() -> Result<()> {
             runtime.admission().total_microvm_report().native_fallback
         );
         installed_total_runtime = Some(runtime);
-        let mut launcher = PreparedMicrovmConfigurationLauncher::new(
-            AdmittedConfigurationGuestFactory::new(spec, admitted_guest),
-        );
-        let endpoint = launcher
-            .launch_microvm(spec)
-            .map_err(|(_, error)| anyhow!("WHP configuration lifecycle failed: {:?}", error))?;
         WhpGuestOwner::Configuration { launcher, endpoint }
     } else if let (Some(admission), Some(prepared)) =
         (isolation_admission.as_mut(), isolation_preparation)

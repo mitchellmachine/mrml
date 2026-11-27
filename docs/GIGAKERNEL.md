@@ -2416,6 +2416,22 @@ capability-checked interface queue, rejecting a foreign endpoint, a replayed
 reply, and a request after revocation. The resumed Gigakernel checks the reply
 itself. The queue is monitor-owned, with bounded stopped-guest copies, not
 a mapped peer queue or an installed service scheduler.
+
+The recovered-deployment startup transaction now keeps provisional service
+endpoints private until the complete admitted set and runtime proof both
+succeed. On construction, admission, or proof failure it withdraws logical
+routes and invokes backend teardown in reverse start order. A failed teardown
+retains the exact endpoint for retry. Hosted KVM and WHP component runners
+create the configuration launcher endpoint inside the transaction, before
+they publish their runtime result. The signed two-required-domain unit test
+injects a late startup failure and a failed first teardown, verifies no
+running admission and no runtime proof, then retries the same endpoint and
+checks that its token no longer opens the guest. It also verifies cleanup
+order on a commit failure. A fresh signed v2 release completed the hosted
+KVM component probe through this path with one classified domain in a
+MicroVM, zero native fallback, and the expected halt. The configuration
+suites pass 55 tests on each host; the KVM and WHP runners pass 16 and 12.
+This is not yet a live two-domain failure and hardware teardown test.
 Bare-metal retesting remains deferred.
 
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`

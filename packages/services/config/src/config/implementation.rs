@@ -4005,6 +4005,54 @@ impl<
         self.admission.prepare_complete_service_set(bindings)
     }
 
+    /// Starts a complete prepared set against this exact recovered owner.
+    /// Neither the runtime proof nor any route is returned until finalization
+    /// succeeds. A failed proof withdraws logical routes and tears down the
+    /// concrete endpoints rather than dropping them as an incidental error.
+    pub fn start_prepared_services<C, E>(
+        mut self,
+        prepared: PreparedTotalServiceSet<DOMAINS>,
+        construct: impl FnMut(IsolationServiceSpec) -> Result<E, C>,
+        mut stop: impl FnMut(ObjectId, E) -> Result<(), E>,
+    ) -> Result<
+        (
+            RecoveredDeploymentTotalRuntime<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>,
+            RoutedTotalServiceSet<E, DOMAINS>,
+        ),
+        CompleteTotalServiceStartFailure<C, E, DOMAINS>,
+    > {
+        let routed = prepared.start_complete(self.admission_mut(), construct, &mut stop)?;
+        let proof = match self.admission.finalize() {
+            Ok(proof) => proof,
+            Err(error) => {
+                let pending = routed.into_endpoints();
+                let mut admission_rollback = None;
+                for binding in pending.iter().rev().flatten() {
+                    if let Err(rollback) = self.admission_mut().retire(binding.domain()) {
+                        if admission_rollback.is_none() {
+                            admission_rollback = Some(rollback);
+                        }
+                    }
+                }
+                let mut failure = CompleteTotalServiceStartFailure {
+                    error: CompleteTotalServiceStartError::RuntimeProof {
+                        error,
+                        admission_rollback,
+                    },
+                    pending,
+                };
+                failure.retry_teardown(stop);
+                return Err(failure);
+            }
+        };
+        let runtime = RecoveredInstalledTotalRuntime { total: self.admission, proof };
+        Ok((RecoveredDeploymentTotalRuntime {
+            configuration: self.configuration,
+            deployment: self.deployment,
+            runtime,
+        }, routed))
+    }
+
     pub fn authorize_runtime(
         self,
     ) -> Result<
@@ -4985,6 +5033,53 @@ impl TotalServicePreparationBinding {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompleteTotalServiceStartError<C> {
+    Construction(CompleteTotalServiceConstructionError<C>),
+    Commit(CompleteTotalServiceCommitError),
+    RuntimeProof {
+        error: mrml_kernel::TotalMicrovmRuntimeError,
+        admission_rollback: Option<mrml_kernel::IsolationLaunchError>,
+    },
+}
+
+/// Failed startup is never a runtime. Retains ownership of precisely those
+/// backend endpoints whose shutdown has not yet been confirmed.
+#[derive(Debug)]
+#[must_use = "a failed start may still own endpoints that require teardown"]
+pub struct CompleteTotalServiceStartFailure<C, E, const DOMAINS: usize> {
+    error: CompleteTotalServiceStartError<C>,
+    pending: [Option<TotalServiceEndpointBinding<E>>; DOMAINS],
+}
+
+impl<C, E, const DOMAINS: usize> CompleteTotalServiceStartFailure<C, E, DOMAINS> {
+    pub const fn error(&self) -> &CompleteTotalServiceStartError<C> {
+        &self.error
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.pending.iter().flatten().count()
+    }
+
+    /// Backend callbacks consume the exact endpoint on success and return it
+    /// on failure. Every pending endpoint is attempted, in reverse start
+    /// order. An unconfirmed endpoint remains owned here for a later retry.
+    pub fn retry_teardown(
+        &mut self,
+        mut stop: impl FnMut(ObjectId, E) -> Result<(), E>,
+    ) -> usize {
+        for slot in self.pending.iter_mut().rev() {
+            if let Some(binding) = slot.take() {
+                let domain = binding.domain();
+                if let Err(endpoint) = stop(domain, binding.into_endpoint()) {
+                    *slot = Some(TotalServiceEndpointBinding::new(domain, endpoint));
+                }
+            }
+        }
+        self.pending_count()
+    }
+}
+
 pub struct PreparedTotalServiceSet<const DOMAINS: usize> {
     routes: [Option<PreparedIsolationServiceRoute>; DOMAINS],
     expected_specs: [Option<IsolationServiceSpec>; DOMAINS],
@@ -5252,6 +5347,38 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
             }
         }
         Ok((self, endpoints))
+    }
+
+    /// Constructs and commits the complete set as one transaction. Failed
+    /// backend cleanup remains explicitly owned by the returned error.
+    pub fn start_complete<C, E>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+        construct: impl FnMut(IsolationServiceSpec) -> Result<E, C>,
+        stop: &mut impl FnMut(ObjectId, E) -> Result<(), E>,
+    ) -> Result<RoutedTotalServiceSet<E, DOMAINS>, CompleteTotalServiceStartFailure<C, E, DOMAINS>> {
+        let (prepared, endpoints) = match self.construct_complete_endpoints(admission, construct) {
+            Ok(result) => result,
+            Err(CompleteTotalServiceConstructionFailure { error, endpoints }) => {
+                let mut failure = CompleteTotalServiceStartFailure {
+                    error: CompleteTotalServiceStartError::Construction(error),
+                    pending: endpoints,
+                };
+                failure.retry_teardown(stop);
+                return Err(failure);
+            }
+        };
+        match prepared.commit_complete(admission, endpoints) {
+            Ok(routed) => Ok(routed),
+            Err(CompleteTotalServiceCommitFailure { error, endpoints }) => {
+                let mut failure = CompleteTotalServiceStartFailure {
+                    error: CompleteTotalServiceStartError::Commit(error),
+                    pending: endpoints,
+                };
+                failure.retry_teardown(stop);
+                Err(failure)
+            }
+        }
     }
 
     /// Publishes one already-constructed endpoint for every prepared unique

@@ -6596,8 +6596,65 @@ mod tests {
         );
         assert_eq!(construction.admission().running().count(), 0);
 
+        // Exercise native-launcher ownership semantics as well as the
+        // admission-state case above: keep the exact first endpoint when its
+        // teardown fails, allow no publish, and retry that same endpoint.
+        let bindings = [
+            TotalServicePreparationBinding::new(valid_bounds, first),
+            TotalServicePreparationBinding::new(valid_bounds, second),
+        ];
+        let prepared = construction.prepare_complete_service_set(&bindings).unwrap();
+        let attempts = core::cell::Cell::new(0);
+        let mut stop = |domain, (mut launcher, endpoint):
+            (PreparedMicrovmConfigurationLauncher<PreparedGuestFactoryProbe>, ConfigurationMicrovmEndpoint)| {
+            assert_eq!(domain, first_domain);
+            assert_eq!(endpoint.domain(), domain);
+            assert!(launcher.active_guest(endpoint).is_ok());
+            attempts.set(attempts.get() + 1);
+            if launcher.revoke_microvm(&endpoint).is_ok() {
+                assert_eq!(launcher.factory().destructions, 2);
+                assert!(launcher.active_guest(endpoint).is_err());
+                Ok(())
+            } else {
+                Err((launcher, endpoint))
+            }
+        };
+        let mut failed = prepared.start_complete(
+            construction.admission_mut(),
+            |spec| {
+                if spec.domain() == second_domain {
+                    return Err(0xbeef_u32);
+                }
+                let mut launcher = PreparedMicrovmConfigurationLauncher::new(
+                    PreparedGuestFactoryProbe {
+                        fail_first_destruction: true,
+                        ..PreparedGuestFactoryProbe::default()
+                    },
+                );
+                let endpoint = launcher.launch_microvm(spec).unwrap();
+                Ok((launcher, endpoint))
+            },
+            &mut stop,
+        ).err().expect("second required domain fails");
+        assert_eq!(
+            failed.error(),
+            &CompleteTotalServiceStartError::Construction(
+                CompleteTotalServiceConstructionError::Construction(0xbeef)
+            )
+        );
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(failed.pending_count(), 1);
+        assert_eq!(construction.admission().running().count(), 0);
+        assert!(matches!(
+            construction.finalize(),
+            Err(mrml_kernel::TotalMicrovmRuntimeError::RequiredDomainMissing)
+        ));
+        assert_eq!(failed.retry_teardown(&mut stop), 0);
+        assert_eq!(failed.retry_teardown(&mut stop), 0);
+        assert_eq!(attempts.get(), 2);
+
         // The same exact owner can immediately prepare, construct and publish
-        // both domains after tearing down the returned provisional endpoint.
+        // both domains after confirmed teardown of the provisional endpoint.
         let prepared = construction
             .prepare_complete_service_set(&[
                 TotalServicePreparationBinding::new(valid_bounds, first),
@@ -6617,6 +6674,33 @@ mod tests {
         assert_eq!(routed.into_endpoints().iter().flatten().count(), 2);
         construction.admission_mut().retire(second_domain).unwrap();
         construction.admission_mut().retire(first_domain).unwrap();
+
+        // Starting against the wrong admission table must also stop every
+        // concrete endpoint, in reverse order, even when one stop fails.
+        let prepared = construction.prepare_complete_service_set(&bindings).unwrap();
+        let release = activated_two_domain_release(first_domain, second_domain, 19);
+        let mut foreign = policy.bind_release_inventory(release).unwrap();
+        let mut order = [None; 2];
+        let mut index = 0;
+        let mut failed = prepared.start_complete(
+            foreign.admission_mut(),
+            |spec| Ok::<_, ()>(spec.domain()),
+            &mut |domain, endpoint| {
+                assert_eq!(domain, endpoint);
+                order[index] = Some(domain);
+                index += 1;
+                if domain == second_domain { Err(endpoint) } else { Ok(()) }
+            },
+        ).err().expect("prepared routes cannot cross owners");
+        assert!(matches!(failed.error(), CompleteTotalServiceStartError::Commit(_)));
+        assert_eq!(order, [Some(second_domain), Some(first_domain)]);
+        assert_eq!(failed.pending_count(), 1);
+        assert_eq!(foreign.admission().running().count(), 0);
+        assert_eq!(failed.retry_teardown(|domain, endpoint| {
+            assert_eq!(domain, second_domain);
+            assert_eq!(endpoint, second_domain);
+            Ok(())
+        }), 0);
     }
 
     #[test]

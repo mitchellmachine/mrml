@@ -3780,7 +3780,7 @@ fn application_main() -> Result<()> {
         let configured = configured_total_policy
             .as_ref()
             .ok_or_else(|| anyhow!("missing KVM recovered component policy"))?;
-        let total = match isolation_admission.as_mut() {
+        let total = match isolation_admission.take() {
             Some(KvmTotalAdmission::Recovered(total)) => total,
             _ => {
                 return Err(anyhow!(
@@ -3791,52 +3791,43 @@ fn application_main() -> Result<()> {
         let prepared = complete_isolation_preparation
             .take()
             .ok_or_else(|| anyhow!("missing KVM complete component preparation"))?;
+        if prepared.len() != 1 {
+            return Err(anyhow!("KVM runner expects one recovered component domain"));
+        }
         let spec = prepared
             .spec(configured.identity.domain())
             .ok_or_else(|| anyhow!("KVM complete component preparation lost its route"))?;
         let mut provisional_guest = Some(guest);
-        let (prepared, endpoints) = prepared
-            .construct_complete_endpoints(total.admission_mut(), |route_spec| {
+        let (runtime, mut routed) = total.start_prepared_services(
+            prepared,
+            |route_spec| {
                 if route_spec != spec {
-                    return Err("prepared KVM component identity changed");
+                    return Err(anyhow!("prepared KVM component identity changed"));
                 }
-                provisional_guest
-                    .take()
-                    .ok_or("KVM component endpoint was constructed more than once")
-            })
-            .map_err(|failure| {
-                anyhow!(
-                    "KVM complete component construction failed: {:?}",
-                    failure.error()
-                )
-            })?;
-        let routed = prepared
-            .commit_complete(total.admission_mut(), endpoints)
-            .map_err(|failure| {
-                anyhow!(
-                    "KVM complete component publication failed: {:?}",
-                    failure.error()
-                )
-            })?;
-        let mut endpoints = routed.into_endpoints().into_iter().flatten();
-        let admitted_guest = endpoints
-            .next()
-            .filter(|binding| binding.domain() == configured.identity.domain())
+                let guest = provisional_guest.take()
+                    .ok_or_else(|| anyhow!("KVM component endpoint was already constructed"))?;
+                let mut launcher = PreparedMicrovmConfigurationLauncher::new(
+                    AdmittedConfigurationGuestFactory::new(spec, guest),
+                );
+                let endpoint = launcher.launch_microvm(spec)
+                    .map_err(|(_, error)| anyhow!("KVM configuration lifecycle failed: {:?}", error))?;
+                Ok((launcher, endpoint))
+            },
+            |_, (mut launcher, endpoint)| {
+                if launcher.revoke_microvm(&endpoint).is_ok() {
+                    Ok(())
+                } else {
+                    Err((launcher, endpoint))
+                }
+            },
+        ).map_err(|failure| anyhow!(
+            "KVM complete component startup failed: {:?}; unconfirmed endpoints={}",
+            failure.error(), failure.pending_count(),
+        ))?;
+        let (launcher, endpoint) = routed.take(configured.identity.domain())
             .ok_or_else(|| anyhow!("KVM complete publication omitted component endpoint"))?
             .into_endpoint();
-        if endpoints.next().is_some() {
-            return Err(anyhow!(
-                "KVM complete publication returned an excess endpoint"
-            ));
-        }
-        let runtime = match isolation_admission.take() {
-            Some(KvmTotalAdmission::Recovered(total)) => {
-                total.authorize_runtime().map_err(|error| {
-                    anyhow!("KVM recovered runtime authorization failed: {:?}", error)
-                })?
-            }
-            _ => return Err(anyhow!("KVM component route lost installed Total owner")),
-        };
+        debug_assert!(routed.is_empty());
         let proof = runtime.proof();
         println!(
             "component-total-inventory|status=PASS|backend=kvm|classified={}|eligible={}|microvm={}|native_fallback={}",
@@ -3846,12 +3837,6 @@ fn application_main() -> Result<()> {
             runtime.admission().total_microvm_report().native_fallback
         );
         installed_total_runtime = Some(runtime);
-        let mut launcher = PreparedMicrovmConfigurationLauncher::new(
-            AdmittedConfigurationGuestFactory::new(spec, admitted_guest),
-        );
-        let endpoint = launcher
-            .launch_microvm(spec)
-            .map_err(|(_, error)| anyhow!("KVM configuration lifecycle failed: {:?}", error))?;
         KvmGuestOwner::Configuration { launcher, endpoint }
     } else if let (Some(admission), Some(prepared)) =
         (isolation_admission.as_mut(), isolation_preparation)
