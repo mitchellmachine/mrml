@@ -958,11 +958,9 @@ mod tests {
         observed_projection.set(DeviceDmaProjection { dma_generation: 8, ..projection });
         assert_eq!(launcher.active_device_guest_mut(endpoint, &caps), Err(PreparedMicrovmConfigurationAccessError::DeviceProjectionChanged));
         observed_projection.set(projection);
-        caps.revoke(dma).unwrap();
-        let replacement_dma = caps.insert(projection.dma_memory, DeviceDmaProjection::DMA_RIGHTS).unwrap();
-        assert_ne!(replacement_dma, dma);
-        assert_eq!(launcher.active_device_guest(endpoint, &caps), Err(PreparedMicrovmConfigurationAccessError::DeviceAuthorityChanged));
-        assert_eq!(launcher.active_device_guest_mut(endpoint, &caps), Err(PreparedMicrovmConfigurationAccessError::DeviceAuthorityChanged));
+        // Returning to the old descriptor cannot revive a fenced guest.
+        assert_eq!(launcher.active_device_guest(endpoint, &caps), Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseFenced));
+        assert_eq!(launcher.active_device_guest_mut(endpoint, &caps), Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseFenced));
         assert_eq!(launcher.revoke_microvm(&endpoint), Err(PreparedMicrovmConfigurationError::DeviceLease(())));
         assert_eq!(withdrawals.get(), 1);
         assert_eq!(launcher.factory().destructions, 0);
@@ -988,7 +986,17 @@ mod tests {
         ));
         assert_eq!(launcher.revoke_microvm(&endpoint), Err(PreparedMicrovmConfigurationError::WrongEndpoint));
         assert_eq!(launcher.active_guest(replacement), Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired));
+        let fresh_projection = DeviceDmaProjection { dma_generation: 9, ..projection };
+        observed_projection.set(fresh_projection);
+        launcher.attach_device_lease(Lease { endpoint: replacement, ..lease() }, fresh_projection, &caps, device, dma).unwrap();
+        assert!(launcher.active_device_guest(replacement, &caps).is_ok());
+        caps.revoke(dma).unwrap();
+        let replacement_dma = caps.insert(projection.dma_memory, DeviceDmaProjection::DMA_RIGHTS).unwrap();
+        assert_ne!(replacement_dma, dma);
+        assert_eq!(launcher.active_device_guest(replacement, &caps), Err(PreparedMicrovmConfigurationAccessError::DeviceAuthorityChanged));
+        assert_eq!(launcher.active_device_guest_mut(replacement, &caps), Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseFenced));
         launcher.revoke_microvm(&replacement).unwrap();
+        assert_eq!(withdrawals.get(), 3);
     }
 
     #[test]

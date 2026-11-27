@@ -1,7 +1,7 @@
 use core::array;
 use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use mrml_crypto::Sha3_256;
 use mrml_deployment::{
@@ -281,6 +281,7 @@ pub enum PreparedMicrovmConfigurationAccessError {
     DeviceLeaseRequired,
     DeviceAuthorityChanged,
     DeviceProjectionChanged,
+    DeviceLeaseFenced,
     Retiring,
 }
 
@@ -332,6 +333,7 @@ struct AttachedConfigurationDevice<Lease> {
     projection: DeviceDmaProjection,
     device: Capability,
     dma_memory: Capability,
+    fenced: AtomicBool,
 }
 
 /// Owns one backend-prepared configuration microVM from successful construction
@@ -417,6 +419,7 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
             projection: expected,
             device,
             dma_memory,
+            fenced: AtomicBool::new(false),
         });
         Ok(())
     }
@@ -464,6 +467,7 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
             _ => Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint),
         }
     }
+
     /// Device-bound execution uses only this path. The live capability table
     /// must be the same authoritative table used by the supervisor at attach.
     /// It is borrowed for the same interval as the guest so the supervisor
@@ -505,7 +509,11 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
             return Err(Error::Retiring);
         }
         let attached = self.device_lease.as_ref().ok_or(Error::DeviceLeaseRequired)?;
+        if attached.fenced.load(Ordering::Acquire) {
+            return Err(Error::DeviceLeaseFenced);
+        }
         if attached.lease.endpoint() != endpoint || attached.lease.projection() != attached.projection {
+            attached.fenced.store(true, Ordering::Release);
             return Err(Error::DeviceProjectionChanged);
         }
         if capabilities.authorize_exact(attached.device, DeviceDmaProjection::DEVICE_RIGHTS)
@@ -513,7 +521,11 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
             || capabilities.authorize_exact(attached.dma_memory, DeviceDmaProjection::DMA_RIGHTS)
                 != Ok(attached.projection.dma_memory)
         {
+            attached.fenced.store(true, Ordering::Release);
             return Err(Error::DeviceAuthorityChanged);
+        }
+        if attached.fenced.load(Ordering::Acquire) {
+            return Err(Error::DeviceLeaseFenced);
         }
         Ok(())
     }

@@ -3362,7 +3362,11 @@ attached. The live KVM rollback test observes its first boot marker only
 after attaching a modeled lease. The supervisor now revalidates both retained
 capability generations and the exact lease projection on each device-bound
 guest access. Revocation or replacement of the DMA handle blocks later guest
-access without discarding the lease needed for teardown. The adapter is not an installed provider and does not authenticate
+access without discarding the lease needed for teardown. Once a change is
+observed, the same endpoint stays fenced even if a subsequent sample appears
+unchanged. Only withdrawal and a fresh launch can make a new endpoint
+available. This is a supervisor admission fence, not hardware DMA teardown.
+The adapter is not an installed provider and does not authenticate
 IPC or retire DMA leases by itself. The kernel grants and
 revokes scoped device, interrupt, and DMA resources; it does not run USB
 commands or implement a fallback transport. Until a service can receive and
