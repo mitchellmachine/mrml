@@ -329,7 +329,7 @@ enum Mode<'a> {
     Hosted,
     Bulk(&'a mut dyn FnMut(ProbePipe<'_>)),
     Preflight(&'a mut dyn FnMut(&mut dyn PreflightIo)),
-    Command(&'a mut dyn FnMut(&mut dyn CommandIo)),
+    Command(bool, &'a mut dyn FnMut(&mut dyn CommandIo)),
 }
 
 pub fn with_emulated_probe_preflight(
@@ -340,7 +340,14 @@ pub fn with_emulated_probe_preflight(
 }
 
 pub fn with_emulated_command_probe(super_speed: bool, probe: &mut dyn FnMut(&mut dyn CommandIo)) {
-    exercise_qemu(super_speed, Mode::Command(probe));
+    exercise_qemu(super_speed, Mode::Command(false, probe));
+}
+
+pub fn with_emulated_enumeration_probe(
+    super_speed: bool,
+    probe: &mut dyn FnMut(&mut dyn CommandIo),
+) {
+    exercise_qemu(super_speed, Mode::Command(true, probe));
 }
 
 fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
@@ -548,8 +555,8 @@ fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
             );
             return;
         }
-        Mode::Command(probe) => {
-            command_probe::run(&mut projected, probe);
+        Mode::Command(enumerate, probe) => {
+            command_probe::run(&mut projected, probe, enumerate);
             assert_eq!(
                 fs::read(&media).unwrap(),
                 expected,

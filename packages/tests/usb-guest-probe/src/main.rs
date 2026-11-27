@@ -15,7 +15,8 @@ extern "efiapi" fn efi_main() -> ! {
     let passed = match read_byte(0) {
         0x60 => mrml_usb_guest_probe::exercise_transport(Relay),
         0x61 => preflight(),
-        0x62 => command_probe::exercise(),
+        0x62 => command_probe::exercise(false),
+        0x63 => command_probe::exercise(true),
         _ => mrml_usb_guest_probe::exercise(),
     };
     let result = if passed { 0x51 } else { 0x52 };
@@ -29,7 +30,7 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 }
 
 const PAYLOAD: usize = 16;
-const MAX_PAYLOAD: usize = 512;
+const MAX_PAYLOAD: usize = 33 * 64;
 
 fn read_byte(offset: usize) -> u8 {
     assert!(offset < PAYLOAD + MAX_PAYLOAD);

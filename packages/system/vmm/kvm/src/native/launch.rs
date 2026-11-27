@@ -3186,6 +3186,12 @@ mod tests {
         usb_write_probe::exercise_command();
     }
 
+    #[test]
+    #[ignore = "requires live KVM, QEMU and the built USB probe image"]
+    fn live_kvm_guest_enumerates_qemu_usb_device() {
+        usb_write_probe::exercise_enumeration();
+    }
+
     mod usb_write_probe;
 
     #[test]

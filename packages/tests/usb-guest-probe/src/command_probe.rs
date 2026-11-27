@@ -1,8 +1,8 @@
 //! Diagnostic guest transport. Only the test broker can enable or revoke PCI.
 use super::{PAYLOAD, read_byte, request_address, transfer, write_byte};
 use mrml_usb_guest_probe::{
-    Controller, DmaAssignment, DmaLayout, PciActivation, PciController, PciLocation, PciSnapshot,
-    Platform, RevocablePlatform,
+    Controller, DeviceDma, DmaAssignment, DmaLayout, PciActivation, PciController, PciLocation,
+    PciSnapshot, Platform, RevocablePlatform,
 };
 
 const DMA: DmaLayout = DmaLayout {
@@ -45,14 +45,14 @@ impl Platform for Channel {
     }
 
     fn dma_write(&mut self, address: u64, bytes: &[u8]) -> Result<(), ()> {
-        if bytes.is_empty() || bytes.len() > 256 {
+        if bytes.is_empty() || bytes.len() > 33 * 64 {
             return Err(());
         }
         send(6, address, bytes)
     }
 
     fn dma_read(&mut self, address: u64, bytes: &mut [u8]) -> Result<(), ()> {
-        if bytes.is_empty() || bytes.len() > 256 {
+        if bytes.is_empty() || bytes.len() > 33 * 64 {
             return Err(());
         }
         receive(7, address, bytes)
@@ -114,7 +114,7 @@ impl RevocablePlatform for Channel {
     }
 }
 
-pub(super) fn exercise() -> bool {
+pub(super) fn exercise(enumerate: bool) -> bool {
     let mut channel = Channel;
     let Ok((_, assignment)) = channel.activation_state() else {
         return false;
@@ -122,10 +122,36 @@ pub(super) fn exercise() -> bool {
     let Ok(mut controller) = Controller::start_pci(channel, assignment, DMA, 100) else {
         return false;
     };
-    let result = controller.no_op(100);
+    let passed = controller.no_op(100).is_ok()
+        && (!enumerate
+            || (|| {
+                let port = (1..=u8::MAX).find(|&port| {
+                    controller
+                        .port_status(port)
+                        .is_ok_and(|status| status.connected)
+                })?;
+                controller
+                    .address_device(
+                        port,
+                        DeviceDma {
+                            input_context: 0x10_1000,
+                            output_context: 0x10_2000,
+                            control_ring: 0x10_3000,
+                            control_buffer: 0x10_4000,
+                        },
+                        100,
+                    )
+                    .ok()?;
+                let mut descriptor = [0; 18];
+                controller
+                    .read_descriptor(1, 0, &mut descriptor, 100)
+                    .ok()?;
+                (descriptor[..2] == [18, 1]).then_some(())
+            })()
+            .is_some());
     let retired = controller
         .stop(100)
         .ok()
         .is_some_and(|halted| halted.revoke().is_ok());
-    result.is_ok() && retired
+    passed && retired
 }

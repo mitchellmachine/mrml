@@ -3002,6 +3002,16 @@ The QEMU controller performs the DMA in its emulated RAM; this is not
 physical DMA isolation or an installed VMX/VT-d lease. The command diagnostic
 does not address the USB device or issue storage commands.
 
+Run `--ignored --nocapture live_kvm_guest_enumerates_qemu_usb_device` to
+extend that diagnostic to one directly connected emulated device. The guest
+selects the connected port, enables and addresses one slot, and reads the
+18-byte device descriptor over endpoint zero. The test broker accepts only
+the assigned port, exact context pointers, and the single standard
+GET_DESCRIPTOR transfer. After halt and revocation, the host checks the
+address and transfer completions and the descriptor independently, scrubs the
+queues and contexts, and compares the untouched image. This is enumeration,
+not a guest-controlled bulk storage read or write.
+
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See
 [review log](../patents/REVIEW_LOG.md).

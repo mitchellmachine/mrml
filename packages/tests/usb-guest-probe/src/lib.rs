@@ -8,8 +8,8 @@ use mrml_storage_fat32::provisioned_probe::{
 pub use mrml_storage_usb::{
     BulkTransport,
     xhci::{
-        Controller, DmaAssignment, DmaLayout, PciActivation, Platform, RevocablePlatform,
-        inspect_legacy_ownership,
+        Controller, DeviceDma, DmaAssignment, DmaLayout, PciActivation, Platform,
+        RevocablePlatform, inspect_legacy_ownership,
         pci::{PciController, PciLocation, PciSnapshot},
     },
 };
