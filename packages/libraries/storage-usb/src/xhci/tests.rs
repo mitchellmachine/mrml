@@ -316,6 +316,26 @@ fn supervisor_controller_retirement_preserves_pending_halt_and_revocation() {
     assert_eq!(retire.withdraw(5), Ok(()));
 }
 
+#[test]
+fn scoped_xhci_rejects_unmapped_mmio_and_dma_before_backend_access() {
+    let assignment = activation_assignment();
+    let mut platform = ScopedXhci::new(Fake::new(), assignment, [0, RT, DB])
+        .unwrap_or_else(|(error, _)| panic!("invalid fixture projection: {error:?}"));
+    assert_eq!(platform.read32(0x3000), Err(ProjectionError::MmioRange));
+    assert_eq!(platform.write32(0x3000, 0), Err(ProjectionError::MmioRange));
+    assert_eq!(platform.read32(3), Err(ProjectionError::MmioRange));
+    assert_eq!(platform.dma_write(u64::MAX, &[1, 2]), Err(ProjectionError::DmaRange));
+    assert_eq!(platform.dma_write(assignment.device_base, &[]), Err(ProjectionError::DmaRange));
+    let mut output = [0x55; 4];
+    for address in [assignment.device_base - 4, assignment.device_base + assignment.bytes - 1] {
+        assert_eq!(platform.dma_read(address, &mut output), Err(ProjectionError::DmaRange));
+        assert_eq!(output, [0x55; 4]);
+    }
+    platform.dma_write(assignment.device_base + 4, &[1, 2, 3, 4]).unwrap();
+    platform.dma_read(assignment.device_base + 4, &mut output).unwrap();
+    assert_eq!(output, [1, 2, 3, 4]);
+}
+
 fn activation_snapshot() -> pci::PciSnapshot {
     pci::PciSnapshot {
         location: pci::PciLocation {

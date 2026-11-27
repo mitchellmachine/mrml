@@ -3290,8 +3290,12 @@ retains one host device lease for the exact launch generation and refuses
 guest access or replacement until withdrawal and destruction finish. Live
 KVM rollback exercises that ordering with a modeled device lease; the QEMU
 USB fixture exercises actual emulated controller halt and bus-master revocation.
-Neither test establishes a DMA mapping from xHCI to an executing service
-MicroVM. The adapter is not an installed provider and does not authenticate
+The scoped xHCI adapter now admits only the three broker-selected BAR pages
+and nonempty, in-range transfers in the exact DMA aperture. QEMU exercises
+USB 2 and USB 3 through this adapter, rejects the unprojected MSI-X page and
+out-of-range DMA, and still retires the same controller. These checks do not
+install hardware mappings. No test yet establishes a DMA mapping from xHCI
+to an executing service MicroVM. The adapter is not an installed provider and does not authenticate
 IPC or retire DMA leases by itself. The kernel grants and
 revokes scoped device, interrupt, and DMA resources; it does not run USB
 commands or implement a fallback transport. Until a service can receive and

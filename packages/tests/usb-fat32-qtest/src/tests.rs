@@ -15,7 +15,7 @@ use mrml_storage_fat32::{
 use mrml_storage_usb::block_provider::UsbReadProvider;
 use mrml_storage_usb::xhci::{
     BulkDma, Controller, ControllerRetirement, DeviceDma, DmaLayout, Error, Platform,
-    RevocablePlatform,
+    ProjectionError, RevocablePlatform, ScopedXhci,
 };
 use std::{
     format, fs,
@@ -353,7 +353,40 @@ fn exercise_qemu(super_speed: bool) {
         panic!("DMA outside the aperture must be rejected before startup");
     };
     assert_eq!(qtest.config_read(4).unwrap() & 4, 0);
-    let mut controller = Controller::start_pci(qtest, assignment, DMA, 100).unwrap();
+    let Err((ProjectionError::Assignment, qtest)) =
+        ScopedXhci::new(qtest, assignment, [0, 0x1000, 0x1000])
+    else {
+        panic!("duplicated BAR page must not open a projection");
+    };
+    let mut projected = ScopedXhci::new(qtest, assignment, [0, 0x1000, 0x2000])
+        .unwrap_or_else(|(error, _)| panic!("invalid fixture projection: {error:?}"));
+    assert!(matches!(
+        projected.read32(0x3000),
+        Err(ProjectionError::MmioRange)
+    ));
+    assert!(matches!(
+        projected.write32(0x3000, 0),
+        Err(ProjectionError::MmioRange)
+    ));
+    assert!(matches!(
+        projected.read32(2),
+        Err(ProjectionError::MmioRange)
+    ));
+    assert!(matches!(
+        projected.dma_write(0x10_7ffe, &[0; 4]),
+        Err(ProjectionError::DmaRange)
+    ));
+    let mut denied = [0x5c; 4];
+    assert!(matches!(
+        projected.dma_read(0xf_fffc, &mut denied),
+        Err(ProjectionError::DmaRange)
+    ));
+    assert_eq!(denied, [0x5c; 4]);
+    assert!(matches!(
+        projected.enable_bus_master(wrong, 2),
+        Err(ProjectionError::Assignment)
+    ));
+    let mut controller = Controller::start_pci(projected, assignment, DMA, 100).unwrap();
     let port = (1..=u8::MAX)
         .find(|&port| {
             controller

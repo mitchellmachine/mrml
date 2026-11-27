@@ -12,6 +12,8 @@ mod native_owner;
 pub use managed_vtd::{ManagedVtd, ManagedVtdError, VtdPciPlatform};
 pub use native_owner::{NativePciBinding, NativePciLease, NativePciOwner, NativePciOwnerError};
 pub mod pci;
+mod projection;
+pub use projection::{ProjectionError, ScopedXhci};
 pub use bulk::{BulkDma, BulkPipe};
 pub use lifecycle::{
     ControllerRetirement, ControllerRetirementPending, Halted, RevocablePlatform,
