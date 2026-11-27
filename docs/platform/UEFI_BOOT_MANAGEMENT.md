@@ -53,10 +53,10 @@ Use the separate VMX image to test CPU virtualization on the Chromebook after
 the embedded FAT32 boot smoke test. This image never installs MRML. It does not
 take over the shared xHCI controller, enable DMA, use the internal disk, or run
 an installed storage service. Before starting any secondary CPUs, the opt-in
-kernel launches two tiny guests sequentially in one VMX root session, each
-with a separate VMCS, EPT hierarchy, code page and private data page. Each
-guest must successfully write its own marker and receive an EPT read fault
-at the other guest's unmapped address. The monitor checks both backing bytes
+kernel runs A → B → A → B in one VMX root session, with separate VMCSs,
+EPT hierarchies, code pages and private backing. Each guest writes a marker
+and yields; on resume it increments its retained marker and must fault on
+the other guest's unmapped address. The monitor checks both backing bytes
 after each exit, exits VMX, and restores the original control registers.
 
 Build and preflight the same image on a Linux system with working nested Intel
@@ -80,17 +80,19 @@ The reference QEMU preflight reached `d0 e0 e6` without VMX (including the
 non-pass label) and `d0 d1 d2 d3 d4 df d6` with nested KVM (including the
 pass label) for the original single-guest image. Mitchell reported
 `VMX PROBE PASS` on the Dragonair after the CR0.NE fix. The two-guest image
-requires `d0 d1 d2 d3 d4 f2 f3 f4 df d6` under nested KVM; it is a separate
-hardware test. The no-VMX trace remains unchanged.
+then reached `VMX 2 VM PASS` on the same Dragonair in a launch-only test.
+The switch-and-resume image requires
+`d0 d1 d2 d3 d4 f2 f3 f4 d7 d8 d9 f7 f8 f9 df d6` under nested KVM; the
+no-VMX trace remains unchanged.
 
 On the Dragonair, use its one-time boot menu or launch
 `fsN:\EFI\BOOT\BOOTX64.EFI` from the EFI Shell as in the FAT32 test. Preserve
 the machine's current Secure Boot policy. Record the exact image hash, firmware
 version, and last visible label:
 
-- `VMX 2 VM PASS`: both guests wrote their own data, faulted on the other
-  guest's unmapped address, and the host exited VMX. This is sequential
-  BSP execution, not a test of concurrent scheduling or an installed service.
+- `VMX ABA PASS`: both guests yielded, resumed, updated retained private
+  memory, and faulted on the other guest's unmapped address. This checks
+  cooperative switching, not preemption, multicore operation, or an installed service.
 - `VMX PROBE NOT PASSED - XX`: record the two-digit code and the final screen.
 
   | Code | Failing check |
@@ -114,6 +116,9 @@ version, and last visible label:
   | `10` | expected read-only EPT violation not observed |
   | `11` | VMXOFF failed |
   | `12` | private backing bytes did not match after guest exit |
+  | `13` | the exact guest yield was not observed or could not be parked |
+  | `14` | the suspended VMCS/EPT pair could not be reloaded |
+  | `15` | VMRESUME failed |
 
   Dragonair reported `07` in the first run with stage codes. The updated
   probe reports four hex masks: `CR0 ADD`, `CR0 CLEAR`, `CR4 ADD`, and

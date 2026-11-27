@@ -35,6 +35,9 @@ pub struct VmcsField(u32);
 impl VmcsField {
     pub const VM_INSTRUCTION_ERROR: Self = Self(0x4400);
     pub const EXIT_REASON: Self = Self(0x4402);
+    const EXIT_INSTRUCTION_LENGTH: Self = Self(0x440c);
+    const GUEST_RIP: Self = Self(0x681e);
+    const EPT_POINTER: Self = Self(0x201a);
     pub const EXIT_QUALIFICATION: Self = Self(0x6400);
     pub const GUEST_PHYSICAL_ADDRESS: Self = Self(0x2400);
     pub const GUEST_LINEAR_ADDRESS: Self = Self(0x640a);
@@ -1008,6 +1011,8 @@ pub struct VmxController<I: VmxInstructions> {
     active_vmcs: Option<PhysAddr>,
     active_ept: Option<EptPointer>,
     failed_vmwrite_index: Option<u8>,
+    suspended_probe_guests: [Option<(PhysAddr, EptPointer)>; 2],
+    probe_resume_only: bool,
 }
 
 impl<I: VmxInstructions> VmxController<I> {
@@ -1019,6 +1024,8 @@ impl<I: VmxInstructions> VmxController<I> {
             active_vmcs: None,
             active_ept: None,
             failed_vmwrite_index: None,
+            suspended_probe_guests: [None; 2],
+            probe_resume_only: false,
         }
     }
 
@@ -1046,7 +1053,13 @@ impl<I: VmxInstructions> VmxController<I> {
     }
 
     pub fn clear_vmcs(&mut self, vmcs: PhysAddr) -> Result<(), VmxError> {
-        if !matches!(self.state, VmxState::Root | VmxState::VmcsLoaded) {
+        if !matches!(self.state, VmxState::Root | VmxState::VmcsLoaded)
+            || self
+                .suspended_probe_guests
+                .iter()
+                .flatten()
+                .any(|&(address, _)| address == vmcs)
+        {
             return Err(VmxError::InvalidState);
         }
         self.instructions
@@ -1054,6 +1067,7 @@ impl<I: VmxInstructions> VmxController<I> {
             .map_err(|_| VmxError::InstructionFailed)?;
         self.active_vmcs = Some(vmcs);
         self.active_ept = None;
+        self.probe_resume_only = false;
         self.state = VmxState::VmcsClear;
         Ok(())
     }
@@ -1078,6 +1092,9 @@ impl<I: VmxInstructions> VmxController<I> {
         if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() {
             return Err(VmxError::InvalidState);
         }
+        if self.probe_resume_only {
+            return Err(VmxError::InvalidState);
+        }
         match self.instructions.vmlaunch() {
             Ok(VmxLaunchOutcome::GuestRunning) => self.state = VmxState::GuestRunning,
             Ok(VmxLaunchOutcome::VmExit) => self.state = VmxState::VmExitPending,
@@ -1090,7 +1107,10 @@ impl<I: VmxInstructions> VmxController<I> {
     }
 
     pub fn program_minimal_vmcs(&mut self, launch: &MinimalVmcsLaunch) -> Result<(), VmxError> {
-        if self.state != VmxState::VmcsLoaded || self.active_ept != Some(launch.ept_pointer()) {
+        if self.state != VmxState::VmcsLoaded
+            || self.active_ept != Some(launch.ept_pointer())
+            || self.probe_resume_only
+        {
             return Err(VmxError::InvalidState);
         }
         self.failed_vmwrite_index = None;
@@ -1109,6 +1129,79 @@ impl<I: VmxInstructions> VmxController<I> {
         if !matches!(self.state, VmxState::GuestRunning | VmxState::VmExitPending) {
             return Err(VmxError::InvalidState);
         }
+        self.state = VmxState::VmcsLoaded;
+        Ok(())
+    }
+
+    /// Park an opt-in boot fixture only after its exact three-byte VMCALL.
+    /// Keep the VMCS launched in this root session; no arbitrary RIP or EPT can be supplied.
+    pub fn park_boot_probe_guest(&mut self, expected_rip: u16) -> Result<(), VmxError> {
+        let vmcs = self.active_vmcs.ok_or(VmxError::InvalidState)?;
+        let ept = self.active_ept.ok_or(VmxError::InvalidState)?;
+        let slot = self
+            .suspended_probe_guests
+            .iter()
+            .position(Option::is_none)
+            .ok_or(VmxError::InvalidState)?;
+        let next_rip = expected_rip.checked_add(3).ok_or(VmxError::InvalidVmExit)?;
+        self.record_vm_exit()?;
+        let result = (|| {
+            let mut read = |field| {
+                self.instructions
+                    .vmread(field)
+                    .map_err(|_| VmxError::InstructionFailed)
+            };
+            if read(VmcsField::EXIT_REASON)? != 18
+                || read(VmcsField::GUEST_RIP)? != u64::from(expected_rip)
+                || read(VmcsField::EXIT_INSTRUCTION_LENGTH)? != 3
+                || read(VmcsField::EPT_POINTER)? != ept.bits()
+            {
+                return Err(VmxError::InvalidVmExit);
+            }
+            self.instructions
+                .vmwrite(VmcsField::GUEST_RIP, u64::from(next_rip))
+                .map_err(|_| VmxError::InstructionFailed)
+        })();
+        if result.is_err() {
+            self.state = VmxState::Poisoned;
+            return result;
+        }
+        self.suspended_probe_guests[slot] = Some((vmcs, ept));
+        self.active_vmcs = None;
+        self.active_ept = None;
+        self.state = VmxState::Root;
+        Ok(())
+    }
+
+    /// Reload the exact suspended VMCS/EPT pair without clearing or rewriting it.
+    pub fn reload_boot_probe_guest(
+        &mut self,
+        vmcs: PhysAddr,
+        ept: EptPointer,
+    ) -> Result<(), VmxError> {
+        if !matches!(self.state, VmxState::Root | VmxState::VmcsLoaded) {
+            return Err(VmxError::InvalidState);
+        }
+        let slot = self
+            .suspended_probe_guests
+            .iter()
+            .position(|entry| *entry == Some((vmcs, ept)))
+            .ok_or(VmxError::InvalidState)?;
+        let result = (|| {
+            self.instructions.vmptrld(vmcs)?;
+            if self.instructions.vmread(VmcsField::EPT_POINTER)? != ept.bits() {
+                return Err(VmxInstructionError::Failed);
+            }
+            self.instructions.invept_single_context(ept)
+        })();
+        if result.is_err() {
+            self.state = VmxState::Poisoned;
+            return Err(VmxError::InstructionFailed);
+        }
+        self.suspended_probe_guests[slot] = None;
+        self.active_vmcs = Some(vmcs);
+        self.active_ept = Some(ept);
+        self.probe_resume_only = true;
         self.state = VmxState::VmcsLoaded;
         Ok(())
     }
@@ -1180,6 +1273,8 @@ impl<I: VmxInstructions> VmxController<I> {
         self.active_vmcs = None;
         self.active_ept = None;
         self.failed_vmwrite_index = None;
+        self.suspended_probe_guests = [None; 2];
+        self.probe_resume_only = false;
         self.state = VmxState::Disabled;
         Ok(())
     }
@@ -1202,6 +1297,9 @@ mod tests {
         guest_physical: u64,
         guest_linear: u64,
         exit_on_launch: bool,
+        probe_rip: u64,
+        probe_instruction_length: u64,
+        probe_ept: u64,
     }
 
     impl EmulatedVmx {
@@ -1250,6 +1348,9 @@ mod tests {
             self.step(9)?;
             Ok(match field {
                 VmcsField::EXIT_REASON => self.exit_reason,
+                VmcsField::EXIT_INSTRUCTION_LENGTH => self.probe_instruction_length,
+                VmcsField::GUEST_RIP => self.probe_rip,
+                VmcsField::EPT_POINTER => self.probe_ept,
                 VmcsField::EXIT_QUALIFICATION => self.exit_qualification,
                 VmcsField::GUEST_PHYSICAL_ADDRESS => self.guest_physical,
                 VmcsField::GUEST_LINEAR_ADDRESS => self.guest_linear,
@@ -1300,6 +1401,51 @@ mod tests {
             0x3000,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn boot_probe_reloads_only_the_exact_suspended_pair_and_consumes_it() {
+        let vmxon = PhysAddr::new(0x1000).unwrap();
+        let vmcs = PhysAddr::new(0x2000).unwrap();
+        let ept = EptPointer::new(PhysAddr::new(0x3000).unwrap(), true).unwrap();
+        let wrong_ept = EptPointer::new(PhysAddr::new(0x4000).unwrap(), true).unwrap();
+        let instructions = EmulatedVmx {
+            exit_reason: 18,
+            exit_on_launch: true,
+            probe_rip: 0x1005,
+            probe_instruction_length: 3,
+            probe_ept: ept.bits(),
+            ..EmulatedVmx::default()
+        };
+        let mut controller = VmxController::new(instructions, capabilities());
+        controller.enter_root(vmxon).unwrap();
+        controller.clear_vmcs(vmcs).unwrap();
+        controller.load_vmcs(vmcs, ept).unwrap();
+        controller.launch().unwrap();
+        controller.park_boot_probe_guest(0x1005).unwrap();
+        assert_eq!(controller.clear_vmcs(vmcs), Err(VmxError::InvalidState));
+        assert_eq!(
+            controller.reload_boot_probe_guest(vmcs, wrong_ept),
+            Err(VmxError::InvalidState)
+        );
+        controller.reload_boot_probe_guest(vmcs, ept).unwrap();
+        assert_eq!(controller.launch(), Err(VmxError::InvalidState));
+        assert_eq!(
+            controller.reload_boot_probe_guest(vmcs, ept),
+            Err(VmxError::InvalidState)
+        );
+        controller.resume().unwrap();
+        assert_eq!(
+            controller.park_boot_probe_guest(0x1006),
+            Err(VmxError::InvalidVmExit)
+        );
+        assert_eq!(controller.state(), VmxState::Poisoned);
+        controller.leave_root().unwrap();
+        controller.enter_root(vmxon).unwrap();
+        assert_eq!(
+            controller.reload_boot_probe_guest(vmcs, ept),
+            Err(VmxError::InvalidState)
+        );
     }
 
     #[test]

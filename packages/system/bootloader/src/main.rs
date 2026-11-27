@@ -607,7 +607,7 @@ fn run_vmx_boot_diagnostic(framebuffer: mrml_kernel::FramebufferInfo) {
     // state, before AP startup or publication of any service mappings.
     let mut host_mismatch = None;
     match unsafe { vmx_probe::run(&mut host_mismatch) } {
-        Ok(()) if paint_boot_diagnostic(framebuffer, b"VMX 2 VM PASS") => vmx_probe::trace(0xd6),
+        Ok(()) if paint_boot_diagnostic(framebuffer, b"VMX ABA PASS") => vmx_probe::trace(0xd6),
         Err(fault) => {
             let label = fault.label();
             let details_painted = host_mismatch.is_some_and(|masks| {

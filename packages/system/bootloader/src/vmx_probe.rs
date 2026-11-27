@@ -170,13 +170,21 @@ unsafe fn prepare_pages(pages: &[PhysAddr; PAGE_COUNT], revision: u32) {
                 .write(pages[at(PRIVATE_BACKING_PAGE)].get() | write_back | 0b011);
             let [own_lo, own_hi] = PRIVATE_GPAS[guest].to_le_bytes();
             let [peer_lo, peer_hi] = PRIVATE_GPAS[peer].to_le_bytes();
-            // Write own byte, read peer, then VMCALL if the read did not fault.
+            // Write own byte and yield at +5. On resume, increment that same
+            // byte, then read peer (VMCALL fallback if the read did not fault).
             let code = [
                 0xc6,
                 0x06,
                 own_lo,
                 own_hi,
                 WRITTEN_BYTES[guest],
+                0x0f,
+                0x01,
+                0xc1,
+                0xfe,
+                0x06,
+                own_lo,
+                own_hi,
                 0xa1,
                 peer_lo,
                 peer_hi,
@@ -220,6 +228,9 @@ pub(super) enum ProbeFault {
     Exit = 0x10,
     Vmxoff = 0x11,
     BackingBytes = 0x12,
+    Yield = 0x13,
+    Reload = 0x14,
+    Resume = 0x15,
 }
 
 pub(super) fn mismatch_labels(masks: [u64; 4]) -> [[u8; 26]; 4] {
@@ -356,7 +367,8 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
             .map_err(|_| ProbeFault::Vmxon)?;
         trace(0xd1);
         let mut expected = INITIAL_BYTES;
-        for (guest, launch) in [first_launch, second_launch].iter().enumerate() {
+        let launches = [first_launch, second_launch];
+        for (guest, launch) in launches.iter().enumerate() {
             let vmcs = pages[guest_page(guest, VMCS_PAGE)];
             controller.clear_vmcs(vmcs).map_err(|_| ProbeFault::Clear)?;
             controller
@@ -370,6 +382,23 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
             trace(0xd2 + 0x20 * guest as u8);
             controller.launch().map_err(|_| ProbeFault::Launch)?;
             trace(0xd3 + 0x20 * guest as u8);
+            controller
+                .park_boot_probe_guest(GUEST_CODE_GPA as u16 + 5)
+                .map_err(|_| ProbeFault::Yield)?;
+            expected[guest] = WRITTEN_BYTES[guest];
+            if observed_private_bytes() != expected {
+                return Err(ProbeFault::BackingBytes);
+            }
+            trace(0xd4 + 0x20 * guest as u8);
+        }
+        for (guest, launch) in launches.iter().enumerate() {
+            let vmcs = pages[guest_page(guest, VMCS_PAGE)];
+            controller
+                .reload_boot_probe_guest(vmcs, launch.ept_pointer())
+                .map_err(|_| ProbeFault::Reload)?;
+            trace(0xd7 + 0x20 * guest as u8);
+            controller.resume().map_err(|_| ProbeFault::Resume)?;
+            trace(0xd8 + 0x20 * guest as u8);
             let violation = controller
                 .record_vm_exit_snapshot()
                 .and_then(|snapshot| {
@@ -386,11 +415,11 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
             {
                 return Err(ProbeFault::Exit);
             }
-            expected[guest] = WRITTEN_BYTES[guest];
+            expected[guest] = WRITTEN_BYTES[guest] + 1;
             if observed_private_bytes() != expected {
                 return Err(ProbeFault::BackingBytes);
             }
-            trace(0xd4 + 0x20 * guest as u8);
+            trace(0xd9 + 0x20 * guest as u8);
         }
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;
         Ok(())
