@@ -186,8 +186,12 @@ VID collision when registering the second partition's first GPA range. The
 separate-process WHP storage diagnostic now verifies two signed guests with
 one pagefile-backed section, exact removal of both mappings, and a 512-byte
 RAM-backed result. The parent and worker open separate views of the same
-section; no payload is written to a scratch file. WHP same-process shared
-backing and a production worker transport remain unverified on this host.
+section; no payload is written to a scratch file. Both workers use the same
+local alias owner, which checks the exact peer projection before mapping,
+withdraws its virtual leaf before unregistering GPA backing, and keeps the
+backing alive if retirement cannot be confirmed. Naming and opening the test
+section is not part of that owner. WHP same-process shared backing and a
+production worker transport remain unverified on this host.
 Guest page-table projection, peer queues, and execution remain **PLANNED**.
 
 Exact guest translation is now **PARTIALLY IMPLEMENTED** by the same retained

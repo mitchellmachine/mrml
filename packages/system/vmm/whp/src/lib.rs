@@ -9,7 +9,8 @@ pub use abi::{GuestRange, MapPermissions, WHP_EXIT_CONTEXT_BYTES, WhpError, deco
 #[cfg(target_os = "windows")]
 pub use native::{
     FirmwareProbeLayout, PreparedWhpFirmware, PreparedWhpGuest, PreparedWhpPeerPage,
-    WhpLaunchLayout, WhpPageWalk, WhpPeerPageError, WhpPeerPagePrepareFailure, WhpServiceEraser,
+    PreparedWhpWorkerPage, WhpLaunchLayout, WhpPageWalk, WhpPeerPageError,
+    WhpPeerPagePrepareFailure, WhpServiceEraser, WhpWorkerPeerRole,
     WhpSystem,
 };
 pub use protected_broker::{BrokerError, BrokerTicket, UntrustedLaunchBroker};

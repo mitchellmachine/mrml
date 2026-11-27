@@ -68,6 +68,6 @@ reason = "Bind the declared native library kernel32 for the reviewed native FFI 
 fingerprint = "fnv1a64:80364249546dda0f"
 id = "external-command.run-peer-block-in-worker.current-test-exe"
 kind = "external-command"
-line = 4126
+line = 4254
 path = "packages/system/vmm/whp/src/native/launch.rs"
 reason = "Run the current Rust test executable with the exact WHP provider fixture selector and bounded output in an isolated temporary directory."

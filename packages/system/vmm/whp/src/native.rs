@@ -14,7 +14,7 @@ use crate::{GuestRange, MapPermissions, WHP_EXIT_CONTEXT_BYTES, WhpError, decode
 mod launch;
 pub use launch::{
     PreparedWhpGuest, PreparedWhpPeerPage, WhpLaunchLayout, WhpPageWalk, WhpPeerPageError,
-    WhpPeerPagePrepareFailure, WhpServiceEraser,
+    PreparedWhpWorkerPage, WhpPeerPagePrepareFailure, WhpServiceEraser, WhpWorkerPeerRole,
 };
 
 const FIRMWARE_TOP: u64 = 0x1_0000_0000;

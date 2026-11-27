@@ -595,6 +595,131 @@ impl Drop for PreparedWhpPeerPage<'_, '_> {
     }
 }
 
+/// The local worker's role in an already reserved two-peer projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WhpWorkerPeerRole {
+    First,
+    Second,
+}
+
+/// Owns one guest and its local view of a shared page. It never opens a named
+/// section or grants authority to a remote process. The launcher supplies
+/// the authorized backing and must arrange quiescent cross-worker access.
+pub struct PreparedWhpWorkerPage<'system, B> {
+    guest: PreparedWhpGuest<'system>,
+    backing: Option<B>,
+    address: core::ptr::NonNull<core::ffi::c_void>,
+    physical: u64,
+    virtual_address: u64,
+    native_live: bool,
+    virtual_live: bool,
+}
+
+impl<'system, B> PreparedWhpWorkerPage<'system, B> {
+    /// Install the local alias selected by the live peer projection.
+    ///
+    /// # Safety
+    ///
+    /// `address` must designate the first byte of one initialized, writable,
+    /// non-executable host page kept mapped by `backing`. The caller must bind
+    /// it to the exact backing object of `projection`, ensure this guest is
+    /// the authorized role, and serialize host/guest access with the other
+    /// worker. It must retire the aliases before revoking the projection or
+    /// reusing backing. This API does not authenticate a remote worker.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn prepare<const C: usize>(
+        guest: PreparedWhpGuest<'system>,
+        backing: B,
+        address: core::ptr::NonNull<core::ffi::c_void>,
+        role: WhpWorkerPeerRole,
+        physical: u64,
+        projection: &MicrovmPeerPageProjection,
+        first: Capability,
+        second: Capability,
+        caps: &CapabilitySpace<C>,
+    ) -> Result<Self, WhpPeerPageError> {
+        projection.validate_targets(first, second, caps).map_err(WhpPeerPageError::Policy)?;
+        let virtual_page = match role {
+            WhpWorkerPeerRole::First => projection.first_virtual_page(),
+            WhpWorkerPeerRole::Second => projection.second_virtual_page(),
+        };
+        let virtual_address = virtual_page.checked_mul(PAGE_SIZE)
+            .ok_or(WhpPeerPageError::Backend(WhpError::InvalidMapping))?;
+        let range = GuestRange::new(physical, PAGE_SIZE, MapPermissions::read_write())
+            .map_err(WhpPeerPageError::Backend)?;
+        let mut owner = Self {
+            guest, backing: Some(backing), address, physical, virtual_address,
+            native_live: false, virtual_live: false,
+        };
+        if owner.guest.page_walk(virtual_address).map_err(WhpPeerPageError::Backend)?
+            .physical_address(virtual_address).is_some()
+        {
+            return Err(WhpPeerPageError::Backend(WhpError::InvalidMapping));
+        }
+        owner.guest.partition.map_external_peer_page(range, address)
+            .map_err(WhpPeerPageError::Backend)?;
+        owner.native_live = true;
+        // Installation can fail after publishing a PTE. Confirm it is absent
+        // before attempting to free the native mapping in that case.
+        owner.virtual_live = true;
+        if let Err(error) = owner.guest.install_peer_page(virtual_address, physical) {
+            if matches!(owner.guest.page_walk(virtual_address), Ok(walk)
+                if walk.physical_address(virtual_address).is_none())
+            {
+                owner.virtual_live = false;
+            }
+            return Err(WhpPeerPageError::Backend(error));
+        }
+        Ok(owner)
+    }
+
+    /// The supervisor must stop the other worker before accessing the page.
+    pub fn read(&self, bytes: &mut [u8; PAGE_SIZE as usize]) -> Result<(), WhpError> {
+        VmBackend::read_guest(&self.guest, self.physical, bytes)
+    }
+
+    /// The supervisor must stop the other worker before accessing the page.
+    pub fn write(&mut self, bytes: &[u8; PAGE_SIZE as usize]) -> Result<(), WhpError> {
+        VmBackend::write_guest(&mut self.guest, self.physical, bytes)
+    }
+
+    pub fn run_with_deadline(
+        &mut self,
+        micros: u32,
+    ) -> Result<mrml_kernel::VmDeadlineOutcome, WhpError> {
+        DeadlineVmBackend::run_with_deadline(&mut self.guest, 0, micros)
+    }
+
+    pub fn retire(mut self) -> Result<(), WhpError> {
+        self.detach()
+    }
+
+    fn detach(&mut self) -> Result<(), WhpError> {
+        if self.virtual_live {
+            self.guest.withdraw_peer_page(self.virtual_address, self.physical)?;
+            self.virtual_live = false;
+        }
+        if self.native_live {
+            self.guest.partition.unmap_external_peer_page(self.physical, self.address)?;
+            self.native_live = false;
+        }
+        Ok(())
+    }
+}
+
+impl<B> Drop for PreparedWhpWorkerPage<'_, B> {
+    fn drop(&mut self) {
+        if self.detach().is_err() {
+            self.guest.partition.mapping_poisoned = true;
+            // Native teardown is uncertain. Do not free a page the OS could
+            // still have registered; the worker must be discarded.
+            if let Some(backing) = self.backing.take() {
+                core::mem::forget(backing);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ServiceInstance {
     digest: [u8; 64],
@@ -4094,8 +4219,6 @@ mod tests {
         }
         let directory = Scratch(directory);
         let backing = FixtureSection::open(&directory.0, true);
-        // Reverse declaration order keeps the section mapped through guest drop.
-        let mut first = first;
         let mut caps = CapabilitySpace::<8>::new();
         let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x771).unwrap();
         let (pool, quota) = memory.create_root(
@@ -4114,14 +4237,19 @@ mod tests {
         ).unwrap();
 
         let physical = 0x70_0000;
-        first.partition.map_external_peer_page(
-            range(physical, PAGE_SIZE, MapPermissions::read_write()).unwrap(), backing.view,
-        ).unwrap();
-        first.install_peer_page(virtual_page, physical).unwrap();
+        let view = backing.view;
+        // SAFETY: the fixture owns a single initialized section view for the
+        // first role and does not run or access the guest while the worker runs.
+        let mut first = unsafe {
+            PreparedWhpWorkerPage::prepare(
+                first, backing, view, WhpWorkerPeerRole::First, physical, &projection,
+                consumer, provider, &caps,
+            )
+        }.unwrap();
         let mut page = [0; PAGE_SIZE as usize];
         client.initialize(&mut page, &projection, &caps).unwrap();
         let notification = client.submit(1, &mut page, &projection, &caps).unwrap();
-        VmBackend::write_guest(&mut first, physical, &page).unwrap();
+        first.write(&page).unwrap();
         let executable = std::env::current_exe().unwrap();
         let completed = mrml_runtime::Command::new(executable.to_str().unwrap())
             .args(["--ignored", "--exact", "native::launch::tests::peer_block_partition_worker"])
@@ -4134,22 +4262,22 @@ mod tests {
         let mut expected = page;
         expected[1024..1536].fill(0xa6);
         let mut worker_page = [0u8; PAGE_SIZE as usize];
-        VmBackend::read_guest(&first, physical, &mut worker_page).unwrap();
+        first.read(&mut worker_page).unwrap();
         assert_eq!(worker_page, expected);
         let mut image = [0; 1024];
         image[512..].copy_from_slice(&worker_page[1024..1536]);
         let mut storage = ReadOnlyBlockImage::new(&image, 512, session).unwrap();
         let response = server.serve(&mut page, &projection, &caps, notification, &mut storage).unwrap();
-        VmBackend::write_guest(&mut first, physical, &page).unwrap();
-        assert_eq!(DeadlineVmBackend::run_with_deadline(&mut first, 0, 1_000_000).unwrap(),
+        first.write(&page).unwrap();
+        assert_eq!(first.run_with_deadline(1_000_000).unwrap(),
             VmDeadlineOutcome::Exit(VmExit::Halted));
         let mut sector = [0; 512];
         client.complete(&mut page, &projection, &caps, response, &mut sector).unwrap();
         assert_eq!(sector, [0xa6; 512]);
-        first.withdraw_peer_page(virtual_page, physical).unwrap();
-        assert_eq!(first.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
-        first.partition.unmap_external_peer_page(physical, backing.view).unwrap();
-        assert_eq!(VmBackend::read_guest(&first, physical, &mut [0; 1]), Err(WhpError::UnmappedMemory));
+        first.detach().unwrap();
+        assert_eq!(first.guest.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
+        assert_eq!(first.read(&mut [0; PAGE_SIZE as usize]), Err(WhpError::UnmappedMemory));
+        first.retire().unwrap();
         caps.revoke(provider).unwrap();
         mrml_runtime::mrml_println!(
             "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-shared-section"
@@ -4181,18 +4309,34 @@ mod tests {
             0x10_0000, 16, 0x20_0000, 0x20_0000, 0x30_0000, 0x30_0000,
             0x40_0000, 0xffff_8000_0040_0000, PRIVILEGE_STACK_ARENA_PAGES, true,
         ).unwrap();
-        let mut guest = system.prepare_boot_kernel(&executable, &valid_handoff(), layout).unwrap();
-        let physical = 0x80_0000;
-        guest.partition.map_external_peer_page(
-            range(physical, PAGE_SIZE, MapPermissions::read_write()).unwrap(), backing.view,
+        let guest = system.prepare_boot_kernel(&executable, &valid_handoff(), layout).unwrap();
+        let mut caps = CapabilitySpace::<8>::new();
+        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x771).unwrap();
+        let (pool, quota) = memory.create_root(
+            1, 2, 0, Rights::ALLOCATE.union(Rights::CONTROL).union(Rights::INSPECT), &mut caps,
         ).unwrap();
-        guest.install_peer_page(virtual_page, physical).unwrap();
-        assert_eq!(DeadlineVmBackend::run_with_deadline(&mut guest, 0, 1_000_000).unwrap(),
-            VmDeadlineOutcome::Exit(VmExit::Halted));
-        guest.withdraw_peer_page(virtual_page, physical).unwrap();
-        guest.partition.unmap_external_peer_page(physical, backing.view).unwrap();
-        assert_eq!(guest.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
-        assert_eq!(VmBackend::read_guest(&guest, physical, &mut [0; 1]), Err(WhpError::UnmappedMemory));
+        let target = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+        let consumer = caps.insert(ObjectId(0x772), target).unwrap();
+        let provider = caps.insert(ObjectId(0x773), target).unwrap();
+        let (projection, _) = reserve_microvm_peer_page_projection(
+            &mut memory, pool, quota, consumer, provider,
+            virtual_page / PAGE_SIZE, virtual_page / PAGE_SIZE, &mut caps,
+        ).unwrap();
+
+        let view = backing.view;
+        // SAFETY: this test worker opens the parent's single section view,
+        // with the parent waiting until this guest's mapping is retired.
+        let mut guest = unsafe {
+            PreparedWhpWorkerPage::prepare(
+                guest, backing, view, WhpWorkerPeerRole::Second, 0x80_0000, &projection,
+                consumer, provider, &caps,
+            )
+        }.unwrap();
+        assert_eq!(guest.run_with_deadline(1_000_000).unwrap(), VmDeadlineOutcome::Exit(VmExit::Halted));
+        guest.detach().unwrap();
+        assert_eq!(guest.guest.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
+        assert_eq!(guest.read(&mut [0; PAGE_SIZE as usize]), Err(WhpError::UnmappedMemory));
+        guest.retire().unwrap();
     }
 
     #[test]
