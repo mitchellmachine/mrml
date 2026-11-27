@@ -335,6 +335,13 @@ mrml_activate_address_space:
     mov rax, cr0
     or rax, 0x10000
     mov cr0, rax
+    # Clear CR4.PGE and CR4.PCIDE before changing roots. A change to
+    # PGE or a 1-to-0 change to PCIDE invalidates all translations,
+    # including globals; the subsequent CR3 load retires non-global
+    # translations refilled under the firmware root with both bits off.
+    mov rax, cr4
+    and rax, -131201
+    mov cr4, rax
     mov cr3, r11
     mov rsp, r12
     mov rcx, r9

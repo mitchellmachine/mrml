@@ -249,8 +249,10 @@ fn validate_boot_mmio_cpu(
 ) -> Result<(), PlatformMmioError> {
     // Supervisor reads must use the exact RO/NX 4 KiB translations. Require
     // WP, NXE and four-level paging, and architectural UC (not UC-minus).
+    // The loader retires firmware's global and tagged translations before
+    // changing roots; require PGE and PCIDE to still be off on entry.
     if cr0 & (1 << 16) == 0
-        || cr4 & (1 << 12) != 0
+        || cr4 & ((1 << 7) | (1 << 12) | (1 << 17)) != 0
         || efer_low & (1 << 11) == 0
         || pat_low >> 24 != 0
     {
@@ -347,7 +349,9 @@ mod tests {
         assert_eq!(validate_boot_mmio_cpu(wp, 0, 0x0007_0406, nxe), Ok(()));
         for (cr0, cr4, pat, efer) in [
             (0, 0, 0, nxe),
+            (wp, 1 << 7, 0, nxe),
             (wp, 1 << 12, 0, nxe),
+            (wp, 1 << 17, 0, nxe),
             (wp, 0, 0, 0),
             (wp, 0, 0x0700_0000, nxe),
             (wp, 0, 0x0600_0000, nxe),
