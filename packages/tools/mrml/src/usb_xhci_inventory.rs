@@ -16,6 +16,7 @@ enum Case {
     NoController,
     NoRemapper,
     WithRemapper,
+    UsbBoot,
 }
 
 impl Case {
@@ -34,15 +35,36 @@ impl Case {
             return reported("xhci-inventory: controllers=0 incomplete=0")
                 && !report.lines().any(|line| line.starts_with("xhci 0000:"));
         }
+        if matches!(self, Self::UsbBoot) {
+            return reported("xhci-inventory: controllers=2 incomplete=0")
+                && report
+                    .split("xhci 0000:00:05.0")
+                    .nth(1)
+                    .and_then(|report| report.split("xhci 0000:00:06.0").next())
+                    .is_some_and(|device| {
+                        device
+                            .lines()
+                            .any(|line| line == "xhci boot source: separate-usb")
+                    })
+                && report
+                    .split("xhci 0000:00:06.0")
+                    .nth(1)
+                    .is_some_and(|device| {
+                        device
+                            .lines()
+                            .any(|line| line == "xhci boot source: shared-usb")
+                    });
+        }
         reported("xhci 0000:00:05.0 pci=1b36:000d rev=01 cmd=0007")
             && reported("xhci MCFG: valid, entries=1, covered=true")
             && reported("xhci-inventory: controllers=1 incomplete=0")
+            && reported("xhci boot source: non-usb")
             && report.lines().any(|line| {
                 line.starts_with("xhci BAR0=0x")
                     && line.ends_with(" size=0x4000 ownership=Ok(Absent)")
             })
             && match self {
-                Self::NoController => false,
+                Self::NoController | Self::UsbBoot => false,
                 Self::NoRemapper => reported("xhci DMAR: MissingDmar"),
                 Self::WithRemapper => reported("xhci DMAR: valid, units=1, DRHD=0xfed90000"),
             }
@@ -82,7 +104,12 @@ pub(super) fn test(
     if !bytes.starts_with(b"MZ") {
         return Err("inventory output is not an EFI PE image".into());
     }
-    for case in [Case::NoController, Case::NoRemapper, Case::WithRemapper] {
+    for case in [
+        Case::NoController,
+        Case::NoRemapper,
+        Case::WithRemapper,
+        Case::UsbBoot,
+    ] {
         let scratch = Scratch::new().map_err(|e| e.to_string())?;
         let esp = scratch.path("esp");
         let boot = esp.join("EFI/BOOT");
@@ -114,13 +141,25 @@ pub(super) fn test(
             .arg("-drive")
             .arg(drive(&vars_copy, "if=pflash,format=raw,file="))
             // Only a private virtual FAT directory; no host storage devices.
-            .arg("-drive")
-            .arg(drive(&esp, "format=raw,file=fat:rw:"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(File::create(&stderr).map_err(|e| e.to_string())?);
         if !matches!(case, Case::NoController) {
             command.args(["-device", "qemu-xhci,addr=0x05"]);
+        }
+        if matches!(case, Case::UsbBoot) {
+            command
+                .args(["-device", "qemu-xhci,id=boot_usb,addr=0x06"])
+                .arg("-drive")
+                .arg(drive(&esp, "if=none,id=inventory,format=raw,file=fat:rw:"))
+                .args([
+                    "-device",
+                    "usb-storage,drive=inventory,bus=boot_usb.0,bootindex=1",
+                ]);
+        } else {
+            command
+                .arg("-drive")
+                .arg(drive(&esp, "format=raw,file=fat:rw:"));
         }
         if matches!(case, Case::WithRemapper) {
             command.args(["-device", "intel-iommu"]);

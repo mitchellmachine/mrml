@@ -73,6 +73,20 @@ controller, an unavailable BAR, or a missing, ambiguous or reserved-memory
 route is not clearance for a native test. A listed route is only firmware
 inventory and is not authorization to start the native driver.
 
+The boot-source line reports shared USB, separate USB, a recognized non-USB
+source, or unresolved. It uses the loaded application's device handle and the
+closest firmware PCI I/O ancestor of a bounded device path. An unresolved
+path never establishes separation. The diagnostic does not change ownership
+even if it recognizes a separate source.
+
+The first Dragonair inventory (2026-11-27 UTC, build 503b3600) found one
+Intel 8086:02ed xHCI controller at 0000:00:14.0, revision 00, with command
+0006 and a 64 KiB BAR0 at 0xceef0000. MCFG covered the requester and DMAR
+described a route to DRHD 0xfed91000. The controller reported firmware
+ownership with bus mastering enabled. The application returned to EFI Shell.
+This was a read-only firmware inventory, not native USB I/O or a test of
+controller handoff. That build did not verify the boot-source relationship.
+
 ### Diagnose a return to firmware
 
 Boot the UEFI Shell and run `map -r`, then use the USB filesystem mapping

@@ -5,6 +5,8 @@
 // loader or add an ExitBootServices, PCI write, or media I/O path here.
 use core::ffi::c_void;
 use core::fmt::{self, Write};
+#[path = "xhci_inventory_source.rs"]
+mod source;
 use mrml_kernel::DeviceAddress;
 use mrml_kernel::arch::x86_64::PciConfigSpace;
 use mrml_storage_usb::xhci::inspect_legacy_ownership;
@@ -155,6 +157,7 @@ unsafe fn bar0(
 // SAFETY: services and output are the live tables of this UEFI application;
 // protocol handles/buffers are firmware-owned until the documented free.
 unsafe fn scan(
+    image: Handle,
     system: &SystemTable,
     services: &BootServices,
     output: *mut TextOutput,
@@ -231,6 +234,18 @@ unsafe fn scan(
     // SAFETY: the firmware mapping and services are still live here; ACPI
     // memory reads use only an exact non-overlapping reported RAM range.
     let tables = unsafe { acpi::read(system, services) };
+    // SAFETY: these are the live image, services, and matched firmware handles.
+    let origin = unsafe { source::inspect(image, services) }.and_then(|(handle, transport)| {
+        let i = handles[..count].iter().position(|&entry| entry == handle)?;
+        let (requester, io) = records[i]?;
+        // SAFETY: the BDF and live PCI I/O interface were validated above.
+        let xhci = unsafe { cfg(io, 8).ok()? } >> 8 == 0x0c0330;
+        match (transport, xhci) {
+            (source::Transport::Usb, true) => Some(Some(requester)),
+            (source::Transport::SataOrNvme, false) => Some(None),
+            _ => None,
+        }
+    });
     let mut config = InventoryConfig(&records[..count]);
     let mut found = 0;
     let mut incomplete = 0;
@@ -268,6 +283,14 @@ unsafe fn scan(
                 ),
             )?
         };
+        let relationship = match origin {
+            Some(Some(address)) if address == requester => "shared-usb",
+            Some(Some(_)) => "separate-usb",
+            Some(None) => "non-usb",
+            None => "unresolved",
+        };
+        // SAFETY: the console is live; the relationship is a static label.
+        unsafe { line(output, format_args!("xhci boot source: {relationship}"))? };
         // SAFETY: the console and the bounded inventory config remain live.
         unsafe {
             match &tables {
@@ -332,7 +355,7 @@ unsafe fn scan(
 #[unsafe(export_name = "efi_main")]
 /// # Safety
 /// UEFI supplies the live system table and owns every protocol table read here.
-pub unsafe extern "efiapi" fn efi_main(_image: Handle, system: *mut SystemTable) -> Status {
+pub unsafe extern "efiapi" fn efi_main(image: Handle, system: *mut SystemTable) -> Status {
     if system.is_null() || !system.is_aligned() {
         return LOAD_ERROR;
     }
@@ -345,7 +368,7 @@ pub unsafe extern "efiapi" fn efi_main(_image: Handle, system: *mut SystemTable)
     // SAFETY: the checked aligned firmware services and console are live.
     let outcome = unsafe {
         line(output, format_args!("MRML xhci-inventory: read-only"))
-            .and_then(|()| scan(system, &*services, output))
+            .and_then(|()| scan(image, system, &*services, output))
     };
     if let Err(status) = outcome {
         // SAFETY: the checked console is still live on an error return.

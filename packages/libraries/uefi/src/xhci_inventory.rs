@@ -48,9 +48,70 @@ pub fn inspect_bar0(
     Some((base, u32::try_from(length).ok()?))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceTransport {
+    Usb,
+    SataOrNvme,
+}
+
+/// Classify only an actual node boundary after the firmware PCI path prefix.
+/// Unknown transports never imply the boot media is safely separate.
+pub fn source_transport(path: &[u8], remaining: usize) -> Option<SourceTransport> {
+    super::validate_single_device_path(path).ok()?;
+    let mut offset = 0;
+    let mut transport = None;
+    let mut media_seen = false;
+    while offset < path.len() {
+        let node = path.get(offset..offset + 4)?;
+        let len = u16::from_le_bytes([node[2], node[3]]) as usize;
+        if offset == remaining && (offset == 0 || transport.is_some()) {
+            return None;
+        }
+        if offset >= remaining {
+            match (node[0], node[1], len) {
+                (3, 5, 6)
+                    if !media_seen && matches!(transport, None | Some(SourceTransport::Usb)) =>
+                {
+                    transport = Some(SourceTransport::Usb);
+                }
+                (3, 0x12, 10) | (3, 0x17, 16) if offset == remaining => {
+                    transport = Some(SourceTransport::SataOrNvme);
+                }
+                (4, 1, 42) if transport.is_some() && !media_seen => media_seen = true,
+                (0x7f, 0xff, 4) => return transport,
+                _ => return None,
+            }
+        } else if offset + len > remaining {
+            return None;
+        }
+        offset += len;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_only_bounded_unambiguous_source_suffixes() {
+        const PCI: [u8; 6] = [1, 1, 6, 0, 0, 5];
+        const USB: [u8; 6] = [3, 5, 6, 0, 1, 0];
+        const SATA: [u8; 10] = [3, 0x12, 10, 0, 0, 0, 0, 0, 0, 0];
+        const END: [u8; 4] = [0x7f, 0xff, 4, 0];
+        let usb = [&PCI[..], &USB[..], &USB[..], &END[..]].concat();
+        let sata = [&PCI[..], &SATA[..], &END[..]].concat();
+        let ambiguous = [&PCI[..], &USB[..], &PCI[..], &END[..]].concat();
+        assert_eq!(source_transport(&usb, 6), Some(SourceTransport::Usb));
+        assert_eq!(
+            source_transport(&sata, 6),
+            Some(SourceTransport::SataOrNvme)
+        );
+        assert_eq!(source_transport(&ambiguous, 6), None);
+        assert_eq!(source_transport(&usb, 1), None);
+        assert_eq!(source_transport(&usb, 0), None);
+        assert_eq!(source_transport(&usb[..12], 6), None);
+    }
 
     fn descriptor(base: u64, length: u64, width: u64) -> [u8; BAR_RESOURCE_BYTES] {
         let mut bytes = [0; BAR_RESOURCE_BYTES];

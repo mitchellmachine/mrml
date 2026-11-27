@@ -410,6 +410,7 @@ pub type LocateHandleBuffer = unsafe extern "efiapi" fn(
     *mut usize,
     *mut *mut Handle,
 ) -> Status;
+pub type LocateDevicePath = unsafe extern "efiapi" fn(*const Guid, *mut *mut u8, *mut Handle) -> Status;
 pub type AllocatePages = unsafe extern "efiapi" fn(u32, u32, usize, *mut u64) -> Status;
 pub type FreePages = unsafe extern "efiapi" fn(u64, usize) -> Status;
 pub type Tcg2HashLogExtendEvent =
@@ -1479,7 +1480,12 @@ unsafe fn with_opened_uefi_block_protocols<R>(
     discovered
 }
 
-unsafe fn copy_single_device_path(
+/// Copies the firmware's bounded single-instance device path.
+///
+/// # Safety
+/// The firmware pointer must remain readable through its complete declared
+/// path, without aliasing the caller-owned scratch buffer.
+pub unsafe fn copy_single_device_path(
     path: *const u8,
     output: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
 ) -> Result<usize, UefiBlockDescriptorError> {
@@ -1602,7 +1608,7 @@ pub struct BootServices {
     pub reserved: usize,
     pub register_protocol_notify: usize,
     pub locate_handle: usize,
-    pub locate_device_path: usize,
+    pub locate_device_path: Option<LocateDevicePath>,
     pub install_configuration_table: usize,
     pub load_image: usize,
     pub start_image: usize,
@@ -2662,7 +2668,7 @@ mod tests {
             reserved: 0,
             register_protocol_notify: 0,
             locate_handle: 0,
-            locate_device_path: 0,
+            locate_device_path: None,
             install_configuration_table: 0,
             load_image: 0,
             start_image: 0,
