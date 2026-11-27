@@ -128,6 +128,7 @@ fn inspect_qmp(
         validate_scratch_uart(&map)?;
         verify_shared_boot(stdin, reader)?;
         if release == Some(0xad) {
+            let before = sample_shared_controller(stdin, reader)?;
             qmp_write(
                 stdin,
                 "{\"execute\":\"device_del\",\"arguments\":{\"id\":\"mrml_shared_boot\"},\"id\":152}\n",
@@ -145,6 +146,28 @@ fn inspect_qmp(
             {
                 return Err(
                     "shared boot disk did not detach while the controller stayed present".into(),
+                );
+            }
+            let after = sample_shared_controller(stdin, reader)?;
+            if !before.matches_control(after) {
+                return Err(
+                    "virtual USB removal changed PCI identity, controller control or VT-d state"
+                        .into(),
+                );
+            }
+            for (phase, state) in [("before-detach", before), ("after-detach", after)] {
+                println!(
+                    "q35-shared-controller|phase={phase}|bdf=0000:00:1b.0|bar0={:#x}|pci_cmd={:#06x}|bme={}|run={}|halted={}|usbsts={:#010x}|vtd_translation={}|vtd_gsts={:#010x}|vtd_root={:#018x}|vtd_faults={:#010x}",
+                    state.xhci.bar.start,
+                    state.pci_command as u16,
+                    state.pci_command & 4 != 0,
+                    state.xhci.command & 1 != 0,
+                    state.xhci.status & 1 != 0,
+                    state.xhci.status,
+                    state.gsts & (1 << 31) != 0,
+                    state.gsts,
+                    state.root,
+                    state.fsts,
                 );
             }
             println!(
@@ -732,6 +755,69 @@ fn inspect_command_completion(
     );
     Ok(())
 }
+#[derive(Clone, Copy, Debug)]
+struct SharedController {
+    xhci: FixtureState,
+    pci_command: u32,
+    gsts: u32,
+    root: u64,
+    fsts: u32,
+}
+
+impl SharedController {
+    fn matches_control(self, after: Self) -> bool {
+        // Detach may set the port-change bit. It must not move the BAR,
+        // alter the controller's Run/Halted state or alter remapping.
+        self.xhci.bar == after.xhci.bar
+            && self.xhci.cap0 == after.xhci.cap0
+            && self.xhci.command == after.xhci.command
+            && self.xhci.status & 1 == after.xhci.status & 1
+            && self.pci_command as u16 == after.pci_command as u16
+            && self.gsts == after.gsts
+            && self.root == after.root
+            && self.fsts == after.fsts
+    }
+}
+
+fn sample_shared_controller(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+) -> Result<SharedController, String> {
+    qmp_write(
+        stdin,
+        "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info pci\"},\"id\":154}\n",
+    )?;
+    let bar = fixture_bar(&read_monitor(&mut *reader, 154)?, false)?;
+    qmp_write(
+        stdin,
+        "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":155}\n",
+    )?;
+    validate_fixture_bar(&read_monitor(&mut *reader, 155)?, bar, false, false)?;
+    // The outer QMP check proved the ECAM and DRHD apertures. Bind the
+    // config dwords to the same exact 00:1b.0 candidate validated above.
+    const ENDPOINT: u64 = ECAM.0 + (27 << 15);
+    if read_model_dword(stdin, reader, ENDPOINT, 156)? != 0x000d_1b36 {
+        return Err("wrong shared-controller ECAM identity".into());
+    }
+    let pci_command = read_model_dword(stdin, reader, ENDPOINT + 4, 157)?;
+    if pci_command as u16 == u16::MAX || pci_command & 2 == 0 {
+        return Err("shared controller lacks readable PCI memory decoding".into());
+    }
+    let gsts = read_model_dword(stdin, reader, DRHD.0 + 0x1c, 158)?;
+    let fsts = read_model_dword(stdin, reader, DRHD.0 + 0x34, 159)?;
+    let root = read_root_pointer(stdin, reader)?;
+    if gsts == u32::MAX || fsts == u32::MAX || root == u64::MAX {
+        return Err("invalid shared-controller VT-d sample".into());
+    }
+    Ok(SharedController {
+        xhci: sample_xhci_state(stdin, reader, bar)?,
+        pci_command,
+        gsts,
+        root,
+        fsts,
+    })
+}
+
 fn shared_boot_topology(tree: &str) -> bool {
     let mut bus = None;
     let mut buses = 0;
@@ -1432,6 +1518,65 @@ fn validate_resources(map: &str, expect_drhd: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_controller_accepts_port_change_but_not_control_or_remapper_drift() {
+        let initial = SharedController {
+            xhci: FixtureState {
+                bar: FixtureBar {
+                    start: 0x10000,
+                    end: 0x13fff,
+                },
+                cap0: 0x0100_0040,
+                command: 0,
+                status: 1,
+            },
+            pci_command: 7,
+            gsts: 0,
+            root: 0,
+            fsts: 0,
+        };
+        let mut after = initial;
+        after.xhci.status |= 1 << 4;
+        after.pci_command |= 1 << 19; // Separate PCI status half.
+        assert!(initial.matches_control(after));
+        after.xhci.status &= !1;
+        assert!(!initial.matches_control(after));
+        for changed in [
+            SharedController {
+                pci_command: 3,
+                ..initial
+            },
+            SharedController {
+                gsts: 1 << 31,
+                ..initial
+            },
+            SharedController {
+                root: 0x1000,
+                ..initial
+            },
+            SharedController { fsts: 1, ..initial },
+            SharedController {
+                xhci: FixtureState {
+                    command: 1,
+                    ..initial.xhci
+                },
+                ..initial
+            },
+            SharedController {
+                xhci: FixtureState {
+                    bar: FixtureBar {
+                        start: 0x20000,
+                        end: 0x23fff,
+                    },
+                    ..initial.xhci
+                },
+                ..initial
+            },
+        ] {
+            assert!(!initial.matches_control(changed));
+        }
+    }
 
     #[test]
     fn shared_boot_requires_unique_direct_attachment_and_named_stats() {

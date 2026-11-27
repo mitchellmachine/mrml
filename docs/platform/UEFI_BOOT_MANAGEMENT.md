@@ -105,7 +105,16 @@ writes, detaches only that disk (not the controller), confirms its absence,
 then releases the guest. The kernel completes the signed embedded FAT32
 service restart without the boot disk. Missing-marker and denied-release
 controls halt. This demonstrates boot can continue from RAM; it does not
-exercise native xHCI ownership transfer, reset, or storage I/O.
+exercise native xHCI ownership transfer, reset, or storage I/O. The signed
+preload regression also samples the same paused QEMU PCI function, BAR,
+xHCI command and status, and VT-d translation/root/fault registers before
+and after detachment. The host requires control and remapper state to
+remain unchanged while allowing a port-status event. The report describes
+firmware-inherited emulated state, not proof of physical ownership or DMA
+isolation. In the QEMU reference run, xHCI was halted both times, but
+PCI Bus Master Enable remained set and VT-d translation remained off.
+Removing the boot stick is therefore not a substitute for an explicit,
+verified DMA-safe controller shutdown.
 
 ### Diagnose a return to firmware
 
