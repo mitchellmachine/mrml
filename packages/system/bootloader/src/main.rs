@@ -598,10 +598,10 @@ fn run_vmx_boot_diagnostic(framebuffer: mrml_kernel::FramebufferInfo) {
     }
     // SAFETY: this opt-in boot probe runs on the BSP with validated early
     // state, before AP startup or publication of any service mappings.
-    let passed = unsafe { vmx_probe::run() }.is_ok();
-    let label: &[u8] = if passed { b"VMX PROBE PASS" } else { b"VMX PROBE NOT PASSED" };
-    if paint_boot_diagnostic(framebuffer, label) {
-        vmx_probe::trace(if passed { 0xd6 } else { 0xe6 });
+    match unsafe { vmx_probe::run() } {
+        Ok(()) if paint_boot_diagnostic(framebuffer, b"VMX PROBE PASS") => vmx_probe::trace(0xd6),
+        Err(fault) if paint_boot_diagnostic(framebuffer, &fault.label()) => vmx_probe::trace(0xe6),
+        _ => {}
     }
     halt();
 }

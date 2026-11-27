@@ -75,8 +75,8 @@ sole eligible USB stick without a selection or erase prompt. Without
 
 The reference QEMU preflight reached `d0 e0 e6` without VMX (including the
 non-pass label) and `d0 d1 d2 d3 d4 df d6` with nested KVM (including the
-pass label). This is emulator-hosted evidence only; Dragonair has not run this
-VMX image yet.
+pass label). On Dragonair, the first physical run reached the generic
+`VMX PROBE NOT PASSED` label. It did not identify the failing stage.
 
 On the Dragonair, use its one-time boot menu or launch
 `fsN:\EFI\BOOT\BOOTX64.EFI` from the EFI Shell as in the FAT32 test. Preserve
@@ -84,7 +84,30 @@ the machine's current Secure Boot policy. Record the exact image hash, firmware
 version, and last visible label:
 
 - `VMX PROBE PASS`: the probe verified the expected EPT fault and exited VMX.
-- `VMX PROBE NOT PASSED`: the platform or probe rejected the operation.
+- `VMX PROBE NOT PASSED - XX`: record the two-digit code and the final screen.
+
+  | Code | Failing check |
+  | --- | --- |
+  | `00` | CPUID does not expose VMX |
+  | `01` | VMX/EPT capability requirements not met |
+  | `02` | required VM execution controls unavailable |
+  | `03` | diagnostic pages could not be validated |
+  | `04` | EPT root pointer rejected |
+  | `05` | firmware left IA32_FEATURE_CONTROL unlocked |
+  | `06` | firmware disabled VMX outside SMX |
+  | `07` | host CR0/CR4 fixed-bit validation failed |
+  | `08` | unrestricted guest CR0/CR4 setup failed |
+  | `09` | host task register descriptor rejected |
+  | `0A` | minimal VMCS launch state rejected |
+  | `0B` | VMXON failed |
+  | `0C` | VMCLEAR failed |
+  | `0D` | VMPTRLD or EPT binding failed |
+  | `0E` | VMWRITE failed |
+  | `0F` | VMLAUNCH failed |
+  | `10` | expected read-only EPT violation not observed |
+  | `11` | VMXOFF failed |
+
+  The test never changes the firmware VMX policy.
 - `VMX PROBE START` without a terminal label: record it as a non-pass; the probe
   did not return to its caller with a terminal result.
 

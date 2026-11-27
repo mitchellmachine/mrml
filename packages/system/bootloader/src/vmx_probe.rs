@@ -3,7 +3,7 @@ use core::cell::UnsafeCell;
 
 use mrml_kernel::arch::x86_64::{
     ActivePageTables, EptPointer, MinimalVmcsLaunch, NativeVmx, VirtAddr, VmxCapabilities,
-    VmxControlPolicy, VmxController, VmxHostState, VmxPrerequisites, VmxState,
+    VmxControlPolicy, VmxController, VmxError, VmxHostState, VmxPrerequisites, VmxState,
 };
 use mrml_kernel::{PAGE_SIZE, PhysAddr};
 
@@ -161,18 +161,60 @@ unsafe fn prepare_pages(pages: &[PhysAddr; PAGE_COUNT], revision: u32) {
     unsafe { page(PRIVATE_BACKING_PAGE).write_volatile(0xa5) };
 }
 
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(super) enum ProbeFault {
+    Cpu = 0x00,
+    Capabilities = 0x01,
+    Controls = 0x02,
+    Pages = 0x03,
+    Ept = 0x04,
+    FirmwareUnlocked = 0x05,
+    FirmwareDisabled = 0x06,
+    HostControls = 0x07,
+    GuestControls = 0x08,
+    TaskRegister = 0x09,
+    LaunchState = 0x0A,
+    Vmxon = 0x0B,
+    Clear = 0x0C,
+    Load = 0x0D,
+    Program = 0x0E,
+    Launch = 0x0F,
+    Exit = 0x10,
+    Vmxoff = 0x11,
+}
+
+impl ProbeFault {
+    pub(super) fn label(self) -> [u8; 25] {
+        let mut label = *b"VMX PROBE NOT PASSED - 00";
+        let hex = b"0123456789ABCDEF";
+        let code = self as usize;
+        label[23] = hex[code >> 4];
+        label[24] = hex[code & 15];
+        label
+    }
+}
+
 /// Runs a controlled boot-time VMX/EPT proof. QEMU execution is evidence of
 /// this state machine only; it is not physical-platform or remote attestation.
-pub unsafe fn run() -> Result<(), ()> {
+pub(super) unsafe fn run() -> Result<(), ProbeFault> {
     trace(0xd0);
     if __cpuid(1).ecx & (1 << 5) == 0 {
         trace(0xe0);
-        return Err(());
+        return Err(ProbeFault::Cpu);
+    }
+    // Observe firmware policy before testing other VMX prerequisites. Never change it.
+    let feature_control = unsafe { rdmsr(0x3a) };
+    if feature_control & 1 == 0 {
+        return Err(ProbeFault::FirmwareUnlocked);
+    }
+    if feature_control & (1 << 2) == 0 {
+        return Err(ProbeFault::FirmwareDisabled);
     }
     let basic = unsafe { rdmsr(0x480) };
     let secondary = unsafe { rdmsr(0x48b) };
-    let capabilities =
-        VmxCapabilities::from_msrs(basic, secondary, unsafe { rdmsr(0x48c) }).map_err(|_| ())?;
+    let capabilities = VmxCapabilities::from_msrs(basic, secondary, unsafe { rdmsr(0x48c) })
+        .map_err(|_| ProbeFault::Capabilities)?;
     let true_controls = basic & (1 << 55) != 0;
     let controls = VmxControlPolicy::from_msrs(
         unsafe { rdmsr(if true_controls { 0x48d } else { 0x481 }) },
@@ -181,14 +223,14 @@ pub unsafe fn run() -> Result<(), ()> {
         unsafe { rdmsr(if true_controls { 0x490 } else { 0x484 }) },
         secondary,
     )
-    .map_err(|_| ())?;
-    let pages = unsafe { physical_pages() }?;
+    .map_err(|_| ProbeFault::Controls)?;
+    let pages = unsafe { physical_pages() }.map_err(|_| ProbeFault::Pages)?;
     unsafe { prepare_pages(&pages, capabilities.revision_id()) };
-    let ept = EptPointer::new(pages[EPT_PML4_PAGE], true).map_err(|_| ())?;
+    let ept = EptPointer::new(pages[EPT_PML4_PAGE], true).map_err(|_| ProbeFault::Ept)?;
     let (cr0, cr3, original_cr4) = unsafe { control_registers() };
     let vmx_cr4 = original_cr4 | (1 << 13);
     let prerequisites = VmxPrerequisites::new(
-        unsafe { rdmsr(0x3a) },
+        feature_control,
         cr0,
         vmx_cr4,
         unsafe { rdmsr(0x486) },
@@ -196,13 +238,16 @@ pub unsafe fn run() -> Result<(), ()> {
         unsafe { rdmsr(0x488) },
         unsafe { rdmsr(0x489) },
     );
-    prerequisites.validate().map_err(|_| ())?;
+    prerequisites
+        .validate()
+        .map_err(|_| ProbeFault::HostControls)?;
     let (guest_cr0, guest_cr4) = prerequisites
         .unrestricted_guest_controls()
-        .map_err(|_| ())?;
+        .map_err(|_| ProbeFault::GuestControls)?;
     let selectors = unsafe { selectors() };
     let (gdtr, idtr) = unsafe { descriptor_tables() };
-    let tr_base = unsafe { task_register_base(gdtr, selectors[6]) }?;
+    let tr_base =
+        unsafe { task_register_base(gdtr, selectors[6]) }.map_err(|_| ProbeFault::TaskRegister)?;
     let stack_pointer: u64;
     unsafe {
         asm!("mov {}, rsp", out(reg) stack_pointer, options(nomem, nostack, preserves_flags))
@@ -235,39 +280,48 @@ pub unsafe fn run() -> Result<(), ()> {
         GUEST_CODE_GPA as u16,
         0x3000,
     )
-    .map_err(|_| ())?;
+    .map_err(|_| ProbeFault::LaunchState)?;
     unsafe { asm!("mov cr4, {}", in(reg) vmx_cr4, options(nostack, preserves_flags)) };
     let native = unsafe { NativeVmx::assume_cpl0_vmx_enabled() };
     let mut controller = VmxController::new(native, capabilities);
     let result = (|| {
-        controller.enter_root(pages[VMXON_PAGE])?;
+        controller
+            .enter_root(pages[VMXON_PAGE])
+            .map_err(|_| ProbeFault::Vmxon)?;
         trace(0xd1);
-        controller.clear_vmcs(pages[VMCS_PAGE])?;
-        controller.load_vmcs(pages[VMCS_PAGE], ept)?;
-        if let Err(error) = controller.program_minimal_vmcs(&launch) {
+        controller
+            .clear_vmcs(pages[VMCS_PAGE])
+            .map_err(|_| ProbeFault::Clear)?;
+        controller
+            .load_vmcs(pages[VMCS_PAGE], ept)
+            .map_err(|_| ProbeFault::Load)?;
+        if controller.program_minimal_vmcs(&launch).is_err() {
             trace(0xed);
             trace(controller.failed_vmwrite_index().unwrap_or(u8::MAX));
-            return Err(error);
+            return Err(ProbeFault::Program);
         }
         trace(0xd2);
-        controller.launch()?;
+        controller.launch().map_err(|_| ProbeFault::Launch)?;
         trace(0xd3);
-        let snapshot = controller.record_vm_exit_snapshot()?;
-        let violation = snapshot.private_page_violation(
-            PhysAddr::new(PRIVATE_GPA)
-                .map_err(|_| mrml_kernel::arch::x86_64::VmxError::InvalidVmExit)?,
-        )?;
+        let violation = controller
+            .record_vm_exit_snapshot()
+            .and_then(|snapshot| {
+                snapshot.private_page_violation(
+                    PhysAddr::new(PRIVATE_GPA).map_err(|_| VmxError::InvalidVmExit)?,
+                )
+            })
+            .map_err(|_| ProbeFault::Exit)?;
         if !violation.attempted_read()
             || violation.attempted_write()
             || violation.attempted_execute()
         {
-            return Err(mrml_kernel::arch::x86_64::VmxError::InvalidVmExit);
+            return Err(ProbeFault::Exit);
         }
         trace(0xd4);
-        controller.leave_root()?;
+        controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;
         Ok(())
     })();
-    if result.is_err() {
+    if let Err(fault) = result {
         trace(0xef);
         if controller.state() != VmxState::Disabled && controller.leave_root().is_err() {
             loop {
@@ -275,7 +329,7 @@ pub unsafe fn run() -> Result<(), ()> {
             }
         }
         unsafe { asm!("mov cr4, {}", in(reg) original_cr4, options(nostack, preserves_flags)) };
-        return Err(());
+        return Err(fault);
     }
     unsafe { asm!("mov cr4, {}", in(reg) original_cr4, options(nostack, preserves_flags)) };
     trace(0xdf);
