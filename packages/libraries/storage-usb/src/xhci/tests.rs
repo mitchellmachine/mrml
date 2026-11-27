@@ -25,6 +25,8 @@ struct Fake {
     pci_writes: u8,
     releases: u8,
     ignore_pci_write: bool,
+    native_binding: Option<NativePciBinding>,
+    substitute_bar: bool,
 }
 
 impl Fake {
@@ -44,6 +46,8 @@ impl Fake {
             pci_writes: 0,
             releases: 0,
             ignore_pci_write: false,
+            native_binding: None,
+            substitute_bar: false,
         };
         fake.regs[0] = 0x0110_0040;
         fake.regs[1] = 0x0200_0108;
@@ -344,6 +348,9 @@ fn independent_translation_check_blocks_programming_or_running_at_each_stage() {
 }
 
 impl VtdPciPlatform for Fake {
+    fn validate_aperture(&self, _: mrml_kernel::arch::x86_64::VtdDmaAperture) -> Result<(), ()> {
+        Ok(())
+    }
     fn live_pci(&mut self, expected: DmaAssignment) -> Result<pci::PciSnapshot, ()> {
         assert_eq!(expected, activation_assignment());
         let mut live = activation_snapshot();
@@ -418,4 +425,152 @@ fn managed_vtd_requires_pci_readback_before_withdrawal_and_resumes_release_only(
     assert_eq!(progress, Cleanup::Released);
     assert_eq!(fake.pci_writes, 2);
     assert_eq!(fake.releases, 2);
+}
+
+impl mrml_kernel::arch::x86_64::PciConfigSpace for Fake {
+    fn read_u32(&mut self, address: mrml_kernel::DeviceAddress, offset: u16) -> Option<u32> {
+        assert_eq!(
+            (
+                address.segment(),
+                address.bus(),
+                address.device(),
+                address.function()
+            ),
+            (0, 0, 3, 0)
+        );
+        let live = activation_snapshot();
+        match offset {
+            0 => Some(live.vendor_device),
+            4 => Some(0xabcd_0000 | u32::from(self.pci_command)),
+            8 => Some(live.class_revision),
+            12 => Some(u32::from(live.header_type) << 16),
+            0x10 if self.substitute_bar => Some(live.bar0 + 0x4000),
+            0x10 => Some(live.bar0),
+            0x14 => Some(live.bar1),
+            _ => None,
+        }
+    }
+}
+
+impl NativePciLease for Fake {
+    fn binding(&self) -> NativePciBinding {
+        self.native_binding.unwrap()
+    }
+
+    fn write_command16(
+        &mut self,
+        address: mrml_kernel::DeviceAddress,
+        value: u16,
+    ) -> Result<(), ()> {
+        assert_eq!(address, self.binding().aperture.route.requester());
+        self.pci_writes += 1;
+        self.pci_command = value;
+        Ok(())
+    }
+
+    fn release_bound_resources(&mut self, binding: NativePciBinding) -> Result<(), ()> {
+        assert_eq!(binding, self.binding());
+        self.releases += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn native_owner_binds_capabilities_generations_and_exact_command_write() {
+    use mrml_kernel::arch::x86_64::{DmarTopology, VtdDmaAperture};
+    use mrml_kernel::{CapabilitySpace, DeviceAddress, ObjectId, PhysAddr, Rights};
+
+    let mut fake = Fake::new();
+    let dma = activation_assignment();
+    let mut dmar = [0u8; 64];
+    dmar[..4].copy_from_slice(b"DMAR");
+    dmar[4..8].copy_from_slice(&64u32.to_le_bytes());
+    dmar[36] = 47;
+    dmar[50..52].copy_from_slice(&16u16.to_le_bytes());
+    dmar[52] = 1;
+    dmar[56..64].copy_from_slice(&0xfed9_0000u64.to_le_bytes());
+    dmar[9] = 0u8.wrapping_sub(dmar.iter().fold(0u8, |a, b| a.wrapping_add(*b)));
+    let route = DmarTopology::<1, 0>::parse(&dmar)
+        .unwrap()
+        .route_for_requester(DeviceAddress::new(0, 0, 3, 0).unwrap(), &mut fake)
+        .unwrap();
+    let binding = NativePciBinding {
+        device: ObjectId(1),
+        memory: ObjectId(2),
+        bar_generation: 1,
+        allocation_generation: 1,
+        dma,
+        aperture: VtdDmaAperture {
+            route,
+            hardware_domain: 1,
+            device_base: dma.device_base,
+            physical_base: PhysAddr::new(0x20_0000).unwrap(),
+            pages: 1,
+        },
+    };
+    let mut caps = CapabilitySpace::<3>::new();
+    let device = caps.insert(binding.device, Rights::CONTROL).unwrap();
+    let read_only = caps.insert(binding.memory, Rights::READ).unwrap();
+    let memory = caps
+        .insert(
+            binding.memory,
+            Rights::MAP
+                .union(Rights::PIN)
+                .union(Rights::READ)
+                .union(Rights::WRITE),
+        )
+        .unwrap();
+    assert!(matches!(
+        NativePciOwner::admit(&caps, device, read_only, binding, Fake::new()),
+        Err(NativePciOwnerError::Capability(_))
+    ));
+    fake.native_binding = Some(binding);
+    assert!(matches!(
+        NativePciOwner::admit(
+            &caps,
+            device,
+            memory,
+            NativePciBinding {
+                allocation_generation: 2,
+                ..binding
+            },
+            fake
+        ),
+        Err(NativePciOwnerError::Binding)
+    ));
+    let mut fake = Fake::new();
+    fake.native_binding = Some(binding);
+    fake.pci_command = 0x402;
+    let mut owner = NativePciOwner::admit(&caps, device, memory, binding, fake)
+        .ok()
+        .unwrap();
+    assert_eq!(owner.validate_aperture(binding.aperture), Ok(()));
+    assert_eq!(
+        owner.validate_aperture(VtdDmaAperture {
+            physical_base: PhysAddr::new(0x21_0000).unwrap(),
+            ..binding.aperture
+        }),
+        Err(NativePciOwnerError::Binding)
+    );
+    assert_eq!(
+        owner.set_bus_master(dma, 2, true),
+        Err(NativePciOwnerError::Pci(pci::PciError::CommandMismatch))
+    );
+    owner.set_bus_master(dma, 0x402, true).unwrap();
+    assert_eq!(owner.live_pci(dma).unwrap().command, 0x406);
+    owner.set_bus_master(dma, 0x406, false).unwrap();
+    assert_eq!(owner.live_pci(dma).unwrap().command, 0x402);
+    owner.release_revoked(dma).unwrap();
+    assert_eq!(owner.live_pci(dma), Err(NativePciOwnerError::Binding));
+
+    let mut fake = Fake::new();
+    fake.native_binding = Some(binding);
+    fake.substitute_bar = true;
+    let mut changed = NativePciOwner::admit(&caps, device, memory, binding, fake)
+        .ok()
+        .unwrap();
+    assert_eq!(
+        changed.set_bus_master(dma, 6, false),
+        Err(NativePciOwnerError::Pci(pci::PciError::AssignmentChanged))
+    );
 }

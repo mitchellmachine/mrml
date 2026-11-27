@@ -97,6 +97,10 @@ impl PciController {
         }
     }
 
+    pub const fn configuration_generation(&self) -> u64 {
+        self.generation
+    }
+
     pub const fn location(&self) -> PciLocation {
         self.location
     }

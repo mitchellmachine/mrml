@@ -3002,6 +3002,15 @@ final release. A concrete native owner must still issue PCI assignments,
 allocate/pin resources, and implement quarantine and final release; the
 adapter is not called from native boot.
 
+The native PCI owner adapter now accepts only an exact device control
+capability and separate DMA memory rights. The trusted lease must match
+the PCI, BAR, allocation and DMA generations and the complete VT-d
+aperture, including physical backing and hardware domain. It samples
+configuration space through the lease and changes only the bus-master
+bit using a command-width write after checking the live identity. The
+adapter does not implement the allocator, pin/unpin, or ECAM writer
+itself; those remain required from the platform lease implementation.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

@@ -16,6 +16,7 @@ const BUS_MASTER: u16 = 1 << 2;
 /// resources (including the translation slots); absence of a Rust reference
 /// is not evidence that hardware lost access.
 pub trait VtdPciPlatform: Platform {
+    fn validate_aperture(&self, aperture: VtdDmaAperture) -> Result<(), Self::Error>;
     fn live_pci(&mut self, expected: DmaAssignment) -> Result<PciSnapshot, Self::Error>;
 
     /// Compare the exact live identity and command under the assignment lock
@@ -76,6 +77,9 @@ impl<'a, P: VtdPciPlatform, M: VtdTableMemory, R: VtdRegisterIo> ManagedVtd<'a, 
         assignment: DmaAssignment,
         aperture: VtdDmaAperture,
     ) -> Result<Self, ManagedVtdError<P::Error>> {
+        owner
+            .validate_aperture(aperture)
+            .map_err(ManagedVtdError::Platform)?;
         let location = assignment.controller.location();
         let requester = aperture.route.requester();
         if !assignment.valid()
