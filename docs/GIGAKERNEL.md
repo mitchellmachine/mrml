@@ -2431,8 +2431,36 @@ order on a commit failure. A fresh signed v2 release completed the hosted
 KVM component probe through this path with one classified domain in a
 MicroVM, zero native fallback, and the expected halt. The configuration
 suites pass 55 tests on each host; the KVM and WHP runners pass 16 and 12.
-This is not yet a live two-domain failure and hardware teardown test.
-Bare-metal retesting remains deferred.
+That single-domain probe did not exercise a live two-domain rollback.
+
+The KVM runner now tests late startup rollback with a signed two-domain
+fixture and real KVM VM/vCPU objects. The first provisional guest executes a
+marker before an injected second-service startup refusal. The transaction
+releases the first guest through its owning launcher and publishes neither
+routes nor a Total runtime proof. Retrying with two fresh guests admits both
+domains with zero native fallback. Configuration launch generations are
+unique across launcher objects in the same runtime; an endpoint retained
+from the failed attempt cannot open or revoke a same-spec replacement. Both
+new guests execute independent markers, including the second after retirement
+of the first. Endpoint tokens are neither persistent nor cross-runtime
+authority.
+
+Verification: `mrml test org.mrml.service.config --target windows` and
+`mrml test org.mrml.service.config --target linux` each passed 56 tests.
+`mrml test org.mrml.tool.vmm-whp-run --target windows` passed 12, and
+`mrml test org.mrml.tool.vmm-kvm-run --target linux` passed 16 with one
+explicitly opt-in test. On Arch WSL with a usable KVM device, the opt-in test
+passed when run as:
+
+```text
+target/mrml-native/linux/debug/mrml-kvm-run_bin_tests --ignored --exact tests::live_kvm_total_startup_rollback_and_same_spec_restart
+```
+
+This is hosted KVM evidence using small guest fixtures, not a two-service
+installed-media boot, an independent kernel-resource audit, device/DMA
+teardown evidence, or bare-metal validation. The late startup refusal is
+injected; teardown-error retry remains modeled. Bare-metal retesting remains
+deferred.
 
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and

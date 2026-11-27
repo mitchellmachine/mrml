@@ -5883,6 +5883,288 @@ mod tests {
     use super::*;
     use mrml_kernel::BootHandoff;
 
+    // The signed inventory exercises the real admission transaction; the
+    // tiny guests are test payloads, not installed service artifacts.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a usable /dev/kvm; execute explicitly on a KVM host"]
+    fn live_kvm_total_startup_rollback_and_same_spec_restart() {
+        extern crate std;
+        use mrml_config::{
+            CompleteTotalServiceConstructionError, CompleteTotalServiceStartError,
+            PreparedMicrovmConfigurationAccessError, PreparedMicrovmConfigurationError,
+        };
+        use mrml_crypto::{LAMPORT_PRIVATE_KEY_BYTES, lamport_public_key};
+        use mrml_kernel::{
+            IsolationServiceSpec, RuntimeDomainAssignment, RuntimeDomainAssignmentPlan,
+            TotalMicrovmRuntimeError,
+        };
+        use mrml_kvm::PreparedKvmFirmware;
+        use mrml_package_format::{
+            ActivatedSystemGeneration, ActivatedSystemRelease, ComponentInterfaceProvider,
+            ComponentInterfaceRequirement, ComponentProviderForms,
+            encode_system_release_with_runtime_inventory, parse_system_release,
+        };
+
+        const DOMAINS: [ObjectId; 2] = [ObjectId(0x101), ObjectId(0x102)];
+        const IDS: [&str; 2] = ["org.mrml.test.first", "org.mrml.test.second"];
+        const INTERFACES: [&str; 2] = ["org.mrml.interface.first", "org.mrml.interface.second"];
+        const DIGESTS: [[u8; 64]; 2] = [[0x61; 64], [0x62; 64]];
+        const GEN: u64 = 33;
+        let recovery = RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14).unwrap();
+        let handoff = boot_handoff(
+            21,
+            [0x38; 32],
+            [0xaa; 64],
+            1,
+            Some(recovery),
+            Some(BootIsolationOverride::TotalMicrovmOnce),
+            true,
+        )
+        .unwrap();
+        let handoff = BootHandoff::decode(handoff.as_slice(), |_| {}).unwrap();
+        let effective =
+            configured_total_service_policy(DOMAINS[0], ObjectId(0x301), 1, 1, &handoff)
+                .unwrap()
+                .effective
+                .unwrap();
+
+        let versions = [0, 1].map(|i| SystemGenerationDigestRecord {
+            package_id: IDS[i],
+            version: 1,
+            artifact_digest: &DIGESTS[i],
+        });
+        let providers = [0, 1].map(|i| {
+            ComponentInterfaceProvider::exact(
+                IDS[i],
+                INTERFACES[i],
+                1,
+                [0x52 + i as u8; 32],
+                ComponentProviderForms::MICROVM,
+            )
+            .unwrap()
+        });
+        let requirements = [0, 1].map(|i| {
+            ComponentInterfaceRequirement::exact(IDS[i], INTERFACES[i], 1, [0x52 + i as u8; 32])
+                .unwrap()
+        });
+        let classifications = [0, 1].map(|i| RuntimeInventoryRecord {
+            package_id: IDS[i],
+            version: 1,
+            artifact_digest: &DIGESTS[i],
+            class: RuntimeIsolationClass::MicrovmEligible,
+            must_run: true,
+            preferred: RuntimeIsolationPlacement::Microvm,
+            minimum: RuntimeIsolationPlacement::Microvm,
+            maximum: RuntimeIsolationPlacement::Microvm,
+            supported: RuntimeIsolationPlacement::Microvm.bit(),
+            reason: "",
+        });
+        let mut generation = [0; 320];
+        let mut catalog = [0; 512];
+        let mut inventory = [0; 512];
+        let generation_bytes = encode_system_generation(GEN, &versions, &mut generation).unwrap();
+        let catalog_bytes =
+            encode_interface_catalog(GEN, &requirements, &providers, &mut catalog).unwrap();
+        let inventory_bytes =
+            encode_runtime_inventory(GEN, &classifications, &mut inventory).unwrap();
+        let private = std::vec![0x6du8; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut public = std::vec![0; LAMPORT_PUBLIC_KEY_BYTES];
+        lamport_public_key(&private, &mut public).unwrap();
+        let mut release = std::vec![0; MAX_SYSTEM_RELEASE_BYTES];
+        let bytes = encode_system_release_with_runtime_inventory(
+            &generation[..generation_bytes],
+            &catalog[..catalog_bytes],
+            &inventory[..inventory_bytes],
+            &private,
+            &mut release,
+        )
+        .unwrap();
+        let release = &release[..bytes];
+        let parsed = parse_system_release(release).unwrap();
+        let active = ActivatedSystemGeneration::new(
+            GEN,
+            parsed.generation().digest(),
+            parsed.interface_catalog().digest(),
+            8,
+            0x5156,
+            3,
+        )
+        .unwrap();
+        let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
+            release,
+            &Sha3_512::digest(&public),
+            ActivatedSystemRelease::new(active, parsed.identity()),
+            effective.policy_generation(),
+        )
+        .unwrap();
+        plan.assign_from_policy(|record| {
+            let i = IDS.iter().position(|id| *id == record.package_id).unwrap();
+            RuntimeDomainAssignment::new(record.package_id, DOMAINS[i])
+        })
+        .unwrap();
+        let mut owner = effective
+            .bind_release_inventory(plan.seal().unwrap())
+            .unwrap();
+        let bounds = IsolationServiceBounds::new(
+            IsolationPlacement::Microvm,
+            IsolationPlacement::Microvm,
+            IsolationPlacement::Microvm,
+            false,
+            true,
+        )
+        .unwrap();
+        let bindings = [0, 1].map(|i| {
+            TotalServicePreparationBinding::new(
+                bounds,
+                IsolationServiceIdentity::new(
+                    DOMAINS[i],
+                    ObjectId(0x301 + i as u64),
+                    1,
+                    1,
+                    TotalMicrovmClass::MicrovmEligible,
+                )
+                .unwrap(),
+            )
+        });
+
+        let kvm = KvmSystem::open().expect("this explicit live test requires usable KVM");
+        type TestLauncher = PreparedMicrovmConfigurationLauncher<
+            AdmittedConfigurationGuestFactory<PreparedKvmFirmware>,
+        >;
+        let launch = |spec: IsolationServiceSpec| {
+            let marker = if spec.domain() == DOMAINS[0] {
+                0x51
+            } else {
+                0x52
+            };
+            let mut firmware = [0; 4096];
+            // Two marker writes, then halt. This has no device or host authority.
+            firmware[4080..4089].copy_from_slice(&[
+                0xb0,
+                marker,
+                0xe6,
+                0xe9,
+                0xb0,
+                marker + 2,
+                0xe6,
+                0xe9,
+                0xf4,
+            ]);
+            let mut guest = kvm.prepare_firmware_probe(&firmware).unwrap();
+            assert_eq!(
+                guest.run().unwrap(),
+                VmExit::Io {
+                    port: 0xe9,
+                    size: 1,
+                    write: true,
+                    value: u32::from(marker),
+                }
+            );
+            let mut launcher =
+                TestLauncher::new(AdmittedConfigurationGuestFactory::new(spec, guest));
+            let endpoint = launcher.launch_microvm(spec).unwrap();
+            (launcher, endpoint)
+        };
+        let stale = core::cell::Cell::new(None);
+        let prepared = owner.prepare_complete_service_set(&bindings).unwrap();
+        let failed =
+            prepared
+                .start_complete(
+                    owner.admission_mut(),
+                    |spec| {
+                        if spec.domain() == DOMAINS[1] {
+                            return Err("second service intentionally not ready");
+                        }
+                        let launched = launch(spec);
+                        stale.set(Some(launched.1));
+                        Ok(launched)
+                    },
+                    &mut |domain,
+                          (mut launcher, endpoint): (
+                        TestLauncher,
+                        ConfigurationMicrovmEndpoint,
+                    )| {
+                        assert_eq!(domain, DOMAINS[0]);
+                        assert_eq!(Some(endpoint), stale.get());
+                        assert!(launcher.active_guest(endpoint).is_ok());
+                        launcher.revoke_microvm(&endpoint).unwrap();
+                        assert!(launcher.active_guest(endpoint).is_err());
+                        Ok(())
+                    },
+                )
+                .err()
+                .expect("partial startup must not publish");
+        assert_eq!(
+            failed.error(),
+            &CompleteTotalServiceStartError::Construction(
+                CompleteTotalServiceConstructionError::Construction(
+                    "second service intentionally not ready",
+                ),
+            )
+        );
+        assert_eq!(failed.pending_count(), 0);
+        assert_eq!(owner.admission().running().count(), 0);
+        assert!(matches!(
+            owner.finalize(),
+            Err(TotalMicrovmRuntimeError::RequiredDomainMissing)
+        ));
+
+        let prepared = owner.prepare_complete_service_set(&bindings).unwrap();
+        let mut routed = prepared
+            .start_complete(
+                owner.admission_mut(),
+                |spec| Ok::<_, ()>(launch(spec)),
+                &mut |_, mut started: (TestLauncher, ConfigurationMicrovmEndpoint)| {
+                    started.0.revoke_microvm(&started.1).unwrap();
+                    Ok(())
+                },
+            )
+            .ok()
+            .expect("both KVM guests are ready");
+        let proof = owner.finalize().unwrap();
+        assert_eq!(proof.classified_domains(), 2);
+        assert_eq!(proof.running_in_microvm(), 2);
+        assert_eq!(owner.admission().total_microvm_report().native_fallback, 0);
+
+        let (mut first, live) = routed.take(DOMAINS[0]).unwrap().into_endpoint();
+        let (mut second, other) = routed.take(DOMAINS[1]).unwrap().into_endpoint();
+        let stale = stale.get().unwrap();
+        assert_eq!(stale.spec(), live.spec());
+        assert!(matches!(
+            first.active_guest_mut(stale),
+            Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint)
+        ));
+        assert_eq!(
+            first.revoke_microvm(&stale),
+            Err(PreparedMicrovmConfigurationError::WrongEndpoint)
+        );
+        assert_eq!(
+            first.active_guest_mut(live).unwrap().run().unwrap(),
+            VmExit::Io {
+                port: 0xe9,
+                size: 1,
+                write: true,
+                value: 0x53,
+            }
+        );
+        first.revoke_microvm(&live).unwrap();
+        owner.admission_mut().retire(DOMAINS[0]).unwrap();
+        // The other real VM continues independently after retirement.
+        assert_eq!(
+            second.active_guest_mut(other).unwrap().run().unwrap(),
+            VmExit::Io {
+                port: 0xe9,
+                size: 1,
+                write: true,
+                value: 0x54,
+            }
+        );
+        second.revoke_microvm(&other).unwrap();
+        owner.admission_mut().retire(DOMAINS[1]).unwrap();
+        assert_eq!(owner.admission().running().count(), 0);
+    }
+
     #[test]
     fn application_projection_namespaces_are_admissible() {
         assert!(MemoryPoolTable::<1, 1>::new(APPLICATION_MEMORY_NAMESPACE).is_ok());

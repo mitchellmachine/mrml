@@ -1,6 +1,7 @@
 use core::array;
 use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use mrml_crypto::Sha3_256;
 use mrml_deployment::{
@@ -211,6 +212,10 @@ impl<Guest> ConfigurationMicrovmFactory for AdmittedConfigurationGuestFactory<Gu
     }
 }
 
+// Endpoints are local to this runtime, not persistent or wire authority. A
+// replacement launcher must not reissue a generation used by an earlier one.
+static NEXT_CONFIGURATION_MICROVM_LAUNCH: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConfigurationMicrovmEndpoint {
     launch_generation: u64,
@@ -278,7 +283,6 @@ pub enum PreparedMicrovmConfigurationAccessError {
 pub struct PreparedMicrovmConfigurationLauncher<Factory: ConfigurationMicrovmFactory> {
     factory: Factory,
     active: Option<(ConfigurationMicrovmEndpoint, Factory::Guest)>,
-    next_generation: u64,
 }
 
 impl<Factory: ConfigurationMicrovmFactory> PreparedMicrovmConfigurationLauncher<Factory> {
@@ -286,7 +290,6 @@ impl<Factory: ConfigurationMicrovmFactory> PreparedMicrovmConfigurationLauncher<
         Self {
             factory,
             active: None,
-            next_generation: 1,
         }
     }
 
@@ -339,19 +342,22 @@ impl<Factory: ConfigurationMicrovmFactory> MicrovmConfigurationServiceLauncher
                 PreparedMicrovmConfigurationError::AlreadyRunning,
             ));
         }
-        let next_generation = self.next_generation.checked_add(1).ok_or((
-            IsolationUnavailableReason::VmmResource,
-            PreparedMicrovmConfigurationError::GenerationExhausted,
-        ))?;
+        let launch_generation = NEXT_CONFIGURATION_MICROVM_LAUNCH
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| next.checked_add(1))
+            .map_err(|_| {
+                (
+                    IsolationUnavailableReason::VmmResource,
+                    PreparedMicrovmConfigurationError::GenerationExhausted,
+                )
+            })?;
         let guest = self.factory.prepare(spec).map_err(|(reason, error)| {
             (reason, PreparedMicrovmConfigurationError::Backend(error))
         })?;
         let endpoint = ConfigurationMicrovmEndpoint {
-            launch_generation: self.next_generation,
+            launch_generation,
             spec,
         };
         self.active = Some((endpoint, guest));
-        self.next_generation = next_generation;
         Ok(endpoint)
     }
 

@@ -765,7 +765,7 @@ mod tests {
             ConfigurationServiceEndpoint::Microvm(endpoint) => *endpoint,
             ConfigurationServiceEndpoint::Native(_) => panic!("wrong placement"),
         };
-        assert_eq!(endpoint.launch_generation(), 1);
+        assert_ne!(endpoint.launch_generation(), 0);
         assert_eq!(endpoint.domain(), ObjectId(0x434f_4e46_4947));
         assert_eq!(endpoint.interface(), routed.interface());
         assert_eq!(endpoint.interface_generation(), 1);
@@ -828,9 +828,41 @@ mod tests {
             .microvm
             .launch_microvm(configuration_service_spec(IsolationPlacement::Microvm))
             .unwrap();
-        assert_eq!(replacement.launch_generation(), 2);
+        assert!(replacement.launch_generation() > endpoint.launch_generation());
         assert_ne!(replacement, endpoint);
         assert_eq!(backend.microvm.factory().preparations, 2);
+    }
+
+    #[test]
+    fn retired_microvm_endpoint_cannot_name_a_fresh_launcher_with_the_same_spec() {
+        let spec = configuration_service_spec(IsolationPlacement::Microvm);
+        let mut old = PreparedMicrovmConfigurationLauncher::new(
+            AdmittedConfigurationGuestFactory::new(spec, 0x11u8),
+        );
+        let stale = old.launch_microvm(spec).unwrap();
+        old.revoke_microvm(&stale).unwrap();
+        drop(old);
+
+        let mut new = PreparedMicrovmConfigurationLauncher::new(
+            AdmittedConfigurationGuestFactory::new(spec, 0x22u8),
+        );
+        let live = new.launch_microvm(spec).unwrap();
+        assert_eq!(stale.spec(), live.spec());
+        assert_ne!(stale, live);
+        assert_eq!(
+            new.active_guest(stale),
+            Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint)
+        );
+        assert_eq!(
+            new.active_guest_mut(stale),
+            Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint)
+        );
+        assert_eq!(
+            new.revoke_microvm(&stale),
+            Err(PreparedMicrovmConfigurationError::WrongEndpoint)
+        );
+        assert_eq!(new.active_guest(live), Ok(&0x22));
+        new.revoke_microvm(&live).unwrap();
     }
 
     #[test]
