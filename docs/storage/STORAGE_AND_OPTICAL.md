@@ -3286,7 +3286,13 @@ OS-owned, or contended semaphores and rejects malformed, duplicate, or
 out-of-range legacy capabilities. It never reads the adjacent legacy SMI
 control dword or writes ownership state. The sealed QEMU preflight
 independently expects no legacy interface. A semaphore observation alone
-is not authority for reset, DMA, or firmware handoff.
+is not authority for reset, DMA, or firmware handoff. Before the first
+controller programming operation the driver reads the bounded capability
+again and requires the same HCCPARAMS1 and exact legacy capability header
+at the same register offset. Firmware-owned or contended states, a mutated
+sample, or malformed readback fail before controller writes, PCI activation
+or DMA writes. This detects observed drift, not a handoff or a replacement
+for exclusive assignment and remapping.
 The standalone [UEFI xHCI inventory](../platform/UEFI_BOOT_MANAGEMENT.md#read-only-xhci-inventory-before-native-bring-up)
 uses the same sampler through the firmware PCI I/O protocol. It also
 reports validated MCFG coverage and the DMAR route for that exact

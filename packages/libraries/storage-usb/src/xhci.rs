@@ -58,6 +58,7 @@ pub enum Error<E> {
     InvalidBar,
     Unsupported,
     FirmwareOwned,
+    OwnershipChanged,
     InvalidDma,
     Pci(pci::PciError),
     Vtd(mrml_kernel::arch::x86_64::VtdBindingError),
@@ -148,8 +149,17 @@ impl<P: Platform> Controller<P> {
         ticks: u32,
         activate: impl FnOnce(&mut P) -> Result<(), Error<P::Error>>,
     ) -> Result<Self, StartFailure<P>> {
-        let registers = match discover(&mut platform, bar_bytes).and_then(|registers| {
-            validate_dma::<P::Error>(dma, registers.address64, assignment).map(|()| registers)
+        let registers = match discover(&mut platform, bar_bytes).and_then(|(registers, initial)| {
+            validate_dma::<P::Error>(dma, registers.address64, assignment)?;
+            // Inspect the same capability again before the first reset, PCI
+            // activation, or DMA publication. Held/changed observations do
+            // not authorize handoff and leave the backend untouched.
+            let current = sample_legacy_ownership(bar_bytes, |offset| platform.read32(offset))?;
+            current.require_available()?;
+            if current != initial {
+                return Err(Error::OwnershipChanged);
+            }
+            Ok(registers)
         }) {
             Ok(registers) => registers,
             Err(error) => return Err(StartFailure::Untouched { error, platform }),
@@ -619,12 +629,39 @@ pub enum LegacyOwnership {
     Contended,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LegacySample {
+    hcc1: u32,
+    capability: Option<(u32, u32)>,
+    ownership: LegacyOwnership,
+}
+
+impl LegacySample {
+    fn require_available<E>(self) -> Result<(), Error<E>> {
+        if matches!(
+            self.ownership,
+            LegacyOwnership::Firmware | LegacyOwnership::Contended
+        ) {
+            Err(Error::FirmwareOwned)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// Reads only xHCI capability dwords through the caller's validated BAR
 /// reader. Never reads the legacy SMI control dword or changes either owner.
 pub fn inspect_legacy_ownership<E>(
     bar_bytes: u32,
-    mut read: impl FnMut(u32) -> Result<u32, E>,
+    read: impl FnMut(u32) -> Result<u32, E>,
 ) -> Result<LegacyOwnership, Error<E>> {
+    sample_legacy_ownership(bar_bytes, read).map(|sample| sample.ownership)
+}
+
+fn sample_legacy_ownership<E>(
+    bar_bytes: u32,
+    mut read: impl FnMut(u32) -> Result<u32, E>,
+) -> Result<LegacySample, Error<E>> {
     if bar_bytes < 0x20 {
         return Err(Error::InvalidBar);
     }
@@ -638,15 +675,19 @@ fn legacy_capability_chain<E>(
     hcc1: u32,
     bar_bytes: u32,
     read: &mut impl FnMut(u32) -> Result<u32, Error<E>>,
-) -> Result<LegacyOwnership, Error<E>> {
+) -> Result<LegacySample, Error<E>> {
     if hcc1 == u32::MAX {
         return Err(Error::InvalidBar);
     }
     let mut offset = (hcc1 >> 16) * 4;
-    let mut ownership = LegacyOwnership::Absent;
+    let mut sample = LegacySample {
+        hcc1,
+        capability: None,
+        ownership: LegacyOwnership::Absent,
+    };
     for _ in 0..64 {
         if offset == 0 {
-            return Ok(ownership);
+            return Ok(sample);
         }
         if offset < 0x20 || offset.checked_add(4).is_none_or(|end| end > bar_bytes) {
             return Err(Error::InvalidBar);
@@ -657,13 +698,14 @@ fn legacy_capability_chain<E>(
             return Err(Error::InvalidBar);
         }
         if raw & 0xff == 1 {
-            if ownership != LegacyOwnership::Absent
+            if sample.capability.is_some()
                 || offset.checked_add(8).is_none_or(|end| end > bar_bytes)
                 || next == 4
             {
                 return Err(Error::InvalidBar);
             }
-            ownership = match (raw & (1 << 16) != 0, raw & (1 << 24) != 0) {
+            sample.capability = Some((offset, raw));
+            sample.ownership = match (raw & (1 << 16) != 0, raw & (1 << 24) != 0) {
                 (false, false) => LegacyOwnership::Unclaimed,
                 (true, false) => LegacyOwnership::Firmware,
                 (false, true) => LegacyOwnership::OperatingSystem,
@@ -679,7 +721,10 @@ fn legacy_capability_chain<E>(
     Err(Error::InvalidBar)
 }
 
-fn discover<P: Platform>(platform: &mut P, bar_bytes: u32) -> Result<Registers, Error<P::Error>> {
+fn discover<P: Platform>(
+    platform: &mut P,
+    bar_bytes: u32,
+) -> Result<(Registers, LegacySample), Error<P::Error>> {
     if bar_bytes < 0x20 {
         return Err(Error::InvalidBar);
     }
@@ -715,20 +760,19 @@ fn discover<P: Platform>(platform: &mut P, bar_bytes: u32) -> Result<Registers, 
             return Err(Error::InvalidBar);
         }
     }
-    if matches!(
-        legacy_capability_chain(hcc1, bar_bytes, &mut read)?,
-        LegacyOwnership::Firmware | LegacyOwnership::Contended
-    ) {
-        return Err(Error::FirmwareOwned);
-    }
-    Ok(Registers {
-        operational: op,
-        runtime,
-        doorbell,
-        ports,
-        address64: hcc1 & 1 != 0,
-        context_bytes: if hcc1 & 4 != 0 { 64 } else { 32 },
-    })
+    let legacy = legacy_capability_chain(hcc1, bar_bytes, &mut read)?;
+    legacy.require_available()?;
+    Ok((
+        Registers {
+            operational: op,
+            runtime,
+            doorbell,
+            ports,
+            address64: hcc1 & 1 != 0,
+            context_bytes: if hcc1 & 4 != 0 { 64 } else { 32 },
+        },
+        legacy,
+    ))
 }
 fn validate_dma<E>(
     dma: DmaLayout,

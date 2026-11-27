@@ -82,6 +82,9 @@ struct Fake {
     ignore_pci_write: bool,
     native_binding: Option<NativePciBinding>,
     substitute_bar: bool,
+    legacy_after: Option<u32>,
+    legacy_reads: u8,
+    mmio_writes: u32,
 }
 
 impl Fake {
@@ -103,6 +106,9 @@ impl Fake {
             ignore_pci_write: false,
             native_binding: None,
             substitute_bar: false,
+            legacy_after: None,
+            legacy_reads: 0,
+            mmio_writes: 0,
         };
         fake.regs[0] = 0x0110_0040;
         fake.regs[1] = 0x0200_0108;
@@ -119,9 +125,18 @@ impl Fake {
 impl Platform for Fake {
     type Error = ();
     fn read32(&mut self, offset: u32) -> Result<u32, ()> {
+        if offset == 0x900 {
+            self.legacy_reads += 1;
+            if self.legacy_reads == 2
+                && let Some(value) = self.legacy_after
+            {
+                return Ok(value);
+            }
+        }
         Ok(self.regs[offset as usize / 4])
     }
     fn write32(&mut self, offset: u32, value: u32) -> Result<(), ()> {
+        self.mmio_writes += 1;
         if offset == OP && value == 0 && self.ignore_stop_once {
             self.ignore_stop_once = false;
             return Ok(());
@@ -343,6 +358,36 @@ impl PciActivation for Fake {
         assert_eq!(self.regs[OP as usize / 4], 0);
         assert_eq!(self.regs[(OP as usize + 0x30) / 4], 0);
         Ok(())
+    }
+}
+
+#[test]
+fn native_pci_refuses_held_or_changed_legacy_ownership_without_any_writes() {
+    const FIRMWARE: u32 = 1 << 16;
+    const OS: u32 = 1 << 24;
+    for (initial, after, expected, reads) in [
+        (FIRMWARE, None, Error::FirmwareOwned, 1),
+        (FIRMWARE | OS, Some(1 | OS), Error::FirmwareOwned, 1),
+        (OS, Some(1 | FIRMWARE | OS), Error::FirmwareOwned, 2),
+        (OS, Some(1), Error::OwnershipChanged, 2),
+        (0, Some(1 | OS), Error::OwnershipChanged, 2),
+        (0, Some(u32::MAX), Error::InvalidBar, 2),
+    ] {
+        let mut platform = Fake::new();
+        platform.regs[4] |= (0x900 / 4) << 16;
+        platform.regs[0x900 / 4] = 1 | initial;
+        platform.legacy_after = after;
+        let Err(StartFailure::Untouched { error, platform }) =
+            Controller::start_pci(platform, activation_assignment(), DMA, 5)
+        else {
+            panic!("unstable or firmware-held ownership must abort before programming");
+        };
+        assert_eq!(error, expected);
+        assert_eq!(platform.legacy_reads, reads);
+        assert_eq!(platform.activation_reads, 1);
+        assert_eq!(platform.mmio_writes, 0);
+        assert_eq!(platform.pci_writes, 0);
+        assert_eq!(platform.dma, [0xff; 1024]);
     }
 }
 
