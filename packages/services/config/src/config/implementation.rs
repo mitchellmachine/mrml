@@ -1574,6 +1574,21 @@ pub enum SelectedStableSystemRecoveryError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstalledServiceFileSelectionError {
+    Empty,
+    ControlFile,
+    MissingFile,
+    StaleFileGeneration,
+    DuplicateFile,
+}
+
+#[derive(Debug)]
+pub enum InstalledServiceFileReadError<E> {
+    Selection(InstalledServiceFileSelectionError),
+    Read(FileReadError<BlockVolumeError<BlockServiceError<E>>>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StableSystemSelectionError<E> {
     Recovery(RecoveryError<E>),
     MissingConfiguration,
@@ -1662,6 +1677,39 @@ impl<const EXTENTS: usize, const OBJECTS: usize>
 
     pub const fn reachable(&self) -> &RecoveredReachableState<EXTENTS, OBJECTS> {
         &self.reachable
+    }
+
+    /// Selects the requested file generations as one batch from this recovery
+    /// graph. This grants no read, signature, package, or launch authority.
+    pub fn select_service_files<const N: usize>(
+        &self,
+        requested: [(StorageObjectId, u64); N],
+    ) -> Result<[ReachableFileSelection<'_, EXTENTS>; N], InstalledServiceFileSelectionError> {
+        use InstalledServiceFileSelectionError as Error;
+        if N == 0 {
+            return Err(Error::Empty);
+        }
+        let control_files = [
+            self.configuration,
+            self.authority_checkpoint,
+            self.deployment_checkpoint,
+            self.system_release,
+        ];
+        let mut files = [None; N];
+        for (index, (object, generation)) in requested.iter().copied().enumerate() {
+            if control_files.contains(&object) {
+                return Err(Error::ControlFile);
+            }
+            if requested[..index].iter().any(|(prior, _)| *prior == object) {
+                return Err(Error::DuplicateFile);
+            }
+            let selected = self.reachable.select_file(object).ok_or(Error::MissingFile)?;
+            if selected.generation() != generation {
+                return Err(Error::StaleFileGeneration);
+            }
+            files[index] = Some(selected);
+        }
+        Ok(files.map(|file| file.expect("complete recovered service file selection")))
     }
 }
 
@@ -2305,6 +2353,35 @@ impl<
 
     pub fn selected(&self) -> SelectedStableTotalSystemRecovery<'_, EXTENTS> {
         self.recovered.selected()
+    }
+
+    pub fn select_service_files<const N: usize>(
+        &self,
+        requested: [(StorageObjectId, u64); N],
+    ) -> Result<[ReachableFileSelection<'_, EXTENTS>; N], InstalledServiceFileSelectionError> {
+        self.recovered.selected.select_service_files(requested)
+    }
+
+    /// An exact file selection and an independent READ handle are both
+    /// required. The bytes are read through the retained recovery device and
+    /// its extent verification; this does not authenticate a service image.
+    pub fn read_service_file<const A: usize>(
+        &mut self,
+        requested: (StorageObjectId, u64),
+        authority: &StorageAuthorityTable<A>,
+        handle: StorageHandle,
+        principal: StoragePrincipal,
+        offset: u64,
+        output: &mut [u8],
+    ) -> Result<usize, InstalledServiceFileReadError<B::Error>> {
+        let [file] = self
+            .recovered
+            .selected
+            .select_service_files([requested])
+            .map_err(InstalledServiceFileReadError::Selection)?;
+        file.file_state()
+            .read(authority, handle, principal, offset, output, &mut self.recovered.volume)
+            .map_err(InstalledServiceFileReadError::Read)
     }
 
     pub const fn volume(&self) -> &BlockVolume<'a, ServicedBlockDevice<'a, B, DEVICES, SESSIONS>> {

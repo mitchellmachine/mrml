@@ -98,6 +98,17 @@ remain required. The hosted recovery regression rejects a checkpoint and a
 release selected from a separately validated copy with identical generation
 metadata.
 
+The installed recovery reader now selects exact service file generations
+from that retained graph and refuses to reuse control-plane files, repeat
+an object, or accept a missing or stale selection. Reading still requires
+an independently held file READ capability and uses the same retained
+recovery volume with extent verification. A hosted block fixture recovered
+and read a separate file through this path; the release file's READ handle
+could not be substituted. This validates the installed storage mechanism
+in a hosted fixture, not an installed boot or executable signature. The
+next integration step is to pass authenticated recovered service bytes to
+the complete executable preflight before creating guests.
+
 ## Implementation evidence
 
 The current UEFI filesystem calls load boot artifacts and the current GOP
