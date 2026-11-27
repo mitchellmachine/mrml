@@ -6526,6 +6526,15 @@ fn decode_hex_character_escape(escaped: &str) -> Option<u8> {
     Some(((high << 4) | low) as u8)
 }
 
+fn decode_unescaped_character(inner: &str) -> Option<char> {
+    let mut characters = inner.chars();
+    let character = characters.next()?;
+    if matches!(character, '\t' | '\n' | '\r') || characters.next().is_some() {
+        return None;
+    }
+    Some(character)
+}
+
 fn decode_character(token: Token<'_>) -> Result<u32, ExpressionError> {
     let invalid = || ExpressionError {
         kind: ExpressionErrorKind::InvalidCharacter,
@@ -6569,12 +6578,9 @@ fn decode_character(token: Token<'_>) -> Result<u32, ExpressionError> {
             _ => Err(invalid()),
         };
     }
-    let mut characters = inner.chars();
-    let character = characters.next().ok_or_else(invalid)?;
-    if characters.next().is_some() {
-        return Err(invalid());
-    }
-    Ok(u32::from(character))
+    decode_unescaped_character(inner)
+        .map(u32::from)
+        .ok_or_else(invalid)
 }
 
 fn decode_byte_character(token: Token<'_>) -> Result<u8, ExpressionError> {
@@ -6602,10 +6608,8 @@ fn decode_byte_character(token: Token<'_>) -> Result<u8, ExpressionError> {
             _ => Err(invalid()),
         };
     }
-    let bytes = inner.as_bytes();
-    if bytes.len() == 1 && bytes[0].is_ascii() {
-        Ok(bytes[0])
-    } else {
-        Err(invalid())
-    }
+    decode_unescaped_character(inner)
+        .filter(char::is_ascii)
+        .map(|character| character as u8)
+        .ok_or_else(invalid)
 }

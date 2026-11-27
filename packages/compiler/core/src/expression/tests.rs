@@ -94,6 +94,29 @@ mod tests {
     }
 
     #[test]
+    fn character_literals_require_escapes_for_tab_and_line_endings() {
+        for (source, value) in [
+            ("' '", 32),
+            ("b' '", 32),
+            ("'\u{a0}'", 160),
+            ("b'\u{b}'", 11),
+            (r"'\t'", 9),
+            (r"'\n'", 10),
+            (r"'\r'", 13),
+            (r"b'\t'", 9),
+            (r"b'\n'", 10),
+            (r"b'\r'", 13),
+        ] {
+            assert_eq!(evaluate(source), Ok(value));
+        }
+        for source in ["'\t'", "'\n'", "'\r'", "b'\t'", "b'\n'", "b'\r'"] {
+            let error = ExpressionParser::<4>::new(source).parse().unwrap_err();
+            assert_eq!(error.kind, ExpressionErrorKind::InvalidCharacter);
+            assert_eq!(&source[error.span.start..error.span.end], source);
+        }
+    }
+
+    #[test]
     fn hexadecimal_character_escapes_require_two_digits_and_respect_literal_kind() {
         for (source, value) in [
             (r"'\x41'", 0x41),
