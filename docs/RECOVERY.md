@@ -2001,8 +2001,11 @@ page cannot initialize a replacement at the same guest addresses. The worker
 loss fixture exits without Rust teardown after the signed provider writes
 scratch data, while the read is still pending. The parent observes exact
 process exit, does not publish a read response, checks its local alias is
-withdrawn, and reclaims the reservation. The separate success fixture
-still completes a read. No durable writes are involved. This is test-only evidence, not worker
+withdrawn, and reclaims the reservation. Without resetting the parent's
+ledger, the fixture starts a new worker and guest with fresh page and binding
+generations at the same guest addresses. The old endpoint cannot submit on the
+replacement; the fresh pair completes the 512-byte retry. No durable writes
+are involved. This is test-only evidence, not worker
 attestation, an installed storage service, or recovered Total placement.
 
 Recovery's retained peer owner now also installs and verifies the two exact

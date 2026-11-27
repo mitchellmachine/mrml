@@ -4252,6 +4252,30 @@ mod tests {
         }
     }
 
+    struct PeerWorkerLedger {
+        caps: CapabilitySpace<8>,
+        memory: MemoryPoolTable<1, 1, 2>,
+        pool: mrml_kernel::MemoryPoolId,
+        quota: Capability,
+        consumer: Capability,
+        provider: Capability,
+    }
+
+    impl PeerWorkerLedger {
+        fn new() -> Self {
+            let mut caps = CapabilitySpace::new();
+            let mut memory = MemoryPoolTable::new(0x771).unwrap();
+            let (pool, quota) = memory.create_root(
+                1, 2, 0, Rights::ALLOCATE.union(Rights::CONTROL).union(Rights::INSPECT),
+                &mut caps,
+            ).unwrap();
+            let target = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+            let consumer = caps.insert(ObjectId(0x772), target).unwrap();
+            let provider = caps.insert(ObjectId(0x773), target).unwrap();
+            Self { caps, memory, pool, quota, consumer, provider }
+        }
+    }
+
     // Test-only transport for WHP hosts that reject the second GPA owner
     // in one process. The parent retains its live partition while the worker
     // maps the same pagefile-backed section in a separate process.
@@ -4260,7 +4284,9 @@ mod tests {
         virtual_page: u64,
         provider_digest: &[u8; 64],
         exit_pending: bool,
-    ) {
+        ledger: &mut PeerWorkerLedger,
+        stale: Option<&mrml_storage::MicrovmBlockReadConsumer>,
+    ) -> Option<mrml_storage::MicrovmBlockReadConsumer> {
         use mrml_interface_storage_block_provider_v1::OpaqueHandle;
         use mrml_kernel::{CapabilityError, MicrovmInterfaceQueueError, VmDeadlineOutcome};
         use mrml_storage::{MicrovmBlockReadError, ReadOnlyBlockImage, bind_microvm_block_read};
@@ -4278,21 +4304,16 @@ mod tests {
             }
         }
         let backing = FixtureSection::create();
-        let mut caps = CapabilitySpace::<8>::new();
-        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x771).unwrap();
-        let (pool, quota) = memory.create_root(
-            1, 2, 0, Rights::ALLOCATE.union(Rights::CONTROL).union(Rights::INSPECT), &mut caps,
-        ).unwrap();
-        let target = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
-        let consumer = caps.insert(ObjectId(0x772), target).unwrap();
-        let provider = caps.insert(ObjectId(0x773), target).unwrap();
+        let PeerWorkerLedger { caps, memory, pool, quota, consumer, provider } = ledger;
+        let (pool, quota, consumer, provider) = (*pool, *quota, *consumer, *provider);
+        let binding = if stale.is_some() { 12 } else { 11 };
         let (projection, object_capability) = reserve_microvm_peer_page_projection(
-            &mut memory, pool, quota, consumer, provider,
-            virtual_page / PAGE_SIZE, virtual_page / PAGE_SIZE, &mut caps,
+            memory, pool, quota, consumer, provider,
+            virtual_page / PAGE_SIZE, virtual_page / PAGE_SIZE, caps,
         ).unwrap();
         let session = OpaqueHandle::new(1, 14).unwrap();
         let (_, mut client, mut server) = bind_microvm_block_read(
-            14, 9, 7, 11, session, &projection, consumer, provider, &caps,
+            14, 9, 7, binding, session, &projection, consumer, provider, caps,
         ).unwrap();
 
         let physical = 0x70_0000;
@@ -4302,12 +4323,20 @@ mod tests {
         let mut first = unsafe {
             PreparedWhpWorkerPage::prepare(
                 first, backing, view, WhpWorkerPeerRole::First, physical, &projection,
-                consumer, provider, &caps,
+                consumer, provider, caps,
             )
         }.unwrap();
         let mut page = [0; PAGE_SIZE as usize];
-        client.initialize(&mut page, &projection, &caps).unwrap();
-        let notification = client.submit(1, &mut page, &projection, &caps).unwrap();
+        client.initialize(&mut page, &projection, caps).unwrap();
+        if let Some(stale_endpoint) = stale {
+            let before = page;
+            assert_eq!(
+                stale_endpoint.submit(1, &mut page, &projection, caps),
+                Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
+            );
+            assert_eq!(page, before);
+        }
+        let notification = client.submit(1, &mut page, &projection, caps).unwrap();
         first.write(&page).unwrap();
         let executable = std::env::current_exe().unwrap();
         // MRML compiles tests with panic=abort. Run this exact test in the
@@ -4325,7 +4354,7 @@ mod tests {
         // The parent retains the live ledger and does not mutate it until the
         // exact child has exited and its alias is gone.
         projection.validate_live_reservations(
-            &memory, consumer, provider, object_capability, &caps,
+            memory, consumer, provider, object_capability, caps,
         ).expect("live peer reservation required for WHP worker export");
         let handle = first.backing.as_ref().unwrap().duplicate_into(&worker.0);
         // The parent writes only one fixed-size frame and closes the pipe.
@@ -4353,7 +4382,7 @@ mod tests {
             // The provider wrote scratch data, but its exit is not a
             // completion. Never publish those bytes as a successful read.
             assert_eq!(
-                client.submit(1, &mut page, &projection, &caps),
+                client.submit(1, &mut page, &projection, caps),
                 Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidState))
             );
             None
@@ -4361,12 +4390,12 @@ mod tests {
             let mut image = [0; 1024];
             image[512..].copy_from_slice(&worker_page[1024..1536]);
             let mut storage = ReadOnlyBlockImage::new(&image, 512, session).unwrap();
-            let response = server.serve(&mut page, &projection, &caps, notification, &mut storage).unwrap();
+            let response = server.serve(&mut page, &projection, caps, notification, &mut storage).unwrap();
             first.write(&page).unwrap();
             assert_eq!(first.run_with_deadline(1_000_000).unwrap(),
                 VmDeadlineOutcome::Exit(VmExit::Halted));
             let mut sector = [0; 512];
-            client.complete(&mut page, &projection, &caps, response, &mut sector).unwrap();
+            client.complete(&mut page, &projection, caps, response, &mut sector).unwrap();
             assert_eq!(sector, [0xa6; 512]);
             Some(response)
         };
@@ -4382,45 +4411,49 @@ mod tests {
             // grandchildren. The parent verified and retired its own aliases.
             unsafe {
                 release_microvm_peer_page_projection(
-                    &mut memory, projection, object_capability, consumer, provider, &mut caps,
+                    memory, projection, object_capability, consumer, provider, caps,
                 )
             },
             Ok(1)
         );
-        let usage = memory.usage(pool, quota, &caps).unwrap();
+        let usage = memory.usage(pool, quota, caps).unwrap();
         assert_eq!((usage.object_pages(), usage.active_mappings()), (0, 0));
         assert_eq!(
             caps.authorize(object_capability, Rights::CONTROL),
             Err(CapabilityError::Invalid)
         );
 
+        if exit_pending {
+            return Some(client);
+        }
+
         // Reuse both guest addresses with the same live target capabilities.
         // Only the projection generation changes; an endpoint bound to the
         // retired page must not initialize or consume bytes in the successor.
         let (replacement, replacement_cap) = reserve_microvm_peer_page_projection(
-            &mut memory, pool, quota, consumer, provider,
-            virtual_page / PAGE_SIZE, virtual_page / PAGE_SIZE, &mut caps,
+            memory, pool, quota, consumer, provider,
+            virtual_page / PAGE_SIZE, virtual_page / PAGE_SIZE, caps,
         ).unwrap();
         let mut successor_page = [0; PAGE_SIZE as usize];
         let (_, successor, _) = bind_microvm_block_read(
-            14, 9, 7, 12, session, &replacement, consumer, provider, &caps,
+            14, 9, 7, binding + 1, session, &replacement, consumer, provider, caps,
         ).unwrap();
-        successor.initialize(&mut successor_page, &replacement, &caps).unwrap();
+        successor.initialize(&mut successor_page, &replacement, caps).unwrap();
         let before = successor_page;
         assert_eq!(
-            client.initialize(&mut successor_page, &replacement, &caps),
+            client.initialize(&mut successor_page, &replacement, caps),
             Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
         );
         if let Some(response) = response {
             let mut untouched = [0x5a; 512];
             assert_eq!(
-                client.complete(&mut successor_page, &replacement, &caps, response, &mut untouched),
+                client.complete(&mut successor_page, &replacement, caps, response, &mut untouched),
                 Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
             );
             assert_eq!(untouched, [0x5a; 512]);
         } else {
             assert_eq!(
-                client.submit(1, &mut successor_page, &replacement, &caps),
+                client.submit(1, &mut successor_page, &replacement, caps),
                 Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
             );
         }
@@ -4430,20 +4463,15 @@ mod tests {
             // received a native mapping and no transport references its backing.
             unsafe {
                 release_microvm_peer_page_projection(
-                    &mut memory, replacement, replacement_cap, consumer, provider, &mut caps,
+                    memory, replacement, replacement_cap, consumer, provider, caps,
                 )
             },
             Ok(1)
         );
-        if exit_pending {
-            mrml_runtime::mrml_println!(
-                "peer-block-worker-loss|status=PASS|backend=whp|read=not-published|ledger=retired|stale_endpoint=rejected"
-            );
-        } else {
-            mrml_runtime::mrml_println!(
-                "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-duplicated-section|ledger=retired|stale_endpoint=rejected"
-            );
-        }
+        mrml_runtime::mrml_println!(
+            "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-duplicated-section|ledger=retired|stale_endpoint=rejected"
+        );
+        None
     }
 
     #[test]
@@ -4509,6 +4537,20 @@ mod tests {
         guest.retire().unwrap();
     }
 
+    #[inline(never)]
+    fn worker_loss_attempt(
+        system: &WhpSystem,
+        executable: &VerifiedExecutable<'_>,
+        layout: WhpLaunchLayout,
+        virtual_page: u64,
+        provider_digest: &[u8; 64],
+        ledger: &mut PeerWorkerLedger,
+        stale: Option<&mrml_storage::MicrovmBlockReadConsumer>,
+    ) -> Option<mrml_storage::MicrovmBlockReadConsumer> {
+        let first = system.prepare_boot_kernel(executable, &valid_handoff(), layout).unwrap();
+        run_peer_block_in_worker(first, virtual_page, provider_digest, stale.is_none(), ledger, stale)
+    }
+
     #[test]
     fn live_worker_loss_discards_pending_read_and_reclaims_peer_page() {
         let system = WhpSystem::open().unwrap();
@@ -4530,9 +4572,17 @@ mod tests {
             0x10_0000, 16, 0x20_0000, 0x20_0000, 0x30_0000, 0x30_0000,
             0x40_0000, 0xffff_8000_0040_0000, PRIVILEGE_STACK_ARENA_PAGES, true,
         ).unwrap();
-        let first = system.prepare_boot_kernel(&executable, &valid_handoff(), layout).unwrap();
+        let mut ledger = PeerWorkerLedger::new();
         let provider_digest = Sha3_512::digest(&peer_block_probe_pe(true, virtual_page));
-        run_peer_block_in_worker(first, virtual_page, &provider_digest, true);
+        let stale = worker_loss_attempt(
+            &system, &executable, layout, virtual_page, &provider_digest, &mut ledger, None,
+        ).expect("retain old test endpoint after worker loss");
+        assert!(worker_loss_attempt(
+            &system, &executable, layout, virtual_page, &provider_digest, &mut ledger, Some(&stale),
+        ).is_none());
+        mrml_runtime::mrml_println!(
+            "peer-block-worker-loss|status=PASS|backend=whp|read=not-published|retry_bytes=512|ledger=retired|stale_endpoint=rejected"
+        );
     }
 
     #[test]
@@ -4596,7 +4646,10 @@ mod tests {
             // A second partition object can be created on this host, but
             // its first GPA mapping collides with the live in-process owner.
             Err(WhpError::PartitionAlreadyExists) => {
-                run_peer_block_in_worker(first, peer_virtual, provider_executable.artifact().digest(), false);
+                assert!(run_peer_block_in_worker(
+                    first, peer_virtual, provider_executable.artifact().digest(), false,
+                    &mut PeerWorkerLedger::new(), None,
+                ).is_none());
                 return;
             }
             Err(error) => panic!("second WHP partition failed: {error:?}"),

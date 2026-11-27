@@ -68,6 +68,6 @@ reason = "Bind the declared native library kernel32 for the reviewed native FFI 
 fingerprint = "fnv1a64:dd8883981408e1a8"
 id = "external-command.module.executable"
 kind = "external-command"
-line = 4316
+line = 4345
 path = "packages/system/vmm/whp/src/native/launch.rs"
 reason = "Run only the current Rust test executable with the exact WHP provider fixture selector, the dedicated bootstrap pipe, and a finite deadline."
