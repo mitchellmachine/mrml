@@ -208,7 +208,7 @@ id = "native-link.usb-shell32"
 kind = "native-link"
 line = 39
 path = "packages/tools/mrml/src/usb_windows.rs"
-reason = "Use Windows UAC to relaunch the same MRML executable in an interactive elevated console; there is no shell-script implementation."
+reason = "Request native Windows UAC for the interactive burner or the selected autoburn writer without a shell-script implementation."
 
 [[build_input]]
 fingerprint = "fnv1a64:dc138525d08694bd"

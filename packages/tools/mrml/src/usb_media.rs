@@ -63,6 +63,10 @@ fn device_command(args: &[String]) -> io::Result<()> {
         [mode, file] if mode == "burn" => burn(Path::new(file), false),
         [mode] if mode == "autoburn" => autoburn(false),
         [mode, flag] if mode == "autoburn" && erase_flag(flag) => autoburn(true),
+        #[cfg(windows)]
+        [mode, path, token, digest, flag] if mode == "--elevated-autoburn" => {
+            elevated_autoburn(Path::new(path), token, digest, flag)
+        }
         [mode, file, marker]
             if cfg!(windows) && mode == "burn" && marker == "--elevated-console" =>
         {
@@ -203,11 +207,10 @@ fn discover_autoburn(erase: bool) -> io::Result<Disk> {
 fn autoburn(erase: bool) -> io::Result<()> {
     #[cfg(windows)]
     if !host::privileged() {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "autoburn requires an Administrator or root session; no elevation prompt is used",
-        ));
+        return request_autoburn(erase);
     }
+    #[cfg(windows)]
+    host::check_write_policy()?;
     #[cfg(target_os = "linux")]
     let elevated_writer = if host::privileged() {
         None
@@ -231,6 +234,89 @@ fn autoburn(erase: bool) -> io::Result<()> {
             write_verified(disk, image, WriteMode::Auto { erase })
         },
     )
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn request_autoburn(erase: bool) -> io::Result<()> {
+    let (token, label) = host::autoburn_token()?;
+    println!(
+        "Autoburn will erase {} after Windows authorization.",
+        clean(&label)
+    );
+    let scratch = Scratch::new()?;
+    let file = scratch.path("autoburn.img");
+    create(&load_workspace().map_err(io::Error::other)?, &file).map_err(io::Error::other)?;
+    if host::autoburn_token()?.0 != token {
+        return Err(io::Error::other("USB identity changed; no bytes written"));
+    }
+    let image = usb_image::read_regular(&file, BYTES)?;
+    let status = host::elevate_autoburn(&file, &token, &sha3(&image), erase)?;
+    let receipt = usb_image::read_regular(&file.with_extension("result"), 4096).map_err(|_| {
+        io::Error::other(format!(
+            "Windows writer exited with status {status} without a receipt"
+        ))
+    })?;
+    let receipt = String::from_utf8(receipt).map_err(io::Error::other)?;
+    if status == 0 && receipt == "verified" {
+        println!(
+            "Verified {BYTES} bytes on {}. Safely eject the drive.",
+            clean(&label)
+        );
+        Ok(())
+    } else {
+        Err(io::Error::other(receipt))
+    }
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn elevated_autoburn(path: &Path, token: &str, digest: &str, flag: &str) -> io::Result<()> {
+    if !host::privileged() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Windows writer is not elevated",
+        ));
+    }
+    let sha = |s: &str| s.len() == 128 && s.bytes().all(|b| b.is_ascii_hexdigit());
+    if !path.is_absolute()
+        || path.file_name().and_then(|s| s.to_str()) != Some("autoburn.img")
+        || !path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.starts_with("mrml-usb-"))
+        || !sha(token)
+        || !sha(digest)
+        || !matches!(flag, "0" | "1")
+    {
+        return Err(io::Error::other("invalid elevated USB request"));
+    }
+    let erase = flag == "1";
+    // Claim a fresh outcome file before any disk I/O; do not overwrite caller files.
+    let mut receipt = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path.with_extension("result"))?;
+    let result = (|| {
+        host::check_write_policy()?;
+        let disk = discover_autoburn(erase)?;
+        if !host::matches_autoburn_token(&disk, token) {
+            return Err(io::Error::other("USB identity changed; no bytes written"));
+        }
+        let image = usb_image::read_regular(path, BYTES)?;
+        usb_image::check_image(&image)?;
+        if sha3(&image) != digest {
+            return Err(io::Error::other(
+                "USB image changed before elevation; no bytes written",
+            ));
+        }
+        host::write_image(&disk, &image, WriteMode::Auto { erase })
+    })();
+    match &result {
+        Ok(()) => receipt.write_all(b"verified")?,
+        Err(error) => receipt.write_all(error.to_string().as_bytes())?,
+    }
+    receipt.sync_all()?;
+    result
 }
 
 #[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]

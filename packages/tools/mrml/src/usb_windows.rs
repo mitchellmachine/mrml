@@ -6,6 +6,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::windows::ffi::OsStrExt as _;
 use std::os::windows::fs::OpenOptionsExt as _;
 use std::os::windows::io::AsRawHandle as _;
+use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +51,8 @@ unsafe extern "system" {
     fn FindNextVolumeW(handle: *mut c_void, name: *mut u16, capacity: u32) -> i32;
     fn FindVolumeClose(handle: *mut c_void) -> i32;
     fn GetDriveTypeW(root: *const u16) -> u32;
+    fn WaitForSingleObject(handle: *mut c_void, milliseconds: u32) -> u32;
+    fn GetExitCodeProcess(handle: *mut c_void, exit_code: *mut u32) -> i32;
     fn DeviceIoControl(
         handle: *mut c_void,
         code: u32,
@@ -64,6 +67,7 @@ unsafe extern "system" {
 #[link(name = "shell32", kind = "raw-dylib")]
 unsafe extern "system" {
     fn IsUserAnAdmin() -> i32;
+    fn ShellExecuteExW(info: *mut ShellExecuteInfo) -> i32;
     fn ShellExecuteW(
         window: *mut c_void,
         verb: *const u16,
@@ -72,6 +76,83 @@ unsafe extern "system" {
         cwd: *const u16,
         show: i32,
     ) -> isize;
+}
+
+#[repr(C)]
+struct ShellExecuteInfo {
+    size: u32,
+    mask: u32,
+    window: *mut c_void,
+    verb: *const u16,
+    file: *const u16,
+    args: *const u16,
+    directory: *const u16,
+    show: i32,
+    instance: *mut c_void,
+    id_list: *mut c_void,
+    class: *const u16,
+    class_key: *mut c_void,
+    hotkey: u32,
+    icon_or_monitor: *mut c_void,
+    process: *mut c_void,
+}
+
+pub(super) fn elevate_autoburn(
+    image: &Path,
+    token: &str,
+    digest: &str,
+    erase: bool,
+) -> io::Result<u32> {
+    let exe = wide(std::env::current_exe()?.as_os_str());
+    let verb = wide("runas".as_ref());
+    let image = image
+        .to_str()
+        .filter(|p| !p.contains(['"', '\0']) && !p.ends_with('\\'))
+        .ok_or_else(|| io::Error::other("invalid image path"))?;
+    let args = wide(
+        format!(
+            "usb --elevated-autoburn \"{image}\" {token} {digest} {}",
+            u8::from(erase)
+        )
+        .as_ref(),
+    );
+    let nil = std::ptr::null_mut();
+    let mut info = ShellExecuteInfo {
+        size: size_of::<ShellExecuteInfo>() as u32,
+        mask: 0x40 | 0x100 | 0x400, // NOCLOSEPROCESS | NOASYNC | FLAG_NO_UI (UAC still applies)
+        window: nil,
+        verb: verb.as_ptr(),
+        file: exe.as_ptr(),
+        args: args.as_ptr(),
+        directory: std::ptr::null(),
+        show: 0,
+        instance: nil,
+        id_list: nil,
+        class: std::ptr::null(),
+        class_key: nil,
+        hotkey: 0,
+        icon_or_monitor: nil,
+        process: nil,
+    };
+    // SAFETY: the C ABI record and its terminated strings live through the call.
+    if unsafe { ShellExecuteExW(&mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if info.process.is_null() {
+        return Err(io::Error::other("UAC returned no writer process handle"));
+    }
+    // SAFETY: a successful call transfers ownership of the non-null process handle.
+    let process = unsafe { OwnedHandle::from_raw_handle(info.process) };
+    // SAFETY: the owned process handle remains live until the wait and status read finish.
+    if unsafe { WaitForSingleObject(process.as_raw_handle(), u32::MAX) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut status = 0;
+    // SAFETY: valid process handle and writable status word.
+    if unsafe { GetExitCodeProcess(process.as_raw_handle(), &mut status) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(status)
 }
 pub(super) fn privileged() -> bool {
     // SAFETY: no pointers; queries the caller's token.
@@ -410,6 +491,49 @@ fn read_mbr(mut file: &File) -> io::Result<[u8; 512]> {
     Ok(*block.0.first_chunk::<512>().expect("fixed buffer size"))
 }
 
+fn storage_names(props: &[u8]) -> io::Result<(&str, &str)> {
+    if props.len() < 36 || props[10] != 1 || u32_at(props, 28) != 7 {
+        return Err(io::Error::other("not removable USB storage"));
+    }
+    let text = |at| {
+        let start = u32_at(props, at) as usize;
+        let tail = props.get(start..).filter(|_| start >= 36)?;
+        let end = tail.iter().position(|&b| b == 0)?;
+        let value = std::str::from_utf8(&tail[..end]).ok()?.trim();
+        (!value.is_empty()).then_some(value)
+    };
+    let serial = text(24).ok_or_else(|| io::Error::other("USB does not have a stable serial"))?;
+    Ok((text(16).unwrap_or("USB drive"), serial))
+}
+
+pub(super) fn autoburn_token() -> io::Result<(String, String)> {
+    let numbers = usb_disk_numbers()?;
+    let [number] = numbers.as_slice() else {
+        return Err(io::Error::other(
+            "expected exactly one USB storage drive; no bytes written",
+        ));
+    };
+    let file = OpenOptions::new()
+        .access_mode(0)
+        .share_mode(3)
+        .open(physical_path(*number))?;
+    let mut props = [0; 4096];
+    let n = control(&file, 0x2d1400, &[0; 12], &mut props)?;
+    let (model, serial) = storage_names(&props[..n])?;
+    Ok((
+        token_for(*number, serial),
+        format!("{model} (serial {serial})"),
+    ))
+}
+
+fn token_for(number: u32, serial: &str) -> String {
+    super::sha3(format!("{number}:{serial}").as_bytes())
+}
+
+pub(super) fn matches_autoburn_token(disk: &Disk, token: &str) -> bool {
+    token_for(disk.identity.number, &disk.identity.serial) == token
+}
+
 fn inspect(file: &File, number: u32, erase: bool) -> io::Result<Disk> {
     let mut device = [0; 12];
     let mut length = [0; 8];
@@ -432,20 +556,9 @@ fn inspect(file: &File, number: u32, erase: bool) -> io::Result<Disk> {
     }
     let mut props = [0; 4096];
     let n = control(file, 0x2d1400, &[0; 12], &mut props)?;
-    if n < 36 || props[10] != 1 || u32_at(&props, 28) != 7 {
-        return Err(io::Error::other("not removable USB storage"));
-    }
-    let text = |at| {
-        let start = u32_at(&props, at) as usize;
-        let text = props.get(start..n).filter(|_| start >= 36)?;
-        let end = text.iter().position(|&b| b == 0)?;
-        let value = std::str::from_utf8(&text[..end]).ok()?.trim();
-        (!value.is_empty()).then_some(value)
-    };
-    let serial = text(24)
-        .ok_or_else(|| io::Error::other("USB does not have a stable serial"))?
-        .to_owned();
-    let label = format!("{} (serial {serial})", text(16).unwrap_or("USB drive"));
+    let (model, serial) = storage_names(&props[..n])?;
+    let label = format!("{model} (serial {serial})");
+    let serial = serial.to_owned();
     control(file, 0x70024, &[], &mut [])?; // IOCTL_DISK_IS_WRITABLE
     let mut info = [0; 48 + 144 * 128];
     let count = control(file, 0x70050, &[], &mut info)?;
@@ -605,6 +718,41 @@ fn same_handle(file: &File, selected: &Disk, erase: bool) -> io::Result<bool> {
 
 const DIRECT: u32 = 0xa000_0000; // NO_BUFFERING | WRITE_THROUGH
 
+pub(super) fn check_write_policy() -> io::Result<()> {
+    for key in [
+        r"SYSTEM\CurrentControlSet\Policies\Microsoft\FVE",
+        r"SOFTWARE\Policies\Microsoft\FVE",
+    ] {
+        let key = wide(key.as_ref());
+        let name = wide("RDVDenyWriteAccess".as_ref());
+        let mut value = 0u32;
+        let mut bytes = 4u32;
+        // SAFETY: predefined HKLM, terminated names, and the writable four-byte DWORD.
+        let status = unsafe {
+            RegGetValueW(
+                -2_147_483_646isize as *mut c_void,
+                key.as_ptr(),
+                name.as_ptr(),
+                0x10,
+                std::ptr::null_mut(),
+                (&mut value as *mut u32).cast(),
+                &mut bytes,
+            )
+        };
+        match (status, value) {
+            (0 | 2 | 3, 0) => {}
+            (0, _) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Windows requires BitLocker on removable drives (RDVDenyWriteAccess); MRML cannot write a raw boot image under this policy. No bytes written.",
+                ));
+            }
+            (error, _) => return Err(io::Error::from_raw_os_error(error)),
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn write_image(disk: &Disk, image: &[u8], mode: WriteMode) -> io::Result<()> {
     if !privileged() {
         return Err(io::Error::new(
@@ -612,8 +760,9 @@ pub(super) fn write_image(disk: &Disk, image: &[u8], mode: WriteMode) -> io::Res
             "Administrator needed",
         ));
     }
+    check_write_policy()?;
     let erase = matches!(mode, WriteMode::Auto { erase: true });
-    let file = open(&disk.path, true, DIRECT)?;
+    let mut file = open(&disk.path, true, DIRECT)?;
     let before = volume_names()?;
     if !disks(erase)?.contains(disk) || !same_handle(&file, disk, erase)? {
         return Err(io::Error::other("USB instance changed; no bytes written"));
@@ -644,9 +793,15 @@ pub(super) fn write_image(disk: &Disk, image: &[u8], mode: WriteMode) -> io::Res
     for lock in &locks {
         control(lock, 0x90020, &[], &mut [])?;
     } // dismount only held volumes
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| io::Error::other(format!("seek to start before write: {e}")))?;
     let mut raw = Raw::new(file);
-    let result = transfer(&mut raw, image, |d| d.file.sync_all())
-        .map_err(|err| io::Error::other(format!("USB write or read-back incomplete: {err}")));
+    let result = transfer(&mut raw, image, |d| {
+        d.file
+            .sync_all()
+            .map_err(|e| io::Error::other(format!("flush after {} written bytes: {e}", d.offset)))
+    })
+    .map_err(|err| io::Error::other(format!("USB write or read-back incomplete: {err}")));
     drop(locks);
     result
 }
@@ -656,19 +811,27 @@ struct Aligned([u8; 65536]);
 struct Raw {
     file: File,
     buffer: Box<Aligned>,
+    offset: u64,
 }
 impl Raw {
     fn new(file: File) -> Self {
         Self {
             file,
             buffer: Box::new(Aligned([0; 65536])),
+            offset: 0,
         }
     }
 }
 impl Read for Raw {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         let length = out.len().min(self.buffer.0.len());
-        let count = self.file.read(&mut self.buffer.0[..length])?;
+        let count = self.file.read(&mut self.buffer.0[..length]).map_err(|e| {
+            io::Error::other(format!(
+                "read-back at byte {} ({length} bytes requested): {e}",
+                self.offset
+            ))
+        })?;
+        self.offset += count as u64;
         out[..count].copy_from_slice(&self.buffer.0[..count]);
         Ok(count)
     }
@@ -677,7 +840,14 @@ impl Write for Raw {
     fn write(&mut self, input: &[u8]) -> io::Result<usize> {
         let length = input.len().min(self.buffer.0.len());
         self.buffer.0[..length].copy_from_slice(&input[..length]);
-        self.file.write(&self.buffer.0[..length])
+        let count = self.file.write(&self.buffer.0[..length]).map_err(|e| {
+            io::Error::other(format!(
+                "write at byte {} ({length} bytes requested): {e}",
+                self.offset
+            ))
+        })?;
+        self.offset += count as u64;
+        Ok(count)
     }
     fn flush(&mut self) -> io::Result<()> {
         self.file.flush()
@@ -685,13 +855,40 @@ impl Write for Raw {
 }
 impl Seek for Raw {
     fn seek(&mut self, where_: SeekFrom) -> io::Result<u64> {
-        self.file.seek(where_)
+        self.offset = self.file.seek(where_).map_err(|e| {
+            io::Error::other(format!("seek from byte {} to {where_:?}: {e}", self.offset))
+        })?;
+        Ok(self.offset)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_uac_layout_and_usb_token_pin_the_request() {
+        assert_eq!(size_of::<ShellExecuteInfo>(), 112);
+        assert_eq!(std::mem::offset_of!(ShellExecuteInfo, process), 104);
+        let digest = token_for(1, "fixture");
+        assert_eq!(digest.len(), 128);
+        assert_ne!(digest, token_for(2, "fixture"));
+        assert_ne!(digest, token_for(1, "other"));
+    }
+
+    #[test]
+    fn raw_error_names_the_operation_and_offset() {
+        let stage = super::super::Scratch::new().unwrap();
+        let path = stage.path("read-only.bin");
+        File::create_new(&path).unwrap().set_len(1024).unwrap();
+        let mut raw = Raw::new(open(&path, false, 0).unwrap());
+        raw.seek(SeekFrom::Start(512)).unwrap();
+        let error = raw.write_all(&[0; 512]).unwrap_err().to_string();
+        assert!(
+            error.contains("write at byte 512 (512 bytes requested)"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn protects_system_partition_and_accepts_only_volume_guid_paths() {
         assert!(volume_name(r"\\?\Volume{11111111-1111-1111-1111-111111111111}").is_some());

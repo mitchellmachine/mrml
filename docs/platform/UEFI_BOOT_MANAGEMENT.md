@@ -66,8 +66,7 @@ type `ERASE <number>`. The writer rechecks and claims the device, writes
 and flushes the image, then compares every written byte. Safely eject
 afterward. This is imaging, not secure wiping of the rest of the disk.
 
-For unattended use on a trusted host, use an Administrator terminal on
-Windows or an already authorized root session on Linux, then run:
+For unattended use on a trusted host, run:
 
 ```text
 mrml usb autoburn
@@ -83,6 +82,13 @@ before claiming and writing, and verifies every written byte. If the
 inventory cannot be determined or changes during the checks, it stops
 instead of picking another drive. Use interactive `burn` when you need
 to select a drive.
+
+From a normal Windows session, autoburn builds the image before requesting
+native Windows UAC for the writer. The elevated process rechecks the
+selected USB identity, image hash, and write policy, then returns the result.
+An already elevated session does not show a second UAC prompt. If Windows
+requires BitLocker for removable writes, MRML refuses to overwrite the raw
+image; it does not weaken or override the policy.
 
 On Linux, running autoburn as a normal user builds the image without
 privilege and asks the system polkit agent to authorize only the USB writer.
