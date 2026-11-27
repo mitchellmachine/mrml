@@ -9,8 +9,8 @@ document and current evidence take precedence. Links copied from the former
 root README may be expressed relative to the repository root and are retained
 as archival text rather than validated navigation.
 
-For current native Windows and VMM testing policy, see
-`docs/PROJECT_STATUS.md#windows-testing`. The quoted policy below is historical.
+For current operating mode, platform direction, and host testing, see
+`docs/PROJECT_STATUS.md#current-direction`. The quoted material below is historical.
 
 # MRML
 

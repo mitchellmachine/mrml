@@ -8,7 +8,7 @@ and dated evidence are in [GIGAKERNEL.md](GIGAKERNEL.md).
 1. No ambient authority.
 2. Identity is not authority: names identify; capabilities authorize.
 3. Power should be explicit, limited, inspectable, and revocable.
-4. Memory safety is the default for ordinary native applications.
+4. Memory-safe admission and MicroVM isolation are both required for ordinary MRML applications.
 5. Minimize the trusted computing base.
 6. One compromise should remain one compromise; one crash should remain one
    crash.
@@ -834,8 +834,7 @@ generations, revocation, and protocol validation across the transport. Hosted
 WHP/KVM still does not protect such a VM from its host.
 
 Strict Total MicroVM semantics are canonical in
-[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md). Failure to satisfy a stronger
-requested boundary must not silently weaken it: an eligible component whose
+[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md). A failed launch must not weaken the required boundary: an eligible component whose
 microVM or required resource/device projection cannot be created is unavailable,
 not launched natively. Every host-substrate exception is explicitly classified
 and justified. A microVM limits compromise propagation but grants no file,

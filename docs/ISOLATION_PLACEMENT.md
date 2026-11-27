@@ -563,7 +563,7 @@ diagnostic or recovery handling, never an alternate session.
 Every component has one explainable Total-mode eligibility class:
 
 - `MICROVM_ELIGIBLE`: the execution domain supports the standard microVM runtime
-  and MUST use it whenever running in Total mode;
+  and MUST use it whenever running an ordinary MRML OS workload;
 - `HOST_SUBSTRATE_REQUIRED`: it must remain outside guests to instantiate,
   supervise, broker, or secure microVM execution, with a specific reason;
 - `BOOT_ONLY`: it executes before the normal microVM substrate exists;
@@ -1464,7 +1464,8 @@ Existing-object reuse: HIGH
 
 1. Every running `MICROVM_ELIGIBLE` domain MUST execute within an admitted
    microVM boundary.
-2. Failure to create that boundary MUST NOT cause automatic native fallback.
+2. Failure to create that boundary MUST leave the workload unavailable; neither
+   automatic nor owner-selected native fallback is an MRML OS mode.
 3. Required non-microVM components MUST have explicit classification and
    architectural justification; unsupported userspace cannot masquerade as host
    substrate.

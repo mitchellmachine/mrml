@@ -15,7 +15,8 @@ log records the actual image and runner software versions.
   on both hosts and PTX for SM100 and SM120; these are compile-only.
 - **macOS:** compile the Cargo stage-zero frontend, run selected portable
   manifest, input-audit, and assurance tests, and verify manifests and lock
-  state. This is not an MRML runtime or VMM port.
+  state. This limited bootstrap coverage does not establish a supported macOS host,
+  a VMM port, or ARM64 support.
 - **MRML target:** build all MRML-target packages and all UEFI-target packages.
   `mrml test --all --target native` builds the relevant native component and
   runs its declared host test harness on the runner. Components without such

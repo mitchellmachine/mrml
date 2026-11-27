@@ -25,6 +25,19 @@ capability limits and secret redaction.
 The full commitments are in [MRML values](../../VALUES.md). Major design work
 must also follow the [Engineering Constitution](../ENGINEERING_CONSTITUTION.md).
 
+## How MRML runs
+
+Strict [Total MicroVM isolation](../ISOLATION_PLACEMENT.md) is the only MRML
+OS mode. Ordinary applications and services run in admitted microVMs or remain
+unavailable, with no native fallback. This is the design, not a claim of full
+implementation. The [Gigakernel](../GIGAKERNEL.md) is the privileged core.
+
+x86-64 is the primary OS bring-up target. Build tools, compiler, local ML,
+media libraries, and Git software can run as native Windows/Linux host
+software without booting MRML OS. macOS host support and ARM64 support are
+planned. The [platform test record](../PLATFORM_TESTS.md) separates verified
+host behavior from guest and physical hardware results.
+
 ## What exists today
 
 The repository contains experimental local inference, a capability-oriented

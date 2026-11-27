@@ -239,14 +239,13 @@ deduplication is disabled by default pending side-channel analysis.
 
 ## Placement and performance
 
-Adaptive execution placement is specified in
+Strict Total MicroVM placement is specified in
 [../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md). Requested and effective
 placement carry explicit process/service/VM, page-table, queue, and shared-code
 charges. In strict Total mode, RAM, vCPU, VirtualGPU, VirtIO, projection, or VMM
 resource exhaustion makes the affected eligible component unavailable and
 reports the exact shortage; it never causes native fallback. Resource pressure
 may reduce availability, throttle, or stop work, but cannot weaken placement.
-Balanced may use a visible policy-permitted alternative within mandatory floors.
 
 The adaptive-isolation path now has a **PARTIALLY IMPLEMENTED** linear
 `MicrovmProjectionPlan`. Before backend allocation begins it revalidates the

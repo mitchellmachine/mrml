@@ -1007,12 +1007,11 @@ optical, and total-microVM claim until exact implementation and evidence exist.
 Total MicroVM is strict: a failed eligible microVM launch makes that component
 unavailable and never silently boots or launches it natively. Recovery remains a
 separate small audited environment so it can repair persistent isolation policy,
-the VMM, and guest-runtime generations even when Total mode cannot start. A
-repeated failed persistent Total request may offer an explicit Balanced-once or
-Recovery choice, but must not mutate persistent policy automatically; authorized
-recovery policy changes are recorded where audit support exists.
+the VMM, and guest-runtime generations even when Total mode cannot start. A failed normal boot may offer an explicit retry or entry into Recovery. Neither
+choice enables native userspace fallback or mutates persistent policy
+automatically; authorized recovery changes are recorded where audit support exists.
 
-The UEFI library's bounded LoadOptions parser now recognizes the configured
+Historical compatibility evidence: the UEFI library's bounded LoadOptions parser recognizes the configured
 default or exact one-boot Total request identically for boot-entry optional data
 and an exact `BOOTX64.EFI` shell invocation. The loader now validates the
 firmware-owned buffer and carries `TotalMicrovmOnce` in the canonical handoff;

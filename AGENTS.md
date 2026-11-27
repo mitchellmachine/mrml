@@ -110,7 +110,7 @@ Architectural invariants:
   transitions fail closed;
 - all parsers, arithmetic, identities, generations, boundary copies,
   capabilities, and state transitions remain bounded and adversarially tested.
-- ordinary native applications are memory-safe by admission policy and do not
+- ordinary MRML applications are memory-safe by admission policy and do not
   gain a general-purpose C/C++ ABI; stable contracts are versioned service
   protocols rather than Rust's internal ABI;
 - WebAssembly remains browser content, the browser remains no-JIT/W^X, and

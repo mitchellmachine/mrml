@@ -1,7 +1,10 @@
 # Getting started with MRML
 
 MRML is an experimental research repository. You can inspect and build it
-without installing or booting an operating system image.
+without installing or booting an operating system image. These are native
+Windows and Linux host tools. They do not provide a native execution mode
+inside MRML OS. x86-64 is the primary OS bring-up target; macOS host support
+and ARM64 support are planned.
 
 ## 1. Get the source
 

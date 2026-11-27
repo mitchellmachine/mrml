@@ -506,18 +506,15 @@ is separately controlled for one-time recovery, candidate, Windows, or test boot
 and never implies permanent order change. A boot transaction can create MRML,
 preserve Windows, propose order, and leave fallback state unchanged.
 
-The planned menu offers `MRML`, `MRML — Total MicroVM Isolation`, `MRML
-Recovery`, and independently discovered `Windows Boot Manager` where applicable.
-The Total entry requests the same admitted `SystemGeneration` with a strict
-nonpersistent overlay. `BOOTX64.EFI --isolation=total-microvm` from UEFI/EFI
-Shell produces the same typed policy; it is not a second parser or loader. The
-request is authenticated into the boot handoff, expires after one boot, and
-cannot bypass Secure Boot, signatures, release admission, anti-rollback,
-capabilities, or isolation floors. Selection does not prove runtime satisfaction.
-If virtualization, resources, or a required microVM are unavailable, the loader
-and runtime never silently continue as Balanced; retry, Balanced-once, or
-Recovery requires explicit owner selection. See
-[../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md).
+The planned menu offers `MRML`, `MRML Recovery`, and independently discovered
+`Windows Boot Manager` where applicable. Every normal MRML boot uses strict
+[Total MicroVM isolation](../ISOLATION_PLACEMENT.md). If a required workload
+cannot start, fail closed; retry or enter the separate recovery environment.
+Neither establishes an alternate MRML session.
+
+The following compatibility evidence describes an explicit
+`--isolation=total-microvm` load option and its typed handoff. It does not
+select between operating modes or prove runtime satisfaction.
 
 The shared UEFI library now provides the first **PARTIALLY IMPLEMENTED** parser
 prerequisite. One allocation-free, 128-UTF-16-unit parser accepts either the

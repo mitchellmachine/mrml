@@ -19,6 +19,21 @@ remain independently attributable.
 
 ## Current priority
 
+x86-64 remains the primary MRML OS bring-up target. macOS host support and
+ARM64 support are planned separately from this work. Strict Total MicroVM
+remains the only MRML OS mode.
+
+The current USB gate is native controller qualification. Signed KVM guests
+have already written, flushed, and independently verified the exact fixture
+change on both emulated USB speeds at `40554703`. Next, qualify the controller's
+scratchpad/page-size requirements, firmware handoff, and VMX/VT-d assignment
+and teardown. Keep the planned physical write target separate and expendable.
+The Chromebook inventory identifies a shared USB boot controller; it does not
+establish an isolated handoff or a physical write. See the
+[storage design and evidence](storage/STORAGE_AND_OPTICAL.md).
+
+## Earlier storage and supervisor gates
+
 The hosted signed FAT32 guest qualification gate **PASSES** on Windows WHP
 and Arch WSL2 nested KVM. The real signed service mounts the synthetic volume,
 opens and reads `PROBE.TXT`, retires through `ServiceSupervisor`, rejects its
@@ -45,9 +60,10 @@ The firmware bring-up plan also includes a
 [bare-metal USB smoke test](platform/UEFI_BOOT_MANAGEMENT.md#bare-metal-usb-bring-up).
 It runs the same embedded fixture on one identified x86-64 UEFI machine. The
 USB stick is boot media only; this does not qualify a native storage controller.
-No physical run is claimed yet.
+The embedded fixture is separate from the read-only Dragonair inventory;
+neither qualifies a physical write.
 
-The next storage gate is a QEMU/OVMF guest boot with a separate disposable
+An earlier storage gate was defined as a QEMU/OVMF guest boot with a separate disposable
 FAT32 disk attached to an emulated storage controller instead of serving
 sectors from the embedded image. The signed FAT32 service should read the same
 known bytes through the guest driver, restart under supervision without a guest
@@ -67,7 +83,7 @@ issues block I/O. FAT32 (103 tests) and storage (168 tests) passed on native
 Windows gnullvm and Arch WSL2 with ORACLE-0004; the native FAT32 image built.
 This does not exercise provider restart, CPL3, or device hardware.
 
-The existing independent `service-restart-request-probe` currently blocks
+In this earlier run, the independent `service-restart-request-probe` blocked
 live supervisor qualification. A fresh `service_restart_request_probe` UEFI
 kernel and default native `org.mrml.system.service-image`, signed with separate
 disposable keys, reached the same earlier configuration-response mismatch on

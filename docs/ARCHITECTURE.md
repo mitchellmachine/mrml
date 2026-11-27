@@ -39,7 +39,10 @@ MRML is the **Mitchell Renouf Machine Learning Library**. It began as local
 machine-learning and inference work and is evolving into a broader experimental
 computing stack, including an operating system built from first principles.
 The OS direction is experimental, security-oriented, capability-based,
-and centered on Total MicroVM isolation. It is Rust-first, local-first,
+and centered on strict Total MicroVM isolation. x86-64 is the primary
+bring-up target. Windows and Linux host tools are separate from MRML OS
+execution. macOS host support and ARM64 (AArch64) support are planned.
+The project is Rust-first, local-first,
 minimizes dependencies, and is designed for user sovereignty and first-class
 local AI. MRML is not currently a production operating system.
 
@@ -1482,7 +1485,7 @@ secrets, power, and restart policy are canonical in
 [network/NETWORK_ADMINISTRATION.md](network/NETWORK_ADMINISTRATION.md). All are
 **PLANNED** unless exact code/tests below establish otherwise.
 
-**PLANNED:** networking remains a userspace service for native applications,
+**PLANNED:** networking remains a userspace service for applications in admitted microVMs,
 which request bounded connection objects instead of raw packets. A VM receives
 a VirtIO-net-compatible or MRML virtual NIC only with explicit authority such as
 none, isolated, outbound-only, specifically routed, bridged, or raw access.
@@ -1675,8 +1678,8 @@ Local AI is eventually exposed as a capability such as
 discipline as all software: **AI-native does not mean AI-privileged**.
 
 The application platform does not inherit POSIX/C as its foundational ABI.
-Ordinary native applications are intended to be admitted as memory-safe code
-using a safe SDK over stable service protocols. Unsafe/legacy applications live
+Ordinary MRML applications are intended to run as memory-safe code in admitted
+microVMs, using a safe SDK over stable service protocols. Unsafe/legacy applications live
 behind explicit VM compatibility boundaries. The trusted compositor, semantic
 scene graph, HiDPI coordinate model, browser rules, and AI interaction boundary
 are specified in [APPLICATION_PLATFORM.md](APPLICATION_PLATFORM.md). None is

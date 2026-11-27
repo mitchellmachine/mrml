@@ -8,6 +8,11 @@ This page is a readable introduction. The root `AGENTS.md`,
 [Engineering Constitution](../ENGINEERING_CONSTITUTION.md), and canonical
 subsystem documents contain the complete rules.
 
+Effective work across the project requires advanced systems and security
+expertise or authorized access to specialized defensive cybersecurity tools.
+See the [README](../../README.md#contributing-and-security-review) for the
+maintainer's rationale and the limits of automated review.
+
 ## Before you edit
 
 1. Inspect `git status`, recent history, the affected source, and its tests.
