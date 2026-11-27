@@ -74,28 +74,46 @@ impl Q35FixtureTopology {
 pub fn q35_fixture_probe_mappings(
     topology: Q35FixtureTopology,
 ) -> Result<[Option<Mapping>; 4], PlatformMmioError> {
-    let page = |virtual_start, physical| {
+    q35_fixture_mappings(topology, false)
+}
+
+/// The sealed shutdown profile changes only the two ECAM leaves. The
+/// controller and remapper stay read-only, including in the shutdown case.
+pub fn q35_fixture_shutdown_mappings() -> Result<[Option<Mapping>; 4], PlatformMmioError> {
+    q35_fixture_mappings(Q35FixtureTopology::Isolated, true)
+}
+
+fn q35_fixture_mappings(
+    topology: Q35FixtureTopology,
+    shutdown: bool,
+) -> Result<[Option<Mapping>; 4], PlatformMmioError> {
+    let page = |virtual_start, physical, writable| {
         Mapping::new(
             VirtAddr::new(virtual_start).map_err(|_| PlatformMmioError::InvalidRange)?,
             PhysAddr::new(physical).map_err(|_| PlatformMmioError::InvalidRange)?,
             1,
-            PagePermissions::KERNEL_MMIO_READ,
+            if writable {
+                PagePermissions::KERNEL_HIGH_MMIO_READ_WRITE
+            } else {
+                PagePermissions::KERNEL_MMIO_READ
+            },
         )
         .map_err(|_| PlatformMmioError::InvalidRange)
     };
     let (endpoint, bridge) = match topology {
         Q35FixtureTopology::Control => (0xe00d_8000, None),
-        Q35FixtureTopology::Isolated => {
-            (0xe410_0000, Some(page(0xffff_d800_0010_2000, 0xe400_0000)?))
-        }
+        Q35FixtureTopology::Isolated => (
+            0xe410_0000,
+            Some(page(0xffff_d800_0010_2000, 0xe400_0000, shutdown)?),
+        ),
     };
     Ok([
-        Some(page(0xffff_d800_0010_0000, 0xfed9_0000)?),
-        Some(page(0xffff_d800_0010_1000, endpoint)?),
+        Some(page(0xffff_d800_0010_0000, 0xfed9_0000, false)?),
+        Some(page(0xffff_d800_0010_1000, endpoint, shutdown)?),
         bridge,
         match topology {
             Q35FixtureTopology::Control => None,
-            Q35FixtureTopology::Isolated => Some(page(0xffff_d800_0010_3000, 0x8120_0000)?),
+            Q35FixtureTopology::Isolated => Some(page(0xffff_d800_0010_3000, 0x8120_0000, false)?),
         },
     ])
 }
@@ -116,6 +134,26 @@ mod q35_fixture_tests {
         table[72..80].copy_from_slice(&[2, 8, 0, 0, 0, 0x40, 0, 0]);
         checksum(&mut table);
         table
+    }
+
+    #[test]
+    fn shutdown_profile_cannot_write_the_controller_or_remapper() {
+        let read_only = q35_fixture_probe_mappings(Q35FixtureTopology::Isolated).unwrap();
+        let shutdown = q35_fixture_shutdown_mappings().unwrap();
+        for (index, (before, after)) in read_only.into_iter().zip(shutdown).enumerate() {
+            let (before, after) = (before.unwrap(), after.unwrap());
+            assert_eq!(before.physical_start(), after.physical_start());
+            assert_eq!(before.virtual_start(), after.virtual_start());
+            assert_eq!(after.pages(), 1);
+            assert_eq!(
+                after.permissions(),
+                if index == 1 || index == 2 {
+                    PagePermissions::KERNEL_HIGH_MMIO_READ_WRITE
+                } else {
+                    PagePermissions::KERNEL_MMIO_READ
+                }
+            );
+        }
     }
 
     fn checksum(table: &mut [u8]) {

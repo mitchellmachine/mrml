@@ -64,7 +64,7 @@ pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{
     PlatformMmioError, PlatformMmioManifest, PlatformMmioPurpose, PlatformMmioRequirement,
     VerifiedPlatformMmio, check_boot_mmio_cpu_policy, extend_vtd_mmio_requirement,
-    Q35FixtureTopology, q35_fixture_probe_mappings, verify_active_platform_mmio,
+    Q35FixtureTopology, q35_fixture_probe_mappings, q35_fixture_shutdown_mappings, verify_active_platform_mmio,
 };
 pub use privilege_stack::{
     CpuPrivilegeStacks, EARLY_STACK_PAGES, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES,
@@ -148,6 +148,7 @@ impl PagePermissions {
     pub const KERNEL_SHARED_READ_WRITE: Self = Self((1 << 0) | (1 << 3));
     /// Supervisor-only, read-only device leaf; selects PAT index 3.
     pub const KERNEL_MMIO_READ: Self = Self(1 << 4);
+    pub const KERNEL_HIGH_MMIO_READ_WRITE: Self = Self((1 << 0) | (1 << 4));
     pub const KERNEL_MMIO_READ_WRITE: Self = Self((1 << 0) | (1 << 3) | (1 << 4));
     pub const USER_READ: Self = Self(1 << 2);
     pub const USER_READ_WRITE: Self = Self((1 << 2) | (1 << 0));

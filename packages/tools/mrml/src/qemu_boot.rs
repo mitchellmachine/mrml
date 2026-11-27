@@ -95,13 +95,24 @@ pub(super) enum Q35FixtureCase {
     ValidRelease,
     IsolatedWrongRelease,
     IsolatedValidRelease,
+    ShutdownWrongRelease,
+    ShutdownValidRelease,
 }
 
 impl Q35FixtureCase {
     fn isolated(self) -> bool {
         matches!(
             self,
-            Self::IsolatedWrongRelease | Self::IsolatedValidRelease
+            Self::IsolatedWrongRelease
+                | Self::IsolatedValidRelease
+                | Self::ShutdownWrongRelease
+                | Self::ShutdownValidRelease
+        )
+    }
+    fn shutdown(self) -> bool {
+        matches!(
+            self,
+            Self::ShutdownWrongRelease | Self::ShutdownValidRelease
         )
     }
 }
@@ -172,12 +183,16 @@ fn run_qemu_config(
         return Err("PackageQemuExpectedTraceSize".into());
     }
     let fixture_end = match map_only_marker {
-        Some(Q35FixtureCase::WrongRelease | Q35FixtureCase::IsolatedWrongRelease) => {
-            Some([0xdc, 0xdd])
-        }
-        Some(Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease) => {
-            Some([0xdc, 0xde])
-        }
+        Some(
+            Q35FixtureCase::WrongRelease
+            | Q35FixtureCase::IsolatedWrongRelease
+            | Q35FixtureCase::ShutdownWrongRelease,
+        ) => Some([0xdc, 0xdd]),
+        Some(
+            Q35FixtureCase::ValidRelease
+            | Q35FixtureCase::IsolatedValidRelease
+            | Q35FixtureCase::ShutdownValidRelease,
+        ) => Some([0xdc, 0xde]),
         _ => None,
     };
     if fixture_end.is_some_and(|suffix| !expected.ends_with(&suffix)) {
@@ -298,7 +313,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 .open(scratch.join("q35-mmio.acpi"))
                 .map_err(|error| format!("create q35 marker: {error}"))?;
             marker
-                .write_all(&crate::qemu_mmio::fixture_acpi_table())
+                .write_all(&crate::qemu_mmio::fixture_acpi_table(case.shutdown()))
                 .map_err(|error| format!("write q35 marker: {error}"))?;
             command.args(["-acpitable", "file=q35-mmio.acpi"]);
         }
@@ -356,8 +371,11 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     let start = Instant::now();
     let release = map_only_marker.and_then(|case| match case {
         Q35FixtureCase::NoMarker => None,
-        Q35FixtureCase::WrongRelease | Q35FixtureCase::IsolatedWrongRelease => Some(false),
-        Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease => Some(true),
+        Q35FixtureCase::WrongRelease
+        | Q35FixtureCase::IsolatedWrongRelease
+        | Q35FixtureCase::ShutdownWrongRelease => Some(0x5a),
+        Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease => Some(0xa6),
+        Q35FixtureCase::ShutdownValidRelease => Some(0xa7),
     });
     let mut released = false;
     let mut fixture_bar = None;
@@ -366,15 +384,19 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             if let Some(valid) = release {
                 let ready = &expected[..expected.len() - 1];
                 if !released && bytes == ready {
-                    fixture_bar =
-                        match crate::qemu_mmio::release_q35_fixture(&mut child, valid, isolated) {
-                            Ok(bar) => bar,
-                            Err(error) => {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                                return Err(error);
-                            }
-                        };
+                    fixture_bar = match crate::qemu_mmio::release_q35_fixture(
+                        &mut child,
+                        valid,
+                        isolated,
+                        (valid == 0xa7).then_some((trace, expected)),
+                    ) {
+                        Ok(bar) => bar,
+                        Err(error) => {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return Err(error);
+                        }
+                    };
                     released = true;
                 } else if !released && !ready.starts_with(&bytes) {
                     let _ = child.kill();
@@ -399,7 +421,13 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 return Ok(());
             }
             let report = if let Some(bar) = fixture_bar {
-                match crate::qemu_mmio::register_snapshot(expected, &bytes, bar, isolated) {
+                match crate::qemu_mmio::register_snapshot(
+                    expected,
+                    &bytes,
+                    bar,
+                    isolated,
+                    release == Some(0xa7),
+                ) {
                     Ok(report) => report,
                     Err(error) => {
                         let _ = child.kill();
@@ -410,7 +438,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             } else {
                 None
             };
-            let exact_trace = if release == Some(true) {
+            let exact_trace = if matches!(release, Some(0xa6 | 0xa7)) {
                 report.is_some()
             } else {
                 bytes == expected
@@ -432,7 +460,9 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                     if let Some(report) = report {
                         println!("{report}");
                     }
-                    let access = if release == Some(true) {
+                    let access = if release == Some(0xa7) {
+                        "pci-bme-only-verified"
+                    } else if release == Some(0xa6) {
                         "fixed-read-only"
                     } else {
                         "none"
@@ -451,7 +481,10 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 );
                 return Ok(());
             }
-            if rejection.is_none() && release != Some(true) && bytes.len() >= expected.len() {
+            if rejection.is_none()
+                && !matches!(release, Some(0xa6 | 0xa7))
+                && bytes.len() >= expected.len()
+            {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(format!(

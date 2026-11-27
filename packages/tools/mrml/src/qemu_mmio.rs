@@ -12,44 +12,52 @@ const ECAM: (u64, u64) = (0xe000_0000, 0xefff_ffff);
 const DRHD: (u64, u64) = (0xfed9_0000, 0xfed9_022f);
 const DRHD_PAGE: (u64, u64) = (DRHD.0, DRHD.0 + 4095);
 
-pub(super) fn fixture_acpi_table() -> [u8; 36] {
+pub(super) fn fixture_acpi_table(shutdown: bool) -> [u8; 36] {
     let mut table = [0u8; 36];
     table[..4].copy_from_slice(b"MQ35");
     table[4..8].copy_from_slice(&36u32.to_le_bytes());
     table[8] = 1;
     table[10..].copy_from_slice(b"MRMLQ3MMIOTEST\x01\x00\x00\x00MRML\x01\x00\x00\x00");
+    table[32] = if shutdown { 2 } else { 1 };
     table[9] = 0u8.wrapping_sub(table.iter().copied().fold(0u8, u8::wrapping_add));
     table
 }
 
 pub(super) fn verify_paused_q35_resources(child: &mut Child) -> Result<(), String> {
-    inspect_q35(child, None, false).map(|_| ())
+    inspect_q35(child, None, false, None).map(|_| ())
 }
 
 pub(super) fn release_q35_fixture(
     child: &mut Child,
-    valid: bool,
+    release: u8,
     isolated: bool,
+    post: Option<(&std::path::Path, &[u8])>,
 ) -> Result<Option<FixtureState>, String> {
-    inspect_q35(child, Some(valid), isolated)
+    inspect_q35(child, Some(release), isolated, post)
 }
 
 fn inspect_q35(
     child: &mut Child,
-    release: Option<bool>,
+    release: Option<u8>,
     isolated: bool,
+    post: Option<(&std::path::Path, &[u8])>,
 ) -> Result<Option<FixtureState>, String> {
     let mut stdin = child.stdin.take().ok_or("missing QMP input")?;
     let stdout = child.stdout.take().ok_or("missing QMP output")?;
+    let post = post.map(|(path, prefix)| (path.to_owned(), prefix.to_vec()));
     let (send, receive) = mpsc::sync_channel(1);
     let worker = std::thread::Builder::new()
         .spawn(move || {
-            let _ = send.send(inspect_qmp(
+            let mut reader = BufReader::new(stdout);
+            let result = inspect_qmp(
                 &mut stdin,
-                &mut BufReader::new(stdout),
+                &mut reader,
                 release,
                 isolated,
-            ));
+                post.as_ref()
+                    .map(|(path, prefix)| (path.as_path(), prefix.as_slice())),
+            );
+            let _ = send.send(result);
         })
         .map_err(|e| format!("QMP reader: {e}"))?;
     // The caller always kills/reaps QEMU, including on timeout, which closes
@@ -66,8 +74,9 @@ fn inspect_q35(
 fn inspect_qmp(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
-    release: Option<bool>,
+    release: Option<u8>,
     isolated: bool,
+    post: Option<(&std::path::Path, &[u8])>,
 ) -> Result<Option<FixtureState>, String> {
     qmp_write(stdin, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 71}")?;
@@ -79,7 +88,7 @@ fn inspect_qmp(
     )?;
     let map = read_monitor(&mut *reader, 73)?;
     validate(&map)?;
-    let bar = if release == Some(true) {
+    let bar = if matches!(release, Some(0xa6 | 0xa7)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
         }
@@ -97,19 +106,100 @@ fn inspect_qmp(
     } else {
         None
     };
-    if let Some(valid) = release {
+    let shutdown = release == Some(0xa7);
+    let before = if shutdown {
+        let state = bar
+            .filter(|_| isolated)
+            .ok_or("missing isolated controller sample")?;
+        if state.command != 0 || state.status != 1 || post.is_none() {
+            return Err(
+                "isolated controller is not already halted or lacks readback channel".into(),
+            );
+        }
+        Some(sample_shutdown(&mut *stdin, &mut *reader, 90)?)
+    } else {
+        None
+    };
+    if before.is_some_and(|snapshot| {
+        snapshot.endpoint as u16 != 7 || snapshot.bridge as u16 != 7 || snapshot.gsts != 0
+    }) {
+        return Err("unexpected firmware PCI or remapping state before shutdown".into());
+    }
+    if let Some(byte) = release {
         validate_scratch_uart(&map)?;
-        let write = if valid {
-            "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"o /b 0x2ff 0xa6\"},\"id\":74}\n"
-        } else {
-            "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"o /b 0x2ff 0x5a\"},\"id\":74}\n"
-        };
-        qmp_write(stdin, write)?;
+        if !matches!(byte, 0xa6 | 0xa7 | 0x5a) {
+            return Err("unknown q35 fixture release value".into());
+        }
+        qmp_write(
+            stdin,
+            &format!(
+                "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"o /b 0x2ff {byte:#x}\"}},\"id\":74}}\n"
+            ),
+        )?;
         ack(reader, "{\"return\": \"\", \"id\": 74}")?;
         qmp_write(stdin, "{\"execute\":\"cont\",\"id\":75}\n")?;
         ack(reader, "{\"return\": {}, \"id\": 75}")?;
     }
+    if let (Some(before), Some((path, prefix)), Some(state)) = (before, post, bar) {
+        await_shutdown_report(path, prefix, state)?;
+        qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
+        ack(reader, "{\"return\": {}, \"id\": 94}")?;
+        let after = sample_shutdown(stdin, reader, 95)?;
+        if after
+            != (ShutdownSample {
+                endpoint: before.endpoint & !4,
+                bridge: before.bridge & !4,
+                ..before
+            })
+            || sample_xhci_state(stdin, reader, state.bar)? != state
+        {
+            return Err("paused QEMU did not confirm the exact PCI BME-only shutdown".into());
+        }
+    }
     Ok(bar)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ShutdownSample {
+    endpoint: u32,
+    bridge: u32,
+    boot: u32,
+    gsts: u32,
+}
+
+fn sample_shutdown(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    id: u8,
+) -> Result<ShutdownSample, String> {
+    // These offsets are within the live, independently checked ECAM and
+    // DRHD apertures. The QMP monitor only reads the emulated device state.
+    Ok(ShutdownSample {
+        endpoint: read_model_dword(stdin, reader, 0xe410_0004, id)?,
+        bridge: read_model_dword(stdin, reader, 0xe400_0004, id + 1)?,
+        boot: read_model_dword(stdin, reader, 0xe002_8004, id + 2)?,
+        gsts: read_model_dword(stdin, reader, 0xfed9_001c, id + 3)?,
+    })
+}
+
+fn await_shutdown_report(
+    path: &std::path::Path,
+    prefix: &[u8],
+    state: FixtureState,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(512).read_to_end(&mut bytes))
+            .map_err(|e| format!("read shutdown trace: {e}"))?;
+        // The loop starts immediately after cont, so dc alone is legitimate.
+        if register_snapshot(prefix, &bytes, state, true, true)?.is_some() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Err("missing complete signed shutdown report".into())
 }
 
 fn check_isolation_properties(
@@ -151,12 +241,12 @@ fn sample_xhci_state(
 ) -> Result<FixtureState, String> {
     // validate_fixture_bar has proved these precise, aligned 32-bit windows in
     // the paused VM. Never derive an address from an unchecked register word.
-    let cap0 = read_xhci_dword(stdin, reader, bar.start, 78)?;
+    let cap0 = read_model_dword(stdin, reader, bar.start, 78)?;
     if cap0 & 0xffff != 0x40 || !matches!(cap0 >> 16, 0x100 | 0x110 | 0x120) {
         return Err("unexpected xHCI CAPLENGTH or HCIVERSION".into());
     }
-    let command = read_xhci_dword(stdin, reader, bar.start + 0x40, 79)?;
-    let status = read_xhci_dword(stdin, reader, bar.start + 0x44, 80)?;
+    let command = read_model_dword(stdin, reader, bar.start + 0x40, 79)?;
+    let status = read_model_dword(stdin, reader, bar.start + 0x44, 80)?;
     if command == u32::MAX || status == u32::MAX {
         return Err("invalid xHCI operational register sample".into());
     }
@@ -168,7 +258,7 @@ fn sample_xhci_state(
     })
 }
 
-fn read_xhci_dword(
+fn read_model_dword(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
     address: u64,
@@ -284,6 +374,7 @@ pub(super) fn register_snapshot(
     bytes: &[u8],
     state: FixtureState,
     isolated: bool,
+    shutdown: bool,
 ) -> Result<Option<String>, String> {
     if prefix.starts_with(bytes) {
         return Ok(None);
@@ -294,10 +385,10 @@ pub(super) fn register_snapshot(
     if data.first() == Some(&0xdb) {
         return Err("q35 guest rejected the VT-d extent or exact xHCI PCI identity".into());
     }
-    if data.len() < 62 {
+    if data.len() < 66 {
         return Ok(None);
     }
-    if data.len() != 62 || data[61] != 0xda {
+    if data.len() != 66 || data[65] != 0xda {
         return Err("wrong q35 fixed-register report length or trailer".into());
     }
     let long = |at| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
@@ -321,6 +412,17 @@ pub(super) fn register_snapshot(
     if guest_xhci != expected_xhci {
         return Err("signed guest xHCI operational state disagrees with the paused host".into());
     }
+    let cleared = &data[61..65];
+    let report = if shutdown {
+        "q35-verified-pci-shutdown"
+    } else {
+        "q35-read-only-registers"
+    };
+    if cleared != if shutdown { &[3, 0, 3, 0] } else { &[0; 4] } {
+        return Err(
+            "signed guest shutdown word readbacks do not match the requested profile".into(),
+        );
+    }
     let bar = state.bar;
     let (bar0, bar1) = (long(35), long(39));
     let guest_base = u64::from(bar1) << 32 | u64::from(bar0 & !0xf);
@@ -337,7 +439,7 @@ pub(super) fn register_snapshot(
         return Err("q35 fixed-register report disagrees with the exact fixture".into());
     }
     Ok(Some(format!(
-        "q35-read-only-registers|status=PASS|ver={ver:#x}|cap={cap:#018x}|ecap={ecap:#018x}|gsts={gsts:#010x}|pci={pci:#010x}|command={command:#06x}|class_revision={class:#010x}|bme={}|bar0={:#x}..={:#x}|xhci_cap0={:#010x}|xhci_usbcmd={:#010x}|xhci_usbsts={:#010x}|xhci_run={}|xhci_halted={}|isolated={isolated}|bridge_command={bridge_command:#06x}|bridge_buses={bridge_buses:#010x}|guest_xhci_match={isolated}",
+        "{report}|status=PASS|ver={ver:#x}|cap={cap:#018x}|ecap={ecap:#018x}|gsts={gsts:#010x}|pci={pci:#010x}|command={command:#06x}|class_revision={class:#010x}|bme={}|bar0={:#x}..={:#x}|xhci_cap0={:#010x}|xhci_usbcmd={:#010x}|xhci_usbsts={:#010x}|xhci_run={}|xhci_halted={}|isolated={isolated}|bridge_command={bridge_command:#06x}|bridge_buses={bridge_buses:#010x}|guest_xhci_match={isolated}|shutdown={shutdown}",
         command & (1 << 2) != 0,
         bar.start,
         bar.end,
@@ -666,7 +768,7 @@ mod tests {
             );
             let mut sent = Vec::new();
             assert_eq!(
-                inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(false), false).is_ok(),
+                inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(0x5a), false, None).is_ok(),
                 allowed
             );
             let sent = String::from_utf8(sent).unwrap();
@@ -742,7 +844,7 @@ mod tests {
                 "{{\"return\": {{}}, \"id\": 71}}\n{{\"return\": {{}}, \"id\": 72}}\n{{\"return\": \"{base}\", \"id\": 73}}\n{{\"return\": \"{pci}\", \"id\": 76}}\n{{\"return\": \"{mapped}\", \"id\": 77}}\n{{\"return\": \"c000004000: 0x01000040\\r\\n\", \"id\": 78}}\n{{\"return\": \"c000004040: 0x00000000\\r\\n\", \"id\": 79}}\n{{\"return\": \"c000004044: 0x00000001\\r\\n\", \"id\": 80}}\n{{\"return\": \"\", \"id\": 74}}\n{{\"return\": {{}}, \"id\": 75}}\n"
             );
             let mut sent = Vec::new();
-            let result = inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(true), false);
+            let result = inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(0xa6), false, None);
             assert_eq!(
                 result.as_ref().is_ok_and(Option::is_some),
                 allowed,
@@ -838,30 +940,55 @@ mod tests {
             &[0],
             &0x4004_u32.to_le_bytes(),
             &0xc0_u32.to_le_bytes(),
-            &[0; 18],
+            &[0; 22],
             &[0xda],
         ]
         .concat();
+        let mut shutdown = data.clone();
+        shutdown[30] = 7;
+        shutdown[45..47].copy_from_slice(&7u16.to_le_bytes());
+        shutdown[47..51].copy_from_slice(&0x0041_4140u32.to_le_bytes());
+        shutdown[51..55].copy_from_slice(&state.cap0.to_le_bytes());
+        shutdown[59..63].copy_from_slice(&state.status.to_le_bytes());
+        shutdown[63..67].copy_from_slice(&[3, 0, 3, 0]);
+        assert!(
+            register_snapshot(&prefix, &shutdown, state, true, true)
+                .unwrap()
+                .is_some()
+        );
+        assert!(register_snapshot(&prefix, &shutdown, state, true, false).is_err());
+        for at in [63, 65] {
+            let mut wrong = shutdown.clone();
+            wrong[at] |= 4;
+            assert!(register_snapshot(&prefix, &wrong, state, true, true).is_err());
+        }
         for end in 0..data.len() {
             assert_eq!(
-                register_snapshot(&prefix, &data[..end], state, false).unwrap(),
+                register_snapshot(&prefix, &data[..end], state, false, false).unwrap(),
                 None
             );
         }
         assert!(
-            register_snapshot(&prefix, &data, state, false)
+            register_snapshot(&prefix, &data, state, false, false)
                 .unwrap()
                 .unwrap()
                 .contains("|bme=true")
         );
-        for at in [0, 1, 2, 26, 35, 36, 37, 41, 45, 48, 51, 55, 60, 63] {
+        for at in [0, 1, 2, 26, 35, 36, 37, 41, 45, 48, 51, 55, 60, 63, 66, 67] {
             let mut wrong = data.clone();
             wrong[at] ^= 0xff;
-            assert!(register_snapshot(&prefix, &wrong, state, false).is_err());
+            assert!(register_snapshot(&prefix, &wrong, state, false, false).is_err());
         }
-        assert!(register_snapshot(&prefix, &[0xdc, 0xde, 0xdb], state, false).is_err());
+        assert!(register_snapshot(&prefix, &[0xdc, 0xde, 0xdb], state, false, false).is_err());
         assert!(
-            register_snapshot(&prefix, &[data.as_slice(), &[0]].concat(), state, false).is_err()
+            register_snapshot(
+                &prefix,
+                &[data.as_slice(), &[0]].concat(),
+                state,
+                false,
+                false
+            )
+            .is_err()
         );
     }
 }

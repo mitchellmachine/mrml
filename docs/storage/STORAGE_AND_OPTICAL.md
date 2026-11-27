@@ -3139,7 +3139,7 @@ paused host's observation. Neither side writes a BAR sizing probe, and the
 control guest does not map or read through the BAR. The guest checks the
 capability-derived VT-d arrays against the proven byte extent without reading them. The report
 includes the observed bus-master bit, not an ownership or shutdown proof.
-There are no device register writes or MRML USB DMA in this test. The marker
+The read-only cases do not write device registers or initiate USB DMA. The marker
 is an opt-in for the isolated model, not authenticated hardware provenance.
 The same command additionally exercises a separate q35 topology. The boot
 USB and firmware devices stay on the bypassed default bus; test xHCI
@@ -3161,6 +3161,17 @@ case stops before touching PCI or VT-d registers in the guest. This shows
 the intended remapping scope and identifies the inherited firmware state;
 it does not disable either bus master, install translation or transfer
 USB data. Do not flash this profile or use it in a real hardware test.
+
+A separate shutdown case within this test-only image requires the exact
+version-2 fixture marker and a different release byte. Only the two ECAM
+function pages are writable; the BAR and remapper remain read-only.
+An already halted controller and inactive remapper are mandatory. The
+guest clears BME via a 16-bit PCI COMMAND write at the endpoint, verifies
+readback, then clears and checks the isolated root port. The paused QEMU
+monitor independently confirms both changes, no change to the boot USB
+command or status, and no change to xHCI status or remapper GSTS. The wrong-byte
+case still stops before device access. This is shutdown only: no reset,
+new translation, bus-master re-enable, or USB transfer.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

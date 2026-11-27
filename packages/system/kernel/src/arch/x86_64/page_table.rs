@@ -1353,6 +1353,19 @@ impl ActivePageTables {
         verify_read_only_mmio_from_store(&IdentityMappedPageTables, self.root, mapping)
     }
 
+    /// Verify the exact signed QEMU shutdown fixture, not arbitrary PCI
+    /// memory. No MMIO access, permission changes, or TLB changes occur.
+    pub fn verify_q35_shutdown_leaves(&self) -> Result<(), PageTableBuildError> {
+        for mapping in super::q35_fixture_shutdown_mappings()
+            .map_err(|_| PageTableBuildError::MappingMismatch)?
+            .into_iter()
+            .flatten()
+        {
+            verify_exclusive_mmio_from_store(&IdentityMappedPageTables, self.root, mapping)?;
+        }
+        Ok(())
+    }
+
     /// Checks the exact preinstalled supervisor RW/NX mapping and clears all
     /// of the reserved RAM before returning it as initialized.
     ///
@@ -1583,6 +1596,14 @@ fn verify_read_only_mmio_from_store<S: PageTableStore>(
     if mapping.permissions() != PagePermissions::KERNEL_MMIO_READ {
         return Err(PageTableBuildError::MappingMismatch);
     }
+    verify_exclusive_mmio_from_store(store, root, mapping)
+}
+
+fn verify_exclusive_mmio_from_store<S: PageTableStore>(
+    store: &S,
+    root: PhysAddr,
+    mapping: Mapping,
+) -> Result<(), PageTableBuildError> {
     let physical_start = mapping.physical_start().get();
     let physical_end = mapping
         .pages()

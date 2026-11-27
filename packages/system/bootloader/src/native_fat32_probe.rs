@@ -199,7 +199,8 @@ pub(super) fn dma_mmio_coverage(covered: bool) {
 }
 
 #[cfg(feature = "q35-mmio-probe")]
-pub(super) fn dma_fixture_rendezvous() -> bool {
+pub(super) fn dma_fixture_rendezvous(shutdown: bool) -> bool {
+    let expected = if shutdown { 0xa7 } else { 0xa6 };
     let scratch = || {
         let byte: u8;
         // SAFETY: this signed QEMU-only BSP fixture reads only the dedicated
@@ -215,7 +216,7 @@ pub(super) fn dma_fixture_rendezvous() -> bool {
     for _ in 0..100_000_000 {
         match scratch() {
             0 => core::hint::spin_loop(),
-            0xa6 => {
+            byte if byte == expected => {
                 trace(0xde);
                 return true;
             }
@@ -229,11 +230,12 @@ pub(super) fn dma_fixture_rendezvous() -> bool {
     false
 }
 
-/// Samples only aligned fixed RO registers of the verified fixture pages.
+/// Samples fixed registers; the sealed shutdown case also clears two BME bits.
 /// The caller must keep the verified root active throughout these reads.
 #[cfg(feature = "q35-mmio-probe")]
 pub(super) unsafe fn dma_fixture_register_snapshot(
     mappings: [Option<mrml_kernel::arch::x86_64::Mapping>; 4],
+    shutdown: bool,
 ) {
     use mrml_kernel::arch::x86_64::VtdRegisterLayout;
     let [Some(drhd), Some(ecam), bridge, xhci] =
@@ -326,6 +328,48 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
             return;
         }
     };
+    let (endpoint_after, bridge_after) = if shutdown {
+        let Some(bridge) = bridge else {
+            trace(0xdb);
+            return;
+        };
+        // This first shutdown test refuses a running, resetting, not-ready or
+        // faulted controller. No controller register writes are admitted.
+        if xhci_command != 0 || xhci_status != 1 || pci_command != 7 || bridge_command != 7 {
+            trace(0xdb);
+            return;
+        }
+        // SAFETY: the shutdown-only mapping and release authorizes exactly
+        // these two PCI COMMAND words in the owned QEMU subtree. BAR and
+        // remapper mappings stay read-only. Guest executes alone at CPL0.
+        let completed = unsafe {
+            let endpoint = (ecam + 4) as *mut u16;
+            let root_port = (bridge + 4) as *mut u16;
+            if endpoint.read_volatile() != pci_command
+                || root_port.read_volatile() != bridge_command
+            {
+                None
+            } else {
+                endpoint.write_volatile(pci_command & !4);
+                let endpoint_after = endpoint.read_volatile();
+                if endpoint_after != pci_command & !4 {
+                    None
+                } else {
+                    root_port.write_volatile(bridge_command & !4);
+                    let bridge_after = root_port.read_volatile();
+                    (bridge_after == bridge_command & !4).then_some((endpoint_after, bridge_after))
+                }
+            }
+        };
+        let Some(commands) = completed else {
+            // No retries, re-enable, or continuation after uncertain state.
+            trace(0xdb);
+            return;
+        };
+        commands
+    } else {
+        (0u16, 0u16)
+    };
     for bytes in [
         &version.to_le_bytes()[..],
         &cap.to_le_bytes(),
@@ -342,6 +386,8 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         &xhci_cap0.to_le_bytes(),
         &xhci_command.to_le_bytes(),
         &xhci_status.to_le_bytes(),
+        &endpoint_after.to_le_bytes(),
+        &bridge_after.to_le_bytes(),
     ] {
         for &byte in bytes {
             trace(byte);

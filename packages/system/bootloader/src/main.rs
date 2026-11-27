@@ -4053,17 +4053,23 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             .unwrap_or_else(|| halt());
         let mappings = mrml_kernel::arch::x86_64::q35_fixture_probe_mappings(topology)
             .unwrap_or_else(|_| halt());
-        for mapping in mappings.into_iter().flatten() {
-            active
-                .verify_read_only_mmio_leaves(mapping)
-                .unwrap_or_else(|_| halt());
-        }
-        if native_fat32_probe::dma_fixture_rendezvous() {
-            // SAFETY: the exact RO/NX UC xHCI and remapper leaves were
-            // verified in the current root. Only the isolated signed QEMU
-            // test can get this far; host QMP proved the apertures before
-            // setting the release byte. No APs or mutable access exist.
-            unsafe { native_fat32_probe::dma_fixture_register_snapshot(mappings) };
+        let shutdown = if mappings.into_iter().flatten().all(|mapping|
+            active.verify_read_only_mmio_leaves(mapping).is_ok()
+        ) {
+            false
+        } else if topology == mrml_kernel::arch::x86_64::Q35FixtureTopology::Isolated
+            && active.verify_q35_shutdown_leaves().is_ok()
+        {
+            true
+        } else {
+            halt();
+        };
+        if native_fat32_probe::dma_fixture_rendezvous(shutdown) {
+            // SAFETY: exact alias-free RO/NX UC pages were verified in the
+            // active BSP root. The sealed shutdown case additionally has RW
+            // only for its two ECAM functions and requires its distinct host
+            // release. The fixture branch has no other requesters.
+            unsafe { native_fat32_probe::dma_fixture_register_snapshot(mappings, shutdown) };
         }
         halt();
     }
