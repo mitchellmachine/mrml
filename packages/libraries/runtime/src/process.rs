@@ -490,6 +490,8 @@ fn append_windows_argument(output: &mut Vector<u16>, argument: &str) {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
 
     #[test]
@@ -572,43 +574,77 @@ mod tests {
 
     #[test]
     fn detached_process_runs_to_completion() {
-        let marker = crate::join_path(
-            &temporary_directory(),
-            &crate::mrml_format!("mrml-detached-{}.txt", process_id()),
-        );
-        let _ = crate::remove_file(&marker);
-        #[cfg(windows)]
-        let mut command = {
-            let escaped = marker.replace("'", "''");
-            let mut command = Command::new("powershell.exe");
-            command
-                .args(["-NoProfile", "-Command"])
-                .arg(crate::mrml_format!(
-                    "[IO.File]::WriteAllText('{}','ok')",
-                    escaped
-                ));
-            command
-        };
-        #[cfg(unix)]
-        let mut command = {
-            let escaped = marker.replace("'", "'\\''");
-            let mut command = Command::new("sh");
-            command.args(["-c", &crate::mrml_format!("printf ok > '{}'", escaped)]);
-            command
-        };
-        command.spawn_detached().unwrap();
-        for _ in 0..200 {
-            if crate::path_is_file(&marker) {
-                assert_eq!(crate::read_file_text(&marker).unwrap().as_str(), "ok");
-                assert!(crate::remove_file(&marker).is_ok());
-                return;
+        use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir()
+            .join(crate::mrml_format!("mrml-detached-{}-{stamp:x}", process_id()).as_str());
+        std::fs::create_dir(&directory).unwrap();
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(self.0.join("armed"));
+                let _ = std::fs::remove_file(self.0.join("pending"));
+                let _ = std::fs::remove_file(self.0.join("ready"));
+                let _ = std::fs::remove_dir(&self.0);
             }
-            #[cfg(windows)]
-            mrml_windows::sleep_millis(5);
-            #[cfg(unix)]
-            mrml_linux::sleep_millis(5);
         }
-        panic!("detached child did not create its marker");
+        let directory = Scratch(directory);
+        std::fs::write(directory.0.join("armed"), b"mrml-detached-test").unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let marker = directory.0.join("ready");
+        Command::new(executable.to_str().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "process::tests::detached_marker_fixture",
+            ])
+            .current_dir(directory.0.to_str().unwrap())
+            .spawn_detached()
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            match std::fs::read(&marker) {
+                Ok(contents) => {
+                    assert_eq!(contents.as_slice(), b"ok");
+                    return;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("could not read detached child marker: {error}"),
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("detached Rust fixture did not publish its marker within 15 seconds");
+    }
+
+    #[test]
+    #[ignore = "started by the detached-process test in its isolated scratch directory"]
+    fn detached_marker_fixture() {
+        use std::io::Write as _;
+
+        let directory = std::env::current_dir().unwrap();
+        if !directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("mrml-detached-"))
+            || !std::fs::read(directory.join("armed"))
+                .is_ok_and(|value| value.as_slice() == b"mrml-detached-test")
+        {
+            return;
+        }
+        let pending = directory.join("pending");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&pending)
+            .unwrap();
+        file.write_all(b"ok").unwrap();
+        drop(file);
+        std::fs::rename(pending, directory.join("ready")).unwrap();
     }
 
     #[test]

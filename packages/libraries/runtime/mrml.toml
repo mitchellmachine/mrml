@@ -89,20 +89,12 @@ path = "packages/libraries/runtime/src/process.rs"
 reason = "Invoke the declared sh process boundary from captures_stdout_stderr_exit_status_and_working_directory for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
-fingerprint = "fnv1a64:d72af3581bf1b057"
-id = "external-command.detached-process-runs-to-completion.powershell-exe"
+fingerprint = "fnv1a64:ce1e343c36399ed4"
+id = "external-command.detached-process-runs-to-completion.current-test-exe"
 kind = "external-command"
-line = 583
+line = 599
 path = "packages/libraries/runtime/src/process.rs"
-reason = "Invoke the declared powershell-exe process boundary from detached_process_runs_to_completion for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
-
-[[build_input]]
-fingerprint = "fnv1a64:c72e67aaa38c78af"
-id = "external-command.detached-process-runs-to-completion.sh"
-kind = "external-command"
-line = 595
-path = "packages/libraries/runtime/src/process.rs"
-reason = "Invoke the declared sh process boundary from detached_process_runs_to_completion for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
+reason = "The runtime test starts its own compiled Rust executable with one exact test selector in an isolated scratch directory."
 
 [[build_input]]
 fingerprint = "fnv1a64:7ed012f6d4b3a556"
