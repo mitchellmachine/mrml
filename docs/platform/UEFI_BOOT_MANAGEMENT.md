@@ -254,6 +254,11 @@ controller handoff. That build did not verify the boot-source relationship.
 The subsequent topology-only EFI test (build 659ea7ed) reported
 `shared-usb` on the same Chromebook: the boot stick uses that xHCI
 controller. Another port or USB stick does not prove controller separation.
+The 2026-11-27 read-only follow-up (`87b78e16`, `XHCI87B.EFI`) confirmed
+34 scratchpads and page mask `0x0001` (4 KiB only), or 136 KiB of scratchpad
+buffers before the pointer array and other DMA objects. The controller was
+still firmware-owned and shared with the USB boot source. The diagnostic
+reported zero incomplete controllers and returned to EFI Shell without handoff.
 
 The signed QEMU/OVMF negative control boots the same sealed test release
 from a read-only virtual disk attached directly to the sole xHCI candidate.

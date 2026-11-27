@@ -55,6 +55,98 @@ fn read_only_legacy_inventory_rejects_malformed_or_ambiguous_capabilities() {
     }
 }
 
+#[test]
+fn stages_dragonair_geometry_without_touching_neighbor_pages() {
+    const PAGE: usize = 4096;
+    const RESERVED: usize = 4 * PAGE;
+    const STAGING: usize = 35 * PAGE;
+    let assignment = DmaAssignment {
+        bytes: (RESERVED + STAGING + PAGE) as u64,
+        ..activation_assignment()
+    };
+    let plan = ScratchpadPlan::plan(assignment, RESERVED as u64, 34, 1, false).unwrap();
+    assert_eq!(plan.staging_bytes(), STAGING);
+
+    let mut memory = [0xa5; RESERVED + STAGING + PAGE];
+    let (prefix, tail) = memory.split_at_mut(RESERVED);
+    let (staging, suffix) = tail.split_at_mut(STAGING);
+    assert_eq!(
+        plan.table_device_address(),
+        assignment.device_base + RESERVED as u64
+    );
+    let replaced = DmaAssignment {
+        mapping_generation: assignment.mapping_generation + 1,
+        ..assignment
+    };
+    assert_eq!(
+        plan.stage(replaced, staging),
+        Err(ScratchpadError::AssignmentChanged)
+    );
+    assert_eq!(
+        plan.stage(assignment, &mut staging[..STAGING - 1]),
+        Err(ScratchpadError::StagingLength)
+    );
+    assert!(staging.iter().all(|&byte| byte == 0xa5));
+
+    plan.stage(assignment, staging).unwrap();
+    for (i, entry) in staging[..34 * 8].chunks_exact(8).enumerate() {
+        assert_eq!(
+            u64::from_le_bytes(entry.try_into().unwrap()),
+            plan.table_device_address() + (i as u64 + 1) * PAGE as u64
+        );
+    }
+    assert!(staging[34 * 8..].iter().all(|&byte| byte == 0));
+    assert!(prefix.iter().chain(suffix.iter()).all(|&byte| byte == 0xa5));
+}
+
+#[test]
+fn scratchpad_geometry_does_not_accept_unusable_apertures() {
+    let assignment = DmaAssignment {
+        bytes: 36 * 4096,
+        ..activation_assignment()
+    };
+    for (count, mask) in [(0, 1), (513, 1), (34, 0), (34, 0x10)] {
+        assert_eq!(
+            ScratchpadPlan::plan(assignment, 4096, count, mask, true),
+            Err(ScratchpadError::UnsupportedGeometry)
+        );
+    }
+    for (mapping, prefix) in [
+        (assignment, 0),
+        (assignment, 4095),
+        (assignment, 8192),
+        (assignment, u64::MAX - 4095),
+        (
+            DmaAssignment {
+                mapping_generation: 0,
+                ..assignment
+            },
+            4096,
+        ),
+        (
+            DmaAssignment {
+                device_base: u64::MAX - 4095,
+                ..assignment
+            },
+            4096,
+        ),
+    ] {
+        assert_eq!(
+            ScratchpadPlan::plan(mapping, prefix, 34, 1, true),
+            Err(ScratchpadError::InvalidAperture)
+        );
+    }
+    let above_32 = DmaAssignment {
+        device_base: (1 << 32) - 4096,
+        ..assignment
+    };
+    assert_eq!(
+        ScratchpadPlan::plan(above_32, 4096, 34, 1, false),
+        Err(ScratchpadError::InvalidAperture)
+    );
+    assert!(ScratchpadPlan::plan(above_32, 4096, 34, 1, true).is_ok());
+}
+
 const DMA: DmaLayout = DmaLayout {
     device_contexts: 0x10_0000,
     command_ring: 0x10_0100,

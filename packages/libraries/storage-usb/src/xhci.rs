@@ -12,6 +12,8 @@ mod native_owner;
 pub use managed_vtd::{ManagedVtd, ManagedVtdError, ProjectedNativeXhci, VtdPciPlatform, install_projected_native_xhci};
 pub use native_owner::{NativePciBinding, NativePciLease, NativePciOwner, NativePciOwnerError};
 pub mod pci;
+mod scratchpad;
+pub use scratchpad::{ScratchpadError, ScratchpadPlan};
 mod projection;
 pub use projection::{ProjectionError, ScopedXhci};
 pub use bulk::{BulkDma, BulkPipe};
