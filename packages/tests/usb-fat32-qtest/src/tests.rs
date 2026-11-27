@@ -14,6 +14,10 @@ use mrml_storage_fat32::provisioned_probe::{
 };
 use mrml_storage_fat32::{FixedFileWriteError, VerifiedSectorDevice};
 use mrml_storage_usb::block_provider::UsbReadProvider;
+use mrml_storage_usb::diagnostic_partition::microvm_queue::{
+    ProbeQueueConsumer, ProbeQueueError, ProbeQueueGenerations, ProbeQueueProvider,
+    bind_probe_write,
+};
 use mrml_storage_usb::diagnostic_partition::{
     DiagnosticPartition, DiagnosticPartitionAssignment, DiagnosticPartitionError,
 };
@@ -716,16 +720,18 @@ fn sector_mut(image: &mut [u8], lba: usize) -> &mut [u8] {
 }
 
 struct TestPartition<'a, 'b, T: mrml_storage_usb::BulkTransport> {
-    view: DiagnosticPartition<'a, T>,
-    session: OpaqueHandle,
-    caps: &'b CapabilitySpace<4>,
+    client: ProbeQueueConsumer,
+    server: ProbeQueueProvider<'a, T>,
+    projection: mrml_kernel::MicrovmPeerPageProjection,
+    page: [u8; PAGE_SIZE as usize],
+    caps: &'b CapabilitySpace<12>,
 }
 
 impl<T: mrml_storage_usb::BulkTransport> VerifiedSectorDevice for TestPartition<'_, '_, T> {
     type Error = DiagnosticPartitionError;
 
     fn read_sector(&mut self, sector: u32, output: &mut [u8; SECTOR]) -> Result<(), Self::Error> {
-        self.view.read(self.caps, sector, output)
+        self.server.read_partition(self.caps, sector, output)
     }
 
     fn write_sector_verified(
@@ -733,13 +739,30 @@ impl<T: mrml_storage_usb::BulkTransport> VerifiedSectorDevice for TestPartition<
         sector: u32,
         input: &[u8; SECTOR],
     ) -> Result<(), Self::Error> {
-        let view = BorrowedReadView::within(0, SECTOR as u64, SECTOR as u64).unwrap();
-        let request = encode_write_request(self.session, u64::from(sector), 1, view).unwrap();
-        let response = self.view.write(self.caps, &request, input).unwrap();
-        match decode_write_response(&response, SECTOR as u64).unwrap() {
-            Ok(bytes) if bytes == SECTOR as u64 => Ok(()),
-            Err(WriteError::PermissionDenied) => Err(DiagnosticPartitionError::Denied),
-            Err(WriteError::StaleObject) => Err(DiagnosticPartitionError::StaleSession),
+        let request = self
+            .client
+            .submit(&mut self.page, &self.projection, self.caps, sector, input)
+            .map_err(|_| DiagnosticPartitionError::IoFailure)?;
+        let response = self
+            .server
+            .serve(&mut self.page, &self.projection, self.caps, request)
+            .map_err(|_| DiagnosticPartitionError::IoFailure)?;
+        assert!(matches!(
+            self.server
+                .serve(&mut self.page, &self.projection, self.caps, request),
+            Err(ProbeQueueError::Queue(_))
+        ));
+        match self
+            .client
+            .complete(&mut self.page, &self.projection, self.caps, response)
+        {
+            Ok(()) => Ok(()),
+            Err(ProbeQueueError::Provider(WriteError::PermissionDenied)) => {
+                Err(DiagnosticPartitionError::Denied)
+            }
+            Err(ProbeQueueError::Provider(WriteError::StaleObject)) => {
+                Err(DiagnosticPartitionError::StaleSession)
+            }
             _ => Err(DiagnosticPartitionError::IoFailure),
         }
     }
@@ -766,7 +789,7 @@ where
     T: mrml_storage_usb::BulkTransport,
     T::Error: std::fmt::Debug,
 {
-    let mut caps = CapabilitySpace::<4>::new();
+    let mut caps = CapabilitySpace::<12>::new();
     let partition_object = ObjectId(0xa1);
     let read_only = caps.insert(partition_object, Rights::READ).unwrap();
     let write_rights = Rights::READ.union(Rights::WRITE);
@@ -815,6 +838,32 @@ where
         ));
     }
 
+    let mut memory = MemoryPoolTable::<1, 2, 4>::new(0xa3).unwrap();
+    let (pool, quota) = memory
+        .create_root(
+            2,
+            4,
+            0,
+            Rights::ALLOCATE
+                .union(Rights::CONTROL)
+                .union(Rights::INSPECT),
+            &mut caps,
+        )
+        .unwrap();
+    let peer_rights = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+    let client_cap = caps.insert(ObjectId(0xa4), peer_rights).unwrap();
+    let server_cap = caps.insert(ObjectId(0xa5), peer_rights).unwrap();
+    let (projection, _) = reserve_microvm_peer_page_projection(
+        &mut memory,
+        pool,
+        quota,
+        client_cap,
+        server_cap,
+        0x900,
+        0xa00,
+        &mut caps,
+    )
+    .unwrap();
     let mut view = DiagnosticPartition::open(provider, assignment, granted, &caps).unwrap();
     let input = [0x3c; SECTOR];
     let wire_view = BorrowedReadView::within(0, SECTOR as u64, SECTOR as u64).unwrap();
@@ -834,9 +883,38 @@ where
     }
 
     {
-        let mut partition = TestPartition {
+        let (mut client, mut server) = bind_probe_write(
             view,
-            session: probe_session(),
+            ProbeQueueGenerations {
+                provider: 5,
+                system: 1,
+                policy: 1,
+                binding: 2,
+            },
+            &projection,
+            client_cap,
+            server_cap,
+            &caps,
+        )
+        .unwrap();
+        let mut page = [0; PAGE_SIZE as usize];
+        client.initialize(&mut page, &projection, &caps).unwrap();
+        // The queue's valid peer authority still cannot address the MBR or FAT.
+        let request = client
+            .submit(&mut page, &projection, &caps, 0, &input)
+            .unwrap();
+        let response = server
+            .serve(&mut page, &projection, &caps, request)
+            .unwrap();
+        assert_eq!(
+            client.complete(&mut page, &projection, &caps, response),
+            Err(ProbeQueueError::Provider(WriteError::InvalidRequest))
+        );
+        let mut partition = TestPartition {
+            client,
+            server,
+            projection,
+            page,
             caps: &caps,
         };
         let mut probe = ProvisionedProbe::verify(
@@ -859,6 +937,25 @@ where
             previous = next;
         }
         probe.update(&previous, b"new").unwrap();
+
+        // A stale completion cannot confirm a write or let this consumer send
+        // another. Keep the exact on-disk comparison outside the queue.
+        assert_eq!(
+            partition
+                .client
+                .complete(&mut partition.page, &partition.projection, &caps, response),
+            Err(ProbeQueueError::CompletionUncertain)
+        );
+        assert_eq!(
+            partition.client.submit(
+                &mut partition.page,
+                &partition.projection,
+                &caps,
+                PROBE_DATA_SECTOR,
+                &input
+            ),
+            Err(ProbeQueueError::CompletionUncertain)
+        );
     }
 
     let mut view = DiagnosticPartition::open(provider, assignment, granted, &caps).unwrap();

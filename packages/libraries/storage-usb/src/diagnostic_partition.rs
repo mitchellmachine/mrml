@@ -2,6 +2,8 @@
 //! read-only. The supervisor must authorize the exclusive, exact media
 //! assignment separately from the controller and DMA lease.
 
+pub mod microvm_queue;
+
 use super::block_provider::UsbReadProvider;
 use crate::{BulkTransport, SECTOR_BYTES};
 use mrml_interface_storage_block_provider_v1::{

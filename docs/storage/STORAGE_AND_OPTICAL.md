@@ -2932,6 +2932,15 @@ stale session and an attempt to write metadata. In the USB 3 case it tests
 unplug before the write and verifies that the old session is retired. The
 test capability is modeled in the running host fixture, not transferred to
 an executing USB service MicroVM. Normal enumeration remains read-only.
+A separate write adapter now carries one canonical request and its copied
+512-byte input on the existing generation-bound MicroVM queue. The provider
+owns the diagnostic partition and enforces the exact write sector after queue
+validation. It rejects a replayed notification and closes the endpoint if
+an accepted operation cannot publish its reply; missing completion is not
+permission to retry. The QEMU test sends the marker updates through this
+queue and checks the persisted disk. It rejects an earlier completion and
+refuses further writes through that consumer. The peers in this test are synthetic:
+it does not launch the USB provider in a MicroVM or map hardware DMA.
 
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See
