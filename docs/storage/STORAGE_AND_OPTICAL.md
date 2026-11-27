@@ -3021,6 +3021,17 @@ addresses. After retirement the host checks the descriptor, command and
 control-transfer completions, confirms both bulk rings stayed empty, and
 verifies an unchanged image. This mode issues no bulk transfer or SCSI command.
 
+The next diagnostic, `--ignored --nocapture live_kvm_guest_reads_qemu_usb_sector`,
+uses the signed guest's own xHCI bulk rings to run BOT/SCSI READ CAPACITY and
+READ(10) for the one provisioned fixture sector. The broker accepts only the
+exact read-only sequence, including one REQUEST SENSE and retry if QEMU
+reports reset-related unit attention. It checks the returned capacity, the
+sector bytes, and matching status tags. After verified halt, withdrawal,
+and scrubbing, the complete external disk image must still match. Unlike the
+earlier hosted xHCI write relay, this exercises bulk transfer and storage
+protocols together inside the guest. It does not exercise an in-guest write
+or qualify physical hardware.
+
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See
 [review log](../patents/REVIEW_LOG.md).

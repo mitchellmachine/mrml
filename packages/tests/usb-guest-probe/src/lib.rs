@@ -5,6 +5,7 @@ use mrml_storage_fat32::VerifiedSectorDevice;
 use mrml_storage_fat32::provisioned_probe::{
     PROBE_DATA_SECTOR, PROBE_PARTITION_SECTORS, ProvisionedProbe, probe_metadata_sector,
 };
+pub use mrml_storage_usb::UsbDisk;
 pub use mrml_storage_usb::{
     BulkTransport,
     xhci::{
@@ -13,11 +14,15 @@ pub use mrml_storage_usb::{
         pci::{PciController, PciLocation, PciSnapshot},
     },
 };
-use mrml_storage_usb::{Error as UsbError, SECTOR_BYTES, UsbDisk};
+use mrml_storage_usb::{Error as UsbError, SECTOR_BYTES};
 
 const START: u32 = 32;
 const SERIAL: u32 = 42;
-const FILE: u32 = START + PROBE_DATA_SECTOR;
+pub const FILE: u32 = START + PROBE_DATA_SECTOR;
+
+pub fn fixture_sectors() -> u64 {
+    u64::from(START + PROBE_PARTITION_SECTORS)
+}
 
 struct Disk {
     command: Option<(u8, u32, [u8; 4], bool)>,

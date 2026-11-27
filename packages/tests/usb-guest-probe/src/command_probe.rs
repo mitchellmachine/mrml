@@ -149,7 +149,7 @@ pub(super) fn exercise(level: u8) -> bool {
                 if descriptor[..2] != [18, 1] {
                     return None;
                 }
-                if level == 2 {
+                if level >= 2 {
                     let mut configuration = [0; 256];
                     controller
                         .read_descriptor(2, 0, &mut configuration[..9], 100)
@@ -161,7 +161,7 @@ pub(super) fn exercise(level: u8) -> bool {
                     controller
                         .read_descriptor(2, 0, &mut configuration[..len], 100)
                         .ok()?;
-                    controller
+                    let pipe = controller
                         .configure_bulk(
                             &configuration[..len],
                             BulkDma {
@@ -172,6 +172,18 @@ pub(super) fn exercise(level: u8) -> bool {
                             100,
                         )
                         .ok()?;
+                    if level == 3 {
+                        let mut disk = mrml_usb_guest_probe::UsbDisk::probe(pipe).ok()?;
+                        let mut data = [0; 512];
+                        disk.read_sector(u64::from(mrml_usb_guest_probe::FILE), &mut data)
+                            .ok()?;
+                        if disk.sectors() != mrml_usb_guest_probe::fixture_sectors()
+                            || &data[..3] != b"old"
+                            || !data[3..].iter().all(|&x| x == 0xa5)
+                        {
+                            return None;
+                        }
+                    }
                 }
                 Some(())
             })()

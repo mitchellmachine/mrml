@@ -3198,6 +3198,12 @@ mod tests {
         usb_write_probe::exercise_bulk_setup();
     }
 
+    #[test]
+    #[ignore = "requires live KVM, QEMU and the built USB probe image"]
+    fn live_kvm_guest_reads_qemu_usb_sector() {
+        usb_write_probe::exercise_bulk_read();
+    }
+
     mod usb_write_probe;
 
     #[test]
