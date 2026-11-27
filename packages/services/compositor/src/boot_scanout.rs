@@ -28,6 +28,14 @@ pub fn paint_boot_ready<const N: usize>(
     pixels: &mut [u8],
 ) -> Result<(), BootScanoutError> {
     validate_output(capabilities, control, binding, current)?;
+    render_private_boot_frame(layout, pixels)
+}
+
+/// Draw into compositor-private RAM. This grants no display authority.
+pub fn render_private_boot_frame(
+    layout: FramebufferLayout,
+    pixels: &mut [u8],
+) -> Result<(), BootScanoutError> {
     let mut surface =
         FramebufferSurface::from_layout(layout, pixels).map_err(BootScanoutError::Framebuffer)?;
     surface

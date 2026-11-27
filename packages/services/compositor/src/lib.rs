@@ -1,9 +1,18 @@
 #![no_std]
 
 mod boot_scanout;
+mod scanout_probe;
 mod transport;
 
-pub use boot_scanout::{BootScanoutError, paint_boot_ready, publish_total_guest_scanout};
+pub use boot_scanout::{
+    BootScanoutError, paint_boot_ready, publish_total_guest_scanout, render_private_boot_frame,
+};
+
+pub use scanout_probe::{
+    BOOT_SCANOUT_PROBE_BYTES, BOOT_SCANOUT_PROBE_HEIGHT, BOOT_SCANOUT_PROBE_READY,
+    BOOT_SCANOUT_PROBE_WIDTH, BootScanoutProbeError, BootScanoutProbeTransport,
+    run_boot_scanout_probe,
+};
 
 use core::array;
 use mrml_interface_gui_surface_v1::OpaqueHandle;

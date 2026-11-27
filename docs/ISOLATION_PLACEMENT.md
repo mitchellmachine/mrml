@@ -39,7 +39,12 @@ included in an active release; placement eligibility does not attest that
 an executable has launched. The storage coordinator is explicitly a required
 blocker until its supervised guest and transport exist. The standalone native
 service-image package is an optional diagnostic blocker, not a production
-exception. Total placement does not promote an explicitly non-eligible class
+exception. The compositor’s fixed one-shot service probe builds as a PE service
+payload and renders a private 128×32 frame. It uses the existing bounded
+shared-buffer syscall for output, releases the write grant, then sends a
+capability-free completion. This is build and protocol-test evidence only;
+launch, guest capture, and physical scanout are not yet connected.
+Total placement does not promote an explicitly non-eligible class
 just because its supported placement list contains microVM. Existing admission
 and readiness evidence gates still determine whether Total is satisfied.
 

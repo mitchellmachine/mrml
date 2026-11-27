@@ -32,10 +32,25 @@ environment = "linux"
 kind = "lib"
 name = "mrml_compositor"
 
+[[artifact]]
+kind = "bin"
+name = "mrml-compositor-scanout-probe"
+
 [rust]
 crate_name = "mrml_compositor"
 crate_type = "lib"
 source = "packages/services/compositor/src/lib.rs"
+
+[[binary]]
+crate_name = "mrml_compositor_scanout_probe"
+output = "mrml-compositor-scanout-probe"
+self_extern = true
+source = "packages/services/compositor/src/scanout_probe_main.rs"
+targets = ["MRML_NATIVE"]
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"
 
 [[dependency]]
 alias = "mrml_interface_gui_surface_v1"
