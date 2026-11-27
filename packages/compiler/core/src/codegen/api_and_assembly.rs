@@ -153,6 +153,7 @@ pub enum CodegenErrorKind {
     InvalidRangeBounds,
     RangeEndpointOutOfRange,
     RuntimeExpressionUnsupported,
+    RuntimeCharacterCastRequired,
     MissingReturnType,
     UnsupportedReturnType,
     UnsupportedLifetimeElision,
@@ -269,6 +270,35 @@ pub struct CodegenError {
     pub span: Span,
 }
 
+// The scalar constant IR does not carry the types needed for all comparisons
+// after a character cast. Use the typed emitter for these expressions.
+fn require_scalar_constant_casts<
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_NODES: usize,
+>(
+    function: &Function<'_, MAX_PARAMETERS>,
+    resolver: &R,
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    source_start: usize,
+) -> Result<(), CodegenError> {
+    for expression in tree.nodes().iter().flatten() {
+        if let ExprKind::Cast {
+            operand,
+            target: crate::CastType::Integer(_),
+        } = expression.kind
+            && runtime_expression_type(function, resolver, tree, operand, 1)
+                == Ok(RuntimeExpressionType::Char)
+        {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::RuntimeCharacterCastRequired,
+                span: translate_span(source_start, expression.span),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub fn compile_x86_64_constant_function<
     'source,
     R: ConstantResolver,
@@ -322,6 +352,12 @@ pub fn compile_x86_64_constant_function<
                     error.span,
                 ),
             })?;
+        require_scalar_constant_casts(
+            function,
+            resolver,
+            &tree,
+            function.body_expression_span.start + local.initializer_span.start,
+        )?;
         let expression_type = runtime_expression_type(function, resolver, &tree, tree.root(), 0)
             .map_err(|kind| CodegenError {
                 kind,
@@ -496,6 +532,12 @@ pub fn compile_x86_64_constant_function<
                     error.span,
                 ),
             })?;
+        require_scalar_constant_casts(
+            function,
+            resolver,
+            &tree,
+            function.body_expression_span.start + assignment.value_span.start,
+        )?;
         let expression_type = runtime_expression_type(function, resolver, &tree, tree.root(), 0)
             .map_err(|kind| CodegenError {
                 kind,
@@ -567,6 +609,12 @@ pub fn compile_x86_64_constant_function<
             kind,
             span: function.body_expression_span,
         })?;
+    require_scalar_constant_casts(
+        function,
+        resolver,
+        &tree,
+        function.body_expression_span.start + body.tail_span.start,
+    )?;
     let expected_type =
         RuntimeExpressionType::Integer(crate::IntegerType::from_name(return_type.text));
     if !runtime_types_compatible(expression_type, expected_type) {
@@ -718,14 +766,18 @@ pub fn compile_x86_64_runtime_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
-    let mut body_has_aggregate_local = false;
+    let mut locals_require_runtime = false;
     for local in parsed_body.locals().iter().flatten() {
+        if local.ty.is_some_and(|ty| ty.text == "char") {
+            locals_require_runtime = true;
+            break;
+        }
         if local
             .ty
             .and_then(|ty| runtime_array_type(ty.text))
             .is_some()
         {
-            body_has_aggregate_local = true;
+            locals_require_runtime = true;
             break;
         }
         if local
@@ -733,22 +785,24 @@ pub fn compile_x86_64_runtime_function_with_options<
             .and_then(|ty| runtime_tuple_type(ty.text))
             .is_some()
         {
-            body_has_aggregate_local = true;
+            locals_require_runtime = true;
             break;
         }
         if local.initializer.as_bytes().contains(&b'[') {
-            body_has_aggregate_local = true;
+            locals_require_runtime = true;
             break;
         }
         if let Ok(tree) = local.parse_initializer::<MAX_EXPRESSION_NODES>()
             && runtime_expression_type(function, resolver, &tree, tree.root(), 0).is_ok_and(|ty| {
                 matches!(
                     ty,
-                    RuntimeExpressionType::Array { .. } | RuntimeExpressionType::Tuple { .. }
+                    RuntimeExpressionType::Array { .. }
+                        | RuntimeExpressionType::Tuple { .. }
+                        | RuntimeExpressionType::Char
                 )
             })
         {
-            body_has_aggregate_local = true;
+            locals_require_runtime = true;
             break;
         }
     }
@@ -769,7 +823,7 @@ pub fn compile_x86_64_runtime_function_with_options<
             .flatten()
             .any(|expression| matches!(expression.kind, ExprKind::CStrToBytes { .. }))
     };
-    let body_requires_runtime = body_has_aggregate_local
+    let body_requires_runtime = locals_require_runtime
         || tail_requires_runtime
         || parsed_body.assignment_count() != 0
         || parsed_body.conditional_return_count() != 0
@@ -786,20 +840,24 @@ pub fn compile_x86_64_runtime_function_with_options<
             .and_then(|return_type| runtime_width(return_type.text))
             .is_some()
     {
-        let code =
-            compile_x86_64_constant_function::<R, MAX_BYTES, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
-                function, resolver,
-            )?;
-        return Ok(X86_64RuntimeMachineCode {
-            code,
-            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
-            readonly_data_length: 0,
-            readonly_relocations: [X86_64ReadonlyDataRelocation {
-                offset: 0,
-                data_offset: 0,
-            }; MAX_X86_64_READONLY_RELOCATIONS],
-            readonly_relocation_count: 0,
-        });
+        match compile_x86_64_constant_function::<R, MAX_BYTES, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+            function, resolver,
+        ) {
+            Ok(code) => {
+                return Ok(X86_64RuntimeMachineCode {
+                    code,
+                    readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+                    readonly_data_length: 0,
+                    readonly_relocations: [X86_64ReadonlyDataRelocation {
+                        offset: 0,
+                        data_offset: 0,
+                    }; MAX_X86_64_READONLY_RELOCATIONS],
+                    readonly_relocation_count: 0,
+                });
+            }
+            Err(error) if error.kind == CodegenErrorKind::RuntimeCharacterCastRequired => {}
+            Err(error) => return Err(error),
+        }
     }
     validate_stable_export(function, abi)?;
     if function.parameter_count() > MAX_X86_64_ABI_PARAMETERS {

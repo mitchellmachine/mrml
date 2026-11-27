@@ -70,6 +70,36 @@ fn compound_boolean_expression_compiles_with_public_frontend_capacities() {
     }
 }
 
+#[test]
+fn char_casts_compile_in_constant_and_runtime_paths() {
+    for source in [
+        r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> i32 { '*' as i32 }"#,
+        r#"#[unsafe(no_mangle)] pub extern "C" fn probe(value: char) -> i8 { value as i8 }"#,
+        r#"#[unsafe(no_mangle)] pub extern "C" fn probe(value: char) -> i32 {
+            if value as i128 == 0x1f980i128 { 42 } else { 0 }
+        }"#,
+        r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> i32 {
+            let value = '\u{ff}';
+            if (value as i8) < 0i8 { 42 } else { 0 }
+        }"#,
+        r#"const VALUE: u128 = '\u{1f980}' as u128;
+        #[unsafe(no_mangle)] pub extern "C" fn probe() -> i32 {
+            if VALUE as u32 == 0x1f980u32 { 42 } else { 0 }
+        }"#,
+    ] {
+        for format in [ObjectFormat::Coff, ObjectFormat::Elf64] {
+            let object = compile_source_function::<4096, 1024, 4, 4, 4, 48>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .expect("char-to-integer cast compiles");
+            assert!(!object.is_empty());
+        }
+    }
+}
+
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }

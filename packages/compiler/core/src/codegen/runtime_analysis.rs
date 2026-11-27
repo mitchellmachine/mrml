@@ -19245,6 +19245,7 @@ fn runtime_non_binary_expression_type<
                         RuntimeExpressionType::Integer(_)
                             | RuntimeExpressionType::RawPointer { .. }
                             | RuntimeExpressionType::Bool
+                            | RuntimeExpressionType::Char
                     ) {
                         return Err(CodegenErrorKind::RuntimeTypeMismatch);
                     }

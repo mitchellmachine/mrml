@@ -9237,6 +9237,10 @@ impl<
             .map_err(|kind| self.error(kind))?;
             let source = match (operand_type, target) {
                 (
+                    RuntimeExpressionType::Char,
+                    crate::CastType::Integer(crate::IntegerType::U128 | crate::IntegerType::I128),
+                ) => crate::IntegerType::U32,
+                (
                     RuntimeExpressionType::Integer(Some(source)),
                     crate::CastType::Integer(
                         crate::IntegerType::U128 | crate::IntegerType::I128,
