@@ -120,6 +120,7 @@ pub enum DmarError {
     ScopeTableFull,
     InvalidRegisterBase,
     InvalidScope,
+    UnsupportedRequesterScope,
     PathTooDeep,
     AmbiguousUnit,
     MissingUnit,
@@ -561,43 +562,56 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
         scope: &DmarDeviceScope,
         config: &mut C,
     ) -> Result<DeviceAddress, DmarError> {
+        self.resolve_scope_path(segment, scope, config)
+            .map(|(address, _)| address)
+    }
+
+    fn resolve_scope_path<C: PciConfigSpace>(
+        &self,
+        segment: u16,
+        scope: &DmarDeviceScope,
+        config: &mut C,
+    ) -> Result<(DeviceAddress, u8), DmarError> {
         let mut bus = scope.start_bus;
-        let path = &scope.path[..scope.path_len as usize];
+        let mut limit = u8::MAX;
+        let path = scope
+            .path
+            .get(..usize::from(scope.path_len))
+            .ok_or(DmarError::InvalidScope)?;
         for (index, element) in path.iter().enumerate() {
             let address = DeviceAddress::new(segment, bus, element.device, element.function)
                 .map_err(|_| DmarError::InvalidScope)?;
             let identity = config
                 .read_u32(address, 0)
                 .ok_or(DmarError::ConfigReadFailed)?;
-            if identity & 0xffff == 0xffff {
+            if matches!(identity as u16, 0 | u16::MAX) {
                 return Err(DmarError::MissingDevice);
             }
-            if index + 1 != path.len() {
-                let header = config
-                    .read_u32(address, 0x0c)
-                    .ok_or(DmarError::ConfigReadFailed)?;
-                if (header >> 16) as u8 & 0x7f != 1 {
-                    return Err(DmarError::NotPciBridge);
-                }
-                let buses = config
-                    .read_u32(address, 0x18)
-                    .ok_or(DmarError::ConfigReadFailed)?;
-                let primary = buses as u8;
-                let secondary = (buses >> 8) as u8;
-                let subordinate = (buses >> 16) as u8;
-                if primary != bus || secondary == 0 || secondary > subordinate {
-                    return Err(DmarError::InvalidBusRange);
-                }
-                bus = secondary;
+            if index + 1 == path.len() {
+                return Ok((address, limit));
             }
+            (bus, limit) = bridge_window(config, address, limit)?;
         }
-        DeviceAddress::new(
-            segment,
-            bus,
-            path.last().ok_or(DmarError::InvalidScope)?.device,
-            path.last().ok_or(DmarError::InvalidScope)?.function,
-        )
-        .map_err(|_| DmarError::InvalidScope)
+        Err(DmarError::InvalidScope)
+    }
+
+    fn scope_covers<C: PciConfigSpace>(
+        &self,
+        segment: u16,
+        scope: &DmarDeviceScope,
+        requester: DeviceAddress,
+        config: &mut C,
+    ) -> Result<bool, DmarError> {
+        match scope.scope_type {
+            1 => Ok(self.resolve_scope(segment, scope, config)? == requester),
+            2 => {
+                let (bridge, limit) = self.resolve_scope_path(segment, scope, config)?;
+                let (secondary, subordinate) = bridge_window(config, bridge, limit)?;
+                Ok(requester == bridge || (secondary..=subordinate).contains(&requester.bus()))
+            }
+            3 | 4 => Ok(false), // Interrupt source, not an enumerated PCI DMA endpoint.
+            _ => Err(DmarError::UnsupportedRequesterScope),
+        }
     }
 
     /// Selects the unique DRHD covering `requester`. Explicit device scopes
@@ -617,7 +631,7 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
                 return Err(DmarError::AmbiguousUnit);
             }
             for scope in self.scopes(unit) {
-                if self.resolve_scope(unit.segment, scope, config)? == requester
+                if self.scope_covers(unit.segment, scope, requester, config)?
                     && explicit.replace(unit).is_some()
                 {
                     return Err(DmarError::AmbiguousUnit);
@@ -635,7 +649,7 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
         let identity = config
             .read_u32(requester, 0)
             .ok_or(DmarError::MissingDevice)?;
-        if identity == u32::MAX || identity as u16 == u16::MAX {
+        if matches!(identity as u16, 0 | u16::MAX) {
             return Err(DmarError::MissingDevice);
         }
         let unit = self.unit_for_requester(requester, config)?;
@@ -721,6 +735,9 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
                 return Err(DmarError::Truncated);
             }
             let scope = parse_scope(&bytes[offset..end])?;
+            if include_all && matches!(scope.scope_type, 1 | 2) {
+                return Err(DmarError::InvalidScope);
+            }
             if self.scope_count == SCOPES {
                 return Err(DmarError::ScopeTableFull);
             }
@@ -752,6 +769,31 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
         self.unit_count += 1;
         Ok(())
     }
+}
+
+fn bridge_window<C: PciConfigSpace>(
+    config: &mut C,
+    bridge: DeviceAddress,
+    enclosing_limit: u8,
+) -> Result<(u8, u8), DmarError> {
+    let header = config
+        .read_u32(bridge, 0x0c)
+        .ok_or(DmarError::ConfigReadFailed)?;
+    if (header >> 16) as u8 & 0x7f != 1 {
+        return Err(DmarError::NotPciBridge);
+    }
+    let buses = config
+        .read_u32(bridge, 0x18)
+        .ok_or(DmarError::ConfigReadFailed)?;
+    let [primary, secondary, subordinate, _] = buses.to_le_bytes();
+    if primary != bridge.bus()
+        || secondary <= primary
+        || secondary > subordinate
+        || subordinate > enclosing_limit
+    {
+        return Err(DmarError::InvalidBusRange);
+    }
+    Ok((secondary, subordinate))
 }
 
 fn same_pci_route(left: &DmarDeviceScope, right: &DmarDeviceScope) -> bool {
@@ -1276,7 +1318,7 @@ mod tests {
         table[52] = 1;
         table[54..56].copy_from_slice(&0u16.to_le_bytes());
         table[56..64].copy_from_slice(&0xfed9_0000u64.to_le_bytes());
-        table[64..72].copy_from_slice(&[1, 8, 0, 0, 0, 2, 3, 0]);
+        table[64..72].copy_from_slice(&[3, 8, 0, 0, 0, 2, 3, 0]);
         finalize_table(&mut table);
         table
     }
@@ -1481,6 +1523,104 @@ mod tests {
                 .register_base
                 .get(),
             0xfeda_0000
+        );
+    }
+
+    struct BridgeWindows {
+        subordinate: u8,
+    }
+
+    impl PciConfigSpace for BridgeWindows {
+        fn read_u32(&mut self, address: DeviceAddress, offset: u16) -> Option<u32> {
+            let bridge = (address.bus(), address.device());
+            match (bridge, offset) {
+                ((2, 3) | (5, 1) | (8, 14) | (9, 1), 0) => Some(0x1234_8086),
+                ((2, 3) | (5, 1), 0x0c) => Some(1 << 16),
+                ((2, 3), 0x18) => Some(u32::from_le_bytes([2, 5, 9, 0])),
+                ((5, 1), 0x18) => Some(u32::from_le_bytes([5, 6, self.subordinate, 0])),
+                _ => None,
+            }
+        }
+    }
+
+    #[test]
+    fn downstream_xhci_requester_uses_the_explicit_bridge_unit() {
+        let mut table = routing_dmar();
+        table[64] = 2;
+        finalize_table(&mut table);
+        let topology = DmarTopology::<2, 2>::parse(&table).unwrap();
+        let mut config = BridgeWindows { subordinate: 8 };
+        let endpoint = DeviceAddress::new(0, 8, 14, 0).unwrap();
+        let bridge = DeviceAddress::new(0, 5, 1, 0).unwrap();
+        let outside = DeviceAddress::new(0, 9, 1, 0).unwrap();
+        for address in [endpoint, bridge] {
+            let route = topology.route_for_requester(address, &mut config).unwrap();
+            assert_eq!(route.requester(), address);
+            assert_eq!(route.register_base().get(), 0xfed9_0000);
+        }
+        assert_eq!(
+            topology
+                .route_for_requester(outside, &mut config)
+                .unwrap()
+                .register_base()
+                .get(),
+            0xfeda_0000
+        );
+        for invalid_limit in [5, 10] {
+            config.subordinate = invalid_limit;
+            assert_eq!(
+                topology.route_for_requester(endpoint, &mut config),
+                Err(DmarError::InvalidBusRange)
+            );
+        }
+    }
+
+    #[test]
+    fn downstream_scope_and_conflicting_endpoint_do_not_pick_a_unit() {
+        let mut table = [0; 98];
+        table[..90].copy_from_slice(&routing_dmar());
+        table[4..8].copy_from_slice(&98u32.to_le_bytes());
+        table[64] = 2;
+        table[76..78].copy_from_slice(&24u16.to_le_bytes());
+        table[78] = 0;
+        table[90..].copy_from_slice(&[1, 8, 0, 0, 0, 8, 14, 0]);
+        finalize_table(&mut table);
+        let endpoint = DeviceAddress::new(0, 8, 14, 0).unwrap();
+        let mut config = BridgeWindows { subordinate: 8 };
+        let topology = DmarTopology::<2, 2>::parse(&table).unwrap();
+        assert_eq!(
+            topology.route_for_requester(endpoint, &mut config),
+            Err(DmarError::AmbiguousUnit)
+        );
+        table[90] = 5;
+        finalize_table(&mut table);
+        let topology = DmarTopology::<2, 2>::parse(&table).unwrap();
+        assert_eq!(
+            topology.route_for_requester(endpoint, &mut config),
+            Err(DmarError::UnsupportedRequesterScope)
+        );
+    }
+
+    #[test]
+    fn interrupt_only_scope_never_claims_a_pci_dma_requester() {
+        let mut table = routing_dmar();
+        table[64] = 3;
+        finalize_table(&mut table);
+        let topology = DmarTopology::<2, 2>::parse(&table).unwrap();
+        let route = topology
+            .route_for_requester(
+                DeviceAddress::new(0, 8, 14, 0).unwrap(),
+                &mut BridgeWindows { subordinate: 8 },
+            )
+            .unwrap();
+        assert_eq!(route.register_base().get(), 0xfeda_0000);
+
+        let mut invalid = dmar();
+        invalid[64] = 2;
+        finalize_table(&mut invalid);
+        assert_eq!(
+            DmarTopology::<2, 2>::parse(&invalid),
+            Err(DmarError::InvalidScope)
         );
     }
 

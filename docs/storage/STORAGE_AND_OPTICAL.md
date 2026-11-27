@@ -2943,6 +2943,15 @@ QEMU checks the halted/reset state at bus-master enable, rejects out-of-range
 DMA, and runs the existing FAT32 test using its synthetic guest aperture.
 This is ordering and bounds evidence, not physical IOMMU enforcement.
 
+For Intel VT-d, the kernel now resolves PCI sub-hierarchy entries in the
+firmware DMAR table to the named bridge and its downstream bus window, rather
+than falling back to the segment default for a downstream xHCI requester.
+It checks nested bridge windows against their parents, excludes interrupt-only
+entries from PCI DMA routing, and rejects ambiguous matches and unsupported
+ACPI namespace scopes rather than guessing. This is read-only routing evidence
+and does not establish device isolation, requester-alias safety, or DMA
+authority.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The
