@@ -139,11 +139,7 @@ fn inspect_qmp(
                 "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info qtree\"},\"id\":153}\n",
             )?;
             let tree = read_monitor(&mut *reader, 153)?;
-            if tree.contains("mrml_shared_boot")
-                || !tree
-                    .lines()
-                    .any(|line| line.trim() == "bus: mrml_probe_xhci.0")
-            {
+            if !retired_shared_boot_topology(&tree) {
                 return Err(
                     "shared boot disk did not detach while the controller stayed present".into(),
                 );
@@ -694,6 +690,11 @@ fn verify_guest_bme(
         before.pci_command as u16, after.pci_command as u16
     );
     if allow {
+        qmp_write(stdin, "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info qtree\"},\"id\":171}\n")?;
+        if !retired_shared_boot_topology(&read_monitor(&mut *reader, 171)?) {
+            return Err("virtual boot source is not retired at guest release".into());
+        }
+        println!("q35-shared-release|status=PASS|boot_source_retired=true|bme=false|xhci_halted=true");
         // Only the test UART release register is written by the host.
         qmp_write(
             stdin,
@@ -799,6 +800,28 @@ fn shared_boot_topology(tree: &str) -> bool {
         }
     }
     buses == 1 && disks == 1 && matched
+}
+
+fn retired_shared_boot_topology(tree: &str) -> bool {
+    let mut bus = None;
+    let mut buses = 0;
+    for line in tree.lines() {
+        let content = line.trim_start();
+        let indent = line.len() - content.len();
+        if content.contains("mrml_shared_boot") {
+            return false;
+        }
+        if bus.is_some_and(|depth| indent <= depth) {
+            bus = None;
+        }
+        if content == "bus: mrml_probe_xhci.0" {
+            buses += 1;
+            bus = Some(indent);
+        } else if bus.is_some() && content.starts_with("dev: ") {
+            return false;
+        }
+    }
+    buses == 1
 }
 
 fn verify_shared_boot(
@@ -1430,6 +1453,19 @@ fn validate_resources(map: &str, expect_drhd: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retired_boot_topology_requires_one_empty_controller_bus() {
+        let empty = "dev: qemu-xhci\n  bus: mrml_probe_xhci.0\n    type usb-bus\n    bus-prop: label\ndev: other\n";
+        assert!(super::retired_shared_boot_topology(empty));
+        for tree in [
+            empty.replace("    bus-prop: label", "    dev: usb-storage, id \"other\""),
+            empty.replace("mrml_probe_xhci.0", "other.0"),
+            format!("{empty}{empty}"),
+            format!("{empty}dev: usb-storage, id \"mrml_shared_boot\"\n"),
+        ] {
+            assert!(!super::retired_shared_boot_topology(&tree));
+        }
+    }
     use super::*;
 
     #[test]

@@ -2888,14 +2888,14 @@ fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
         match scratch() {
             0 => core::hint::spin_loop(),
             0xb5 if profile == 2 => {
-                if !usb_preload_clear_fixture_bme() {
+                if !usb_preload_fixture_bme(true) {
                     break;
                 }
                 loader_trace(0xef);
                 for _ in 0..100_000_000 {
                     match scratch() {
                         0xb5 => core::hint::spin_loop(),
-                        0xb6 => {
+                        0xb6 if usb_preload_fixture_bme(false) => {
                             loader_trace(0xea);
                             return;
                         }
@@ -2916,7 +2916,7 @@ fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
 }
 
 #[cfg(feature = "usb-preload-probe")]
-fn usb_preload_clear_fixture_bme() -> bool {
+fn usb_preload_fixture_bme(clear: bool) -> bool {
     // SAFETY: only the sealed, single-vCPU QEMU fixture executes here,
     // after UEFI exit and host verification of the sole halted device and
     // removal of its emulated boot disk. Only 00:1b.0 is selectable. Restore
@@ -2941,15 +2941,16 @@ fn usb_preload_clear_fixture_bme() -> bool {
         let admitted = read(0xcf8) == DEVICE | 4
             && identity == 0x000d_1b36
             && class == 0x0c03_3001
-            && original as u16 == 7;
-        let changed = if admitted {
+            && original as u16 == if clear { 7 } else { 3 };
+        let verified = if admitted && clear {
             core::arch::asm!("out dx, ax", in("dx") 0xcfcu16, in("ax") 3u16, options(nomem, nostack));
             read(0xcfc) == original & !4
         } else {
-            false
+            admitted
         };
         select(saved);
-        changed && read(0xcf8) == saved
+        let restored = read(0xcf8) == saved;
+        verified && restored
     }
 }
 

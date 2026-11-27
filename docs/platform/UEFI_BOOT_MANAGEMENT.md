@@ -299,7 +299,11 @@ Enable, restores the PCI configuration address, and pauses for independent
 QEMU readback. The host detaches the virtual boot disk and supplies the
 release through the test UART; it does not write PCI configuration in
 the guest case. A denied release writes no command and stops. The allow
-case continues from RAM only after the host verifies the exact change.
+case continues from RAM only after the host verifies the exact change and
+rechecks that the emulated boot source is detached and the controller bus
+is empty. The guest then reads back the exact bus-master-disabled PCI
+command before leaving the test checkpoint. This does not prove VT-d
+containment or ownership transfer on physical hardware.
 This diagnostic is not in the normal boot profile and does not claim
 legacy semaphore transfer or enable DMA. An independent software model
 checks the retained lease, blocked DMA, quiescent boot source, and exact
