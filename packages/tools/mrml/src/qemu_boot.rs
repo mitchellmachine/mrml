@@ -93,6 +93,17 @@ pub(super) enum Q35FixtureCase {
     NoMarker,
     WrongRelease,
     ValidRelease,
+    IsolatedWrongRelease,
+    IsolatedValidRelease,
+}
+
+impl Q35FixtureCase {
+    fn isolated(self) -> bool {
+        matches!(
+            self,
+            Self::IsolatedWrongRelease | Self::IsolatedValidRelease
+        )
+    }
 }
 
 pub(super) fn run_q35_map_only_fixture(
@@ -161,8 +172,12 @@ fn run_qemu_config(
         return Err("PackageQemuExpectedTraceSize".into());
     }
     let fixture_end = match map_only_marker {
-        Some(Q35FixtureCase::WrongRelease) => Some([0xdc, 0xdd]),
-        Some(Q35FixtureCase::ValidRelease) => Some([0xdc, 0xde]),
+        Some(Q35FixtureCase::WrongRelease | Q35FixtureCase::IsolatedWrongRelease) => {
+            Some([0xdc, 0xdd])
+        }
+        Some(Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease) => {
+            Some([0xdc, 0xde])
+        }
         _ => None,
     };
     if fixture_end.is_some_and(|suffix| !expected.ends_with(&suffix)) {
@@ -226,10 +241,20 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         verify_q35,
         map_only_marker,
     } = options;
-    let machine = format!("q35,accel={accelerator}");
+    let isolated = map_only_marker.is_some_and(Q35FixtureCase::isolated);
+    let machine = if isolated {
+        format!("q35,accel={accelerator},default-bus-bypass-iommu=on,sata=off")
+    } else {
+        format!("q35,accel={accelerator}")
+    };
     let mut command = Command::new(qemu);
     if intel_iommu {
-        command.args(["-device", "intel-iommu,aw-bits=48,intremap=off"]);
+        let remapper = if isolated {
+            "intel-iommu,id=mrml_probe_vtd,aw-bits=48,intremap=off"
+        } else {
+            "intel-iommu,aw-bits=48,intremap=off"
+        };
+        command.args(["-device", remapper]);
     }
     if verify_q35 {
         command.args(["-no-user-config", "-qmp", "stdio"]);
@@ -239,12 +264,25 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             .parent()
             .filter(|p| p.is_absolute())
             .ok_or("missing private q35 fixture directory")?;
-        command.current_dir(scratch).args([
-            "-nic",
-            "none",
-            "-device",
-            "qemu-xhci,bus=pcie.0,addr=0x1b,id=mrml_probe_xhci",
-        ]);
+        command.current_dir(scratch).args(["-nic", "none"]);
+        if isolated {
+            command.args([
+                "-nodefaults",
+                "-device",
+                "VGA,bus=pcie.0",
+                "-device",
+                "pxb-pcie,id=probe_domain,bus=pcie.0,addr=0x1b,bus_nr=64,bypass_iommu=off",
+                "-device",
+                "pcie-root-port,slot=0,id=probe_port,bus=probe_domain,addr=0x0",
+                "-device",
+                "qemu-xhci,bus=probe_port,addr=0x0,id=mrml_probe_xhci",
+            ]);
+        } else {
+            command.args([
+                "-device",
+                "qemu-xhci,bus=pcie.0,addr=0x1b,id=mrml_probe_xhci",
+            ]);
+        }
         if case != Q35FixtureCase::NoMarker {
             command.args([
                 "-smp",
@@ -267,7 +305,11 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     }
     let (boot_xhci, boot_disk) = if map_only_marker.is_some() {
         (
-            "qemu-xhci,id=mrml_boot_xhci",
+            if isolated {
+                "qemu-xhci,bus=pcie.0,addr=0x5,id=mrml_boot_xhci"
+            } else {
+                "qemu-xhci,id=mrml_boot_xhci"
+            },
             "usb-storage,bus=mrml_boot_xhci.0,drive=esp,removable=on,bootindex=1",
         )
     } else {
@@ -287,7 +329,14 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         .arg(format!("if=none,id=esp,format=raw,file={image}"))
         .args(["-device", boot_xhci])
         .args(["-device", boot_disk])
-        .args(["-device", "virtio-rng-pci"])
+        .args([
+            "-device",
+            if isolated {
+                "virtio-rng-pci,bus=pcie.0"
+            } else {
+                "virtio-rng-pci"
+            },
+        ])
         .arg("-debugcon")
         .arg(format!("file:{}", trace.display()))
         .args(["-global", "isa-debugcon.iobase=0xe9"])
@@ -301,14 +350,14 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         } else {
             Stdio::null()
         })
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("PackageQemuLaunchError {{ detail: {error} }}"))?;
     let start = Instant::now();
     let release = map_only_marker.and_then(|case| match case {
         Q35FixtureCase::NoMarker => None,
-        Q35FixtureCase::WrongRelease => Some(false),
-        Q35FixtureCase::ValidRelease => Some(true),
+        Q35FixtureCase::WrongRelease | Q35FixtureCase::IsolatedWrongRelease => Some(false),
+        Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease => Some(true),
     });
     let mut released = false;
     let mut fixture_bar = None;
@@ -317,14 +366,15 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             if let Some(valid) = release {
                 let ready = &expected[..expected.len() - 1];
                 if !released && bytes == ready {
-                    fixture_bar = match crate::qemu_mmio::release_q35_fixture(&mut child, valid) {
-                        Ok(bar) => bar,
-                        Err(error) => {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            return Err(error);
-                        }
-                    };
+                    fixture_bar =
+                        match crate::qemu_mmio::release_q35_fixture(&mut child, valid, isolated) {
+                            Ok(bar) => bar,
+                            Err(error) => {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                return Err(error);
+                            }
+                        };
                     released = true;
                 } else if !released && !ready.starts_with(&bytes) {
                     let _ = child.kill();
@@ -349,7 +399,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 return Ok(());
             }
             let report = if let Some(bar) = fixture_bar {
-                match crate::qemu_mmio::register_snapshot(expected, &bytes, bar) {
+                match crate::qemu_mmio::register_snapshot(expected, &bytes, bar, isolated) {
                     Ok(report) => report,
                     Err(error) => {
                         let _ = child.kill();

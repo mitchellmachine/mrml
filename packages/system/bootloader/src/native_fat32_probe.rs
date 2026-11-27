@@ -233,10 +233,15 @@ pub(super) fn dma_fixture_rendezvous() -> bool {
 /// The caller must keep the verified root active throughout these reads.
 #[cfg(feature = "q35-mmio-probe")]
 pub(super) unsafe fn dma_fixture_register_snapshot(
-    mappings: [mrml_kernel::arch::x86_64::Mapping; 2],
+    mappings: [Option<mrml_kernel::arch::x86_64::Mapping>; 3],
 ) {
     use mrml_kernel::arch::x86_64::VtdRegisterLayout;
-    let [drhd, ecam] = mappings.map(|mapping| mapping.virtual_start().get() as usize);
+    let [Some(drhd), Some(ecam), bridge] =
+        mappings.map(|mapping| mapping.map(|page| page.virtual_start().get() as usize))
+    else {
+        trace(0xdb);
+        return;
+    };
     // SAFETY: the caller establishes the current, exact, alias-free UC leaves
     // and release. Only fixed aligned widths inside the proven apertures.
     let (version, cap, ecap, status, pci_id, pci_command, pci_class, header, bar0, bar1) = unsafe {
@@ -266,6 +271,32 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         trace(0xdb);
         return;
     }
+    let (bridge_command, bridge_buses) = match bridge {
+        None => (0, 0),
+        Some(bridge) => {
+            // SAFETY: the caller verified the signed isolated model's exact
+            // RO/NX UC bridge leaf before the host proved and released it.
+            let (identity, command, class, header, buses) = unsafe {
+                (
+                    core::ptr::read_volatile(bridge as *const u32),
+                    core::ptr::read_volatile((bridge + 4) as *const u16),
+                    core::ptr::read_volatile((bridge + 8) as *const u32),
+                    core::ptr::read_volatile((bridge + 14) as *const u8),
+                    core::ptr::read_volatile((bridge + 0x18) as *const u32),
+                )
+            };
+            if identity != 0x000c_1b36
+                || class >> 16 != 0x0604
+                || header & 0x7f != 1
+                || buses & 0x00ff_ffff != 0x0041_4140
+                || status != 0
+            {
+                trace(0xdb);
+                return;
+            }
+            (command, buses)
+        }
+    };
     for bytes in [
         &version.to_le_bytes()[..],
         &cap.to_le_bytes(),
@@ -277,6 +308,8 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         &[header],
         &bar0.to_le_bytes(),
         &bar1.to_le_bytes(),
+        &bridge_command.to_le_bytes(),
+        &bridge_buses.to_le_bytes(),
     ] {
         for &byte in bytes {
             trace(byte);

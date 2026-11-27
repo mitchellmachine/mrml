@@ -1375,6 +1375,7 @@ unsafe fn launch_after_exit(
             let marker = mrml_kernel::arch::x86_64::q35_fixture_marker(&mut acpi_memory, acpi_root)
                 .ok()?;
             q35_mmio_snapshot(dmar, mcfg, &marker, map_bytes, descriptor_size, framebuffer)
+                .map(|(digest, _)| digest)
         });
         if verified != Some(transition.q35_snapshot) {
             loader_trace(0xed);
@@ -2546,13 +2547,15 @@ fn prepare_transition(
     };
     #[cfg(feature = "q35-mmio-probe")]
     let q35_snapshot = {
-        let snapshot = prepare_q35_mmio_snapshot(services, acpi_root, framebuffer)
+        let (snapshot, topology) = prepare_q35_mmio_snapshot(services, acpi_root, framebuffer)
             .unwrap_or_else(|| {
                 loader_trace(0xed);
                 halt();
             });
-        for mapping in mrml_kernel::arch::x86_64::q35_fixture_probe_mappings()
+        for mapping in mrml_kernel::arch::x86_64::q35_fixture_probe_mappings(topology)
             .map_err(|_| LOAD_ERROR)?
+            .into_iter()
+            .flatten()
         {
             tables.map(mapping).map_err(|_| LOAD_ERROR)?;
         }
@@ -2588,7 +2591,7 @@ fn prepare_q35_mmio_snapshot(
     services: &BootServices,
     acpi_root: u64,
     framebuffer: Framebuffer,
-) -> Option<[u8; 64]> {
+) -> Option<([u8; 64], mrml_kernel::arch::x86_64::Q35FixtureTopology)> {
     use mrml_kernel::arch::x86_64::{AcpiError, copy_dmar, copy_mcfg, q35_fixture_marker};
     // SAFETY: Boot Services are live on the BSP. The static scratch buffers
     // have no other users here and references do not escape this function.
@@ -2646,27 +2649,16 @@ fn q35_mmio_snapshot(
     raw: &[u8],
     stride: usize,
     framebuffer: Framebuffer,
-) -> Option<[u8; 64]> {
-    use mrml_kernel::arch::x86_64::{DmarTopology, McfgTopology, q35_fixture_probe_mappings};
-    let dmar = DmarTopology::<1, 64>::parse(dmar_bytes)
-        .map_err(|_| loader_trace(0xe2)).ok()?;
-    let unit = dmar.units().next()?;
+) -> Option<([u8; 64], mrml_kernel::arch::x86_64::Q35FixtureTopology)> {
+    use mrml_kernel::arch::x86_64::{McfgTopology, Q35FixtureTopology, q35_fixture_probe_mappings};
+    let topology = Q35FixtureTopology::from_dmar(dmar_bytes).or_else(|| {
+        loader_trace(0xe6);
+        None
+    })?;
     let mcfg = McfgTopology::<1>::parse(mcfg_bytes)
         .map_err(|_| loader_trace(0xe3)).ok()?;
     let allocation = mcfg.allocations().next()?;
-    let exact_requesters = dmar.scopes(unit).filter(|scope| {
-        scope.scope_type == 1
-            && scope.start_bus == 0
-            && scope.path_len == 1
-            && scope.path[0].device == 0x1b
-            && scope.path[0].function == 0
-    }).count();
-    if unit.segment != 0
-        || unit.include_all
-        || exact_requesters != 1
-        || unit.register_base.get() != 0xfed9_0000
-        || dmar.reserved_regions().next().is_some()
-        || allocation.segment != 0
+    if allocation.segment != 0
         || allocation.start_bus != 0
         || allocation.end_bus != 255
         || allocation.physical_start() != 0xe000_0000
@@ -2674,7 +2666,7 @@ fn q35_mmio_snapshot(
         loader_trace(0xe6);
         return None;
     }
-    for mapping in q35_fixture_probe_mappings().ok()? {
+    for mapping in q35_fixture_probe_mappings(topology).ok()?.into_iter().flatten() {
         if !q35_fixture_has_no_memory_conflict(
             raw,
             stride,
@@ -2689,7 +2681,7 @@ fn q35_mmio_snapshot(
     digest.update(marker);
     digest.update(dmar_bytes);
     digest.update(mcfg_bytes);
-    Some(digest.finalize())
+    Some((digest.finalize(), topology))
 }
 
 fn map_containing_identity(

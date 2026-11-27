@@ -16,9 +16,64 @@ pub enum PlatformMmioError {
     CpuProtection,
 }
 
-/// The two pages of the isolated q35 mapping test, never an authorization
-/// to access physical hardware. The fixture xHCI function is 00:1b.0.
-pub fn q35_fixture_probe_mappings() -> Result<[Mapping; 2], PlatformMmioError> {
+/// Exact accepted layouts for the signed, emulator-only q35 fixture.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Q35FixtureTopology {
+    Control,
+    Isolated,
+}
+
+impl Q35FixtureTopology {
+    /// Classify ACPI evidence for the model. Neither case grants ownership
+    /// or says anything about real hardware.
+    pub fn from_dmar(table: &[u8]) -> Option<Self> {
+        let dmar = DmarTopology::<1, 64>::parse(table).ok()?;
+        let unit = dmar.units().next()?;
+        if unit.segment != 0
+            || unit.include_all
+            || unit.register_base.get() != 0xfed9_0000
+            || dmar.reserved_regions().next().is_some()
+        {
+            return None;
+        }
+        let matching = |kind, bus, device| {
+            dmar.scopes(unit).filter(move |scope| {
+                scope.scope_type == kind
+                    && scope.enumeration_id == 0
+                    && scope.start_bus == bus
+                    && scope.path_len == 1
+                    && scope.path[0].device == device
+                    && scope.path[0].function == 0
+            })
+        };
+        // The model's firmware snapshots this topology before assigning the
+        // secondary bus, so the isolated endpoint is covered by type 2, not
+        // a separate endpoint scope. Require the whole table, including no
+        // extra or unparsed structures, not just a matching entry.
+        if table.len() == 80
+            && table[8] == 1
+            && table[38..48] == [0; 10]
+            && table[52..54] == [0; 2]
+            && dmar.host_address_width == 48
+            && dmar.flags == 0
+            && dmar.scopes(unit).count() == 2
+            && matching(2, 0x40, 0).count() == 1
+            && matching(3, 0xff, 0).count() == 1
+        {
+            Some(Self::Isolated)
+        } else if matching(1, 0, 0x1b).count() == 1 {
+            Some(Self::Control)
+        } else {
+            None
+        }
+    }
+}
+
+/// Exact read-only pages, in DRHD / endpoint / optional bridge order.
+/// These are addresses in the signed model fixture, not physical authority.
+pub fn q35_fixture_probe_mappings(
+    topology: Q35FixtureTopology,
+) -> Result<[Option<Mapping>; 3], PlatformMmioError> {
     let page = |virtual_start, physical| {
         Mapping::new(
             VirtAddr::new(virtual_start).map_err(|_| PlatformMmioError::InvalidRange)?,
@@ -28,10 +83,84 @@ pub fn q35_fixture_probe_mappings() -> Result<[Mapping; 2], PlatformMmioError> {
         )
         .map_err(|_| PlatformMmioError::InvalidRange)
     };
+    let (endpoint, bridge) = match topology {
+        Q35FixtureTopology::Control => (0xe00d_8000, None),
+        Q35FixtureTopology::Isolated => {
+            (0xe410_0000, Some(page(0xffff_d800_0010_2000, 0xe400_0000)?))
+        }
+    };
     Ok([
-        page(0xffff_d800_0010_0000, 0xfed9_0000)?,
-        page(0xffff_d800_0010_1000, 0xe00d_8000)?,
+        Some(page(0xffff_d800_0010_0000, 0xfed9_0000)?),
+        Some(page(0xffff_d800_0010_1000, endpoint)?),
+        bridge,
     ])
+}
+
+#[cfg(test)]
+mod q35_fixture_tests {
+    use super::*;
+
+    fn fixture() -> [u8; 80] {
+        let mut table = [0u8; 80];
+        table[..4].copy_from_slice(b"DMAR");
+        table[4..8].copy_from_slice(&80u32.to_le_bytes());
+        table[8] = 1;
+        table[36] = 47;
+        table[50..52].copy_from_slice(&32u16.to_le_bytes());
+        table[56..64].copy_from_slice(&0xfed9_0000u64.to_le_bytes());
+        table[64..72].copy_from_slice(&[3, 8, 0, 0, 0, 0xff, 0, 0]);
+        table[72..80].copy_from_slice(&[2, 8, 0, 0, 0, 0x40, 0, 0]);
+        checksum(&mut table);
+        table
+    }
+
+    fn checksum(table: &mut [u8]) {
+        table[9] = 0;
+        table[9] = 0u8.wrapping_sub(table.iter().copied().fold(0u8, u8::wrapping_add));
+    }
+
+    #[test]
+    fn isolated_fixture_requires_exact_scope_and_ro_pages() {
+        let good = fixture();
+        assert_eq!(
+            Q35FixtureTopology::from_dmar(&good),
+            Some(Q35FixtureTopology::Isolated)
+        );
+        let pages = q35_fixture_probe_mappings(Q35FixtureTopology::Isolated).unwrap();
+        assert_eq!(
+            pages.map(|page| page.unwrap().physical_start().get()),
+            [0xfed9_0000, 0xe410_0000, 0xe400_0000]
+        );
+        assert!(
+            pages
+                .into_iter()
+                .flatten()
+                .all(|page| page.permissions() == PagePermissions::KERNEL_MMIO_READ)
+        );
+        for (at, byte) in [
+            (36, 38),
+            (37, 1),
+            (51, 1),
+            (52, 1),
+            (66, 1),
+            (68, 1),
+            (72, 1),
+            (77, 0x41),
+            (78, 1),
+            (79, 1),
+        ] {
+            let mut wrong = good;
+            wrong[at] = byte;
+            checksum(&mut wrong);
+            assert_eq!(Q35FixtureTopology::from_dmar(&wrong), None, "byte {at}");
+        }
+        let mut opaque = [0u8; 84];
+        opaque[..80].copy_from_slice(&good);
+        opaque[4..8].copy_from_slice(&84u32.to_le_bytes());
+        opaque[80..].copy_from_slice(&[6, 0, 4, 0]);
+        checksum(&mut opaque);
+        assert_eq!(Q35FixtureTopology::from_dmar(&opaque), None);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

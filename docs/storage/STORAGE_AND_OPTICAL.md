@@ -3141,7 +3141,20 @@ arrays against the proven byte extent without reading them. The report
 includes the observed bus-master bit, not an ownership or shutdown proof.
 There are no device register writes or MRML USB DMA in this test. The marker
 is an opt-in for the isolated model, not authenticated hardware provenance.
-Do not flash this profile or use it in a real hardware test.
+The same command additionally exercises a separate q35 topology. The boot
+USB and firmware devices stay on the bypassed default bus; test xHCI
+`41:00.0` is the only descendant of root port `40:00.0` on the separate
+remapped host bridge. The signed boot checks that DMAR describes precisely
+that sub-hierarchy plus the IOAPIC with interrupt remapping disabled, with
+no include-all unit or reserved ranges. It independently verifies the
+three read-only pages and reads the exact root port identity, bus numbers
+and inherited command bits after the valid release. The paused host also
+checks the live QEMU bypass settings and exact PCI inventory of the
+remapped branch before accepting the signed report. The wrong-release
+case stops before touching PCI or VT-d registers in the guest. This shows
+the intended remapping scope and identifies the inherited firmware state;
+it does not disable either bus master, install translation or transfer
+USB data. Do not flash this profile or use it in a real hardware test.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

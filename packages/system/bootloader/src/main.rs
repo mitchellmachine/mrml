@@ -4042,15 +4042,18 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     #[cfg(feature = "q35-mmio-probe")]
     {
         let _ = &early;
-        if _boot_dma.is_none() || handoff.dma_acpi(encoded).is_none() {
+        if _boot_dma.is_none() {
             halt();
         }
         // SAFETY: this is the signed fixture's BSP and no secondary CPU has
         // started. Loader tables are identity-mapped and not mutated here.
         let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
-        let mappings = mrml_kernel::arch::x86_64::q35_fixture_probe_mappings()
+        let topology = handoff.dma_acpi(encoded)
+            .and_then(|(dmar, _)| mrml_kernel::arch::x86_64::Q35FixtureTopology::from_dmar(dmar))
+            .unwrap_or_else(|| halt());
+        let mappings = mrml_kernel::arch::x86_64::q35_fixture_probe_mappings(topology)
             .unwrap_or_else(|_| halt());
-        for mapping in mappings {
+        for mapping in mappings.into_iter().flatten() {
             active
                 .verify_read_only_mmio_leaves(mapping)
                 .unwrap_or_else(|_| halt());

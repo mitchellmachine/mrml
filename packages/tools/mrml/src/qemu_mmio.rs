@@ -23,17 +23,22 @@ pub(super) fn fixture_acpi_table() -> [u8; 36] {
 }
 
 pub(super) fn verify_paused_q35_resources(child: &mut Child) -> Result<(), String> {
-    inspect_q35(child, None).map(|_| ())
+    inspect_q35(child, None, false).map(|_| ())
 }
 
 pub(super) fn release_q35_fixture(
     child: &mut Child,
     valid: bool,
+    isolated: bool,
 ) -> Result<Option<FixtureState>, String> {
-    inspect_q35(child, Some(valid))
+    inspect_q35(child, Some(valid), isolated)
 }
 
-fn inspect_q35(child: &mut Child, release: Option<bool>) -> Result<Option<FixtureState>, String> {
+fn inspect_q35(
+    child: &mut Child,
+    release: Option<bool>,
+    isolated: bool,
+) -> Result<Option<FixtureState>, String> {
     let mut stdin = child.stdin.take().ok_or("missing QMP input")?;
     let stdout = child.stdout.take().ok_or("missing QMP output")?;
     let (send, receive) = mpsc::sync_channel(1);
@@ -43,6 +48,7 @@ fn inspect_q35(child: &mut Child, release: Option<bool>) -> Result<Option<Fixtur
                 &mut stdin,
                 &mut BufReader::new(stdout),
                 release,
+                isolated,
             ));
         })
         .map_err(|e| format!("QMP reader: {e}"))?;
@@ -61,6 +67,7 @@ fn inspect_qmp(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
     release: Option<bool>,
+    isolated: bool,
 ) -> Result<Option<FixtureState>, String> {
     qmp_write(stdin, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 71}")?;
@@ -73,11 +80,14 @@ fn inspect_qmp(
     let map = read_monitor(&mut *reader, 73)?;
     validate(&map)?;
     let bar = if release == Some(true) {
+        if isolated {
+            check_isolation_properties(stdin, reader)?;
+        }
         qmp_write(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info pci\"},\"id\":76}\n",
         )?;
-        let bar = fixture_bar(&read_monitor(&mut *reader, 76)?)?;
+        let bar = fixture_bar(&read_monitor(&mut *reader, 76)?, isolated)?;
         qmp_write(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":77}\n",
@@ -100,6 +110,30 @@ fn inspect_qmp(
         ack(reader, "{\"return\": {}, \"id\": 75}")?;
     }
     Ok(bar)
+}
+
+fn check_isolation_properties(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+) -> Result<(), String> {
+    for (request, reply) in [
+        (
+            "{\"execute\":\"qom-get\",\"arguments\":{\"path\":\"/machine\",\"property\":\"default-bus-bypass-iommu\"},\"id\":81}\n",
+            "{\"return\": true, \"id\": 81}",
+        ),
+        (
+            "{\"execute\":\"qom-get\",\"arguments\":{\"path\":\"/machine/peripheral/probe_domain\",\"property\":\"bypass_iommu\"},\"id\":82}\n",
+            "{\"return\": false, \"id\": 82}",
+        ),
+        (
+            "{\"execute\":\"qom-get\",\"arguments\":{\"path\":\"/machine/peripheral/mrml_probe_vtd\",\"property\":\"intremap\"},\"id\":83}\n",
+            "{\"return\": \"off\", \"id\": 83}",
+        ),
+    ] {
+        qmp_write(stdin, request)?;
+        ack(reader, reply)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -249,6 +283,7 @@ pub(super) fn register_snapshot(
     prefix: &[u8],
     bytes: &[u8],
     state: FixtureState,
+    isolated: bool,
 ) -> Result<Option<String>, String> {
     if prefix.starts_with(bytes) {
         return Ok(None);
@@ -259,10 +294,10 @@ pub(super) fn register_snapshot(
     if data.first() == Some(&0xdb) {
         return Err("q35 guest rejected the VT-d extent or exact xHCI PCI identity".into());
     }
-    if data.len() < 44 {
+    if data.len() < 50 {
         return Ok(None);
     }
-    if data.len() != 44 || data[43] != 0xda {
+    if data.len() != 50 || data[49] != 0xda {
         return Err("wrong q35 fixed-register report length or trailer".into());
     }
     let long = |at| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
@@ -270,6 +305,13 @@ pub(super) fn register_snapshot(
     let (ver, cap, ecap, gsts, pci, class) =
         (long(0), quad(4), quad(12), long(20), long(24), long(30));
     let command = u16::from_le_bytes(data[28..30].try_into().unwrap());
+    let bridge_command = u16::from_le_bytes(data[43..45].try_into().unwrap());
+    let bridge_buses = long(45);
+    if (isolated && (bridge_buses & 0x00ff_ffff != 0x0041_4140 || gsts != 0))
+        || (!isolated && (bridge_command != 0 || bridge_buses != 0))
+    {
+        return Err("unexpected signed xHCI bridge or remapper state".into());
+    }
     let bar = state.bar;
     let (bar0, bar1) = (long(35), long(39));
     let guest_base = u64::from(bar1) << 32 | u64::from(bar0 & !0xf);
@@ -286,7 +328,7 @@ pub(super) fn register_snapshot(
         return Err("q35 fixed-register report disagrees with the exact fixture".into());
     }
     Ok(Some(format!(
-        "q35-read-only-registers|status=PASS|ver={ver:#x}|cap={cap:#018x}|ecap={ecap:#018x}|gsts={gsts:#010x}|pci={pci:#010x}|command={command:#06x}|class_revision={class:#010x}|bme={}|bar0={:#x}..={:#x}|xhci_cap0={:#010x}|xhci_usbcmd={:#010x}|xhci_usbsts={:#010x}|xhci_run={}|xhci_halted={}",
+        "q35-read-only-registers|status=PASS|ver={ver:#x}|cap={cap:#018x}|ecap={ecap:#018x}|gsts={gsts:#010x}|pci={pci:#010x}|command={command:#06x}|class_revision={class:#010x}|bme={}|bar0={:#x}..={:#x}|xhci_cap0={:#010x}|xhci_usbcmd={:#010x}|xhci_usbsts={:#010x}|xhci_run={}|xhci_halted={}|isolated={isolated}|bridge_command={bridge_command:#06x}|bridge_buses={bridge_buses:#010x}",
         command & (1 << 2) != 0,
         bar.start,
         bar.end,
@@ -325,7 +367,79 @@ pub(super) struct FixtureBar {
     end: u64,
 }
 
-fn fixture_bar(pci: &str) -> Result<FixtureBar, String> {
+fn validate_isolated_pci_branch(pci: &str) -> Result<(), String> {
+    let mut current = 0u8;
+    let mut roots = 0;
+    let mut endpoints = 0;
+    let mut expander = 0;
+    let mut boot = 0;
+    let mut bridge_fields = 0u8;
+    for line in pci.lines().map(str::trim) {
+        if let Some(stanza) = line.strip_prefix("Bus ") {
+            let (bus, _) = stanza.split_once(',').ok_or("bad QEMU bus stanza")?;
+            let bus: u8 = bus.trim().parse().map_err(|_| "bad QEMU PCI bus")?;
+            current = match (bus, line) {
+                (64, "Bus 64, device   0, function 0:") => {
+                    roots += 1;
+                    1
+                }
+                (65, "Bus 65, device   0, function 0:") => {
+                    endpoints += 1;
+                    2
+                }
+                (0, "Bus  0, device  27, function 0:") => {
+                    expander += 1;
+                    3
+                }
+                (0, "Bus  0, device   5, function 0:") => {
+                    boot += 1;
+                    4
+                }
+                (0, _) => 0,
+                _ => return Err("unexpected PCI function/bus beside isolated xHCI".into()),
+            };
+        } else {
+            let bit = match (current, line) {
+                (1, "PCI bridge: PCI device 1b36:000c") => 1,
+                (1, "secondary bus 65.") => 2,
+                (1, "subordinate bus 65.") => 4,
+                (1, "id \"probe_port\"") => 8,
+                (3, "id \"probe_domain\"") => 16,
+                (4, "id \"mrml_boot_xhci\"") => 32,
+                (3, "Host bridge: PCI device 1b36:000b") => 64,
+                (4, "USB controller: PCI device 1b36:000d") => 128,
+                (_, "id \"probe_port\"" | "id \"probe_domain\"" | "id \"mrml_boot_xhci\"") => {
+                    return Err("misplaced exact PCI topology identity".into());
+                }
+                (1, fields)
+                    if fields.starts_with("secondary bus ")
+                        || fields.starts_with("subordinate bus ") =>
+                {
+                    return Err("unexpected PCI root port routing".into());
+                }
+                _ => 0,
+            };
+            if bridge_fields & bit != 0 {
+                return Err("duplicate QEMU PCI branch field".into());
+            }
+            bridge_fields |= bit;
+        }
+    }
+    if (roots, endpoints, expander, boot, bridge_fields) != (1, 1, 1, 1, u8::MAX) {
+        return Err("missing complete isolated QEMU PCI branch".into());
+    }
+    Ok(())
+}
+
+fn fixture_bar(pci: &str, isolated: bool) -> Result<FixtureBar, String> {
+    if isolated {
+        validate_isolated_pci_branch(pci)?;
+    }
+    let endpoint = if isolated {
+        "Bus 65, device   0, function 0:"
+    } else {
+        "Bus  0, device  27, function 0:"
+    };
     let mut exact = false;
     let mut identity = false;
     let mut device_id = false;
@@ -334,7 +448,7 @@ fn fixture_bar(pci: &str) -> Result<FixtureBar, String> {
     for line in pci.lines() {
         let line = line.trim();
         if line.starts_with("Bus ") {
-            exact = line == "Bus  0, device  27, function 0:";
+            exact = line == endpoint;
             if exact && std::mem::replace(&mut slot_seen, true) {
                 return Err("duplicate QEMU fixture PCI function".into());
             }
@@ -522,7 +636,7 @@ mod tests {
             );
             let mut sent = Vec::new();
             assert_eq!(
-                inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(false)).is_ok(),
+                inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(false), false).is_ok(),
                 allowed
             );
             let sent = String::from_utf8(sent).unwrap();
@@ -541,6 +655,30 @@ mod tests {
         "  000000c000004000-000000c00000403f (prio 0, i/o): capabilities owner:{dev path=/machine/peripheral/mrml_probe_xhci/xhci-core}\n",
         "  000000c000004040-000000c00000443f (prio 0, i/o): operational owner:{dev path=/machine/peripheral/mrml_probe_xhci/xhci-core}\n",
     );
+
+    #[test]
+    fn isolation_branch_requires_exact_bridge_and_no_other_downstream_functions() {
+        let pci = PCI.replace("Bus  0, device  27,", "Bus 65, device   0,");
+        let branch = concat!(
+            "Bus 64, device   0, function 0:\n",
+            " PCI bridge: PCI device 1b36:000c\n secondary bus 65.\n subordinate bus 65.\n id \"probe_port\"\n",
+            "Bus  0, device  27, function 0:\n Host bridge: PCI device 1b36:000b\n id \"probe_domain\"\n",
+            "Bus  0, device   5, function 0:\n USB controller: PCI device 1b36:000d\n id \"mrml_boot_xhci\"\n",
+        );
+        let topology = format!("{branch}{pci}");
+        assert!(fixture_bar(&topology, true).is_ok());
+        assert!(fixture_bar(&topology, false).is_err());
+        for bad in [
+            topology.replace("subordinate bus 65.", "subordinate bus 66."),
+            topology.replace("Bus 65,", "Bus  0,"),
+            topology.replace("id \"probe_port\"", "id \"unknown\""),
+            topology.replace("id \"mrml_boot_xhci\"", "id \"mrml_probe_xhci\""),
+            format!("{topology}Bus 65, device   1, function 0:\n"),
+            format!("{topology}Bus 66, device   0, function 0:\n"),
+        ] {
+            assert!(fixture_bar(&bad, true).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn correct_release_requires_exact_live_bar_and_register_owners() {
@@ -574,7 +712,7 @@ mod tests {
                 "{{\"return\": {{}}, \"id\": 71}}\n{{\"return\": {{}}, \"id\": 72}}\n{{\"return\": \"{base}\", \"id\": 73}}\n{{\"return\": \"{pci}\", \"id\": 76}}\n{{\"return\": \"{mapped}\", \"id\": 77}}\n{{\"return\": \"c000004000: 0x01000040\\r\\n\", \"id\": 78}}\n{{\"return\": \"c000004040: 0x00000000\\r\\n\", \"id\": 79}}\n{{\"return\": \"c000004044: 0x00000001\\r\\n\", \"id\": 80}}\n{{\"return\": \"\", \"id\": 74}}\n{{\"return\": {{}}, \"id\": 75}}\n"
             );
             let mut sent = Vec::new();
-            let result = inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(true));
+            let result = inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(true), false);
             assert_eq!(
                 result.as_ref().is_ok_and(Option::is_some),
                 allowed,
@@ -588,7 +726,7 @@ mod tests {
 
     #[test]
     fn fixed_xhci_reads_stop_on_an_unproven_geometry_or_bad_reply() {
-        let bar = fixture_bar(PCI).unwrap();
+        let bar = fixture_bar(PCI, false).unwrap();
         let cap = "{\"return\": \"c000004000: 0x01000040\\r\\n\", \"id\": 78}\n";
         let cmd = "{\"return\": \"c000004040: 0x00000001\\r\\n\", \"id\": 79}\n";
         let sts = "{\"return\": \"c000004044: 0x00000000\\r\\n\", \"id\": 80}\n";
@@ -641,27 +779,30 @@ mod tests {
             &[0],
             &0x4004_u32.to_le_bytes(),
             &0xc0_u32.to_le_bytes(),
+            &[0; 6],
             &[0xda],
         ]
         .concat();
         for end in 0..data.len() {
             assert_eq!(
-                register_snapshot(&prefix, &data[..end], state).unwrap(),
+                register_snapshot(&prefix, &data[..end], state, false).unwrap(),
                 None
             );
         }
         assert!(
-            register_snapshot(&prefix, &data, state)
+            register_snapshot(&prefix, &data, state, false)
                 .unwrap()
                 .unwrap()
                 .contains("|bme=true")
         );
-        for at in [0, 1, 2, 26, 35, 36, 37, 41, 45] {
+        for at in [0, 1, 2, 26, 35, 36, 37, 41, 45, 48, 51] {
             let mut wrong = data.clone();
             wrong[at] ^= 0xff;
-            assert!(register_snapshot(&prefix, &wrong, state).is_err());
+            assert!(register_snapshot(&prefix, &wrong, state, false).is_err());
         }
-        assert!(register_snapshot(&prefix, &[0xdc, 0xde, 0xdb], state).is_err());
-        assert!(register_snapshot(&prefix, &[data.as_slice(), &[0]].concat(), state).is_err());
+        assert!(register_snapshot(&prefix, &[0xdc, 0xde, 0xdb], state, false).is_err());
+        assert!(
+            register_snapshot(&prefix, &[data.as_slice(), &[0]].concat(), state, false).is_err()
+        );
     }
 }
