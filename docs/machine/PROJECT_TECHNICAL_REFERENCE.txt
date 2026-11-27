@@ -80,7 +80,7 @@ reference CPUs are targets, not current physical-hardware support claims.
 | Data and training | ZIM, Zstandard, Wikipedia streaming, tokenizer training, compact transformer training, and GGUF export | Research pipeline; trainer is not yet a fully trained competitive LLM system |
 
 Detailed Gigakernel architecture, trust boundaries, probe evidence, and
-remaining milestones live in [docs/GIGAKERNEL.md](docs/GIGAKERNEL.md). Keeping
+remaining milestones live in [docs/gigakernel.md](docs/gigakernel.md). Keeping
 that detail outside this README makes the project overview readable while
 retaining the evidence needed for engineering work.
 
@@ -91,8 +91,8 @@ The durable OS direction is split by purpose: [architecture](docs/ARCHITECTURE.m
 [context-loss recovery](docs/RECOVERY.md). The
 [Engineering Constitution](docs/ENGINEERING_CONSTITUTION.md) is normative for
 complexity, authority, dependencies, compatibility, and major design changes;
-`docs/GIGAKERNEL.md` remains the
-detailed implementation and evidence ledger. Architecture goals in those files
+`docs/gigakernel.md` summarizes current evidence and points to the dated
+implementation ledger. Architecture goals in those files
 are not completion claims.
 
 ## Design principles
@@ -247,7 +247,7 @@ broker memory; exact request, policy, sequence, receipt, and attestation checks
 inside VTL1 are what reject those attempts. Broker wiping is residual-state
 hygiene, not a confidentiality guarantee against the host.
 Reports are policy inputs, not attestation, until authenticated by the
-corresponding hardware-backed launch authority. See `docs/GIGAKERNEL.md` for
+corresponding hardware-backed launch authority. See `docs/gigakernel.md` for
 the layered design.
 The bare-metal monitor derives a nonzero receipt key internally exactly once
 before any domain or granule exists, mixing an opaque full-signed-chain boot
@@ -418,7 +418,7 @@ the repository or undoing its invariants.
 
 1. Read `AGENTS.md`, this README, the architecture, security, application
    platform, roadmap, recovery, and
-   [Gigakernel evidence](docs/GIGAKERNEL.md) documents before changing kernel,
+   [Gigakernel evidence](docs/gigakernel.md) documents before changing kernel,
    VMM, signing, GPU, application, browser, GUI, or trust-boundary code.
 2. Treat the mandatory contribution rules above as hard acceptance gates.
 3. Inspect the current worktree before editing. Preserve unrelated staged,

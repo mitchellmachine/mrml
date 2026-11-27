@@ -28,7 +28,10 @@ IPC, device, or security code, read completely:
 7. `docs/ACCESSIBILITY.md`
 8. `docs/ROADMAP.md`
 9. `docs/RECOVERY.md`
-10. `docs/GIGAKERNEL.md`
+10. `docs/gigakernel.md`
+
+For earlier probe traces and measurements, consult the dated engineering
+ledger linked from the Gigakernel page.
 
 Treat `docs/ENGINEERING_CONSTITUTION.md` as normative before introducing major
 architecture. Apply its lightweight complexity score to major subsystem
