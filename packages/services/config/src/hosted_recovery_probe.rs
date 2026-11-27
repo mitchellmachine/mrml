@@ -1122,20 +1122,20 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
         ))
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     system
-        .stage(&mut update, system_write, OwnerIsolationSelection::Balanced)
+        .stage(&mut update, system_write, OwnerIsolationSelection::TotalMicrovm)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     component
         .stage(
             &mut update,
             component_write,
-            OwnerIsolationSelection::Native,
+            OwnerIsolationSelection::Microvm,
         )
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     secondary_component
         .stage(
             &mut update,
             secondary_component_write,
-            OwnerIsolationSelection::Native,
+            OwnerIsolationSelection::Microvm,
         )
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     configuration

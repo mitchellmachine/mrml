@@ -342,7 +342,7 @@ mod tests {
         );
 
         let mut balanced =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 3, 4).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, 3, 4).unwrap();
         let native = spec(5, IsolationPlacement::NativeService);
         let native_route = prepare_isolation_service_route(&mut balanced, native)
             .unwrap()

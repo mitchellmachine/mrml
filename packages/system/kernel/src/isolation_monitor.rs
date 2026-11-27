@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn inspection_requires_exact_live_monitor_authority() {
-        let table = IsolationAdmissionTable::<2>::new(IsolationMode::Balanced, 7, 11).unwrap();
+        let table = IsolationAdmissionTable::<2>::new(IsolationMode::HostedRegression, 7, 11).unwrap();
         let mut capabilities = CapabilitySpace::<3>::new();
         let read = capabilities.insert(MONITOR, Rights::READ).unwrap();
         let wrong = capabilities
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn total_state_distinguishes_not_requested_from_satisfied() {
-        let balanced = IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 7, 11).unwrap();
+        let balanced = IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, 7, 11).unwrap();
         let mut capabilities = CapabilitySpace::<1>::new();
         let inspect = capabilities.insert(MONITOR, Rights::INSPECT).unwrap();
         assert_eq!(
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn every_substrate_and_unavailable_reason_has_a_distinct_count() {
-        let mut table = IsolationAdmissionTable::<20>::new(IsolationMode::Balanced, 7, 11).unwrap();
+        let mut table = IsolationAdmissionTable::<20>::new(IsolationMode::HostedRegression, 7, 11).unwrap();
         let substrate = [
             HostSubstrateReason::InstantiateMicrovms,
             HostSubstrateReason::SuperviseMicrovms,

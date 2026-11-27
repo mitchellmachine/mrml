@@ -653,14 +653,14 @@ fn configured_total_service_policy(
         .stage(
             &mut transaction,
             component_write,
-            OwnerIsolationSelection::Native,
+            OwnerIsolationSelection::Microvm,
         )
         .map_err(|error| anyhow!("WHP component policy staging failed: {:?}", error))?;
     system
         .stage(
             &mut transaction,
             system_write,
-            OwnerIsolationSelection::Balanced,
+            OwnerIsolationSelection::TotalMicrovm,
         )
         .map_err(|error| anyhow!("WHP system policy staging failed: {:?}", error))?;
     configuration
@@ -690,7 +690,7 @@ fn configured_total_service_policy(
         ));
     }
     println!(
-        "isolation-boot-policy|status=PASS|backend=whp|configured=balanced|component=native-service|handoff=decoded|accepted_epoch={}|override=total-microvm-once|effective=total-microvm|policy_generation={}",
+        "isolation-boot-policy|status=PASS|backend=whp|configured=total-microvm|component=microvm|handoff=decoded|accepted_epoch={}|override=total-microvm-once|effective=total-microvm|policy_generation={}",
         recovery.accepted_epoch(),
         effective.policy_generation()
     );

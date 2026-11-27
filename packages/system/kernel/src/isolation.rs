@@ -16,10 +16,10 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IsolationMode {
-    Balanced,
-    MoreIsolated,
     TotalMicrovm,
-    Custom,
+    /// Retains non-OS hosted regression coverage for older control-plane code.
+    #[cfg(not(target_os = "uefi"))]
+    HostedRegression,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4153,6 +4153,10 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
         class: TotalMicrovmClass,
         placement: IsolationPlacement,
     ) -> Result<(), IsolationLaunchError> {
+        #[cfg(target_os = "uefi")]
+        if matches!(placement, IsolationPlacement::InProcess | IsolationPlacement::NativeProcess | IsolationPlacement::NativeService) {
+            return Err(IsolationLaunchError::TotalMicrovmDowngradeAttempt);
+        }
         if self.mode == IsolationMode::TotalMicrovm {
             return match class {
                 TotalMicrovmClass::MicrovmEligible if placement == IsolationPlacement::Microvm => {
@@ -4165,7 +4169,12 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
                     Err(IsolationLaunchError::TotalMicrovmUnsupportedBlocker)
                 }
                 TotalMicrovmClass::HostSubstrateRequired(_) => {
-                    if matches!(placement, IsolationPlacement::NativeService) {
+                    let substrate_placement = if cfg!(target_os = "uefi") {
+                        IsolationPlacement::Platform
+                    } else {
+                        IsolationPlacement::NativeService
+                    };
+                    if placement == substrate_placement {
                         Ok(())
                     } else {
                         Err(IsolationLaunchError::PlacementClassMismatch)
@@ -4591,7 +4600,7 @@ mod tests {
     #[test]
     fn stale_system_or_policy_generation_and_capacity_fail_closed() {
         let mut table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 7)
                 .unwrap();
         let stale_system = IsolationLaunchRequest::new(
             ObjectId(1),
@@ -4716,7 +4725,7 @@ mod tests {
     #[test]
     fn balanced_service_routes_both_placements_under_one_interface_binding() {
         let mut native_table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 7)
                 .unwrap();
         let mut native_backend = backend();
         let native = route_isolation_service(
@@ -4726,7 +4735,7 @@ mod tests {
         )
         .unwrap();
         let mut microvm_table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 7)
                 .unwrap();
         let mut microvm_backend = backend();
         let microvm = route_isolation_service(
@@ -4798,7 +4807,7 @@ mod tests {
     #[test]
     fn balanced_application_routes_exactly_one_selected_backend() {
         let mut native_table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 7)
                 .unwrap();
         let mut native_backend = backend();
         let native = route_isolation_application(
@@ -4817,7 +4826,7 @@ mod tests {
         );
 
         let mut microvm_table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 7)
                 .unwrap();
         let mut microvm_backend = backend();
         let microvm = route_isolation_application(
@@ -4888,7 +4897,7 @@ mod tests {
     #[test]
     fn application_route_rejects_stale_system_and_policy_before_backend() {
         let mut table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 7)
                 .unwrap();
         let mut backend = backend();
         let stale_system = IsolationApplicationSpec::new(
@@ -6624,7 +6633,7 @@ mod tests {
     #[test]
     fn artifact_bound_component_launch_invokes_only_selected_backend() {
         let mut table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 7)
                 .unwrap();
         let spec = service_spec(IsolationPlacement::NativeService);
         let route = prepare_isolation_service_route(&mut table, spec).unwrap();

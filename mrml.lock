@@ -26,10 +26,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.app.gui-probe"
 path = "packages/apps/gui-probe"
-isolation_default = "native-process"
-isolation_minimum = "native-process"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-process", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.gui.surface"]
 
 static_runtime = []
@@ -39,10 +39,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.app.isolation-probe"
 path = "packages/apps/isolation-probe"
-isolation_default = "native-process"
-isolation_minimum = "native-process"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-process", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = []
 
 static_runtime = []
@@ -91,10 +91,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.driver.nvme"
 path = "packages/libraries/storage-nvme"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.system.kernel"]
@@ -104,10 +104,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.driver.storage.ide"
 path = "packages/libraries/storage-ide"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.system.kernel"]
@@ -494,10 +494,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.storage.ahci"
 path = "packages/libraries/storage-ahci"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.system.kernel"]
@@ -507,10 +507,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.storage.fat32"
 path = "packages/libraries/storage-fat32"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.interface.storage.filesystem", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.system.kernel"]
@@ -520,10 +520,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.storage.usb"
 path = "packages/libraries/storage-usb"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.system.kernel"]
@@ -624,10 +624,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.service.acme"
 path = "packages/services/acme-worker"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.service.certificate"]
 
 static_runtime = ["org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.service.certificate"]
@@ -637,10 +637,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.service.certificate"
 path = "packages/services/certificate"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.certificate.challenge", "org.mrml.interface.certificate.identity", "org.mrml.interface.certificate.lifecycle", "org.mrml.interface.certificate.signing", "org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.library.tls", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.acme", "org.mrml.library.crypto", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.library.tls", "org.mrml.system.kernel"]
@@ -650,10 +650,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.service.compositor"
 path = "packages/services/compositor"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.gui.surface", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.system.kernel"]
@@ -663,10 +663,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.service.config"
 path = "packages/services/config"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.deployment", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.deployment", "org.mrml.service.storage", "org.mrml.system.kernel"]
@@ -676,10 +676,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.service.deployment"
 path = "packages/services/deployment"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.storage", "org.mrml.system.kernel"]
@@ -689,10 +689,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.service.git-authority"
 path = "packages/services/git-authority"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.openpgp", "org.mrml.library.runtime", "org.mrml.tool.git"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.openpgp", "org.mrml.library.runtime", "org.mrml.tool.git"]
@@ -702,10 +702,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.service.gitd"
 path = "packages/services/gitd"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.http", "org.mrml.library.openpgp", "org.mrml.library.runtime", "org.mrml.library.tls", "org.mrml.service.certificate", "org.mrml.service.git-authority", "org.mrml.tool.git"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.http", "org.mrml.library.openpgp", "org.mrml.library.runtime", "org.mrml.library.tls", "org.mrml.service.certificate", "org.mrml.service.git-authority", "org.mrml.tool.git"]
@@ -936,10 +936,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.zim"
 path = "packages/libraries/zim"
-isolation_default = "in-process"
-isolation_minimum = "in-process"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["in-process", "native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
@@ -949,10 +949,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.zstd"
 path = "packages/libraries/zstd"
-isolation_default = "native-service"
-isolation_minimum = "native-service"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
 isolation_maximum = "microvm"
-isolation_supported = ["native-service", "microvm"]
+isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]

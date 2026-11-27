@@ -669,7 +669,7 @@ mod tests {
     #[test]
     fn configuration_backend_preserves_binding_across_both_placements() {
         let mut native_admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 5)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 5)
                 .unwrap();
         let mut native_backend = ConfigurationPlacementBackend::new(
             NativePlacementProbe::default(),
@@ -918,7 +918,7 @@ mod tests {
         }
         assert_eq!(backend.native.substrate().runtime().load().occupied(), 0);
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 5)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 5)
                 .unwrap();
         let routed = route_isolation_service(
             &mut admission,
@@ -4302,13 +4302,13 @@ mod tests {
             ))
             .unwrap();
         system
-            .stage(&mut update, system_write, OwnerIsolationSelection::Balanced)
+            .stage(&mut update, system_write, OwnerIsolationSelection::TotalMicrovm)
             .unwrap();
         component
             .stage(
                 &mut update,
                 component_write,
-                OwnerIsolationSelection::Native,
+                OwnerIsolationSelection::Microvm,
             )
             .unwrap();
         configuration
@@ -4803,7 +4803,7 @@ mod tests {
             assert_eq!(boot_policy.configuration_service(), recovered.service());
             assert_eq!(
                 boot_policy.effective().configured().mode(),
-                IsolationMode::Balanced
+                IsolationMode::TotalMicrovm
             );
             assert_eq!(boot_policy.effective().mode(), IsolationMode::TotalMicrovm);
             assert_eq!(
@@ -5846,8 +5846,18 @@ mod tests {
         );
         assert_eq!(
             IsolationShellCommand::parse("isolation set native 0", system),
-            Err(ConfigError::SchemaViolation)
+            Err(ConfigError::InvalidValue)
         );
+        for command in [
+            "isolation set balanced 0", "isolation set more-isolated 0", "isolation set custom 0",
+        ] {
+            assert_eq!(IsolationShellCommand::parse(command, system), Err(ConfigError::InvalidValue));
+        }
+        for token in [2, 4, 6, 7] {
+            let mut retired = system_edit.encode();
+            retired[13] = token;
+            assert_eq!(IsolationPolicyEdit::decode(&retired), Err(ConfigError::InvalidValue));
+        }
         let schemas = [component.schema().unwrap(), system.schema().unwrap()];
         let mut configuration = ConfigurationService::<2, 4>::new(root_object, &schemas).unwrap();
         let mut capabilities = CapabilitySpace::<7>::new();
@@ -5975,7 +5985,7 @@ mod tests {
             Err(ConfigError::IsolationPolicyMismatch)
         );
         stale_status = status;
-        stale_status.requested_mode = IsolationMode::Balanced;
+        stale_status.requested_mode = IsolationMode::HostedRegression;
         assert_eq!(
             applied.semantic_view(bounds, stale_status),
             Err(ConfigError::IsolationPolicyMismatch)
@@ -6220,23 +6230,23 @@ mod tests {
         )
         .unwrap();
         let default = AppliedIsolationPolicy {
-            mode: IsolationMode::Balanced,
+            mode: IsolationMode::TotalMicrovm,
             component_request: None,
-            system_selection: OwnerIsolationSelection::Balanced,
+            system_selection: OwnerIsolationSelection::TotalMicrovm,
             component_selection: OwnerIsolationSelection::Default,
             policy_generation: 9,
         }
         .admit_service(dual)
         .unwrap();
-        assert_eq!(default.placement(), IsolationPlacement::NativeService);
-        assert_eq!(default.source(), IsolationPolicySource::PackageDefault);
+        assert_eq!(default.placement(), IsolationPlacement::Microvm);
+        assert_eq!(default.source(), IsolationPolicySource::TotalMicrovm);
         assert_eq!(default.policy_generation(), 9);
 
         let total = AppliedIsolationPolicy {
             mode: IsolationMode::TotalMicrovm,
-            component_request: Some(IsolationPlacement::NativeService),
+            component_request: Some(IsolationPlacement::Microvm),
             system_selection: OwnerIsolationSelection::TotalMicrovm,
-            component_selection: OwnerIsolationSelection::Native,
+            component_selection: OwnerIsolationSelection::Microvm,
             policy_generation: 10,
         }
         .admit_service(dual)
@@ -6287,17 +6297,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(
-            AppliedIsolationPolicy {
-                mode: IsolationMode::Custom,
-                component_request: Some(IsolationPlacement::NativeService),
-                system_selection: OwnerIsolationSelection::Custom,
-                component_selection: OwnerIsolationSelection::Native,
-                policy_generation: 12,
-            }
-            .admit_service(microvm_required),
-            Err(ConfigError::SchemaViolation)
-        );
+        assert_eq!(microvm_required.preferred, IsolationPlacement::Microvm);
         assert!(
             IsolationServiceBounds::new(
                 IsolationPlacement::NativeService,
@@ -6313,10 +6313,10 @@ mod tests {
     #[test]
     fn recovered_total_admission_prepares_only_release_classified_service_routes() {
         let persistent = AppliedIsolationPolicy {
-            mode: IsolationMode::Balanced,
-            component_request: Some(IsolationPlacement::NativeService),
-            system_selection: OwnerIsolationSelection::Balanced,
-            component_selection: OwnerIsolationSelection::Native,
+            mode: IsolationMode::TotalMicrovm,
+            component_request: Some(IsolationPlacement::Microvm),
+            system_selection: OwnerIsolationSelection::TotalMicrovm,
+            component_selection: OwnerIsolationSelection::Microvm,
             policy_generation: 9,
         };
         let policy = RecoveredBootIsolationPolicy {
@@ -6398,10 +6398,10 @@ mod tests {
     #[test]
     fn complete_service_set_rolls_back_an_earlier_distinct_domain() {
         let policy = AppliedIsolationPolicy {
-            mode: IsolationMode::Balanced,
-            component_request: Some(IsolationPlacement::NativeService),
-            system_selection: OwnerIsolationSelection::Balanced,
-            component_selection: OwnerIsolationSelection::Native,
+            mode: IsolationMode::TotalMicrovm,
+            component_request: Some(IsolationPlacement::Microvm),
+            system_selection: OwnerIsolationSelection::TotalMicrovm,
+            component_selection: OwnerIsolationSelection::Microvm,
             policy_generation: 19,
         }
         .compose_boot_override(Some(BootIsolationOverride::TotalMicrovmOnce));
@@ -6620,23 +6620,23 @@ mod tests {
     }
 
     #[test]
-    fn one_boot_total_overlay_strengthens_without_mutating_persistent_policy() {
+    fn one_boot_request_retains_total_without_mutating_persistent_policy() {
         let configured = AppliedIsolationPolicy {
-            mode: IsolationMode::Balanced,
-            component_request: Some(IsolationPlacement::NativeService),
-            system_selection: OwnerIsolationSelection::Balanced,
-            component_selection: OwnerIsolationSelection::Native,
+            mode: IsolationMode::TotalMicrovm,
+            component_request: Some(IsolationPlacement::Microvm),
+            system_selection: OwnerIsolationSelection::TotalMicrovm,
+            component_selection: OwnerIsolationSelection::Microvm,
             policy_generation: 27,
         };
         let ordinary = configured.compose_boot_override(None);
         assert_eq!(ordinary.configured(), configured);
-        assert_eq!(ordinary.mode(), IsolationMode::Balanced);
+        assert_eq!(ordinary.mode(), IsolationMode::TotalMicrovm);
         assert_eq!(ordinary.boot_override(), None);
         assert_eq!(ordinary.policy_generation(), 27);
 
         let total = configured.compose_boot_override(Some(BootIsolationOverride::TotalMicrovmOnce));
         assert_eq!(total.configured(), configured);
-        assert_eq!(total.configured().mode(), IsolationMode::Balanced);
+        assert_eq!(total.configured().mode(), IsolationMode::TotalMicrovm);
         assert_eq!(total.mode(), IsolationMode::TotalMicrovm);
         assert_eq!(
             total.boot_override(),
@@ -6672,10 +6672,10 @@ mod tests {
             total.admit_service(native_only),
             Err(ConfigError::SchemaViolation)
         );
-        assert_eq!(configured.mode(), IsolationMode::Balanced);
+        assert_eq!(configured.mode(), IsolationMode::TotalMicrovm);
         assert_eq!(
             configured.component_request(),
-            Some(IsolationPlacement::NativeService)
+            Some(IsolationPlacement::Microvm)
         );
     }
 
@@ -6868,7 +6868,7 @@ mod tests {
         )
         .unwrap();
         let mut wrong_admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 2)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 2)
                 .unwrap();
         let mut wrong_backend = ConfigurationPlacementBackend::new(
             NativePlacementProbe::default(),

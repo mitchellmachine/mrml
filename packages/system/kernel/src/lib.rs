@@ -6,6 +6,7 @@
 //! narrow types so their unsafe boundaries can be reviewed independently.
 
 mod application_artifact;
+#[cfg(not(target_os = "uefi"))]
 mod application_lifecycle;
 mod application_microvm;
 pub mod arch;
@@ -57,6 +58,7 @@ mod vm_interrupt;
 pub use application_artifact::{
     ApplicationArtifactBindingError, VerifiedApplicationImage, bind_verified_application_image,
 };
+#[cfg(not(target_os = "uefi"))]
 pub use application_lifecycle::{
     NativeApplicationBackend, NativeApplicationEndpoint, NativeApplicationError,
 };

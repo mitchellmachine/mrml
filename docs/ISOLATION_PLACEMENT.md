@@ -1,16 +1,16 @@
-# MRML adaptive isolation placement
+# MRML Total MicroVM isolation
 
-Strict Total MicroVM is MRML’s primary production operating model. Native
-placement exists for explicitly selected development or compatibility use; it
-cannot substitute for an unavailable ordinary service in Total mode. Keep
-only the documented, justified platform, boot and recovery exceptions. This
-is the architecture target, not a statement that today’s image satisfies it.
+Strict Total MicroVM is MRML’s only operating mode. Ordinary applications
+and services execute in admitted microVMs or remain unavailable. The loader,
+microkernel, and minimal virtualization substrate are mechanisms, not an
+alternate session mode. Recovery and hosted diagnostics remain separate
+from an MRML session. Full-system Total operation is not yet implemented.
 
 Status: **PARTIALLY IMPLEMENTED**. Manifest V2 parses a typed placement policy,
 rejects unknown fields/tokens, contradictory bounds, duplicates, and cross-class
 placements, and requires a reason for fixed platform policy. Current application
-and service manifests explicitly record policy; the configuration service is the
-first package admitting both native-service and microVM forms. The bounded
+and service manifests explicitly record policy; the configuration service was the first service used to exercise the microVM
+launch contract. The bounded
 resolver applies package defaults, owner requests, and total-mode requests; an
 unsupported total promotion is reported as an exception and launches nothing.
 The workspace model retains each validated policy and `mrml.lock` records its
@@ -480,7 +480,7 @@ state after the bounded run. Nonzero classes and uncertain transitions fail
 before successful return; no numeric equivalence with stronger host policies is
 inferred.
 
-## One policy, several placements
+## One operating mode and its execution boundaries
 
 MRML extends its existing process, service, capability, package-generation, and
 VMM architecture; it does not add a second sandbox system. `IsolationPlacement`
@@ -494,12 +494,11 @@ conceptually contains:
 - `PLATFORM`: fixed kernel, loader, or pre-VMM execution outside selectable
   userspace placement.
 
-Kernel and UEFI-loader placement is fixed. Applications may support native
-process and/or microVM placement; services may support native service and/or
-microVM placement. An independently serviced provider may support in-process,
-service, and/or microVM forms only when its package and interface admit them.
-Some interfaces legitimately support only one form. There is no universal
-location-independence promise.
+Kernel and UEFI-loader placement is fixed. Ordinary applications, services,
+and independently serviced providers have a microVM placement or are
+unavailable. Statically linked libraries execute inside their consumer’s VM,
+not as separately admitted runtime domains. Hosted development binaries and
+regression probes are not MRML operating modes.
 
 ## Preference, floor, supported forms, and policy
 
@@ -515,9 +514,9 @@ Canonical Manifest V2 uses one bounded table:
 
 ```toml
 [isolation]
-default = "native-process"
-minimum = "native-process"
-supported = ["native-process", "microvm"]
+default = "microvm"
+minimum = "microvm"
+supported = ["microvm"]
 ```
 
 A fixed pre-VMM component uses `platform`, a singleton supported set, and a
@@ -525,26 +524,14 @@ bounded reason. Admission rejects unknown placements, contradictory bounds,
 duplicates, unsupported defaults, and impossible requirements. Placement and
 authority are orthogonal: metadata never grants capabilities.
 
-Defaults consider untrusted-input exposure, parser complexity, network/device
-exposure, authority breadth, unsafe/FFI and third-party surfaces, persistence,
-fault impact, performance, RAM, and startup cost. Memory safety is important but
-not decisive; a memory-safe browser renderer remains a strong microVM candidate
-because it processes adversarial content and has a large attack surface.
-Third-party identity alone neither requires a microVM nor grants native placement.
+Assess untrusted inputs, device access, authority, failure impact and resource
+cost when defining each guest and its projections. Neither publisher identity
+nor memory safety changes the requirement to run ordinary domains in a microVM.
 
-The planned `IsolationMode` values are `BALANCED`, `MORE_ISOLATED`,
-`TOTAL_MICROVM`, and `CUSTOM` (wire spellings remain provisional). Balanced uses
-risk-based defaults and may make a visible policy-permitted fallback within the
-supported set and mandatory floor. More Isolated forces additional admitted
-components into microVMs but does not claim Total completeness. Custom applies
-explicit owner choices above mandatory floors. Choosing native placement where
-permitted does not disable address-space isolation, capabilities, resource
-limits, memory protection, or explicit device/network/file authority.
-
-Conceptual precedence is: non-overridable platform/security constraint, strict
-boot/session overlay, owner component override, system/project default, package
-recommendation. A Total overlay therefore supersedes a stale `FORCE_NATIVE`
-preference for that boot when microVM placement is supported.
+The only system policy selection is `total-microvm`. A component must be
+admitted to a microVM; an incompatible package is unavailable. Retired policy
+values are rejected rather than reinterpreted. Firmware and kernel mechanisms
+never turn an incompatible package into an alternate mode.
 
 ## Semantic interface compatibility across placements
 
@@ -570,7 +557,7 @@ native ABI is not the stable cross-placement ABI.
 
 ## Strict Total MicroVM semantics
 
-`TOTAL_MICROVM` is a strict one-boot or persistent policy overlay. Every running
+`TOTAL_MICROVM` is the only supported operating mode. Every running
 `MICROVM_ELIGIBLE` userspace execution domain MUST execute within an admitted
 microVM boundary. If its microVM, resources, projection, or required transport
 cannot be created, that component is unavailable. It MUST NOT automatically run
@@ -587,9 +574,7 @@ NEVER: failed microVM -> native or in-process fallback
 Total mode may sacrifice availability to preserve the requested boundary.
 Failure of an optional launch need not shut down the machine; a boot- or
 session-critical failure may block the session or enter explicitly labeled
-diagnostic/recovery handling. Changing to Balanced, changing a later-boot policy,
-or overriding a floor is an explicit authorized owner action, never an automatic
-recovery decision.
+diagnostic or recovery handling, never an alternate session.
 
 Every component has one explainable Total-mode eligibility class:
 
@@ -624,18 +609,6 @@ shared service may run in its own microVM. Approved multi-component guest groups
 are explicit and inspectable. Each guest graph is exact and generational, with
 private writable state and bounded RAM, vCPU, GPU, IPC, and device projections.
 
-Balanced and Total differ explicitly:
-
-```text
-Balanced browser renderer:
-  preferred MICROVM; minimum NATIVE_PROCESS
-  microVM unavailable -> policy MAY visibly permit NATIVE_PROCESS
-
-Total browser renderer:
-  MICROVM_ELIGIBLE
-  microVM unavailable -> DO NOT LAUNCH
-```
-
 Package updates that change defaults, floors, supported forms, or microVM
 transport are re-evaluated before generation activation. A required unsupported
 component blocks Total readiness; an installed but unused optional blocker need
@@ -646,8 +619,8 @@ admission, security policy, and generation binding.
 ## Settings, boot, recovery, and accessibility
 
 The configuration service now implements the first bounded typed persistent
-records for component preference and system Balanced, More Isolated, Total, or
-Custom selection. Exact
+records for the single system Total MicroVM selection and a component's
+inherited or explicit microVM request. Exact
 setting READ/WRITE plus configuration-root CONTROL capabilities remain required;
 records survive the authenticated checkpoint path, reject scope confusion and
 noncanonical bytes, and grant no runtime authority. A revision-bound application
@@ -697,8 +670,7 @@ trusted semantic surfaces, and restart/reboot presentation remain **PLANNED**.
 The planned Settings application and object shell project that one typed policy
 service. They distinguish configured default, requested boot mode, effective
 state, and policy generation; show floors, supported forms, blockers, overhead,
-and restart/reboot requirements; and allow Default, stronger microVM placement,
-or an explicit native selection only where the floor permits. Changes are
+and restart/reboot requirements; and expose only Total MicroVM policy. Changes are
 transactional, auditable, recoverable, capability-controlled, and semantically
 available through keyboard, Braille, speech, automation, and authorized AI.
 Configuration expresses desired policy; it does not prove current placement.
@@ -714,19 +686,17 @@ projection, and proof that control-plane mismatches call no backend.
 These are unit tests on hosted build targets, not boot, VMM, or physical-
 hardware evidence.
 
-The planned boot menu is `MRML`, `MRML — Total MicroVM Isolation`, `MRML
-Recovery`, and an independently discovered `Windows Boot Manager` where
-applicable. The Total entry selects the same admitted `SystemGeneration` plus a
-strict one-boot overlay, not a separate unsigned build. The same signed loader
-accepts `BOOTX64.EFI --isolation=total-microvm` from a UEFI/EFI Shell and produces
-the same typed policy object rather than a second implementation. Parsing is
-bounded, exact-token, and fail closed; the selector contains no secrets.
+The planned boot menu is `MRML`, `MRML Recovery`, and an independently
+discovered `Windows Boot Manager` where applicable. `MRML` denotes Total
+MicroVM; there is no mode picker. The signed loader still recognizes the
+explicit Total token for compatibility with existing boot entries and shell
+invocations. It cannot select weaker placement.
 
 The one-boot request expires after that boot and cannot bypass Secure Boot,
 package signatures, `SystemRelease` admission, anti-rollback, capabilities, or
 mandatory floors. Selection proves only requested mode; runtime evidence proves
 satisfaction. Virtualization or resource failure MUST NOT silently convert the
-boot to Balanced. The owner may explicitly retry, boot Balanced once, or enter
+boot to any other operating mode. The owner may explicitly retry or enter
 Recovery. Recovery remains a separate small audited environment and can repair
 policy or VMM/runtime generations without depending on successful Total mode.
 
@@ -742,11 +712,10 @@ separately from policy authority or effective-state proof; empty options carry
 no override. One-boot base-policy composition is now **PARTIALLY IMPLEMENTED**
 in the configuration control plane: an immutable applied persistent policy can
 be combined with the typed `TotalMicrovmOnce` overlay to produce an explicit
-effective policy for that boot. The overlay strengthens Balanced to strict
-Total without changing the stored owner selections or policy generation;
-native-only package bounds fail before VMM construction. WHP and nested KVM
-inject that same typed overlay over a Balanced/native configuration and exercise
-one release-derived eligible component as a microVM with zero native fallback.
+effective policy for that boot without changing the stored selection or
+policy generation. Incomplete or incompatible bounds fail before VMM
+construction. WHP and nested KVM use a typed request and verify eligibility
+and zero native fallback in their focused service fixtures.
 The focused configuration suites pass 43 tests on Windows and Arch Linux; the
 WHP runner passes 9 tests and the KVM runner passes 10.
 A focused recovery path now **PARTIALLY IMPLEMENTS** the next connection. Only a
@@ -1034,8 +1003,7 @@ RAM, vCPU, `VirtualGPU`, VirtIO, device-projection, or VMM exhaustion in Total
 mode makes the affected component unavailable and reports the exact shortage.
 Power/thermal policy MAY throttle or stop workloads but MUST NOT weaken their
 placement. Network, file-portal, GPU, accessibility-bridge, or other projection
-failure never justifies native fallback. Balanced may use an explicit policy-
-permitted alternative within the mandatory floor.
+failure never justifies native fallback.
 
 Every microVM receives only explicitly projected files, network, GPU, input,
 audio, devices, secrets, IPC, and resources. VirtualGPU/brokered devices are the
@@ -1172,7 +1140,7 @@ fallback, and confirmed teardown. These are hosted controlled probes, not
 host-resistant isolation, an in-guest GUI call, bare metal, or physical evidence.
 
 Acceptance includes contradictory-manifest rejection, floor enforcement,
-owner strengthening, authorized Balanced weakening, exact-generation interface
+authorized Total policy, exact-generation interface
 behavior across supported forms, revocation/restart, resource exhaustion,
 stale-policy rejection, boot-token parsing, recovery, and backend parity. Total
 MicroVM remains **PLANNED** until a tested configuration proves every running

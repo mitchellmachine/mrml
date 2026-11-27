@@ -10,9 +10,11 @@ name = "mrml-isolation-probe"
 profile = "system-application"
 
 [isolation]
-default = "native-process"
-minimum = "native-process"
-supported = ["native-process", "microvm"]
+default = "microvm"
+minimum = "microvm"
+must_run = false
+runtime_class = "microvm-eligible"
+supported = ["microvm"]
 
 [[target]]
 arch = "x86_64"

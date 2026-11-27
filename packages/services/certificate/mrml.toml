@@ -10,11 +10,11 @@ name = "mrml-certd"
 profile = "system-service"
 
 [isolation]
-default = "native-service"
-minimum = "native-service"
+default = "microvm"
+minimum = "microvm"
 must_run = true
 runtime_class = "microvm-eligible"
-supported = ["native-service", "microvm"]
+supported = ["microvm"]
 
 [[provides]]
 binding = "dynamic"

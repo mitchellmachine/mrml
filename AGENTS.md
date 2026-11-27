@@ -87,8 +87,7 @@ Architectural invariants:
   remain separate; network credentials/bonds are non-exported; offline operation
   remains viable; AI and first-party UI have no bypass;
 
-- treat strict Total MicroVM isolation as the primary production operating
-  model. New ordinary service paths must work in admitted microVMs without
+- treat strict Total MicroVM isolation as the only operating mode. New ordinary service paths must work in admitted microVMs without
   native fallback; do not count unavailability or diagnostic native execution
   as Total satisfaction. Preserve only documented, justified substrate, boot
   and recovery exceptions;
@@ -273,7 +272,7 @@ toolchain lock; Cargo metadata is only nested stage-zero provenance. Upstream
 rustc remains the production compiler until the profile-specific `mrml-rustc`
 gate passes.
 
-Adaptive placement follows `docs/ISOLATION_PLACEMENT.md`: use the existing
+Isolation follows `docs/ISOLATION_PLACEMENT.md`: use the existing
 process/service/capability/VMM architecture, distinguish preference from mandatory
 minimum and supported forms, preserve stable exact-generation interfaces across
 placement, and never let placement metadata grant capabilities. Total MicroVM

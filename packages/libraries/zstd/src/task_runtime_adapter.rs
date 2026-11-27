@@ -797,7 +797,7 @@ mod tests {
         )
         .unwrap();
         let mut admission = IsolationAdmissionTable::<1>::new(
-            IsolationMode::Balanced,
+            IsolationMode::HostedRegression,
             SYSTEM_GENERATION,
             policy_generation,
         )
@@ -857,7 +857,7 @@ mod tests {
         )
         .unwrap();
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 7)
                 .unwrap();
         let spec = service_spec(interface, 11, 7, IsolationPlacement::NativeService);
         let route = prepare_isolation_service_route(&mut admission, spec).unwrap();
@@ -1137,7 +1137,7 @@ mod tests {
         )
         .unwrap();
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM_GENERATION, 7)
                 .unwrap();
         let routed = route_isolation_service(
             &mut admission,

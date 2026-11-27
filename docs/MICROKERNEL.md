@@ -2953,7 +2953,7 @@ two-setting commit. An authorized read can canonically return an unset value.
 
 Adaptive-isolation configuration now has one typed, bounded control-plane path.
 A canonical 16-byte record distinguishes component preferences from system
-Balanced, More Isolated, Total, and Custom modes; each target remains bound to
+the Total MicroVM policy; each target remains bound to
 its own setting object, and a component descriptor fixes its native placement
 class. A revision-bound application plan first loads both values through exact
 READ capabilities, then repeats both reads and compares the complete records and
@@ -3437,7 +3437,7 @@ composition: it retains the immutable applied persistent policy, records the
 typed overlay separately, strengthens the effective mode to Total for that boot,
 and preserves the exact configuration policy generation. Native-only bounds
 fail before backend invocation. WHP and nested KVM both inject this same typed
-overlay over a Balanced/native configuration before their release-derived
+request in the boot handoff before their release-derived
 eligible component route; neither adds native fallback. A focused recovered-
 state path now accepts the real canonical `BootHandoff` type only after
 authenticated authority recovery, monotonic epoch advancement, and
@@ -3455,12 +3455,12 @@ evidence.
 The hosted WHP and nested-KVM service runners exercise the configured
 preparation path before real guest construction. Both build component and system
 policy records under separate setting capabilities, atomically commit a
-Balanced/native revision, reauthorize the plan, compose the explicit one-boot
+stored policy revision, reauthorize the plan, compose the explicit one-boot
 Total overlay, apply the same native-service/microVM package bounds, bind the
 verified provider generation, and reserve the kernel transaction before the VMM
 constructs the guest. The previously implemented retained lifecycle consumes
 the resulting exact specification. Fresh same-release runs on 2026-08-26
-reported `configured=balanced`, `component=native-service`,
+reported the configured selection, component placement,
 `override=total-microvm-once`, `effective=total-microvm`, `eligible=1`,
 `microvm=1`, and `native_fallback=0` on both. WHP timings were
 `19755/5559/2254/52085us` and KVM timings were

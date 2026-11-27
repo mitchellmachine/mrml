@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn mode_generation_duplicate_and_capacity_errors_are_explicit() {
         let balanced =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM, POLICY).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, SYSTEM, POLICY).unwrap();
         let mut inventory = TotalMicrovmInventory::<1>::new(SYSTEM, POLICY).unwrap();
         inventory
             .insert(entry(1, TotalMicrovmClass::BootOnly, false))

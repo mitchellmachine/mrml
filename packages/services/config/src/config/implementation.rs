@@ -406,6 +406,7 @@ impl<Native, Microvm> ConfigurationPlacementBackend<Native, Microvm> {
     }
 }
 
+#[cfg(not(target_os = "uefi"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeConfigurationEndpoint {
     service: ServiceId,
@@ -413,6 +414,7 @@ pub struct NativeConfigurationEndpoint {
     spec: IsolationServiceSpec,
 }
 
+#[cfg(not(target_os = "uefi"))]
 impl NativeConfigurationEndpoint {
     pub const fn service(self) -> ServiceId {
         self.service
@@ -459,6 +461,7 @@ impl NativeConfigurationEndpoint {
     }
 }
 
+#[cfg(not(target_os = "uefi"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeConfigurationLaunchError<E> {
     AlreadyRunning,
@@ -472,6 +475,7 @@ pub enum NativeConfigurationLaunchError<E> {
 /// Owns one accounted native configuration-service runtime and its eraser.
 /// Successful revocation is reported only after the exact retired address
 /// space has been erased and the supervisor cleanup ticket is consumed.
+#[cfg(not(target_os = "uefi"))]
 pub struct SupervisedNativeConfigurationLauncher<
     E,
     const TASKS: usize,
@@ -488,6 +492,7 @@ pub struct SupervisedNativeConfigurationLauncher<
     active: Option<NativeConfigurationEndpoint>,
 }
 
+#[cfg(not(target_os = "uefi"))]
 impl<
     E,
     const TASKS: usize,
@@ -533,6 +538,7 @@ impl<
     }
 }
 
+#[cfg(not(target_os = "uefi"))]
 impl<
     E: ServiceAddressSpaceEraser,
     const TASKS: usize,
@@ -4248,45 +4254,31 @@ pub enum IsolationPolicyScope {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OwnerIsolationSelection {
     Default,
-    Native,
     Microvm,
-    Balanced,
-    MoreIsolated,
     TotalMicrovm,
-    Custom,
 }
 
 impl OwnerIsolationSelection {
     const fn token(self) -> u8 {
         match self {
             Self::Default => 1,
-            Self::Native => 2,
             Self::Microvm => 3,
-            Self::Balanced => 4,
             Self::TotalMicrovm => 5,
-            Self::MoreIsolated => 6,
-            Self::Custom => 7,
         }
     }
 
     const fn scope(self) -> IsolationPolicyScope {
         match self {
-            Self::Default | Self::Native | Self::Microvm => IsolationPolicyScope::Component,
-            Self::Balanced | Self::MoreIsolated | Self::TotalMicrovm | Self::Custom => {
-                IsolationPolicyScope::System
-            }
+            Self::Default | Self::Microvm => IsolationPolicyScope::Component,
+            Self::TotalMicrovm => IsolationPolicyScope::System,
         }
     }
 
     const fn decode(value: u8) -> Result<Self, ConfigError> {
         match value {
             1 => Ok(Self::Default),
-            2 => Ok(Self::Native),
             3 => Ok(Self::Microvm),
-            4 => Ok(Self::Balanced),
             5 => Ok(Self::TotalMicrovm),
-            6 => Ok(Self::MoreIsolated),
-            7 => Ok(Self::Custom),
             _ => Err(ConfigError::InvalidValue),
         }
     }
@@ -4628,12 +4620,8 @@ impl IsolationShellCommand {
             Some("set") => {
                 let selection = match parts.next() {
                     Some("default") => OwnerIsolationSelection::Default,
-                    Some("native") => OwnerIsolationSelection::Native,
                     Some("microvm") => OwnerIsolationSelection::Microvm,
-                    Some("balanced") => OwnerIsolationSelection::Balanced,
-                    Some("more-isolated") => OwnerIsolationSelection::MoreIsolated,
                     Some("total-microvm") => OwnerIsolationSelection::TotalMicrovm,
-                    Some("custom") => OwnerIsolationSelection::Custom,
                     _ => return Err(ConfigError::InvalidValue),
                 };
                 let revision = parts
@@ -4676,10 +4664,7 @@ impl PersistedIsolationPolicy {
             return Err(ConfigError::SchemaViolation);
         }
         match self.selection {
-            OwnerIsolationSelection::Balanced => Ok(IsolationMode::Balanced),
-            OwnerIsolationSelection::MoreIsolated => Ok(IsolationMode::MoreIsolated),
             OwnerIsolationSelection::TotalMicrovm => Ok(IsolationMode::TotalMicrovm),
-            OwnerIsolationSelection::Custom => Ok(IsolationMode::Custom),
             _ => Err(ConfigError::SchemaViolation),
         }
     }
@@ -4690,7 +4675,6 @@ impl PersistedIsolationPolicy {
         }
         match self.selection {
             OwnerIsolationSelection::Default => Ok(None),
-            OwnerIsolationSelection::Native => Ok(self.setting.native_placement),
             OwnerIsolationSelection::Microvm => Ok(Some(IsolationPlacement::Microvm)),
             _ => Err(ConfigError::SchemaViolation),
         }
@@ -4833,16 +4817,13 @@ impl AppliedIsolationPolicy {
         mode: IsolationMode,
         bounds: IsolationServiceBounds,
     ) -> Result<AdmittedIsolationServicePolicy, ConfigError> {
-        let (placement, source) = if mode == IsolationMode::TotalMicrovm {
-            (
-                IsolationPlacement::Microvm,
-                IsolationPolicySource::TotalMicrovm,
-            )
-        } else if let Some(requested) = self.component_request {
-            (requested, IsolationPolicySource::Owner)
-        } else {
-            (bounds.preferred, IsolationPolicySource::PackageDefault)
-        };
+        if mode != IsolationMode::TotalMicrovm
+            || self.component_request.is_some_and(|placement| placement != IsolationPlacement::Microvm)
+        {
+            return Err(ConfigError::IsolationPolicyMismatch);
+        }
+        let placement = IsolationPlacement::Microvm;
+        let source = IsolationPolicySource::TotalMicrovm;
         if !bounds.supports(placement)
             || service_placement_rank(placement) < service_placement_rank(bounds.minimum)
             || service_placement_rank(placement) > service_placement_rank(bounds.maximum)

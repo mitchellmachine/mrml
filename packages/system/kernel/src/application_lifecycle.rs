@@ -281,7 +281,7 @@ mod tests {
         )
         .unwrap();
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 14, 9).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, 14, 9).unwrap();
         let routed = route_isolation_application(&mut admission, &mut backend, expected).unwrap();
         assert_eq!(routed.spec(), expected);
         assert_eq!(backend.active(), Some(*routed.endpoint()));
@@ -311,7 +311,7 @@ mod tests {
         )
         .unwrap();
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 14, 9).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, 14, 9).unwrap();
         let routed = route_isolation_application(&mut admission, &mut backend, expected).unwrap();
         let endpoint = *routed.endpoint();
         assert_eq!(
@@ -345,7 +345,7 @@ mod tests {
         )
         .unwrap();
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 14, 9).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, 14, 9).unwrap();
         let different = IsolationApplicationSpec::new(
             expected.domain(),
             expected.application(),
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(backend.runtime().load().occupied(), 0);
 
         let mut microvm_admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 14, 9).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::HostedRegression, 14, 9).unwrap();
         assert!(matches!(
             route_isolation_application(
                 &mut microvm_admission,

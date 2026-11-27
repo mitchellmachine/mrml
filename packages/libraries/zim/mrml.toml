@@ -10,12 +10,11 @@ name = "mrml-zim"
 profile = "library"
 
 [isolation]
-default = "in-process"
-maximum = "microvm"
-minimum = "in-process"
+default = "microvm"
+minimum = "microvm"
 must_run = true
 runtime_class = "microvm-eligible"
-supported = ["in-process", "native-service", "microvm"]
+supported = ["microvm"]
 
 [[requires]]
 binding = "dynamic"
