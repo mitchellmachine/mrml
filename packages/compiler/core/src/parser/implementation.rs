@@ -1669,10 +1669,7 @@ impl<'source> BodyParser<'source> {
             let Some(field) = self.take()? else {
                 return Ok((None, dot.span.end, Some(dot.span)));
             };
-            if field.kind != TokenKind::Integer {
-                return Ok((None, field.span.end, Some(field.span)));
-            }
-            let Ok(field_index) = field.text.parse::<usize>() else {
+            let Some(field_index) = field.tuple_field_index() else {
                 return Ok((None, field.span.end, Some(field.span)));
             };
             return Ok((

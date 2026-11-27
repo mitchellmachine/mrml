@@ -40,6 +40,16 @@ pub struct Token<'source> {
     pub span: Span,
 }
 
+impl Token<'_> {
+    /// Reads the canonical decimal spelling of a tuple field, such as `0` or `12`.
+    pub(crate) fn tuple_field_index(self) -> Option<usize> {
+        if self.kind != TokenKind::Integer || (self.text.len() > 1 && self.text.starts_with('0')) {
+            return None;
+        }
+        self.text.parse().ok()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LexErrorKind {
     UnterminatedBlockComment,

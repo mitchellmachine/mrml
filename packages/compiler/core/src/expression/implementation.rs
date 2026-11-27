@@ -1040,6 +1040,7 @@ pub enum ExpressionErrorKind {
     TrailingToken,
     InvalidInteger,
     InvalidIntegerSuffix,
+    InvalidTupleField,
     InvalidCharacter,
     InvalidRangeType,
     InvalidRangeBounds,
@@ -4967,12 +4968,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             self.take()?;
             let method = self.take()?;
             if let Some(field) = method.filter(|field| field.kind == TokenKind::Integer) {
-                let literal = decode_integer(field)?;
-                if literal.suffix.is_some() {
-                    return Err(self.error(ExpressionErrorKind::InvalidIntegerSuffix, Some(field)));
-                }
-                let field_index = usize::try_from(literal.value)
-                    .map_err(|_| self.error(ExpressionErrorKind::InvalidInteger, Some(field)))?;
+                let field_index = field.tuple_field_index().ok_or_else(|| {
+                    self.error(ExpressionErrorKind::InvalidTupleField, Some(field))
+                })?;
                 let start = self.node_span(base)?.start;
                 base = self.push(Expr {
                     kind: ExprKind::TupleField {

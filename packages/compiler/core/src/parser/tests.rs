@@ -1082,6 +1082,8 @@ mod tests {
     fn rejects_ambiguous_assignment_projections() {
         for source in [
             "fn bad() { let mut pair = (1u8, 2u8); pair.left = 3; }",
+            "fn bad() { let mut pair = (1u8, 2u8); pair.00 = 3; }",
+            "fn bad() { let mut pair = (1u8, 2u8); pair.0x0 = 3; }",
             "fn bad() { let mut pair = (1u8, 2u8); pair.0usize = 3; }",
         ] {
             let module = Parser::new(source).parse_module::<2, 1>().unwrap();

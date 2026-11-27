@@ -82,6 +82,27 @@ mod tests {
     }
 
     #[test]
+    fn rejects_noncanonical_tuple_fields_at_the_index_token() {
+        for source in ["pair.00", "pair.0_", "pair.0x0", "pair.0u8"] {
+            let error = ExpressionParser::<4>::new(source).parse().unwrap_err();
+            assert_eq!(error.kind, ExpressionErrorKind::InvalidTupleField);
+            assert_eq!(
+                error.span,
+                Span {
+                    start: 5,
+                    end: source.len()
+                }
+            );
+        }
+        let tree = ExpressionParser::<4>::new("pair.0").parse().unwrap();
+        assert!(matches!(
+            tree.expression(tree.root())
+                .map(|expression| expression.kind),
+            Some(ExprKind::TupleField { field: 0, .. })
+        ));
+    }
+
+    #[test]
     fn parses_and_evaluates_integer_casts_with_rust_precedence() {
         assert_eq!(evaluate("300 as u8"), Ok(44));
         assert_eq!(evaluate("255 as i8 as u16"), Ok(u128::from(u16::MAX)));
