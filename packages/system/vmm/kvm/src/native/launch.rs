@@ -3277,6 +3277,7 @@ mod tests {
         vms.start(provider_vm).unwrap();
         let mut request_route = mrml_kernel::MicrovmInterfaceRequestInterrupt::new(
             queue_identity,
+            projection.identity(),
             provider_vm,
             0,
             64,
@@ -3284,6 +3285,7 @@ mod tests {
         );
         let mut response_route = mrml_kernel::MicrovmInterfaceResponseInterrupt::new(
             queue_identity,
+            projection.identity(),
             consumer_vm,
             0,
             65,

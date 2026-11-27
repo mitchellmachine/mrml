@@ -2021,7 +2021,9 @@ is translation lifecycle evidence, not recovered component queue execution.
 The retained peer page now also admits one bounded generation-bound interface
 request/response slot. Recovery cannot infer authority from its bytes: every
 transition revalidates both exact target capabilities and the retained projection
-identity. Nested KVM proves the wire across two live mappings, including response
+identity. Queue endpoints and interrupt notifications also bind the memory
+ledger namespace, so matching slots and generations in another ledger do not
+permit request, response, or interrupt delivery. Nested KVM proves the wire across two live mappings, including response
 return before leaf/GPA/ledger retirement. Recovery has not yet launched signed
 ZIM and Zstd guests to execute this queue.
 

@@ -1,7 +1,7 @@
 use core::sync::atomic::{Ordering, fence};
 
 use crate::{
-    Capability, CapabilitySpace, MemoryMappingId, MemoryObjectId, MemoryResourceError,
+    Capability, CapabilitySpace, MemoryResourceError, MicrovmPeerPageIdentity,
     MicrovmPeerPageProjection, ObjectId, PAGE_SIZE,
 };
 
@@ -69,9 +69,7 @@ impl MicrovmInterfaceQueueIdentity {
 
 #[derive(Clone, Copy)]
 struct ProjectionIdentity {
-    object: MemoryObjectId,
-    first_mapping: MemoryMappingId,
-    second_mapping: MemoryMappingId,
+    page: MicrovmPeerPageIdentity,
     first_target: ObjectId,
     second_target: ObjectId,
     first_virtual_page: u64,
@@ -88,6 +86,7 @@ pub struct MicrovmInterfaceQueuePair {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MicrovmInterfaceRequestNotification {
     identity: MicrovmInterfaceQueueIdentity,
+    projection: MicrovmPeerPageIdentity,
     sequence: u64,
     operation: u32,
 }
@@ -95,6 +94,10 @@ pub struct MicrovmInterfaceRequestNotification {
 impl MicrovmInterfaceRequestNotification {
     pub(crate) const fn identity(self) -> MicrovmInterfaceQueueIdentity {
         self.identity
+    }
+
+    pub(crate) const fn projection(self) -> MicrovmPeerPageIdentity {
+        self.projection
     }
 
     pub const fn sequence(self) -> u64 {
@@ -109,6 +112,7 @@ impl MicrovmInterfaceRequestNotification {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MicrovmInterfaceResponseNotification {
     identity: MicrovmInterfaceQueueIdentity,
+    projection: MicrovmPeerPageIdentity,
     sequence: u64,
     operation: u32,
 }
@@ -116,6 +120,10 @@ pub struct MicrovmInterfaceResponseNotification {
 impl MicrovmInterfaceResponseNotification {
     pub(crate) const fn identity(self) -> MicrovmInterfaceQueueIdentity {
         self.identity
+    }
+
+    pub(crate) const fn projection(self) -> MicrovmPeerPageIdentity {
+        self.projection
     }
 
     pub const fn sequence(self) -> u64 {
@@ -152,9 +160,7 @@ impl MicrovmInterfaceQueuePair {
             .validate_targets(first_capability, second_capability, capabilities)
             .map_err(MicrovmInterfaceQueueError::Authority)?;
         let bound = ProjectionIdentity {
-            object: projection.object(),
-            first_mapping: projection.first_mapping(),
-            second_mapping: projection.second_mapping(),
+            page: projection.identity(),
             first_target: projection.first_target(),
             second_target: projection.second_target(),
             first_virtual_page: projection.first_virtual_page(),
@@ -236,6 +242,7 @@ impl MicrovmInterfaceQueueConsumer {
         write_u16(page, 10, STATE_REQUEST);
         Ok(MicrovmInterfaceRequestNotification {
             identity: self.identity,
+            projection: self.projection.page,
             sequence: self.next_sequence,
             operation,
         })
@@ -252,6 +259,7 @@ impl MicrovmInterfaceQueueConsumer {
         self.authorize(projection, capabilities)?;
         validate_header(page, self.identity)?;
         if notification.identity != self.identity
+            || notification.projection != self.projection.page
             || notification.sequence != self.next_sequence
             || notification.operation == 0
         {
@@ -308,6 +316,7 @@ impl MicrovmInterfaceQueueProvider {
         self.authorize(projection, capabilities)?;
         validate_header(page, self.identity)?;
         if notification.identity != self.identity
+            || notification.projection != self.projection.page
             || notification.sequence != self.next_sequence
             || notification.operation == 0
         {
@@ -369,6 +378,7 @@ impl MicrovmInterfaceQueueProvider {
         self.next_sequence = next_sequence;
         Ok(MicrovmInterfaceResponseNotification {
             identity: self.identity,
+            projection: self.projection.page,
             sequence,
             operation,
         })
@@ -395,9 +405,7 @@ fn authorize_projection<const C: usize>(
             capabilities,
         )
         .map_err(MicrovmInterfaceQueueError::Authority)?;
-    if projection.object() != expected.object
-        || projection.first_mapping() != expected.first_mapping
-        || projection.second_mapping() != expected.second_mapping
+    if projection.identity() != expected.page
         || projection.first_target() != expected.first_target
         || projection.second_target() != expected.second_target
         || projection.first_virtual_page() != expected.first_virtual_page
@@ -503,6 +511,88 @@ mod tests {
     }
 
     #[test]
+    fn matching_queue_generations_do_not_cross_ledger_namespaces() {
+        let mut caps = CapabilitySpace::<8>::new();
+        let target = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+        let first = caps.insert(ObjectId(0x902), target).unwrap();
+        let second = caps.insert(ObjectId(0x903), target).unwrap();
+        let mut reserve = |namespace| {
+            let mut memory = MemoryPoolTable::<1, 1, 2>::new(namespace).unwrap();
+            let (pool, quota) = memory.create_root(
+                1, 2, 0, Rights::ALLOCATE.union(Rights::CONTROL).union(Rights::INSPECT),
+                &mut caps,
+            ).unwrap();
+            let (projection, _) = reserve_microvm_peer_page_projection(
+                &mut memory, pool, quota, first, second, 0x700, 0x800, &mut caps,
+            ).unwrap();
+            (memory, projection)
+        };
+        let (_local_ledger, local) = reserve(0x901);
+        let (_foreign_ledger, foreign) = reserve(0x904);
+        assert_eq!(local.object(), foreign.object());
+        assert_eq!(local.first_mapping(), foreign.first_mapping());
+        assert_eq!(local.second_mapping(), foreign.second_mapping());
+        assert_ne!(local.identity(), foreign.identity());
+
+        let (mut client, mut server) =
+            MicrovmInterfaceQueuePair::bind(identity(), &local, first, second, &caps)
+                .unwrap().split();
+        let (foreign_client, mut foreign_server) =
+            MicrovmInterfaceQueuePair::bind(identity(), &foreign, first, second, &caps)
+                .unwrap().split();
+        let mut page = [0; PAGE_SIZE as usize];
+        let mut foreign_page = [0; PAGE_SIZE as usize];
+        assert_eq!(
+            client.initialize(&mut page, &foreign, &caps),
+            Err(MicrovmInterfaceQueueError::InvalidIdentity)
+        );
+        assert_eq!(page, [0; PAGE_SIZE as usize]);
+        client.initialize(&mut page, &local, &caps).unwrap();
+        let request = client.submit(&mut page, &local, &caps, 1, b"local").unwrap();
+        foreign_client.initialize(&mut foreign_page, &foreign, &caps).unwrap();
+        let wrong = foreign_client.submit(&mut foreign_page, &foreign, &caps, 1, b"other").unwrap();
+
+        let vm = crate::VmTable::<1>::new().create(1).unwrap();
+        let mut route = crate::MicrovmInterfaceRequestInterrupt::new(
+            identity(), local.identity(), vm, 0, 64, ObjectId(0x991),
+        );
+        assert_eq!(route.publish(wrong), Err(crate::MicrovmInterfaceInterruptError::InvalidNotification));
+        assert!(route.pending().is_none());
+        route.publish(request).unwrap();
+
+        let mut output = [0x5a; 8];
+        assert_eq!(
+            server.receive_request(&page, &local, &caps, wrong, &mut output),
+            Err(MicrovmInterfaceQueueError::InvalidNotification)
+        );
+        assert_eq!(output, [0x5a; 8]);
+        server.receive_request(&page, &local, &caps, request, &mut output).unwrap();
+        foreign_server.receive_request(&foreign_page, &foreign, &caps, wrong, &mut output).unwrap();
+        let response = server.respond(&mut page, &local, &caps, 1, 1, b"local").unwrap();
+        let wrong = foreign_server.respond(&mut foreign_page, &foreign, &caps, 1, 1, b"other").unwrap();
+        let mut route = crate::MicrovmInterfaceResponseInterrupt::new(
+            identity(), local.identity(), vm, 0, 65, ObjectId(0x992),
+        );
+        assert_eq!(route.publish(wrong), Err(crate::MicrovmInterfaceInterruptError::InvalidNotification));
+        assert!(route.pending().is_none());
+        route.publish(response).unwrap();
+
+        let before = page;
+        output.fill(0x5a);
+        assert_eq!(
+            client.consume_response(&mut page, &local, &caps, wrong, &mut output),
+            Err(MicrovmInterfaceQueueError::InvalidNotification)
+        );
+        assert_eq!(page, before);
+        assert_eq!(output, [0x5a; 8]);
+        assert_eq!(
+            client.consume_response(&mut page, &local, &caps, response, &mut output),
+            Ok((1, 5))
+        );
+        assert_eq!(&output[..5], b"local");
+    }
+
+    #[test]
     fn exact_projection_queue_round_trips_and_rejects_forgery() {
         let target_rights = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
         let pool_rights = Rights::ALLOCATE
@@ -542,8 +632,7 @@ mod tests {
         let mut request = [0_u8; 16];
         let wrong_binding_notification = MicrovmInterfaceRequestNotification {
             identity: MicrovmInterfaceQueueIdentity::new([0x6b; 32], 3, 14, 9, 7, 11).unwrap(),
-            sequence: 1,
-            operation: 1,
+            ..request_notification
         };
         assert_eq!(
             provider.receive_request(

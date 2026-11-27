@@ -1,6 +1,7 @@
 use crate::{
     Capability, CapabilitySpace, MicrovmInterfaceQueueIdentity,
-    MicrovmInterfaceRequestNotification, MicrovmInterfaceResponseNotification, ObjectId, Rights,
+    MicrovmInterfaceRequestNotification, MicrovmInterfaceResponseNotification, MicrovmPeerPageIdentity,
+    ObjectId, Rights,
     VirtualBlockDevice, VirtualBlockError, VmBackend, VmError, VmId, VmRunError, VmState, VmTable,
 };
 
@@ -94,6 +95,7 @@ pub enum MicrovmInterfaceInterruptError<E> {
 
 struct MicrovmInterfaceInterruptRoute<N> {
     identity: MicrovmInterfaceQueueIdentity,
+    projection: MicrovmPeerPageIdentity,
     vm: VmId,
     vcpu: u32,
     vector: u8,
@@ -115,6 +117,7 @@ macro_rules! interface_interrupt_route {
         impl $name {
             pub const fn new(
                 identity: MicrovmInterfaceQueueIdentity,
+                projection: MicrovmPeerPageIdentity,
                 vm: VmId,
                 vcpu: u32,
                 vector: u8,
@@ -123,6 +126,7 @@ macro_rules! interface_interrupt_route {
                 Self {
                     route: MicrovmInterfaceInterruptRoute {
                         identity,
+                        projection,
                         vm,
                         vcpu,
                         vector,
@@ -146,6 +150,7 @@ macro_rules! interface_interrupt_route {
                     .checked_add(1)
                     .ok_or(MicrovmInterfaceInterruptError::SequenceExhausted)?;
                 if notification.identity() != self.route.identity
+                    || notification.projection() != self.route.projection
                     || notification.sequence() != expected
                 {
                     return Err(MicrovmInterfaceInterruptError::InvalidNotification);
@@ -407,13 +412,13 @@ mod tests {
         let other_identity =
             MicrovmInterfaceQueueIdentity::new([0x6b; 32], 3, 14, 9, 7, 11).unwrap();
         let mut wrong_identity_route =
-            MicrovmInterfaceRequestInterrupt::new(other_identity, vm, 1, 64, interrupt_object);
+            MicrovmInterfaceRequestInterrupt::new(other_identity, request.projection(), vm, 1, 64, interrupt_object);
         assert_eq!(
             wrong_identity_route.publish(request),
             Err(MicrovmInterfaceInterruptError::InvalidNotification)
         );
         let mut request_route =
-            MicrovmInterfaceRequestInterrupt::new(identity, vm, 1, 64, interrupt_object);
+            MicrovmInterfaceRequestInterrupt::new(identity, request.projection(), vm, 1, 64, interrupt_object);
         request_route.publish(request).unwrap();
         assert_eq!(
             request_route.publish(request),
@@ -453,7 +458,7 @@ mod tests {
 
         backend.injected = None;
         let mut response_route =
-            MicrovmInterfaceResponseInterrupt::new(identity, vm, 2, 65, interrupt_object);
+            MicrovmInterfaceResponseInterrupt::new(identity, response.projection(), vm, 2, 65, interrupt_object);
         response_route.publish(response).unwrap();
         assert_eq!(
             deliver_microvm_interface_response_interrupt(
@@ -470,7 +475,7 @@ mod tests {
         assert_eq!(response_route.pending(), None);
 
         let mut denied_route =
-            MicrovmInterfaceResponseInterrupt::new(identity, vm, 2, 66, interrupt_object);
+            MicrovmInterfaceResponseInterrupt::new(identity, response.projection(), vm, 2, 66, interrupt_object);
         denied_route.publish(response).unwrap();
         assert!(matches!(
             deliver_microvm_interface_response_interrupt(
@@ -504,7 +509,7 @@ mod tests {
             fail: true,
         };
         let mut route =
-            MicrovmInterfaceRequestInterrupt::new(identity, vm, 0, 64, interrupt_object);
+            MicrovmInterfaceRequestInterrupt::new(identity, request.projection(), vm, 0, 64, interrupt_object);
         route.publish(request).unwrap();
         assert_eq!(
             deliver_microvm_interface_request_interrupt(
