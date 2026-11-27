@@ -6,6 +6,18 @@ evidence ledger in `packages/compiler/core/README.md`. If chat history or a loca
 worktree is lost, recover this checkpoint first and verify every claim against
 the named commit and current source.
 
+## Integrated literal conformance checkpoint
+
+Signed commits `b107887c` and `0314dd24` on `main` align character
+Unicode escape digits with Rust 2024 and reject uppercase integer base
+prefixes at the prefix span. They preserve the earlier compiler checkpoint
+and do not change the linker or production compiler selection. The source
+commits record 14 public frontend probes against ORACLE-0004, including
+successful Windows execution and Linux ELF emission. The source worktree's
+compiler core and driver suites passed on both Windows gnullvm and Arch
+WSL2. This records that run's evidence; it does not explain the earlier
+Windows loader error 623.
+
 ## Integrated frontend checkpoint
 
 Commit `d2aeb100` on `main` includes four signed frontend changes:
