@@ -242,21 +242,21 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
     let pages = unsafe { physical_pages() }.map_err(|_| ProbeFault::Pages)?;
     unsafe { prepare_pages(&pages, capabilities.revision_id()) };
     let ept = EptPointer::new(pages[EPT_PML4_PAGE], true).map_err(|_| ProbeFault::Ept)?;
-    let (cr0, cr3, original_cr4) = unsafe { control_registers() };
+    let (original_cr0, cr3, original_cr4) = unsafe { control_registers() };
     let vmx_cr4 = original_cr4 | (1 << 13);
     let prerequisites = VmxPrerequisites::new(
         feature_control,
-        cr0,
+        original_cr0,
         vmx_cr4,
         unsafe { rdmsr(0x486) },
         unsafe { rdmsr(0x487) },
         unsafe { rdmsr(0x488) },
         unsafe { rdmsr(0x489) },
     );
-    if prerequisites.validate().is_err() {
+    let (prerequisites, cr0) = prerequisites.for_boot_probe().map_err(|_| {
         *host_mismatch = Some(prerequisites.host_control_mismatch());
-        return Err(ProbeFault::HostControls);
-    }
+        ProbeFault::HostControls
+    })?;
     let (guest_cr0, guest_cr4) = prerequisites
         .unrestricted_guest_controls()
         .map_err(|_| ProbeFault::GuestControls)?;
@@ -297,6 +297,11 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
         0x3000,
     )
     .map_err(|_| ProbeFault::LaunchState)?;
+    if cr0 != original_cr0 {
+        // SAFETY: in the BSP diagnostic, the validator allowed only the missing
+        // required NE bit; every other CR0 bit retains its original value.
+        unsafe { asm!("mov cr0, {}", in(reg) cr0, options(nostack, preserves_flags)) };
+    }
     unsafe { asm!("mov cr4, {}", in(reg) vmx_cr4, options(nostack, preserves_flags)) };
     let native = unsafe { NativeVmx::assume_cpl0_vmx_enabled() };
     let mut controller = VmxController::new(native, capabilities);
@@ -337,17 +342,21 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;
         Ok(())
     })();
-    if let Err(fault) = result {
+    if result.is_err() {
         trace(0xef);
         if controller.state() != VmxState::Disabled && controller.leave_root().is_err() {
             loop {
                 unsafe { asm!("cli; hlt", options(nomem, nostack)) }
             }
         }
-        unsafe { asm!("mov cr4, {}", in(reg) original_cr4, options(nostack, preserves_flags)) };
-        return Err(fault);
     }
     unsafe { asm!("mov cr4, {}", in(reg) original_cr4, options(nostack, preserves_flags)) };
+    if cr0 != original_cr0 {
+        // SAFETY: VMX was never entered or VMXOFF completed; the original
+        // hardware value is valid again and no guest can run.
+        unsafe { asm!("mov cr0, {}", in(reg) original_cr0, options(nostack, preserves_flags)) };
+    }
+    result?;
     trace(0xdf);
     Ok(())
 }

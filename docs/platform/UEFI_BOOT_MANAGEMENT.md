@@ -112,7 +112,12 @@ version, and last visible label:
   `CR4 CLEAR`. These are missing required and set forbidden bits, not
   instructions to change settings. Photograph the full screen. The probe
   reports the masks without changing either register on this failure path.
-  It never changes the firmware VMX policy.
+  A later Dragonair run measured only `CR0 ADD = 0x20` (CR0.NE); the
+  opt-in diagnostic now sets that bit only if it is the sole mismatch and the
+  resulting host controls pass validation. It uses the same CR0 value in the
+  VMCS and restores the original value after VMXOFF, or if VMXON never
+  succeeded. Other mismatches still fail closed. The probe does not change
+  the firmware VMX policy.
 - `VMX PROBE START` without a terminal label: record it as a non-pass; the probe
   did not return to its caller with a terminal result.
 

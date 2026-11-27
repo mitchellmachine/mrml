@@ -385,6 +385,22 @@ impl VmxPrerequisites {
         }
     }
 
+    /// Prepare the opt-in BSP probe's CR0 value without changing hardware.
+    /// No correction other than a required numeric-error reporting bit is valid.
+    pub fn for_boot_probe(self) -> Result<(Self, u64), VmxError> {
+        const CR0_NE: u64 = 1 << 5;
+        let candidate = match self.host_control_mismatch() {
+            [0, 0, 0, 0] => self,
+            [CR0_NE, 0, 0, 0] => Self {
+                cr0: self.cr0 | CR0_NE,
+                ..self
+            },
+            _ => return Err(VmxError::InvalidControl),
+        };
+        candidate.validate()?;
+        Ok((candidate, candidate.cr0))
+    }
+
     pub fn unrestricted_guest_controls(self) -> Result<(u64, u64), VmxError> {
         self.validate()?;
         const CR0_PE: u64 = 1;
@@ -1348,6 +1364,18 @@ mod tests {
         assert_eq!(invalid.validate(), Err(VmxError::InvalidControl));
         let valid = VmxPrerequisites::new(5, 0x21, 1 << 13, 0x21, u64::MAX, 0, u64::MAX);
         assert_eq!(valid.host_control_mismatch(), [0; 4]);
+        assert_eq!(valid.for_boot_probe(), Ok((valid, 0x21)));
+        let missing_ne = VmxPrerequisites::new(5, 1, 1 << 13, 0x21, u64::MAX, 0, u64::MAX);
+        assert_eq!(missing_ne.validate(), Err(VmxError::InvalidControl));
+        assert_eq!(missing_ne.for_boot_probe(), Ok((valid, 0x21)));
+        assert_eq!(invalid.for_boot_probe(), Err(VmxError::InvalidControl));
+        let contradictory = VmxPrerequisites::new(5, 1, 1 << 13, 0x21, 1, 0, u64::MAX);
+        assert_eq!(
+            contradictory.for_boot_probe(),
+            Err(VmxError::InvalidControl)
+        );
+        let denied = VmxPrerequisites::new(1, 1, 1 << 13, 0x21, u64::MAX, 0, u64::MAX);
+        assert_eq!(denied.for_boot_probe(), Err(VmxError::Unsupported));
         assert_eq!(valid.validate(), Ok(()));
         let guest = VmxPrerequisites::new(
             5,
