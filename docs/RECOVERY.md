@@ -1995,8 +1995,11 @@ child it spawned, after rechecking the shared object's authority and both
 exact live target capabilities and one-page RW/NX ledger reservations. A
 fixed-size private-pipe frame binds the child-local handle
 to the expected signed provider payload digest before mapping. Both guest and
-native mappings are withdrawn. This is test-only evidence, not worker
-attestation, an installed storage service, or recovered Total placement.
+native mappings are withdrawn before the parent atomically retires both
+ledger reservations and reclaims the page charge. An endpoint for the old
+page cannot initialize a replacement at the same guest addresses. This is
+test-only evidence, not worker attestation, an installed storage service,
+or recovered Total placement.
 
 Recovery's retained peer owner now also installs and verifies the two exact
 supervisor RW/NX guest leaves before use. It removes and verifies both leaves

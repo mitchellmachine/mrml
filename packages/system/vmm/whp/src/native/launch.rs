@@ -4254,8 +4254,8 @@ mod tests {
         provider_digest: &[u8; 64],
     ) {
         use mrml_interface_storage_block_provider_v1::OpaqueHandle;
-        use mrml_kernel::VmDeadlineOutcome;
-        use mrml_storage::{ReadOnlyBlockImage, bind_microvm_block_read};
+        use mrml_kernel::{CapabilityError, MicrovmInterfaceQueueError, VmDeadlineOutcome};
+        use mrml_storage::{MicrovmBlockReadError, ReadOnlyBlockImage, bind_microvm_block_read};
         use std::io::Write;
         use std::process::Stdio;
         use std::time::{Duration, Instant};
@@ -4351,9 +4351,61 @@ mod tests {
         assert_eq!(first.guest.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
         assert_eq!(first.read(&mut [0; PAGE_SIZE as usize]), Err(WhpError::UnmappedMemory));
         first.retire().unwrap();
-        caps.revoke(provider).unwrap();
+
+        assert_eq!(
+            // SAFETY: the exact child exited after verifying removal of its
+            // leaf and GPA. The parent also verified and retired both aliases
+            // in its own partition before this ledger release.
+            unsafe {
+                release_microvm_peer_page_projection(
+                    &mut memory, projection, object_capability, consumer, provider, &mut caps,
+                )
+            },
+            Ok(1)
+        );
+        let usage = memory.usage(pool, quota, &caps).unwrap();
+        assert_eq!((usage.object_pages(), usage.active_mappings()), (0, 0));
+        assert_eq!(
+            caps.authorize(object_capability, Rights::CONTROL),
+            Err(CapabilityError::Invalid)
+        );
+
+        // Reuse both guest addresses with the same live target capabilities.
+        // Only the projection generation changes; an endpoint bound to the
+        // retired page must not initialize or consume bytes in the successor.
+        let (replacement, replacement_cap) = reserve_microvm_peer_page_projection(
+            &mut memory, pool, quota, consumer, provider,
+            virtual_page / PAGE_SIZE, virtual_page / PAGE_SIZE, &mut caps,
+        ).unwrap();
+        let mut successor_page = [0; PAGE_SIZE as usize];
+        let (_, successor, _) = bind_microvm_block_read(
+            14, 9, 7, 12, session, &replacement, consumer, provider, &caps,
+        ).unwrap();
+        successor.initialize(&mut successor_page, &replacement, &caps).unwrap();
+        let before = successor_page;
+        assert_eq!(
+            client.initialize(&mut successor_page, &replacement, &caps),
+            Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
+        );
+        let mut untouched = [0x5a; 512];
+        assert_eq!(
+            client.complete(&mut successor_page, &replacement, &caps, response, &mut untouched),
+            Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
+        );
+        assert_eq!(untouched, [0x5a; 512]);
+        assert_eq!(successor_page, before);
+        assert_eq!(
+            // SAFETY: the successor existed only in the ledger. Neither guest
+            // received a native mapping and no transport references its backing.
+            unsafe {
+                release_microvm_peer_page_projection(
+                    &mut memory, replacement, replacement_cap, consumer, provider, &mut caps,
+                )
+            },
+            Ok(1)
+        );
         mrml_runtime::mrml_println!(
-            "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-duplicated-section"
+            "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-duplicated-section|ledger=retired|stale_endpoint=rejected"
         );
     }
 
