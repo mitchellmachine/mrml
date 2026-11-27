@@ -3306,7 +3306,10 @@ The projected native installer now takes that retained lease, applies the
 BAR/DMA bounds before activation, and installs only the VT-d aperture taken
 from the same lease. The native-owner regression covers the scoped adapter
 and its cleanup. No test yet establishes a DMA mapping from xHCI to an
-executing service MicroVM. The adapter is not an installed provider and does not authenticate
+executing service MicroVM. A device-dependent MicroVM can now be staged
+without allowing the supervisor to enter it before a matching lease is
+attached. The live KVM rollback test observes its first boot marker only
+after attaching a modeled lease. The adapter is not an installed provider and does not authenticate
 IPC or retire DMA leases by itself. The kernel grants and
 revokes scoped device, interrupt, and DMA resources; it does not run USB
 commands or implement a fallback transport. Until a service can receive and

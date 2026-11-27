@@ -892,12 +892,14 @@ mod tests {
             }
         }
         let spec = configuration_service_spec(IsolationPlacement::Microvm);
-        let mut launcher = Launcher::with_device_leases(PreparedGuestFactoryProbe {
+        let mut launcher = Launcher::with_required_device_lease(PreparedGuestFactoryProbe {
             fail_first_destruction: true,
             ..PreparedGuestFactoryProbe::default()
         });
         let withdrawals = Cell::new(0);
         let endpoint = launcher.launch_microvm(spec).unwrap();
+        assert_eq!(launcher.active_guest(endpoint), Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired));
+        assert_eq!(launcher.active_guest_mut(endpoint), Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired));
         let projection = DeviceDmaProjection {
             requester: mrml_kernel::DeviceAddress::new(0, 0, 3, 0).unwrap(),
             device: ObjectId(0x1010),
@@ -943,7 +945,9 @@ mod tests {
             Err((ConfigurationMicrovmLeaseAttachError::DmaAuthority(_), _))
         ));
         let dma = caps.insert(projection.dma_memory, DeviceDmaProjection::DMA_RIGHTS).unwrap();
+        assert!(matches!(launcher.active_guest(endpoint), Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired)));
         launcher.attach_device_lease(lease(), projection, &caps, device, dma).unwrap();
+        assert!(launcher.active_guest(endpoint).is_ok());
         assert!(matches!(
             launcher.attach_device_lease(lease(), projection, &caps, device, dma),
             Err((ConfigurationMicrovmLeaseAttachError::AlreadyAttached, _))
@@ -972,7 +976,7 @@ mod tests {
             Err((ConfigurationMicrovmLeaseAttachError::WrongEndpoint, _))
         ));
         assert_eq!(launcher.revoke_microvm(&endpoint), Err(PreparedMicrovmConfigurationError::WrongEndpoint));
-        assert!(launcher.active_guest(replacement).is_ok());
+        assert_eq!(launcher.active_guest(replacement), Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired));
         launcher.revoke_microvm(&replacement).unwrap();
     }
 

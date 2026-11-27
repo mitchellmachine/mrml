@@ -6269,27 +6269,28 @@ mod tests {
         type TestLauncher = PreparedMicrovmConfigurationLauncher<
             AdmittedConfigurationGuestFactory<PreparedKvmGuest<16>>, ProbeDeviceLease,
         >;
-        let launch = |spec: IsolationServiceSpec, executables: &[VerifiedExecutable<'_>; 2]| {
-            let i = DOMAINS
-                .iter()
-                .position(|domain| *domain == spec.domain())
-                .unwrap();
-            let marker = marker_for(i);
-            let mut guest = kvm
+        let observe_boot = |guest: &mut PreparedKvmGuest<16>, domain| {
+            let i = DOMAINS.iter().position(|candidate| *candidate == domain).unwrap();
+            assert_eq!(
+                VmBackend::run(guest, 0).unwrap(),
+                VmExit::Io { port: 0xe9, size: 1, write: true, value: u32::from(marker_for(i)) }
+            );
+        };
+        let launch = |spec: IsolationServiceSpec, executables: &[VerifiedExecutable<'_>; 2], device_required: bool| {
+            let i = DOMAINS.iter().position(|domain| *domain == spec.domain()).unwrap();
+            let guest = kvm
                 .prepare_guest::<16>(0, &executables[i], handoff_bytes.as_slice(), layout)
                 .unwrap();
-            assert_eq!(
-                VmBackend::run(&mut guest, 0).unwrap(),
-                VmExit::Io {
-                    port: 0xe9,
-                    size: 1,
-                    write: true,
-                    value: u32::from(marker),
-                }
-            );
-            let mut launcher =
-                TestLauncher::with_device_leases(AdmittedConfigurationGuestFactory::new(spec, guest));
+            let factory = AdmittedConfigurationGuestFactory::new(spec, guest);
+            let mut launcher = if device_required {
+                TestLauncher::with_required_device_lease(factory)
+            } else {
+                TestLauncher::with_device_leases(factory)
+            };
             let endpoint = launcher.launch_microvm(spec).unwrap();
+            if !device_required {
+                observe_boot(launcher.active_guest_mut(endpoint).unwrap(), spec.domain());
+            }
             (launcher, endpoint)
         };
         let prepare = |owner: &mut RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>,
@@ -6375,10 +6376,12 @@ mod tests {
                     if spec.domain() == DOMAINS[1] {
                         return Err("second service intentionally not ready");
                     }
-                    let mut launched = launch(spec, &executables);
+                    let mut launched = launch(spec, &executables, true);
+                    assert!(matches!(launched.0.active_guest(launched.1), Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired)));
                     launched.0.attach_device_lease(ProbeDeviceLease {
                         endpoint: launched.1, projection, pending: true,
                     }, projection, &lease_caps, device, dma).unwrap();
+                    observe_boot(launched.0.active_guest_mut(launched.1).unwrap(), spec.domain());
                     stale.set(Some(launched.1));
                     Ok(launched)
                 },
@@ -6414,7 +6417,7 @@ mod tests {
         let (runtime, mut routed) = owner
             .start_prepared_services(
                 prepared,
-                |spec| Ok::<_, ()>(launch(spec, &executables)),
+                |spec| Ok::<_, ()>(launch(spec, &executables, false)),
                 |_, mut started: (TestLauncher, ConfigurationMicrovmEndpoint)| {
                     started.0.revoke_microvm(&started.1).unwrap();
                     Ok(())

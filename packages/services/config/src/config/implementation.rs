@@ -278,6 +278,7 @@ pub enum PreparedMicrovmConfigurationError<E, D = core::convert::Infallible> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PreparedMicrovmConfigurationAccessError {
     WrongEndpoint,
+    DeviceLeaseRequired,
     Retiring,
 }
 
@@ -335,6 +336,7 @@ pub struct PreparedMicrovmConfigurationLauncher<
     active: Option<(ConfigurationMicrovmEndpoint, Factory::Guest)>,
     factory: Factory,
     retiring: bool,
+    device_required: bool,
 }
 
 impl<Factory: ConfigurationMicrovmFactory> PreparedMicrovmConfigurationLauncher<Factory> {
@@ -347,12 +349,23 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
     PreparedMicrovmConfigurationLauncher<Factory, Lease>
 {
     pub const fn with_device_leases(factory: Factory) -> Self {
+        Self::with_device_policy(factory, false)
+    }
+
+    const fn with_device_policy(factory: Factory, device_required: bool) -> Self {
         Self {
             device_lease: None,
             active: None,
             factory,
             retiring: false,
+            device_required,
         }
+    }
+
+    /// A device-dependent guest is staged but inaccessible to the supervisor's
+    /// guest execution path until its exact lease is attached.
+    pub const fn with_required_device_lease(factory: Factory) -> Self {
+        Self::with_device_policy(factory, true)
     }
 
     /// Attach only to the exact active launch, including its runtime generation.
@@ -414,6 +427,9 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
             Some((active, _)) if *active == endpoint && self.retiring => {
                 Err(PreparedMicrovmConfigurationAccessError::Retiring)
             }
+            Some((active, _)) if *active == endpoint && self.device_required && self.device_lease.is_none() => {
+                Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired)
+            }
             Some((active, guest)) if *active == endpoint => Ok(guest),
             _ => Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint),
         }
@@ -426,6 +442,9 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
         match self.active.as_mut() {
             Some((active, _)) if *active == endpoint && self.retiring => {
                 Err(PreparedMicrovmConfigurationAccessError::Retiring)
+            }
+            Some((active, _)) if *active == endpoint && self.device_required && self.device_lease.is_none() => {
+                Err(PreparedMicrovmConfigurationAccessError::DeviceLeaseRequired)
             }
             Some((active, guest)) if *active == endpoint => Ok(guest),
             _ => Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint),
