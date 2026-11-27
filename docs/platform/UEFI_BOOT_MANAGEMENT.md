@@ -170,10 +170,14 @@ expiry at the spinning fixture's comparison or branch; `c3` is the separate
 signed Gigakernel's completion. The monitor changes only the stopped timer
 fixture's readiness byte, reloads its own VMCS/EPT pair, re-arms the timer,
 and resumes at the interrupted instruction. `c5` requires the resumed guest
-to update its marker from its preserved RAX and reach the expected I/O exit.
-Without VMX the artifact does not try to enter a guest. The L2 topology is
-synthetic and no device is forwarded. This test does not establish installed
-services, preemptive runtime scheduling, floating-point/vector isolation, or
+to update its marker from its preserved RAX, report the exact x87 integer
+conversion and XMM value, and reach the expected I/O exit. The monitor also
+checks reset x87 control and XMM data on first launch and preservation of
+its own x87 control word across the signed L2 run. The diagnostic freezes
+guest CR4 to the validated legacy-state profile; it does not admit AVX or
+other extended CPU-state features. Without VMX the artifact does not try to
+enter a guest. The L2 topology is synthetic and no device is forwarded. This test does not establish installed
+services, preemptive runtime scheduling, extended CPU-state isolation, or
 bare-metal support.
 
 When recording a failure, also collect the reserved boot report described

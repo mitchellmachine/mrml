@@ -34,9 +34,6 @@ struct Arena(UnsafeCell<[u8; ARENA_PAGES * PAGE]>);
 unsafe impl Sync for Arena {}
 static ARENA: Arena = Arena(UnsafeCell::new([0; ARENA_PAGES * PAGE]));
 
-#[repr(C, align(16))]
-struct FxState([u8; 512]);
-
 pub(super) struct KernelLaunch {
     vmcs: PhysAddr,
     ept: EptPointer,
@@ -54,17 +51,28 @@ impl KernelLaunch {
         controller.load_vmcs(self.vmcs, self.ept).ok()?;
         controller.program_minimal_vmcs(&self.launch).ok()?;
         controller.arm_boot_probe_timer(controls, ticks).ok()?;
-        let mut fx = FxState([0; 512]);
-        // SAFETY: aligned host scratch; hosted BSP compiler uses legacy SSE,
-        // and the signed L2 probe uses no extended AVX state.
+        let mut original_cw = 0u16;
+        // SAFETY: this diagnostic reaches here only after earlier isolated
+        // entries validated x87 on the same BSP. The output word is aligned.
         unsafe {
-            asm!("fxsave64 [{}]", in(reg) fx.0.as_mut_ptr(), options(nostack, preserves_flags))
-        };
+            asm!("fnstcw [{}]", in(reg) &mut original_cw, options(nostack, preserves_flags));
+        }
+        let probe_cw = (original_cw & !0x0c00) | 0x0800;
+        // SAFETY: both operands are live aligned words; `probe_cw` retains
+        // all non-rounding bits from the CPU's own valid control word.
+        unsafe { asm!("fldcw [{}]", in(reg) &probe_cw, options(nostack, preserves_flags)) };
         let launched = controller.launch();
-        // SAFETY: VM entry is synchronous and has returned to the same BSP;
-        // this area is host-only and was not mapped into the guest.
-        unsafe { asm!("fxrstor64 [{}]", in(reg) fx.0.as_ptr(), options(nostack, preserves_flags)) };
+        let mut observed_cw = 0u16;
+        // SAFETY: synchronous VM entry returned to the same BSP, which
+        // retains its host CR0/CR4 prerequisites. Restore the original word.
+        unsafe {
+            asm!("fnstcw [{}]", "fldcw [{}]", in(reg) &mut observed_cw, in(reg) &original_cw,
+                options(nostack, preserves_flags));
+        }
         launched.ok()?;
+        if observed_cw != probe_cw {
+            return None;
+        }
         let exit = controller.record_vm_exit_snapshot().ok()?;
         (exit.reason() == 30 && exit.qualification() == (0xe7 << 16) | (1 << 6)).then_some(())
     }

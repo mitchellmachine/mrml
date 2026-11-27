@@ -2399,8 +2399,12 @@ does not yet establish preemptive runtime scheduling. The native
 entry trampoline starts each freshly launched guest with zeroed general-purpose
 registers (RSP is VMCS-owned). The cooperative switch test now requires each
 of two guests to resume with its own register value, not merely with its
-memory intact. This does not establish floating-point/vector state isolation
-or general untrusted-guest CPU-state isolation. Bare-metal retesting remains
+memory intact. The opt-in signed nested diagnostic now checks initial x87/XMM
+state and preserves a timer-preempted guest's x87 data and XMM value across a
+separate signed guest. The monitor checks that its own x87 rounding mode
+returns unchanged. The legacy-state profile does not admit additional CR4 state
+features such as OSXSAVE. This does not qualify extended vector state or
+general untrusted-guest CPU-state isolation. Bare-metal retesting remains
 deferred.
 
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`

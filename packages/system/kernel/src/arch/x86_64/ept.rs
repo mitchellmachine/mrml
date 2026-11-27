@@ -245,13 +245,13 @@ mod tests {
         }
         fn vmlaunch(
             &mut self,
-            _: &mut [u64; 15],
+            _: &mut crate::arch::x86_64::VmxGuestRegisters,
         ) -> Result<crate::arch::x86_64::VmxLaunchOutcome, VmxInstructionError> {
             Ok(crate::arch::x86_64::VmxLaunchOutcome::GuestRunning)
         }
         fn vmresume(
             &mut self,
-            _: &mut [u64; 15],
+            _: &mut crate::arch::x86_64::VmxGuestRegisters,
         ) -> Result<crate::arch::x86_64::VmxLaunchOutcome, VmxInstructionError> {
             Ok(crate::arch::x86_64::VmxLaunchOutcome::GuestRunning)
         }

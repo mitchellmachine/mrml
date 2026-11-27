@@ -837,6 +837,36 @@ const fn valid_pat(pat: u64) -> bool {
     true
 }
 
+// FXSAVE64 image: reset FCW, empty x87 stack, reset MXCSR, zero XMM data.
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+struct LegacyFxState([u8; 512]);
+
+impl LegacyFxState {
+    const RESET: Self = {
+        let mut bytes = [0; 512];
+        bytes[0] = 0x7f;
+        bytes[1] = 0x03;
+        bytes[24] = 0x80;
+        bytes[25] = 0x1f;
+        Self(bytes)
+    };
+}
+
+/// Private monitor-owned CPU state that is not maintained by the VMCS.
+#[derive(Clone, Copy)]
+pub struct VmxGuestRegisters {
+    gpr: [u64; 15],
+    legacy_fx: LegacyFxState,
+}
+
+impl VmxGuestRegisters {
+    const RESET: Self = Self {
+        gpr: [0; 15],
+        legacy_fx: LegacyFxState::RESET,
+    };
+}
+
 /// Narrow unsafe-instruction boundary. A bare-metal adapter implements these
 /// operations; tests and hosted probes use a deterministic emulator.
 pub trait VmxInstructions {
@@ -846,11 +876,11 @@ pub trait VmxInstructions {
     fn vmptrld(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError>;
     fn vmlaunch(
         &mut self,
-        registers: &mut [u64; 15],
+        registers: &mut VmxGuestRegisters,
     ) -> Result<VmxLaunchOutcome, VmxInstructionError>;
     fn vmresume(
         &mut self,
-        registers: &mut [u64; 15],
+        registers: &mut VmxGuestRegisters,
     ) -> Result<VmxLaunchOutcome, VmxInstructionError>;
     fn vmwrite(&mut self, field: VmcsField, value: u64) -> Result<(), VmxInstructionError>;
     fn vmread(&mut self, field: VmcsField) -> Result<u64, VmxInstructionError>;
@@ -861,7 +891,7 @@ pub trait VmxInstructions {
 /// Construction is unsafe so hosted code cannot accidentally execute
 /// privileged instructions through an otherwise safe trait method.
 pub struct NativeVmx {
-    _private: (),
+    isolate_probe_fx: bool,
 }
 
 impl NativeVmx {
@@ -870,8 +900,48 @@ impl NativeVmx {
     /// The caller must be executing at CPL0 on an x86_64 CPU with VMX enabled
     /// in IA32_FEATURE_CONTROL and CR4.VMXE. VMX regions and VMCS host-state
     /// fields must remain valid according to the Intel architecture contract.
-    pub const unsafe fn assume_cpl0_vmx_enabled() -> Self {
-        Self { _private: () }
+    pub const unsafe fn assume_cpl0_vmx_enabled(isolate_probe_fx: bool) -> Self {
+        Self { isolate_probe_fx }
+    }
+
+    fn enter_guest(
+        &mut self,
+        registers: &mut VmxGuestRegisters,
+        resume: bool,
+    ) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+        let mut host_fx = LegacyFxState::RESET;
+        let (host, guest) = if self.isolate_probe_fx {
+            const GUEST_CR4: VmcsField = VmcsField(0x6804);
+            const CR4_MASK: VmcsField = VmcsField(0x6002);
+            const CR4_SHADOW: VmcsField = VmcsField(0x6006);
+            let cr4 = self.vmread(GUEST_CR4)?;
+            if !legacy_fx_probe_cr4(cr4)
+                || self.vmread(VmcsField(0x4002))? & (1 << 28) != 0 // no MSR bitmap exemptions
+                || self.vmread(VmcsField(0x6c00))? & 0xc != 0  // host CR0.EM/TS
+                || self.vmread(VmcsField(0x6c04))? & (1 << 9) == 0
+            // host OSFXSR
+            {
+                return Err(VmxInstructionError::Failed);
+            }
+            // Freeze this diagnostic's CR4. In particular, neither OSXSAVE
+            // nor any feature with state outside FXSAVE64 can become active.
+            self.vmwrite(CR4_SHADOW, cr4)?;
+            self.vmwrite(CR4_MASK, u64::MAX)?;
+            (
+                core::ptr::from_mut(&mut host_fx),
+                core::ptr::from_mut(&mut registers.legacy_fx),
+            )
+        } else {
+            (core::ptr::null_mut(), core::ptr::null_mut())
+        };
+        // SAFETY: NativeVmx is a CPL0-only boundary with a valid host VMCS.
+        // The aligned, disjoint FX areas and GPR frame are private to this
+        // core and stay live through synchronous entry, failure, and exit.
+        if unsafe { mrml_native_vmentry(&mut registers.gpr, u8::from(resume), host, guest) } == 0 {
+            Ok(VmxLaunchOutcome::VmExit)
+        } else {
+            Err(VmxInstructionError::Failed)
+        }
     }
 
     fn physical_operand(
@@ -887,6 +957,14 @@ impl NativeVmx {
             Err(VmxInstructionError::Failed)
         }
     }
+}
+
+// This is an opt-in signed diagnostic, not a negotiated XSAVE guest ABI.
+// The real-mode fixtures need VMXE; the long-mode fixtures also need PAE
+// and may use legacy SSE. Reject all other CR4 facilities for this profile.
+const fn legacy_fx_probe_cr4(cr4: u64) -> bool {
+    const ALLOWED: u64 = (1 << 5) | (1 << 9) | (1 << 10) | (1 << 13);
+    cr4 & !ALLOWED == 0
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -948,6 +1026,8 @@ mrml_native_vmentry:
     push r14
     push r15
     push rdi
+    push rdx
+    push rcx
     mov rax, 0x6c14
     vmwrite rax, rsp
     jbe 3f
@@ -956,6 +1036,26 @@ mrml_native_vmentry:
     vmwrite rax, rdx
     jbe 3f
 
+    // Only the signed diagnostic supplies an FX area. Validate live host
+    // prerequisites before either image is touched. Do not enable interrupts
+    // while architectural state belongs to the guest.
+    mov rdx, [rsp + 8]
+    test rdx, rdx
+    jz 7f
+    mov rax, cr0
+    test eax, 0xc
+    jnz 3f
+    mov rax, cr4
+    test eax, 0x200
+    jz 3f
+    pushfq
+    pop rax
+    test eax, 0x200
+    jnz 3f
+    mov rcx, [rsp]
+    fxsave64 [rdx]
+    fxrstor64 [rcx]
+7:
     // Choose launch or resume before replacing every caller register.
     // MOV preserves the condition flags until the branch.
     test sil, sil
@@ -976,16 +1076,16 @@ mrml_native_vmentry:
     mov rdi, [rdi + 48]
     jnz 1f
     vmlaunch
-    jmp 3f
+    jmp 5f
 1:
     vmresume
-    jmp 3f
+    jmp 5f
 
 2:
     // VM exit loads the host RSP from the VMCS. Retrieve the frame pointer
     // from that private stack without using any guest-controlled pointer.
     push rax
-    mov rax, [rsp + 8]
+    mov rax, [rsp + 24]
     mov [rax + 8], rbx
     mov [rax + 16], rcx
     mov [rax + 24], rdx
@@ -1002,12 +1102,26 @@ mrml_native_vmentry:
     mov [rax + 112], r15
     pop rdx
     mov [rax + 0], rdx
+    mov rcx, [rsp]
+    test rcx, rcx
+    jz 6f
+    fxsave64 [rcx]
+    mov rdx, [rsp + 8]
+    fxrstor64 [rdx]
+6:
     xor eax, eax
     jmp 4f
+5:
+    // VMfail did not transfer control to the host RIP, but the guest
+    // FX image may have been loaded already. Restore without saving it.
+    mov rdx, [rsp + 8]
+    test rdx, rdx
+    jz 3f
+    fxrstor64 [rdx]
 3:
     mov eax, 1
 4:
-    add rsp, 8
+    add rsp, 24
     pop r15
     pop r14
     pop r13
@@ -1020,7 +1134,12 @@ mrml_native_vmentry:
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "sysv64" {
-    fn mrml_native_vmentry(registers: *mut [u64; 15], resume: u8) -> u8;
+    fn mrml_native_vmentry(
+        registers: *mut [u64; 15],
+        resume: u8,
+        host_fx: *mut LegacyFxState,
+        guest_fx: *mut LegacyFxState,
+    ) -> u8;
 }
 
 impl VmxInstructions for NativeVmx {
@@ -1055,29 +1174,16 @@ impl VmxInstructions for NativeVmx {
 
     fn vmlaunch(
         &mut self,
-        registers: &mut [u64; 15],
+        registers: &mut VmxGuestRegisters,
     ) -> Result<VmxLaunchOutcome, VmxInstructionError> {
-        // SAFETY: construction of NativeVmx requires CPL0 and a completely
-        // programmed active VMCS. The private frame is live for this call.
-        // Entry loads its GPRs and exit saves them before returning to Rust.
-        // RSP lives in the VMCS; the trampoline preserves host SysV state.
-        if unsafe { mrml_native_vmentry(registers, 0) } == 0 {
-            Ok(VmxLaunchOutcome::VmExit)
-        } else {
-            Err(VmxInstructionError::Failed)
-        }
+        self.enter_guest(registers, false)
     }
 
     fn vmresume(
         &mut self,
-        registers: &mut [u64; 15],
+        registers: &mut VmxGuestRegisters,
     ) -> Result<VmxLaunchOutcome, VmxInstructionError> {
-        // SAFETY: identical host-stack and register contract to VMLAUNCH above.
-        if unsafe { mrml_native_vmentry(registers, 1) } == 0 {
-            Ok(VmxLaunchOutcome::VmExit)
-        } else {
-            Err(VmxInstructionError::Failed)
-        }
+        self.enter_guest(registers, true)
     }
 
     fn vmwrite(&mut self, field: VmcsField, value: u64) -> Result<(), VmxInstructionError> {
@@ -1152,7 +1258,7 @@ impl VmxInstructions for NativeVmx {
 struct SuspendedProbeGuest {
     vmcs: PhysAddr,
     ept: EptPointer,
-    registers: [u64; 15],
+    registers: VmxGuestRegisters,
 }
 
 pub struct VmxController<I: VmxInstructions> {
@@ -1163,7 +1269,7 @@ pub struct VmxController<I: VmxInstructions> {
     active_ept: Option<EptPointer>,
     failed_vmwrite_index: Option<u8>,
     // Software-owned GPRs, excluding the VMCS-owned RSP.
-    active_registers: [u64; 15],
+    active_registers: VmxGuestRegisters,
     suspended_probe_guests: [Option<SuspendedProbeGuest>; 2],
     probe_resume_only: bool,
 }
@@ -1177,7 +1283,7 @@ impl<I: VmxInstructions> VmxController<I> {
             active_vmcs: None,
             active_ept: None,
             failed_vmwrite_index: None,
-            active_registers: [0; 15],
+            active_registers: VmxGuestRegisters::RESET,
             suspended_probe_guests: [None; 2],
             probe_resume_only: false,
         }
@@ -1220,7 +1326,7 @@ impl<I: VmxInstructions> VmxController<I> {
             .vmclear(vmcs)
             .map_err(|_| VmxError::InstructionFailed)?;
         self.active_vmcs = Some(vmcs);
-        self.active_registers.fill(0);
+        self.active_registers = VmxGuestRegisters::RESET;
         self.active_ept = None;
         self.probe_resume_only = false;
         self.state = VmxState::VmcsClear;
@@ -1250,7 +1356,7 @@ impl<I: VmxInstructions> VmxController<I> {
         if self.probe_resume_only {
             return Err(VmxError::InvalidState);
         }
-        self.active_registers.fill(0);
+        self.active_registers = VmxGuestRegisters::RESET;
         match self.instructions.vmlaunch(&mut self.active_registers) {
             Ok(VmxLaunchOutcome::GuestRunning) => self.state = VmxState::GuestRunning,
             Ok(VmxLaunchOutcome::VmExit) => self.state = VmxState::VmExitPending,
@@ -1388,7 +1494,7 @@ impl<I: VmxInstructions> VmxController<I> {
         self.suspended_probe_guests[slot] = Some(SuspendedProbeGuest {
             vmcs,
             ept,
-            registers: core::mem::take(&mut self.active_registers),
+            registers: core::mem::replace(&mut self.active_registers, VmxGuestRegisters::RESET),
         });
         self.active_vmcs = None;
         self.active_ept = None;
@@ -1498,7 +1604,7 @@ impl<I: VmxInstructions> VmxController<I> {
         self.active_vmcs = None;
         self.active_ept = None;
         self.failed_vmwrite_index = None;
-        self.active_registers.fill(0);
+        self.active_registers = VmxGuestRegisters::RESET;
         self.suspended_probe_guests = [None; 2];
         self.probe_resume_only = false;
         self.state = VmxState::Disabled;
@@ -1553,11 +1659,13 @@ mod tests {
         }
         fn vmlaunch(
             &mut self,
-            registers: &mut [u64; 15],
+            registers: &mut VmxGuestRegisters,
         ) -> Result<VmxLaunchOutcome, VmxInstructionError> {
-            assert_eq!(*registers, [0; 15]);
+            assert_eq!(registers.gpr, [0; 15]);
+            assert_eq!(registers.legacy_fx.0, LegacyFxState::RESET.0);
             self.step(6)?;
-            registers[14] = self.probe_ept;
+            registers.gpr[14] = self.probe_ept;
+            registers.legacy_fx.0[160..168].copy_from_slice(&self.probe_ept.to_le_bytes());
             Ok(if self.exit_on_launch {
                 VmxLaunchOutcome::VmExit
             } else {
@@ -1566,9 +1674,13 @@ mod tests {
         }
         fn vmresume(
             &mut self,
-            registers: &mut [u64; 15],
+            registers: &mut VmxGuestRegisters,
         ) -> Result<VmxLaunchOutcome, VmxInstructionError> {
-            assert_eq!(registers[14], self.probe_ept);
+            assert_eq!(registers.gpr[14], self.probe_ept);
+            assert_eq!(
+                registers.legacy_fx.0[160..168],
+                self.probe_ept.to_le_bytes()
+            );
             self.step(7)?;
             Ok(if self.exit_on_launch {
                 VmxLaunchOutcome::VmExit
@@ -1682,6 +1794,21 @@ mod tests {
             controller.reload_boot_probe_guest(vmcs, ept),
             Err(VmxError::InvalidState)
         );
+    }
+
+    #[test]
+    fn legacy_fx_probe_rejects_control_bits_outside_its_saved_state() {
+        let legacy = (1 << 13) | (1 << 10) | (1 << 9) | (1 << 5);
+        assert!(legacy_fx_probe_cr4(legacy));
+        for unsupported in [18, 22, 23, 24, 25, 63] {
+            assert!(!legacy_fx_probe_cr4(legacy | (1 << unsupported)));
+        }
+        let fx = LegacyFxState::RESET.0;
+        assert_eq!(core::mem::align_of::<LegacyFxState>(), 16);
+        assert_eq!(core::mem::size_of::<LegacyFxState>(), 512);
+        assert_eq!(&fx[..2], &0x037fu16.to_le_bytes());
+        assert_eq!(&fx[24..28], &0x1f80u32.to_le_bytes());
+        assert!(fx[32..416].iter().all(|byte| *byte == 0));
     }
 
     #[test]

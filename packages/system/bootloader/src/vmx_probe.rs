@@ -255,13 +255,14 @@ unsafe fn prepare_long_pages(pages: &[PhysAddr; PAGE_COUNT], revision: u32) {
     }
 }
 
-fn observed_long_stack_marker() -> u64 {
-    // SAFETY: read the aligned final word of the reserved guest stack while
+fn observed_long_stack_word(from_top: usize) -> u64 {
+    assert!((1..=6).contains(&from_top));
+    // SAFETY: read an aligned word of the reserved guest stack while
     // the long-mode vCPU is stopped and no guest can access the frame.
     unsafe {
         page(LONG_RAM + 5)
             .cast::<u64>()
-            .add(PAGE_SIZE as usize / 8 - 1)
+            .add(PAGE_SIZE as usize / 8 - from_top)
             .read_volatile()
     }
 }
@@ -436,7 +437,13 @@ pub(super) unsafe fn run(
         VmxLongModeGuest {
             cr0: guest_cr0 | (1 << 31) | (1 << 16) | (1 << 5) | 1,
             cr3: PhysAddr::new(0x1000).map_err(|_| ProbeFault::LongState)?,
-            cr4: guest_cr4 | (1 << 5),
+            cr4: guest_cr4
+                | (1 << 5)
+                | if cfg!(feature = "vmx-kernel-monitor") {
+                    (1 << 9) | (1 << 10)
+                } else {
+                    0
+                },
             rip: HIGH + 0x5000,
             rsp: LONG_STACK_TOP,
             gdt_base: HIGH + 0x7000,
@@ -460,7 +467,8 @@ pub(super) unsafe fn run(
         unsafe { asm!("mov cr0, {}", in(reg) cr0, options(nostack, preserves_flags)) };
     }
     unsafe { asm!("mov cr4, {}", in(reg) vmx_cr4, options(nostack, preserves_flags)) };
-    let native = unsafe { NativeVmx::assume_cpl0_vmx_enabled() };
+    let native =
+        unsafe { NativeVmx::assume_cpl0_vmx_enabled(cfg!(feature = "vmx-kernel-monitor")) };
     let mut controller = VmxController::new(native, capabilities);
     let result = (|| {
         controller
@@ -540,7 +548,7 @@ pub(super) unsafe fn run(
         const EXACT_OUT_BYTE: u64 = (0xe9 << 16) | (1 << 6);
         if exit.reason() != IO_EXIT
             || exit.qualification() != EXACT_OUT_BYTE
-            || observed_long_stack_marker() != LONG_MARKER
+            || observed_long_stack_word(1) != LONG_MARKER
             || observed_private_bytes() != expected
         {
             return Err(ProbeFault::LongExecution);
@@ -550,6 +558,7 @@ pub(super) unsafe fn run(
         {
             trace(0xc2);
             let timer_marker = !LONG_MARKER;
+            const FX_SETUP_LEN: usize = 6 + 4 + 5 + 2;
             // SAFETY: the prior guest exited and cannot resume; rewrite only
             // its own fixture code page before VMCLEAR and INVEPT. Change the
             // MOV immediate, then replace the OUT with a loop that waits
@@ -559,14 +568,25 @@ pub(super) unsafe fn run(
                 let code = page(LONG_RAM + 4);
                 code.add(2)
                     .copy_from_nonoverlapping(timer_marker.to_le_bytes().as_ptr(), 8);
+                let fx_setup = [
+                    0x66, 0x0f, 0xd6, 0x44, 0x24, 0xd8, // movq [rsp - 40], xmm0
+                    0xd9, 0x7c, 0x24, 0xd0, // fnstcw [rsp - 48]
+                    0x66, 0x48, 0x0f, 0x6e, 0xc0, // movq xmm0, rax
+                    0xd9, 0xe8, // fld1
+                ];
                 let tail = [
                     0x80, 0x7c, 0x24, 0xf0, 0, // cmp byte [rsp - 16], 0
                     0x74, 0xf9, // je back to cmp
                     0x48, 0xff, 0xc0, // inc rax
                     0x48, 0x89, 0x44, 0x24, 0xf8, // mov [rsp - 8], rax
+                    0xdf, 0x7c, 0x24, 0xe8, // fistp qword [rsp - 24]
+                    0x66, 0x0f, 0xd6, 0x44, 0x24, 0xe0, // movq [rsp - 32], xmm0
                     0xe6, 0xe9, // out 0xe9, al (trapped)
                 ];
+                let _: [u8; FX_SETUP_LEN] = fx_setup;
                 code.add(15)
+                    .copy_from_nonoverlapping(fx_setup.as_ptr(), FX_SETUP_LEN);
+                code.add(15 + FX_SETUP_LEN)
                     .copy_from_nonoverlapping(tail.as_ptr(), tail.len());
                 page(LONG_RAM + 5)
                     .add(PAGE_SIZE as usize - 16)
@@ -588,11 +608,14 @@ pub(super) unsafe fn run(
                 .arm_boot_probe_timer(controls, ticks(1 << 23))
                 .map_err(|_| ProbeFault::Timer)?;
             controller.launch().map_err(|_| ProbeFault::Timer)?;
-            let cmp = HIGH + 0x5000 + 15;
+            let cmp = HIGH + 0x5000 + 15 + FX_SETUP_LEN as u64;
             controller
                 .park_boot_timer_probe([cmp, cmp + 5])
                 .map_err(|_| ProbeFault::Timer)?;
-            if observed_long_stack_marker() != timer_marker {
+            if observed_long_stack_word(1) != timer_marker
+                || observed_long_stack_word(5) != 0
+                || observed_long_stack_word(6) as u16 != 0x037f
+            {
                 return Err(ProbeFault::Timer);
             }
             trace(0xc4);
@@ -619,7 +642,9 @@ pub(super) unsafe fn run(
                 .map_err(|_| ProbeFault::Timer)?;
             if exit.reason() != IO_EXIT
                 || exit.qualification() != EXACT_OUT_BYTE
-                || observed_long_stack_marker() != timer_marker.wrapping_add(1)
+                || observed_long_stack_word(1) != timer_marker.wrapping_add(1)
+                || observed_long_stack_word(3) != 1
+                || observed_long_stack_word(4) != timer_marker
                 || observed_private_bytes() != expected
             {
                 return Err(ProbeFault::Timer);

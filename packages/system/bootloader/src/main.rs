@@ -617,7 +617,16 @@ fn vmx_kernel_payload_ready(_early: &EarlyKernelContext<'_>) -> ! {
     }
     // SAFETY: this opt-in payload's terminal port is intercepted by the monitor
     // only after early kernel admission, scheduler and IPC checks.
-    unsafe { asm!("out 0xe7, al", in("al") 1u8, options(nomem, nostack, preserves_flags)) };
+    unsafe {
+        asm!(
+            "pxor xmm0, xmm0",
+            "fninit",
+            "out 0xe7, al",
+            in("al") 1u8,
+            out("xmm0") _,
+            options(nomem, nostack, preserves_flags),
+        )
+    };
     halt()
 }
 
