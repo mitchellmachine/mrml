@@ -602,17 +602,23 @@ fn recover_hosted_component_owner<'out>(
     release: &[u8],
     release_key: &[u8; 64],
     output: &mut [u8],
-    services: Option<[mrml_config::hosted_recovery_probe::HostedInstalledService<'_, 'out>; 2]>,
+    installed: Option<(
+        [mrml_config::hosted_recovery_probe::HostedInstalledService<'_, 'out>; 2],
+        mrml_config::hosted_recovery_probe::HostedRecoveryDisk<'_>,
+    )>,
 ) -> core::result::Result<
-    (RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>, Option<[VerifiedExecutable<'out>; 2]>),
+    (
+        RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>,
+        Option<[VerifiedExecutable<'out>; 2]>,
+    ),
     mrml_config::hosted_recovery_probe::HostedRecoveryProbeBuildError<()>,
 > {
     // SAFETY: both modes build only controlled hosted fixtures. Their synthesized
     // approval is not production recovery or physical evidence.
     unsafe {
-        if let Some(services) = services {
+        if let Some((services, image)) = installed {
             mrml_config::hosted_recovery_probe::recover_distinct_total_control_plane_with_installed_services(
-                handoff, release, release_key, output, services,
+                handoff, release, release_key, output, services, image,
             ).map(|(owner, executables)| (owner, Some(executables)))
         } else {
             recover_total_control_plane::<2>(handoff, release, release_key, output)
@@ -5992,7 +5998,7 @@ mod tests {
     const RECOVERY_SERVICE_IMAGE_BASE: u64 = 0xffff_8001_4000_0000;
 
     // The signed inventory exercises the real admission transaction; the
-    // two diagnostic executables are recovered from the same hosted block volume.
+    // two diagnostic executables are recovered from the same persisted disk image.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "requires a usable /dev/kvm; execute explicitly on a KVM host"]
@@ -6009,8 +6015,8 @@ mod tests {
         };
 
         use mrml_config::hosted_recovery_probe::{
-            HOSTED_TOTAL_SECONDARY_DOMAIN, HostedInstalledService, HostedRecoveryProbeBuildError,
-            HostedRecoveryProbeError,
+            HOSTED_TOTAL_SECONDARY_DOMAIN, HostedInstalledService, HostedRecoveryDisk,
+            HostedRecoveryImageFile, HostedRecoveryProbeBuildError, HostedRecoveryProbeError,
         };
         const DOMAINS: [ObjectId; 2] =
             [HOSTED_TOTAL_COMPONENT_DOMAIN, HOSTED_TOTAL_SECONDARY_DOMAIN];
@@ -6104,6 +6110,7 @@ mod tests {
             signed: &[(std::vec::Vec<u8>, TrustRoot); 2],
             roots: [&TrustRoot; 2],
             outputs: [&'out mut [u8]; 2],
+            image: HostedRecoveryDisk<'_>,
         ) -> Result<
             (
                 RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>,
@@ -6126,10 +6133,66 @@ mod tests {
                 },
             ];
             let (owner, executables) = recover_hosted_component_owner(
-                handoff, release, release_key, &mut output, Some(services),
+                handoff,
+                release,
+                release_key,
+                &mut output,
+                Some((services, image)),
             )?;
-            Ok((owner, executables.expect("storage fixture must return both executables")))
+            Ok((
+                owner,
+                executables.expect("storage fixture must return both executables"),
+            ))
         }
+        use std::io::{Read, Seek, SeekFrom, Write};
+        struct ProbeBlockFile(std::fs::File);
+        impl HostedRecoveryImageFile for ProbeBlockFile {
+            fn regular_file_len(&self) -> core::result::Result<u64, ()> {
+                let metadata = self.0.metadata().map_err(|_| ())?;
+                metadata.is_file().then_some(metadata.len()).ok_or(())
+            }
+
+            fn read_at(&mut self, offset: u64, bytes: &mut [u8]) -> core::result::Result<(), ()> {
+                self.0.seek(SeekFrom::Start(offset)).map_err(|_| ())?;
+                self.0.read_exact(bytes).map_err(|_| ())
+            }
+
+            fn write_at(&mut self, offset: u64, bytes: &[u8]) -> core::result::Result<(), ()> {
+                self.0.seek(SeekFrom::Start(offset)).map_err(|_| ())?;
+                self.0.write_all(bytes).map_err(|_| ())
+            }
+
+            fn sync_all(&self) -> core::result::Result<(), ()> {
+                self.0.sync_all().map_err(|_| ())
+            }
+        }
+        // This guard only removes a file we created exclusively. Later
+        // launches open the completed image read-only, without repopulating it.
+        struct ProbeFile(std::path::PathBuf);
+        impl Drop for ProbeFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let (mut image, guard) = (0..100)
+            .find_map(|serial| {
+                let path = std::env::temp_dir().join(std::format!(
+                    "mrml-recovery-{}-{serial}.img",
+                    std::process::id()
+                ));
+                match std::fs::File::options()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                {
+                    Ok(image) => Some((ProbeBlockFile(image), ProbeFile(path))),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                    Err(error) => panic!("could not create the recovery image: {error}"),
+                }
+            })
+            .expect("no unused disk image path");
+        let reopen = || ProbeBlockFile(std::fs::File::open(&guard.0).unwrap());
         let roots = [&signed[0].1, &signed[1].1];
         let mut first_buffer = std::vec![0; signed[0].0.len()];
         let mut second_buffer = std::vec![0; signed[1].0.len()];
@@ -6140,7 +6203,10 @@ mod tests {
             &signed,
             [roots[0], roots[0]],
             [&mut first_buffer, &mut second_buffer],
-        ).err().expect("an incorrectly pinned service signer must not recover");
+            HostedRecoveryDisk::WriteFixture(&mut image),
+        )
+        .err()
+        .expect("an incorrectly pinned service signer must not recover");
         assert_eq!(
             rejected,
             HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::ServiceExecutable)
@@ -6241,6 +6307,7 @@ mod tests {
             &signed,
             roots,
             [&mut first_buffer, &mut second_buffer],
+            HostedRecoveryDisk::Existing(&mut reopen()),
         )
         .expect("recover the exact two-domain release and its service executables");
         assert_eq!(owner.admission().running().count(), 0);
@@ -6297,6 +6364,7 @@ mod tests {
             &signed,
             roots,
             [&mut first_buffer, &mut second_buffer],
+            HostedRecoveryDisk::Existing(&mut reopen()),
         )
         .expect("recover the exact two-domain release and its service executables");
         let prepared = prepare(&mut owner, &executables);

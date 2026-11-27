@@ -126,10 +126,16 @@ signers, requires the complete executable set to match the admitted release,
 and uses the recovered executable buffers to start the two KVM MicroVMs.
 The test rejects a wrong signer and incomplete or substituted executable
 sets, observes both guests execute, verifies separate guest memory, and checks
-that the second guest still runs after the first is retired. This is hosted
-integration evidence: the block device and owner approval are fixtures. It
-does not verify firmware boot from installed media or production services
-under the normal Gigakernel boot path.
+that the second guest still runs after the first is retired. The fixture is
+now serialized and synced to a raw volume image. The KVM test reopens that
+image read-only for both launch attempts. Recovery reads the configuration,
+authority and deployment checkpoints, release, and service files through the
+same volume; file errors never fall back to the memory used to build it.
+The portable storage regression rejects a changed service extent and a
+truncated image. This remains hosted integration evidence: the disk layout
+and owner approval are generated for the test. It does not verify firmware
+boot from installed media or production services under the normal Gigakernel
+boot path.
 
 ## Implementation evidence
 

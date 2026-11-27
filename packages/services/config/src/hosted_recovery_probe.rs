@@ -3,9 +3,11 @@
 //! This module deliberately uses the normal configuration checkpoint, exact
 //! file-generation, authenticated authority-checkpoint, boot-bound monotonic
 //! recovery, dependent validation, service-publication, and active-release
-//! binding APIs. Its fixed in-memory backends are controlled-probe mechanics;
-//! they are not durable storage, owner-presence, TPM, firmware, or physical
+//! binding APIs. Its synthetic memory and file-backed volumes are controlled
+//! probe mechanics; they are not owner-presence, TPM, firmware, or physical
 //! rollback evidence.
+
+use core::cell::RefCell;
 
 use super::{
     ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
@@ -49,8 +51,8 @@ const RELEASE_BLOCK_BASE: u64 = 33;
 const MAX_HOSTED_SERVICE_BLOCKS: usize = 32;
 
 /// Geometry of the synthetic recovery volume in the hosted runners.
-pub const HOSTED_RECOVERY_BLOCK_COUNT: u64 =
-    RELEASE_BLOCK_BASE + (MAX_HOSTED_RELEASE_BYTES.div_ceil(BLOCK_BYTES) + 2 * MAX_HOSTED_SERVICE_BLOCKS) as u64;
+pub const HOSTED_RECOVERY_BLOCK_COUNT: u64 = RELEASE_BLOCK_BASE
+    + (MAX_HOSTED_RELEASE_BYTES.div_ceil(BLOCK_BYTES) + 2 * MAX_HOSTED_SERVICE_BLOCKS) as u64;
 const CONFIGURATION_GENERATION: u64 = 2;
 const ROOT_GENERATION: u64 = 14;
 const POLICY_GENERATION: u64 = 1;
@@ -72,6 +74,7 @@ pub enum HostedRecoveryProbeError {
     RecoveryRootMismatch,
     Configuration,
     StorageLayout,
+    DiskImage,
     InstalledDevice,
     StableSelection,
     ServiceExecutable,
@@ -103,10 +106,7 @@ impl<E> From<HostedRecoveryProbeError> for HostedRecoveryProbeBuildError<E> {
     }
 }
 
-struct CheckpointBackend {
-    object: StorageObjectId,
-    bytes: [u8; BLOCK_BYTES],
-}
+struct SharedCheckpointReader<'a, B>(&'a RefCell<B>);
 
 struct DeploymentStateStore {
     bytes: [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
@@ -136,7 +136,9 @@ impl DeploymentRecoveryStateStore for DeploymentStateStore {
     }
 }
 
-unsafe impl FileReadBackend for CheckpointBackend {
+// SAFETY: all verification and copying are delegated to the same selected
+// volume. The two readers access it sequentially and reject overlap.
+unsafe impl<B: FileReadBackend> FileReadBackend for SharedCheckpointReader<'_, B> {
     type Error = ();
 
     fn read_verified_extent(
@@ -145,21 +147,17 @@ unsafe impl FileReadBackend for CheckpointBackend {
         byte_offset: u64,
         output: &mut [u8],
     ) -> Result<(), Self::Error> {
-        if record.file() != self.object
-            || record.metadata_generation() != CONFIGURATION_GENERATION
-            || record.content_digest() != digest(&self.bytes)
-        {
-            return Err(());
-        }
-        let start = usize::try_from(byte_offset).map_err(|_| ())?;
-        let end = start.checked_add(output.len()).ok_or(())?;
-        output.copy_from_slice(self.bytes.get(start..end).ok_or(())?);
-        Ok(())
+        self.0
+            .try_borrow_mut()
+            .map_err(|_| ())?
+            .read_verified_extent(record, byte_offset, output)
+            .map_err(|_| ())
     }
 }
 
 struct ReachableMetadataBackend<'data> {
     fail_block: Option<u64>,
+    disk: Option<&'data mut dyn HostedRecoveryImageFile>,
     header: [u8; BLOCK_BYTES],
     primary: [u8; BLOCK_BYTES],
     secondary: [u8; BLOCK_BYTES],
@@ -181,20 +179,48 @@ struct ReachableMetadataBackend<'data> {
     service_data: [&'data [u8]; 2],
     release_data: &'data [u8],
     deployment_data: [u8; BLOCK_BYTES],
+    configuration_data: [u8; BLOCK_BYTES],
+    authority_data: [u8; BLOCK_BYTES],
 }
 
-unsafe impl BlockServiceBackend for ReachableMetadataBackend<'_> {
-    type Error = ();
-
-    fn read_blocks(
+impl<'disk> ReachableMetadataBackend<'disk> {
+    fn install_disk(
         &mut self,
-        device: BlockDeviceId,
-        block: u64,
-        output: &mut [u8],
-    ) -> Result<(), Self::Error> {
-        if device != recovery_device() || self.fail_block == Some(block) {
-            return Err(());
+        file: &'disk mut dyn HostedRecoveryImageFile,
+    ) -> Result<(), HostedRecoveryProbeError> {
+        let error = |_| HostedRecoveryProbeError::DiskImage;
+        if file.regular_file_len().map_err(error)? != 0 || self.disk.is_some() {
+            return Err(HostedRecoveryProbeError::DiskImage);
         }
+        let mut block = [0; BLOCK_BYTES];
+        for index in 0..HOSTED_RECOVERY_BLOCK_COUNT {
+            if !self.fixture_block(index, &mut block) {
+                block.fill(0);
+            }
+            file.write_at(index * BLOCK_BYTES as u64, &block)
+                .map_err(error)?;
+        }
+        file.sync_all().map_err(error)?;
+        self.use_existing_disk(file)
+    }
+
+    fn use_existing_disk(
+        &mut self,
+        file: &'disk mut dyn HostedRecoveryImageFile,
+    ) -> Result<(), HostedRecoveryProbeError> {
+        if file
+            .regular_file_len()
+            .map_err(|_| HostedRecoveryProbeError::DiskImage)?
+            != HOSTED_RECOVERY_BLOCK_COUNT * BLOCK_BYTES as u64
+            || self.disk.is_some()
+        {
+            return Err(HostedRecoveryProbeError::DiskImage);
+        }
+        self.disk = Some(file);
+        Ok(())
+    }
+
+    fn fixture_block(&self, block: u64, output: &mut [u8; BLOCK_BYTES]) -> bool {
         for (base, data) in self
             .service_data_start
             .into_iter()
@@ -202,15 +228,12 @@ unsafe impl BlockServiceBackend for ReachableMetadataBackend<'_> {
             .chain(core::iter::once((RELEASE_BLOCK_BASE, self.release_data)))
         {
             if (base..base + data.len().div_ceil(BLOCK_BYTES) as u64).contains(&block) {
-                if output.len() != BLOCK_BYTES {
-                    return Err(());
-                }
                 let start = (block - base) as usize * BLOCK_BYTES;
                 let end = (start + BLOCK_BYTES).min(data.len());
                 let bytes = &data[start..end];
                 output.fill(0);
                 output[..bytes.len()].copy_from_slice(bytes);
-                return Ok(());
+                return true;
             }
         }
         let source = match block {
@@ -233,14 +256,39 @@ unsafe impl BlockServiceBackend for ReachableMetadataBackend<'_> {
             23 => &self.service_extents[0],
             24 => &self.services[1],
             25 => &self.service_extents[1],
+            30 => &self.configuration_data,
+            31 => &self.authority_data,
             32 => &self.deployment_data,
-            _ => return Err(()),
+            _ => return false,
         };
-        if output.len() != source.len() {
+        output.copy_from_slice(source);
+        true
+    }
+}
+
+// SAFETY: this read-only probe serves one exact device, bounded to its
+// announced geometry. With a disk installed, every read is from that handle;
+// I/O errors and short reads never fall back to the generation buffers.
+unsafe impl BlockServiceBackend for ReachableMetadataBackend<'_> {
+    type Error = ();
+
+    fn read_blocks(
+        &mut self,
+        device: BlockDeviceId,
+        block: u64,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        if device != recovery_device()
+            || block >= HOSTED_RECOVERY_BLOCK_COUNT
+            || self.fail_block == Some(block)
+        {
             return Err(());
         }
-        output.copy_from_slice(source);
-        Ok(())
+        let output: &mut [u8; BLOCK_BYTES] = output.try_into().map_err(|_| ())?;
+        if let Some(file) = self.disk.as_mut() {
+            return file.read_at(block * BLOCK_BYTES as u64, output);
+        }
+        self.fixture_block(block, output).then_some(()).ok_or(())
     }
 
     fn write_blocks(
@@ -316,7 +364,14 @@ fn volume() -> VolumeId {
 }
 
 fn header() -> VolumeHeader {
-    VolumeHeader::new(volume(), BLOCK_BYTES as u32, HOSTED_RECOVERY_BLOCK_COUNT, 1, 2).unwrap()
+    VolumeHeader::new(
+        volume(),
+        BLOCK_BYTES as u32,
+        HOSTED_RECOVERY_BLOCK_COUNT,
+        1,
+        2,
+    )
+    .unwrap()
 }
 
 fn recovery_device() -> BlockDeviceId {
@@ -607,7 +662,10 @@ fn build_reachable_total_device<'data>(
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
 
     let service_blocks = service_data.map(|bytes| bytes.len().div_ceil(BLOCK_BYTES));
-    if service_blocks.iter().any(|count| !(1..=MAX_HOSTED_SERVICE_BLOCKS).contains(count)) {
+    if service_blocks
+        .iter()
+        .any(|count| !(1..=MAX_HOSTED_SERVICE_BLOCKS).contains(count))
+    {
         return Err(HostedRecoveryProbeError::StorageLayout);
     }
     let second_start = header().block_count() - service_blocks[1] as u64;
@@ -897,6 +955,7 @@ fn build_reachable_total_device<'data>(
     header_block[..encoded_header.len()].copy_from_slice(&encoded_header);
     Ok(ReachableMetadataBackend {
         fail_block,
+        disk: None,
         header: header_block,
         primary,
         secondary: [0; BLOCK_BYTES],
@@ -918,18 +977,20 @@ fn build_reachable_total_device<'data>(
         service_data,
         release_data: release_bytes,
         deployment_data: *deployment_bytes,
+        configuration_data: *configuration_bytes,
+        authority_data: *authority_bytes,
     })
 }
 
 #[cfg(test)]
-fn build_reachable_device(
+fn build_reachable_device<'disk>(
     root_generation: u64,
     configuration_length: usize,
     configuration_bytes: &[u8; BLOCK_BYTES],
     authority_length: usize,
     authority_bytes: &[u8; BLOCK_BYTES],
     fail_block: Option<u64>,
-) -> Result<ReachableMetadataBackend<'static>, HostedRecoveryProbeError> {
+) -> Result<ReachableMetadataBackend<'disk>, HostedRecoveryProbeError> {
     let deployment = [0x44; BLOCK_BYTES];
     build_reachable_total_device(
         root_generation,
@@ -1005,8 +1066,15 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
     HostedRecoveryProbeBuildError<()>,
 > {
     recover_total_control_plane_with_domain_policy::<DOMAINS>(
-        handoff, release_bytes, expected_release_key, release_output, false, None,
-    ).map(|(owner, _)| owner)
+        handoff,
+        release_bytes,
+        expected_release_key,
+        release_output,
+        false,
+        None,
+        None,
+    )
+    .map(|(owner, _)| owner)
 }
 
 /// Builds the same retained hosted recovery owner while requiring the two
@@ -1026,8 +1094,15 @@ pub unsafe fn recover_distinct_total_control_plane(
 ) -> Result<RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>, HostedRecoveryProbeBuildError<()>>
 {
     recover_total_control_plane_with_domain_policy::<2>(
-        handoff, release_bytes, expected_release_key, release_output, true, None,
-    ).map(|(owner, _)| owner)
+        handoff,
+        release_bytes,
+        expected_release_key,
+        release_output,
+        true,
+        None,
+        None,
+    )
+    .map(|(owner, _)| owner)
 }
 
 /// One installed service in the controlled probe. The trust root is supplied
@@ -1038,20 +1113,41 @@ pub struct HostedInstalledService<'src, 'out> {
     pub output: &'out mut [u8],
 }
 
+/// Hosted file operations remain outside the no-std configuration crate.
+/// Every successful read or write transfers the entire slice synchronously.
+pub trait HostedRecoveryImageFile {
+    fn regular_file_len(&self) -> Result<u64, ()>;
+    fn read_at(&mut self, offset: u64, bytes: &mut [u8]) -> Result<(), ()>;
+    fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<(), ()>;
+    fn sync_all(&self) -> Result<(), ()>;
+}
+
+/// Selects an exact file handle for the hosted probe, never a raw device.
+pub enum HostedRecoveryDisk<'file> {
+    /// Serialize a fixture into a new, empty regular file and sync it.
+    WriteFixture(&'file mut dyn HostedRecoveryImageFile),
+    /// Read a previously written image without changing it.
+    Existing(&'file mut dyn HostedRecoveryImageFile),
+}
+
 /// Recovers the distinct-domain owner and two independently authenticated
 /// service executables from the same selected block volume. Release
 /// executable-set preflight and live launch remain the caller's responsibility.
+/// All block reads use the supplied regular file; no in-memory fallback is allowed.
 ///
 /// # Safety
 ///
 /// Only for the controlled hosted fixture documented by
 /// [`recover_total_control_plane`], not an owner approval or boot boundary.
+/// Supply a trusted regular-file adapter and keep the image stable throughout
+/// recovery; never pass a physical device.
 pub unsafe fn recover_distinct_total_control_plane_with_installed_services<'out>(
     handoff: &BootHandoff,
     release_bytes: &[u8],
     expected_release_key: &[u8; 64],
     release_output: &mut [u8],
     services: [HostedInstalledService<'_, 'out>; 2],
+    image: HostedRecoveryDisk<'_>,
 ) -> Result<
     (
         RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>,
@@ -1060,7 +1156,13 @@ pub unsafe fn recover_distinct_total_control_plane_with_installed_services<'out>
     HostedRecoveryProbeBuildError<()>,
 > {
     let (owner, executables) = recover_total_control_plane_with_domain_policy::<2>(
-        handoff, release_bytes, expected_release_key, release_output, true, Some(services),
+        handoff,
+        release_bytes,
+        expected_release_key,
+        release_output,
+        true,
+        Some(services),
+        Some(image),
     )?;
     Ok((
         owner,
@@ -1075,6 +1177,7 @@ fn recover_total_control_plane_with_domain_policy<'out, const DOMAINS: usize>(
     release_output: &mut [u8],
     distinct_domains: bool,
     services: Option<[HostedInstalledService<'_, 'out>; 2]>,
+    image: Option<HostedRecoveryDisk<'_>>,
 ) -> Result<
     (
         RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, DOMAINS>,
@@ -1269,10 +1372,6 @@ fn recover_total_control_plane_with_domain_policy<'out, const DOMAINS: usize>(
         .export_checkpoint(&capabilities, root_read, &mut configuration_bytes)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     let configuration_object = object(9);
-    let mut configuration_backend = CheckpointBackend {
-        object: configuration_object,
-        bytes: configuration_bytes,
-    };
 
     let grants = [StorageRecoveryGrant::root(
         principal(),
@@ -1305,12 +1404,8 @@ fn recover_total_control_plane_with_domain_policy<'out, const DOMAINS: usize>(
     };
     let mut issuer = AuthorityCheckpointProofIssuer::new(owner_approval);
     let authority_object = object(10);
-    let mut authority_backend = CheckpointBackend {
-        object: authority_object,
-        bytes: [0; BLOCK_BYTES],
-    };
-    authority_backend.bytes[..authority_length]
-        .copy_from_slice(&authority_bytes[..authority_length]);
+    let mut authority_block = [0; BLOCK_BYTES];
+    authority_block[..authority_length].copy_from_slice(&authority_bytes[..authority_length]);
     let service_data = services
         .as_ref()
         .map_or([&[0x53][..], &[0x54][..]], |pair| {
@@ -1319,15 +1414,24 @@ fn recover_total_control_plane_with_domain_policy<'out, const DOMAINS: usize>(
     let mut recovery_device_backend = build_reachable_total_device(
         ROOT_GENERATION,
         checkpoint.length,
-        &configuration_backend.bytes,
+        &configuration_bytes,
         authority_length,
-        &authority_backend.bytes,
+        &authority_block,
         deployment_checkpoint.len(),
         &checkpoint_block,
         release_bytes,
         service_data,
         None,
     )?;
+    match image {
+        Some(HostedRecoveryDisk::WriteFixture(image)) => {
+            recovery_device_backend.install_disk(image)?
+        }
+        Some(HostedRecoveryDisk::Existing(image)) => {
+            recovery_device_backend.use_existing_disk(image)?
+        }
+        None => {}
+    }
     let mut recovery_block_service = recovery_block_service()?;
     let mut volume_scratch = [0; BLOCK_BYTES];
     let mut reachable = recover_reachable_files(
@@ -1374,7 +1478,7 @@ fn recover_total_control_plane_with_domain_policy<'out, const DOMAINS: usize>(
         None
     };
     let (installed_selection, recovered_blocks) = reachable.into_parts();
-    let (selected_root, mut block_volume) = recovered_blocks.into_parts();
+    let (selected_root, block_volume) = recovered_blocks.into_parts();
     let selected = selected_root.selected();
     let mut bootstrap = StorageAuthorityTable::<1>::new();
     let bootstrap_file = bootstrap
@@ -1410,6 +1514,9 @@ fn recover_total_control_plane_with_domain_policy<'out, const DOMAINS: usize>(
         .map_err(|_| HostedRecoveryProbeError::ServicePublication)?;
     let mut supervisor = ServiceSupervisor::<1>::new();
     let mut recovered_bytes = [0; BLOCK_BYTES];
+    let shared_volume = RefCell::new(block_volume);
+    let mut configuration_reader = SharedCheckpointReader(&shared_volume);
+    let mut authority_reader = SharedCheckpointReader(&shared_volume);
     let configuration_validator =
         StableConfigurationRecoveryValidator::<4, 2, _, _, _>::new_selected(
             selected.configuration(),
@@ -1421,7 +1528,7 @@ fn recover_total_control_plane_with_domain_policy<'out, const DOMAINS: usize>(
             restart_setting,
             service_object,
             &mut recovered_bytes,
-            &mut configuration_backend,
+            &mut configuration_reader,
         );
     let mut validator =
         StableServiceRecoveryValidator::new(configuration_validator, &supervisor, task);
@@ -1434,11 +1541,12 @@ fn recover_total_control_plane_with_domain_policy<'out, const DOMAINS: usize>(
             principal(),
             &mut issuer,
             &mut authority_scratch,
-            &mut authority_backend,
+            &mut authority_reader,
             &mut boot_store,
             &mut validator,
         )
         .map_err(|_| HostedRecoveryProbeError::Recovery)?;
+    let mut block_volume = shared_volume.into_inner();
     drop(boot_store);
     let recovered = prepared_service
         .commit(authorities, &capabilities, &mut supervisor, &runtime)
@@ -1548,6 +1656,8 @@ mod tests {
     use super::*;
     use mrml_crypto::Sha3_512;
     use mrml_kernel::{ArtifactKind, SIGNED_ARTIFACT_OVERHEAD_BYTES, TrustRoot};
+    use std::fs::File;
+    use std::io::{Read, Seek, SeekFrom, Write};
 
     fn signed_recovery_service_fixture(marker: u8) -> (std::vec::Vec<u8>, TrustRoot) {
         use mrml_crypto::{
@@ -1614,6 +1724,117 @@ mod tests {
         signed[signature_at..SIGNED_ARTIFACT_OVERHEAD_BYTES].copy_from_slice(&signature);
         signed[SIGNED_ARTIFACT_OVERHEAD_BYTES..].copy_from_slice(&image);
         (signed, root)
+    }
+
+    impl HostedRecoveryImageFile for File {
+        fn regular_file_len(&self) -> Result<u64, ()> {
+            let metadata = self.metadata().map_err(|_| ())?;
+            metadata.is_file().then_some(metadata.len()).ok_or(())
+        }
+
+        fn read_at(&mut self, offset: u64, bytes: &mut [u8]) -> Result<(), ()> {
+            self.seek(SeekFrom::Start(offset)).map_err(|_| ())?;
+            self.read_exact(bytes).map_err(|_| ())
+        }
+
+        fn write_at(&mut self, offset: u64, bytes: &[u8]) -> Result<(), ()> {
+            self.seek(SeekFrom::Start(offset)).map_err(|_| ())?;
+            self.write_all(bytes).map_err(|_| ())
+        }
+
+        fn sync_all(&self) -> Result<(), ()> {
+            File::sync_all(self).map_err(|_| ())
+        }
+    }
+
+    #[test]
+    fn installed_disk_reads_fail_closed_when_service_blocks_change_or_disappear() {
+        // Keep the original file object selected, even when another handle
+        // changes or truncates it. Never recover from the pristine seed bytes.
+        struct ImagePath(std::path::PathBuf);
+        impl Drop for ImagePath {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let (mut image, _path) = (0..100)
+            .find_map(|serial| {
+                let path = std::env::temp_dir().join(std::format!(
+                    "mrml-config-blocks-{}-{serial}.img",
+                    std::process::id()
+                ));
+                match File::options()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                {
+                    Ok(image) => Some((image, ImagePath(path))),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                    Err(error) => panic!("could not create probe image: {error}"),
+                }
+            })
+            .expect("no unused probe image path");
+        let mut other = image.try_clone().unwrap();
+        let data = [0x42; BLOCK_BYTES];
+        let mut backend = build_reachable_device(14, 1, &data, 1, &data, None).unwrap();
+        let offset = backend.service_data_start[0] * BLOCK_BYTES as u64;
+        backend.install_disk(&mut image).unwrap();
+        assert_eq!(
+            other.metadata().unwrap().len(),
+            HOSTED_RECOVERY_BLOCK_COUNT * BLOCK_BYTES as u64
+        );
+
+        let mut scratch = [0; BLOCK_BYTES];
+        let mut block = recovery_block_service().unwrap();
+        let boot = installed_boot_identity(14).unwrap();
+        let mut selected =
+            recover_reachable_files(&mut block, &mut backend, boot, &mut scratch).unwrap();
+        let request = (object(13), CONFIGURATION_GENERATION);
+        let mut table = StorageAuthorityTable::<1>::new();
+        let handle = table
+            .insert(
+                request.0,
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal(),
+            )
+            .unwrap();
+        let mut out = [0];
+        assert_eq!(
+            selected
+                .read_service_file(request, &table, handle, principal(), 0, &mut out)
+                .unwrap(),
+            1
+        );
+        assert_eq!(out, [0x53]);
+
+        other.seek(SeekFrom::Start(offset)).unwrap();
+        other.write_all(&[0xa5]).unwrap();
+        other.sync_all().unwrap();
+        assert!(matches!(
+            selected.read_service_file(request, &table, handle, principal(), 0, &mut out),
+            Err(crate::InstalledServiceFileReadError::Read(
+                mrml_storage::FileReadError::Backend(
+                    mrml_storage::BlockVolumeError::DigestMismatch
+                )
+            ))
+        ));
+        other.set_len(offset).unwrap();
+        assert!(matches!(
+            selected.read_service_file(request, &table, handle, principal(), 0, &mut out),
+            Err(crate::InstalledServiceFileReadError::Read(
+                mrml_storage::FileReadError::Backend(mrml_storage::BlockVolumeError::Device(
+                    mrml_storage::BlockServiceError::Backend(())
+                ))
+            ))
+        ));
+        drop(selected);
+        backend.disk = None;
+        assert_eq!(
+            backend.use_existing_disk(&mut other),
+            Err(HostedRecoveryProbeError::DiskImage)
+        );
     }
 
     #[test]
