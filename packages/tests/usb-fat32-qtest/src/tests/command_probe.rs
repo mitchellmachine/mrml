@@ -221,12 +221,12 @@ impl<P: PciActivation> Command<'_, P> {
 
     fn control_write(&mut self, address: u64, bytes: &[u8]) -> bool {
         match (self.control_count, self.command_count, self.level) {
-            (0, 3, 1..=3) => descriptor_write(address, bytes, EP0, 1, 18),
-            (1, 3, 2 | 3) => descriptor_write(address, bytes, EP0 + 48, 2, 9),
-            (2, 3, 2 | 3) if self.config_len != 0 => {
+            (0, 3, 1..=4) => descriptor_write(address, bytes, EP0, 1, 18),
+            (1, 3, 2..=4) => descriptor_write(address, bytes, EP0 + 48, 2, 9),
+            (2, 3, 2..=4) if self.config_len != 0 => {
                 descriptor_write(address, bytes, EP0 + 96, 2, self.config_len as u16)
             }
-            (3, 4, 2 | 3) => {
+            (3, 4, 2..=4) => {
                 let Ok(interface) =
                     mrml_storage_usb::find_bulk_interface(&self.configuration[..self.config_len])
                 else {
@@ -263,7 +263,7 @@ impl<P: PciActivation> Platform for Command<'_, P> {
         let rt = self.runtime;
         let event = DMA.event_ring as u32;
         let bulk_doorbell =
-            offset == self.doorbell + 4 && self.level == 3 && self.control_count == 4;
+            offset == self.doorbell + 4 && self.level >= 3 && self.control_count == 4;
         let allowed = if bulk_doorbell {
             self.bulk
                 .dci(&self.configuration[..self.config_len])
@@ -281,7 +281,7 @@ impl<P: PciActivation> Platform for Command<'_, P> {
             value == 1
                 && matches!(
                     (self.control_count, self.command_count, self.level),
-                    (0, 3, 1..=3) | (1 | 2, 3, 2 | 3) | (3, 4, 2 | 3)
+                    (0, 3, 1..=4) | (1 | 2, 3, 2..=4) | (3, 4, 2..=4)
                 )
         } else if self.enumeration.is_some_and(|e| offset == e.portsc) {
             [0x220200, 0x210, 0x200200].contains(&value)
@@ -293,7 +293,7 @@ impl<P: PciActivation> Platform for Command<'_, P> {
                 x if x == rt + 0x10 => value == DMA.event_segments as u32,
                 x if x == rt + 0x18 => {
                     value == event
-                        || (self.level == 3 && value == event | 8)
+                        || (self.level >= 3 && value == event | 8)
                         || ((event + 16)..(event + 256)).contains(&(value & !15)) && value & 15 == 8
                 }
                 x if [op + 0x34, op + 0x1c, rt + 0x14, rt + 0x1c].contains(&x) => value == 0,
@@ -339,7 +339,7 @@ impl<P: PciActivation> Platform for Command<'_, P> {
                         || ([BULK_IN, BULK_OUT].contains(&address) && bytes == [0; 256])
                         || self.bulk_context(address, bytes)
                 }
-                4 if self.level == 3 && self.control_count == 4 => {
+                4 if self.level >= 3 && self.control_count == 4 => {
                     if !self.bulk.started() {
                         let mut events = [0; 256];
                         self.platform
@@ -392,7 +392,7 @@ impl<P: PciActivation> Platform for Command<'_, P> {
                         _ => false,
                     }));
         let bulk_read =
-            self.level == 3 && address == BULK_BUFFER && self.bulk.in_length() == Some(bytes.len());
+            self.level >= 3 && address == BULK_BUFFER && self.bulk.in_length() == Some(bytes.len());
         if self.revoked || self.command_count == 0 || !(event || enumeration || bulk_read) {
             return Err(());
         }
@@ -524,7 +524,7 @@ pub(super) fn run<P: PciActivation>(
         level,
         config_len: 0,
         configuration: [0; 256],
-        bulk: ReadOnly::new(),
+        bulk: ReadOnly::new(level == 4),
         enumeration,
         revoked: false,
     };
@@ -533,12 +533,12 @@ pub(super) fn run<P: PciActivation>(
     probe(&mut broker);
     assert!(broker.activated && broker.revoked);
     assert_eq!(broker.command_count, broker.commands());
-    assert_eq!(broker.control_count, [0, 1, 4, 4][usize::from(level)]);
+    assert_eq!(broker.control_count, [0, 1, 4, 4, 4][usize::from(level)]);
     assert!(broker.read32(0).is_err());
     assert!(broker.activate(before.command).is_err());
     let configuration = broker.configuration[..broker.config_len].to_vec();
     let pre_bulk_events = broker.bulk.events;
-    assert!(level != 3 || broker.bulk.complete());
+    assert!(level < 3 || broker.bulk.complete());
     let (after, same) = platform.activation_state().unwrap();
     assert_eq!(same, assignment);
     assert_eq!(after.command & 6, 0);
@@ -565,7 +565,7 @@ pub(super) fn run<P: PciActivation>(
     if level != 0 {
         verify_descriptor(&events, platform, level, &configuration);
     }
-    if level == 3 {
+    if level >= 3 {
         let mut data = [0; 512];
         for (address, length) in [(BULK_IN, 256), (BULK_OUT, 256), (BULK_BUFFER, 512)] {
             platform.dma_write(address, &[0; 512][..length]).unwrap();

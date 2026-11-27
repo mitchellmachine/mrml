@@ -361,6 +361,13 @@ pub fn with_emulated_bulk_read_probe(super_speed: bool, probe: &mut dyn FnMut(&m
     exercise_qemu(super_speed, Mode::Command(3, probe));
 }
 
+pub fn with_emulated_bulk_write_probe(
+    super_speed: bool,
+    probe: &mut dyn FnMut(&mut dyn CommandIo),
+) {
+    exercise_qemu(super_speed, Mode::Command(4, probe));
+}
+
 fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
     let controller_arg = if super_speed {
         "qemu-xhci,id=xhci,addr=03.0"
@@ -568,10 +575,14 @@ fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
         }
         Mode::Command(enumerate, probe) => {
             command_probe::run(&mut projected, probe, enumerate);
+            if enumerate == 4 {
+                qmp.remove_stick();
+                sector_mut(&mut expected, FILE_SECTOR)[..3].copy_from_slice(b"new");
+            }
             assert_eq!(
                 fs::read(&media).unwrap(),
                 expected,
-                "command probe must not modify media"
+                "unexpected bytes in command probe media"
             );
             return;
         }

@@ -19,6 +19,7 @@ extern "efiapi" fn efi_main() -> ! {
         0x63 => command_probe::exercise(1),
         0x64 => command_probe::exercise(2),
         0x65 => command_probe::exercise(3),
+        0x66 => command_probe::exercise(4),
         _ => mrml_usb_guest_probe::exercise(),
     };
     let result = if passed { 0x51 } else { 0x52 };

@@ -172,7 +172,7 @@ pub(super) fn exercise(level: u8) -> bool {
                             100,
                         )
                         .ok()?;
-                    if level == 3 {
+                    if level >= 3 {
                         let mut disk = mrml_usb_guest_probe::UsbDisk::probe(pipe).ok()?;
                         let mut data = [0; 512];
                         disk.read_sector(u64::from(mrml_usb_guest_probe::FILE), &mut data)
@@ -182,6 +182,14 @@ pub(super) fn exercise(level: u8) -> bool {
                             || !data[3..].iter().all(|&x| x == 0xa5)
                         {
                             return None;
+                        }
+                        if level == 4 {
+                            data[..3].copy_from_slice(b"new");
+                            disk.write_sector_verified(
+                                u64::from(mrml_usb_guest_probe::FILE),
+                                &data,
+                            )
+                            .ok()?;
                         }
                     }
                 }

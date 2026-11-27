@@ -3032,6 +3032,16 @@ earlier hosted xHCI write relay, this exercises bulk transfer and storage
 protocols together inside the guest. It does not exercise an in-guest write
 or qualify physical hardware.
 
+`--ignored --nocapture live_kvm_guest_writes_through_qemu_xhci` uses those
+same guest-driven endpoints to test a single update to the provisioned
+`PROBE.TXT` data sector. Before authorizing a single WRITE(10), the test
+broker verifies the original 512 bytes and exact target. It admits only the
+three-byte marker change, requires successful SYNCHRONIZE CACHE and full
+sector readback, and retires the controller and scrubs its queues. After
+QEMU confirms removal, the host independently compares the entire image:
+only the three expected file bytes may differ. This is a fixed-sector QEMU
+diagnostic, not a general FAT32 writer or a verified Chromebook write.
+
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See
 [review log](../patents/REVIEW_LOG.md).

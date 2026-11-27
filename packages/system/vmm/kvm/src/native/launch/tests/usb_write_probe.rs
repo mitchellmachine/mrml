@@ -359,6 +359,17 @@ pub(super) fn exercise_bulk_read() {
     );
 }
 
+pub(super) fn exercise_bulk_write() {
+    for fast in [false, true] {
+        mrml_usb_fat32_qtest::with_emulated_bulk_write_probe(fast, &mut |io| {
+            run_signed_probe(ProbeMode::Command(io, 4));
+        });
+    }
+    mrml_runtime::mrml_println!(
+        "usb-bulk-write-guest|status=PASS|backend=kvm|xhci=qemu|speeds=2,3|sector=flushed-and-verified"
+    );
+}
+
 fn relay_command(
     io: &mut dyn mrml_usb_fat32_qtest::CommandIo,
     opcode: u8,
@@ -510,7 +521,8 @@ fn run_signed_probe(mut mode: ProbeMode<'_>) {
         ProbeMode::Command(_, 0) => (true, 1024, 0x62),
         ProbeMode::Command(_, 1) => (true, 4096, 0x63),
         ProbeMode::Command(_, 2) => (true, 4096, 0x64),
-        ProbeMode::Command(_, _) => (true, 4096, 0x65),
+        ProbeMode::Command(_, 3) => (true, 4096, 0x65),
+        ProbeMode::Command(_, _) => (true, 4096, 0x66),
     };
     observed[0] = kind;
     peer.write_first(&observed).unwrap();
@@ -527,7 +539,7 @@ fn run_signed_probe(mut mode: ProbeMode<'_>) {
         }
         assert!(observed[3..8].iter().all(|&byte| byte == 0));
         let address = u64::from_le_bytes(observed[8..PAYLOAD].try_into().unwrap());
-        let max_payload = if matches!(kind, 0x63..=0x65) {
+        let max_payload = if matches!(kind, 0x63..=0x66) {
             2112
         } else {
             512

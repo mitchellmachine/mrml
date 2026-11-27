@@ -3204,6 +3204,12 @@ mod tests {
         usb_write_probe::exercise_bulk_read();
     }
 
+    #[test]
+    #[ignore = "requires live KVM, QEMU and the built USB probe image"]
+    fn live_kvm_guest_writes_through_qemu_xhci() {
+        usb_write_probe::exercise_bulk_write();
+    }
+
     mod usb_write_probe;
 
     #[test]
