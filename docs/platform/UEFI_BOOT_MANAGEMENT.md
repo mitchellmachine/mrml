@@ -304,7 +304,10 @@ This diagnostic is not in the normal boot profile and does not claim
 legacy semaphore transfer or enable DMA. An independent software model
 checks the retained lease, blocked DMA, quiescent boot source, and exact
 capability again at the OS-semaphore write boundary. If any changed since
-observation, it records no write. This is not a real firmware handshake.
+observation, it records no write. After a request, losing DMA containment
+while polling or observing a changed lease or owner at the final acceptance
+check prevents transfer; the model never retries the write. This is not a
+real firmware handshake.
 
 ### Diagnose a return to firmware
 

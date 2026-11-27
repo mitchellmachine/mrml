@@ -63,6 +63,9 @@ struct Script<'a> {
     observed: usize,
     request: Option<(u32, u8)>,
     at_request: Option<(Prerequisites, Sample)>,
+    during_poll: Option<(usize, Prerequisites)>,
+    at_accept: Option<(Prerequisites, Sample)>,
+    accepted_generation: Option<u64>,
 }
 
 impl<'a> Script<'a> {
@@ -73,10 +76,19 @@ impl<'a> Script<'a> {
             observed: 0,
             request: None,
             at_request: None,
+            during_poll: None,
+            at_accept: None,
+            accepted_generation: None,
         }
     }
 
     fn observe(&mut self) -> Result<(u64, LegacySample), Failure> {
+        if self
+            .during_poll
+            .is_some_and(|(at, ready)| at == self.observed && !ready.permit_request())
+        {
+            return Err(Failure::Prerequisite);
+        }
         let support = self.samples[self.observed.min(self.samples.len() - 1)];
         self.observed += 1;
         Self::decode(support)
@@ -120,6 +132,32 @@ impl<'a> Script<'a> {
         self.request = Some((offset + 3, 1));
         Ok(())
     }
+
+    fn compare_and_accept(
+        &mut self,
+        generation: u64,
+        acknowledged: LegacySample,
+    ) -> Result<(), Failure> {
+        // The consuming owner rechecks the last acknowledged state and all
+        // prerequisites under the same lease. A poll is not a transfer.
+        let last = self.samples[(self.observed - 1).min(self.samples.len() - 1)];
+        let (ready, sample) = self.at_accept.unwrap_or((Prerequisites::READY, last));
+        if !ready.permit_request() {
+            return Err(Failure::Prerequisite);
+        }
+        let (live_generation, live) = Self::decode(sample)?;
+        if live_generation != generation {
+            return Err(Failure::ChangedLease);
+        }
+        if live.ownership != LegacyOwnership::OperatingSystem {
+            return Err(Failure::RequestLost);
+        }
+        if live != acknowledged {
+            return Err(Failure::ChangedCapability);
+        }
+        self.accepted_generation = Some(generation);
+        Ok(())
+    }
 }
 
 fn simulate(script: &mut Script<'_>, ready: Prerequisites) -> Result<(), Failure> {
@@ -152,7 +190,9 @@ fn simulate(script: &mut Script<'_>, ready: Prerequisites) -> Result<(), Failure
             return Err(Failure::ChangedCapability);
         }
         match current.ownership {
-            LegacyOwnership::OperatingSystem if acknowledged => return Ok(()),
+            LegacyOwnership::OperatingSystem if acknowledged => {
+                return script.compare_and_accept(generation, current);
+            }
             LegacyOwnership::OperatingSystem => acknowledged = true,
             LegacyOwnership::Contended if !acknowledged => (),
             _ => return Err(Failure::RequestLost),
@@ -168,6 +208,7 @@ fn model_accepts_stable_firmware_acknowledgment_after_one_os_byte_write() {
     assert_eq!(simulate(&mut script, Prerequisites::READY), Ok(()));
     assert_eq!(script.request, Some((0x93, 1)));
     assert_eq!(script.observed, 5);
+    assert_eq!(script.accepted_generation, Some(1));
 }
 
 #[test]
@@ -180,6 +221,7 @@ fn model_times_out_without_reasserting_or_clearing_firmware_ownership() {
     );
     assert_eq!(script.request, Some((0x93, 1)));
     assert_eq!(script.observed, 1 + OBSERVATIONS);
+    assert_eq!(script.accepted_generation, None);
 }
 
 #[test]
@@ -331,6 +373,80 @@ fn compare_and_request_denies_changes_at_the_write_boundary_without_writing() {
         assert_eq!(simulate(&mut script, Prerequisites::READY), Err(expected));
         assert_eq!(script.request, None);
         assert_eq!(script.observed, 1);
+    }
+}
+
+#[test]
+fn acknowledgment_cannot_be_used_after_prerequisites_or_lease_change() {
+    let os = Sample::firmware(OS);
+    let samples = [Sample::firmware(FIRMWARE), os, os];
+    for (ready, final_sample, failure) in [
+        (
+            Prerequisites {
+                dma_blocked: false,
+                ..Prerequisites::READY
+            },
+            os,
+            Failure::Prerequisite,
+        ),
+        (
+            Prerequisites {
+                source_closed: false,
+                ..Prerequisites::READY
+            },
+            os,
+            Failure::Prerequisite,
+        ),
+        (
+            Prerequisites::READY,
+            Sample {
+                lease_generation: 2,
+                ..os
+            },
+            Failure::ChangedLease,
+        ),
+        (
+            Prerequisites::READY,
+            Sample::firmware(SEMAPHORES),
+            Failure::RequestLost,
+        ),
+        (
+            Prerequisites::READY,
+            Sample {
+                raw: os.raw | (1 << 25),
+                ..os
+            },
+            Failure::ChangedCapability,
+        ),
+    ] {
+        let mut script = Script::new(&samples);
+        script.at_accept = Some((ready, final_sample));
+        assert_eq!(simulate(&mut script, Prerequisites::READY), Err(failure));
+        assert_eq!(script.observed, 3);
+        assert_eq!(script.request, Some((0x93, 1)));
+        assert_eq!(script.accepted_generation, None);
+    }
+}
+
+#[test]
+fn lost_dma_containment_during_polling_never_accepts_or_retries_the_request() {
+    let samples = [FIRMWARE, SEMAPHORES, OS, OS].map(Sample::firmware);
+    for at in 1..samples.len() {
+        let mut script = Script::new(&samples);
+        script.during_poll = Some((
+            at,
+            Prerequisites {
+                dma_blocked: false,
+                ..Prerequisites::READY
+            },
+        ));
+        assert_eq!(
+            simulate(&mut script, Prerequisites::READY),
+            Err(Failure::Prerequisite)
+        );
+        assert_eq!(script.observed, at);
+        assert_eq!(script.request, Some((0x93, 1)));
+        assert_eq!(script.accepted_generation, None);
     }
 }
 
