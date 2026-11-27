@@ -2365,6 +2365,29 @@ queues, directory-handle grants, measured images, and optional IOMMU device
 assignment. Bare metal uses native architecture modules and the CPU inference
 backend until a separately isolated GPU service is available.
 
+### Hosted kernel and nested VMX evidence
+
+A freshly signed `pci_configuration_probe` Gigakernel package
+(SHA-256 `5053c9cf6fe76ab26c5debca898c854377ee550158f50fd7981b9d5b746d1a6a`)
+booted as a KVM guest in Arch WSL. The runner first rejected a substituted
+package root, then verified virtual block PCI-MMIO write/read/flush, BAR
+withdrawal and continued guest execution, guest replacement, and pending-I/O
+reset isolation. This is a real Gigakernel image under the hosted KVM backend,
+not execution as a guest of MRML's own native monitor. The default hosted
+`boot` marker check did not pass and the separate SMP probe hit its runtime
+deadline. Neither result qualifies a production or multicore guest boot.
+
+The [UEFI VMX diagnostic](platform/UEFI_BOOT_MANAGEMENT.md#dragonair-gigakernel-vmx-test)
+separately reaches a paged 64-bit guest under MRML's native VMX monitor inside
+QEMU with nested KVM. That guest uses a tiny bootstrap workload. A native
+Gigakernel-guest pass requires independent admission of the signed kernel and
+package, PE relocation followed by supervisor-only section permissions,
+guest-owned page tables and guarded stacks, a read-only canonical boot
+handoff carrying the verified measurement, and entry through the actual
+kernel ABI. The monitor must see a bounded, kernel-generated terminal result;
+merely reaching VM entry does not qualify. Bare-metal retesting is deferred
+until that runtime path is ready.
+
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and
 operation-specific unused fields must be zero, sequences are exact and advance

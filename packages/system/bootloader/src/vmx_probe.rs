@@ -244,9 +244,10 @@ unsafe fn prepare_long_pages(pages: &[PhysAddr; PAGE_COUNT], revision: u32) {
         gdt.add(2).write(0x00cf_9300_0000_ffff);
         gdt.add(3).write(0x0000_8b00_7080_0067);
         gdt.add(4).write(HIGH >> 32);
-        // MOV RAX, imm64; MOV [RSP-8], RAX; VMCALL.
+        // MOV RAX, imm64; MOV [RSP-8], RAX; OUT 0xE9, AL.
+        // This port is only a test oracle: no guest I/O is forwarded.
         let mut code = [
-            0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0x48, 0x89, 0x44, 0x24, 0xf8, 0x0f, 0x01, 0xc1,
+            0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0x48, 0x89, 0x44, 0x24, 0xf8, 0xe6, 0xe9,
         ];
         code[2..10].copy_from_slice(&LONG_MARKER.to_le_bytes());
         page(LONG_RAM + 4).copy_from_nonoverlapping(code.as_ptr(), code.len());
@@ -515,7 +516,10 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
         let exit = controller
             .record_vm_exit_snapshot()
             .map_err(|_| ProbeFault::LongExecution)?;
-        if exit.reason() != 18
+        const IO_EXIT: u32 = 30;
+        const EXACT_OUT_BYTE: u64 = (0xe9 << 16) | (1 << 6);
+        if exit.reason() != IO_EXIT
+            || exit.qualification() != EXACT_OUT_BYTE
             || observed_long_stack_marker() != LONG_MARKER
             || observed_private_bytes() != expected
         {

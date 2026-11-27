@@ -93,7 +93,8 @@ version, and last visible label:
 
 - `VMX 64 PASS`: after the cooperative switch test, a separate IA-32e guest
   ran at a high-half address through its own guest page tables, wrote a
-  64-bit marker to an NX guest stack, and exited via VMCALL. Trace `c0 c1`
+  64-bit marker to an NX guest stack, then attempted a port write that
+  the monitor verified trapped without forwarding it. Trace `c0 c1`
   identifies this stage. It is a bootstrap fixture, not yet a signed
   Gigakernel payload, scheduler, or installed service.
 - `VMX PROBE NOT PASSED - XX`: record the two-digit code and the final screen.

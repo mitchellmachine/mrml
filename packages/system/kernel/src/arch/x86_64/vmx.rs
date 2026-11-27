@@ -562,6 +562,8 @@ impl MinimalVmcsLaunch {
         // Fixed bootstrap GDT: null, 64-bit code, data, busy 64-bit TSS.
         values[..8].copy_from_slice(&[16, 8, 16, 16, 16, 16, 0, 24]);
         values[19] = (1 << 8) | (1 << 10) | (1 << 11); // EFER.LME/LMA/NXE
+        let primary = (1 << 31) | (1 << 24) | (1 << 7);
+        values[25] = u64::from(VmxControl::constrained(primary, controls.primary).bits());
         values[27] = u64::from(VmxControl::constrained((1 << 9) | (1 << 21), controls.exit).bits());
         values[28] =
             u64::from(VmxControl::constrained((1 << 9) | (1 << 15), controls.entry).bits());
@@ -769,7 +771,11 @@ impl MinimalVmcsLaunch {
                 let rsp = value(0x681c)?;
                 let gdt = value(0x6816)?;
                 let tss = value(0x6814)?;
+                const REQUIRED_EXITS: u32 = (1 << 24) | (1 << 7); // unconditional I/O and HLT
+                const BITMAPS: u32 = (1 << 25) | (1 << 28); // no I/O or MSR bitmap bases in this profile
                 secondary & UNRESTRICTED_GUEST == 0
+                    && primary & REQUIRED_EXITS == REQUIRED_EXITS
+                    && primary & BITMAPS == 0
                     && entry & (IA32E_GUEST | (1 << 15)) == IA32E_GUEST | (1 << 15)
                     && exit & (1 << 21) != 0
                     && guest_cr0 & PAGED_PE_NE == PAGED_PE_NE
@@ -1615,6 +1621,20 @@ mod tests {
         assert_eq!(field(0x681e), guest.rip);
         assert_eq!(field(0x6802), guest.cr3.get());
         assert_eq!(field(0x4012), (1 << 9) | (1 << 15));
+        assert_eq!(field(0x4002), (1 << 31) | (1 << 24) | (1 << 7));
+        let all = (u32::MAX as u64) << 32;
+        let no_io_exiting =
+            VmxControlPolicy::from_msrs(all, all & !(1 << (32 + 24)), all, all, all).unwrap();
+        assert_eq!(
+            MinimalVmcsLaunch::long_mode_probe(ept, no_io_exiting, host, guest),
+            Err(VmxError::InvalidControl)
+        );
+        let forced_bitmap =
+            VmxControlPolicy::from_msrs(all, all | (1 << 25), all, all, all).unwrap();
+        assert_eq!(
+            MinimalVmcsLaunch::long_mode_probe(ept, forced_bitmap, host, guest),
+            Err(VmxError::InvalidControl)
+        );
         assert_eq!(field(0x4816), 0xa09b);
         for bad in [
             VmxLongModeGuest {
