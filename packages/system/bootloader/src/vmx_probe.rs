@@ -7,7 +7,8 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{PAGE_SIZE, PhysAddr};
 
-const PAGE_COUNT: usize = 8;
+const GUEST_PAGES: usize = 7;
+const PAGE_COUNT: usize = 1 + 2 * GUEST_PAGES;
 const VMXON_PAGE: usize = 0;
 const VMCS_PAGE: usize = 1;
 const EPT_PML4_PAGE: usize = 2;
@@ -17,7 +18,13 @@ const EPT_PT_PAGE: usize = 5;
 const GUEST_CODE_PAGE: usize = 6;
 const PRIVATE_BACKING_PAGE: usize = 7;
 const GUEST_CODE_GPA: u64 = 0x1000;
-const PRIVATE_GPA: u64 = 0x2000;
+const PRIVATE_GPAS: [u16; 2] = [0x2000, 0x3000];
+const INITIAL_BYTES: [u8; 2] = [0xa5, 0x5a];
+const WRITTEN_BYTES: [u8; 2] = [0x3c, 0xc3];
+
+fn guest_page(guest: usize, first_guest_page: usize) -> usize {
+    guest * GUEST_PAGES + first_guest_page
+}
 
 #[repr(C, align(4096))]
 struct ProbeArena(UnsafeCell<[u8; PAGE_COUNT * PAGE_SIZE as usize]>);
@@ -137,28 +144,58 @@ unsafe fn page(index: usize) -> *mut u8 {
 unsafe fn prepare_pages(pages: &[PhysAddr; PAGE_COUNT], revision: u32) {
     unsafe { ARENA.0.get().write_bytes(0, 1) };
     unsafe { page(VMXON_PAGE).cast::<u32>().write(revision) };
-    unsafe { page(VMCS_PAGE).cast::<u32>().write(revision) };
-    let flags = 0b111u64;
-    unsafe {
-        page(EPT_PML4_PAGE)
-            .cast::<u64>()
-            .write(pages[EPT_PDPT_PAGE].get() | flags)
-    };
-    unsafe {
-        page(EPT_PDPT_PAGE)
-            .cast::<u64>()
-            .write(pages[EPT_PD_PAGE].get() | flags)
-    };
-    unsafe {
-        page(EPT_PD_PAGE)
-            .cast::<u64>()
-            .write(pages[EPT_PT_PAGE].get() | flags)
-    };
-    let code_leaf = pages[GUEST_CODE_PAGE].get() | 0b101 | (6 << 3);
-    unsafe { page(EPT_PT_PAGE).cast::<u64>().add(1).write(code_leaf) };
-    // 16-bit MOV AX, moffs16 0x2000. The absent EPT leaf must exit before HLT.
-    unsafe { page(GUEST_CODE_PAGE).copy_from_nonoverlapping([0xa1, 0x00, 0x20, 0xf4].as_ptr(), 4) };
-    unsafe { page(PRIVATE_BACKING_PAGE).write_volatile(0xa5) };
+    for guest in 0..2 {
+        let peer = 1 - guest;
+        let own_gpa = usize::from(PRIVATE_GPAS[guest]);
+        let at = |local| guest_page(guest, local);
+        // SAFETY: the BSP owns the validated, distinct arena frames before
+        // VMX entry. Only the selected guest's code and data get EPT leaves.
+        unsafe {
+            page(at(VMCS_PAGE)).cast::<u32>().write(revision);
+            let flags = 0b111u64;
+            page(at(EPT_PML4_PAGE))
+                .cast::<u64>()
+                .write(pages[at(EPT_PDPT_PAGE)].get() | flags);
+            page(at(EPT_PDPT_PAGE))
+                .cast::<u64>()
+                .write(pages[at(EPT_PD_PAGE)].get() | flags);
+            page(at(EPT_PD_PAGE))
+                .cast::<u64>()
+                .write(pages[at(EPT_PT_PAGE)].get() | flags);
+            let pt = page(at(EPT_PT_PAGE)).cast::<u64>();
+            let write_back = 6 << 3;
+            pt.add(GUEST_CODE_GPA as usize / PAGE_SIZE as usize)
+                .write(pages[at(GUEST_CODE_PAGE)].get() | write_back | 0b101);
+            pt.add(own_gpa / PAGE_SIZE as usize)
+                .write(pages[at(PRIVATE_BACKING_PAGE)].get() | write_back | 0b011);
+            let [own_lo, own_hi] = PRIVATE_GPAS[guest].to_le_bytes();
+            let [peer_lo, peer_hi] = PRIVATE_GPAS[peer].to_le_bytes();
+            // Write own byte, read peer, then VMCALL if the read did not fault.
+            let code = [
+                0xc6,
+                0x06,
+                own_lo,
+                own_hi,
+                WRITTEN_BYTES[guest],
+                0xa1,
+                peer_lo,
+                peer_hi,
+                0x0f,
+                0x01,
+                0xc1,
+            ];
+            page(at(GUEST_CODE_PAGE)).copy_from_nonoverlapping(code.as_ptr(), code.len());
+            page(at(PRIVATE_BACKING_PAGE)).write_volatile(INITIAL_BYTES[guest]);
+        }
+    }
+}
+
+fn observed_private_bytes() -> [u8; 2] {
+    core::array::from_fn(|guest| {
+        // SAFETY: only the BSP calls this between guest launches. Each index
+        // selects a distinct mapped backing frame in the reserved arena.
+        unsafe { page(guest_page(guest, PRIVATE_BACKING_PAGE)).read_volatile() }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -182,6 +219,7 @@ pub(super) enum ProbeFault {
     Launch = 0x0F,
     Exit = 0x10,
     Vmxoff = 0x11,
+    BackingBytes = 0x12,
 }
 
 pub(super) fn mismatch_labels(masks: [u64; 4]) -> [[u8; 26]; 4] {
@@ -241,7 +279,10 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
     .map_err(|_| ProbeFault::Controls)?;
     let pages = unsafe { physical_pages() }.map_err(|_| ProbeFault::Pages)?;
     unsafe { prepare_pages(&pages, capabilities.revision_id()) };
-    let ept = EptPointer::new(pages[EPT_PML4_PAGE], true).map_err(|_| ProbeFault::Ept)?;
+    let epts = [0, 1].map(|guest| EptPointer::new(pages[guest_page(guest, EPT_PML4_PAGE)], true));
+    let [Ok(first_ept), Ok(second_ept)] = epts else {
+        return Err(ProbeFault::Ept);
+    };
     let (original_cr0, cr3, original_cr4) = unsafe { control_registers() };
     let vmx_cr4 = original_cr4 | (1 << 13);
     let prerequisites = VmxPrerequisites::new(
@@ -287,16 +328,20 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
         stack_pointer,
         instruction_pointer: run as *const () as usize as u64,
     };
-    let launch = MinimalVmcsLaunch::unrestricted_real_mode(
-        ept,
-        controls,
-        host,
-        guest_cr0,
-        guest_cr4,
-        GUEST_CODE_GPA as u16,
-        0x3000,
-    )
-    .map_err(|_| ProbeFault::LaunchState)?;
+    let launches = [first_ept, second_ept].map(|ept| {
+        MinimalVmcsLaunch::unrestricted_real_mode(
+            ept,
+            controls,
+            host,
+            guest_cr0,
+            guest_cr4,
+            GUEST_CODE_GPA as u16,
+            0x5000,
+        )
+    });
+    let [Ok(first_launch), Ok(second_launch)] = launches else {
+        return Err(ProbeFault::LaunchState);
+    };
     if cr0 != original_cr0 {
         // SAFETY: in the BSP diagnostic, the validator allowed only the missing
         // required NE bit; every other CR0 bit retains its original value.
@@ -310,35 +355,43 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
             .enter_root(pages[VMXON_PAGE])
             .map_err(|_| ProbeFault::Vmxon)?;
         trace(0xd1);
-        controller
-            .clear_vmcs(pages[VMCS_PAGE])
-            .map_err(|_| ProbeFault::Clear)?;
-        controller
-            .load_vmcs(pages[VMCS_PAGE], ept)
-            .map_err(|_| ProbeFault::Load)?;
-        if controller.program_minimal_vmcs(&launch).is_err() {
-            trace(0xed);
-            trace(controller.failed_vmwrite_index().unwrap_or(u8::MAX));
-            return Err(ProbeFault::Program);
+        let mut expected = INITIAL_BYTES;
+        for (guest, launch) in [first_launch, second_launch].iter().enumerate() {
+            let vmcs = pages[guest_page(guest, VMCS_PAGE)];
+            controller.clear_vmcs(vmcs).map_err(|_| ProbeFault::Clear)?;
+            controller
+                .load_vmcs(vmcs, launch.ept_pointer())
+                .map_err(|_| ProbeFault::Load)?;
+            if controller.program_minimal_vmcs(launch).is_err() {
+                trace(0xed);
+                trace(controller.failed_vmwrite_index().unwrap_or(u8::MAX));
+                return Err(ProbeFault::Program);
+            }
+            trace(0xd2 + 0x20 * guest as u8);
+            controller.launch().map_err(|_| ProbeFault::Launch)?;
+            trace(0xd3 + 0x20 * guest as u8);
+            let violation = controller
+                .record_vm_exit_snapshot()
+                .and_then(|snapshot| {
+                    snapshot.private_page_violation(
+                        PhysAddr::new(u64::from(PRIVATE_GPAS[1 - guest]))
+                            .map_err(|_| VmxError::InvalidVmExit)?,
+                    )
+                })
+                .map_err(|_| ProbeFault::Exit)?;
+            if violation.guest_physical_address() != u64::from(PRIVATE_GPAS[1 - guest])
+                || !violation.attempted_read()
+                || violation.attempted_write()
+                || violation.attempted_execute()
+            {
+                return Err(ProbeFault::Exit);
+            }
+            expected[guest] = WRITTEN_BYTES[guest];
+            if observed_private_bytes() != expected {
+                return Err(ProbeFault::BackingBytes);
+            }
+            trace(0xd4 + 0x20 * guest as u8);
         }
-        trace(0xd2);
-        controller.launch().map_err(|_| ProbeFault::Launch)?;
-        trace(0xd3);
-        let violation = controller
-            .record_vm_exit_snapshot()
-            .and_then(|snapshot| {
-                snapshot.private_page_violation(
-                    PhysAddr::new(PRIVATE_GPA).map_err(|_| VmxError::InvalidVmExit)?,
-                )
-            })
-            .map_err(|_| ProbeFault::Exit)?;
-        if !violation.attempted_read()
-            || violation.attempted_write()
-            || violation.attempted_execute()
-        {
-            return Err(ProbeFault::Exit);
-        }
-        trace(0xd4);
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;
         Ok(())
     })();
