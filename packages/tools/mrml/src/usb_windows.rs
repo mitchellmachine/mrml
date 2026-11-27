@@ -1,5 +1,5 @@
 //! Native Win32 USB discovery and exclusive volume claims.
-use super::{BYTES, Disk, require_only_usb, transfer};
+use super::{BYTES, Disk, WriteMode, require_only_usb, transfer};
 use std::ffi::{OsStr, c_void};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -15,6 +15,7 @@ pub(super) struct Identity {
     partitions: Vec<(u64, u64)>,
     volumes: Vec<PathBuf>,
     raw_guid: Option<[u8; 16]>,
+    erase_mbr: Option<[u8; 512]>,
 }
 
 #[cfg(test)]
@@ -25,7 +26,20 @@ pub(super) fn test_identity() -> Identity {
         partitions: Vec::new(),
         volumes: Vec::new(),
         raw_guid: None,
+        erase_mbr: None,
     }
+}
+#[link(name = "advapi32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn RegGetValueW(
+        key: *mut c_void,
+        subkey: *const u16,
+        name: *const u16,
+        flags: u32,
+        kind: *mut u32,
+        data: *mut c_void,
+        bytes: *mut u32,
+    ) -> i32;
 }
 
 #[link(name = "kernel32")]
@@ -112,6 +126,49 @@ fn system_disk_numbers() -> io::Result<Vec<u32>> {
         .access_mode(0)
         .share_mode(3)
         .open(volume)?;
+    Ok(extents(&file)?.into_iter().map(|extent| extent.0).collect())
+}
+
+fn system_partition_path(value: &str) -> io::Result<PathBuf> {
+    value
+        .strip_prefix(r"\Device\HarddiskVolume")
+        .filter(|suffix| {
+            !suffix.is_empty() && suffix.len() <= 10 && suffix.bytes().all(|b| b.is_ascii_digit())
+        })
+        .ok_or_else(|| io::Error::other("unrecognized Windows startup partition"))?;
+    Ok(PathBuf::from(format!(r"\\?\GLOBALROOT{value}")))
+}
+
+fn startup_disk_numbers() -> io::Result<Vec<u32>> {
+    // The EFI/startup partition can be on a different disk from Windows.
+    let subkey = wide(r"SYSTEM\Setup".as_ref());
+    let name = wide("SystemPartition".as_ref());
+    let mut value = [0u16; 64];
+    let mut bytes = (value.len() * size_of::<u16>()) as u32;
+    // SAFETY: predefined HKLM handle, live terminated names, and a writable buffer with its byte length.
+    let status = unsafe {
+        RegGetValueW(
+            -2_147_483_646isize as *mut c_void,
+            subkey.as_ptr(),
+            name.as_ptr(),
+            2, // RRF_RT_REG_SZ
+            std::ptr::null_mut(),
+            value.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status));
+    }
+    let count = (bytes / 2) as usize;
+    if bytes % 2 != 0 || count == 0 || count > value.len() || value[count - 1] != 0 {
+        return Err(io::Error::other("invalid Windows startup partition value"));
+    }
+    let value = String::from_utf16(&value[..count - 1]).map_err(io::Error::other)?;
+    let file = OpenOptions::new()
+        .access_mode(0)
+        .share_mode(3)
+        .open(system_partition_path(&value)?)?;
     Ok(extents(&file)?.into_iter().map(|extent| extent.0).collect())
 }
 
@@ -239,7 +296,14 @@ fn u64_at(bytes: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(bytes[at..at + 8].try_into().expect("checked ABI length"))
 }
 
-fn partitions(data: &[u8], capacity: u64, owned: bool) -> io::Result<Vec<(u64, u64)>> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LayoutPolicy {
+    Normal,
+    Owned,
+    EraseMbr,
+}
+
+fn partitions(data: &[u8], capacity: u64, policy: LayoutPolicy) -> io::Result<Vec<(u64, u64)>> {
     const EFI: [u8; 16] = [
         0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9,
         0x3b,
@@ -249,7 +313,11 @@ fn partitions(data: &[u8], capacity: u64, owned: bool) -> io::Result<Vec<(u64, u
     }
     let style = u32_at(data, 0);
     let count = u32_at(data, 4) as usize;
-    if style > 2 || count > 128 || data.len() < 48 + count * 144 {
+    if style > 2
+        || (policy == LayoutPolicy::EraseMbr && style != 0)
+        || count > 128
+        || data.len() < 48 + count * 144
+    {
         return Err(io::Error::other("unrecognized Windows partition table"));
     }
     let mut occupied = Vec::new();
@@ -261,8 +329,13 @@ fn partitions(data: &[u8], capacity: u64, owned: bool) -> io::Result<Vec<(u64, u
         }
         if start.checked_add(span).is_none_or(|end| end > capacity)
             || u32_at(row, 0) != style
-            || (row[29] != 0 && !owned)
-            || (style == 0 && (row[33] != 0 || (row[32] == 0xef && !owned)))
+            || (row[29] != 0 && policy != LayoutPolicy::Owned)
+            || (style == 0
+                && match policy {
+                    LayoutPolicy::Normal => row[33] != 0 || row[32] == 0xef,
+                    LayoutPolicy::Owned => row[33] != 0,
+                    LayoutPolicy::EraseMbr => row[32] == 0xee,
+                })
             || (style == 1 && row[32..48] == EFI)
         {
             return Err(io::Error::other(
@@ -272,6 +345,13 @@ fn partitions(data: &[u8], capacity: u64, owned: bool) -> io::Result<Vec<(u64, u
         occupied.push((start, span));
     }
     occupied.sort_unstable();
+    if policy == LayoutPolicy::EraseMbr
+        && occupied
+            .windows(2)
+            .any(|rows| rows[0].0 + rows[0].1 > rows[1].0)
+    {
+        return Err(io::Error::other("overlapping MBR partitions"));
+    }
     Ok(occupied)
 }
 
@@ -322,7 +402,15 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     )
 }
 
-fn inspect(file: &File, number: u32) -> io::Result<Disk> {
+fn read_mbr(mut file: &File) -> io::Result<[u8; 512]> {
+    let mut block = Box::new(Aligned([0; 65536]));
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut block.0[..512])?;
+    file.seek(SeekFrom::Start(0))?;
+    Ok(*block.0.first_chunk::<512>().expect("fixed buffer size"))
+}
+
+fn inspect(file: &File, number: u32, erase: bool) -> io::Result<Disk> {
     let mut device = [0; 12];
     let mut length = [0; 8];
     let mut geometry = [0; 24];
@@ -362,21 +450,22 @@ fn inspect(file: &File, number: u32) -> io::Result<Disk> {
     let mut info = [0; 48 + 144 * 128];
     let count = control(file, 0x70050, &[], &mut info)?;
     let layout = &info[..count];
-    let partitions = match partitions(layout, capacity, false) {
+    let mut erase_mbr = None;
+    let partitions = match partitions(layout, capacity, LayoutPolicy::Normal) {
         Ok(partitions) => partitions,
-        Err(err) => {
-            // The only exception to unknown EFI/service partitions is the
-            // exact MRML MBR; never admit an active or GPT EFI partition.
-            let mut block = Box::new(Aligned([0; 65536]));
-            let mut view = file;
-            view.seek(SeekFrom::Start(0))?;
-            view.read_exact(&mut block.0[..512])?;
-            view.seek(SeekFrom::Start(0))?;
-            if block.0[..512] != crate::usb_image::partition_table() {
+        Err(err) if layout.len() >= 48 && u32_at(layout, 0) == 0 => {
+            let mbr = read_mbr(file)?;
+            if mbr == crate::usb_image::partition_table() {
+                partitions(layout, capacity, LayoutPolicy::Owned)?
+            } else if erase && mbr[510..] == [0x55, 0xaa] {
+                let spans = partitions(layout, capacity, LayoutPolicy::EraseMbr)?;
+                erase_mbr = Some(mbr);
+                spans
+            } else {
                 return Err(err);
             }
-            partitions(layout, capacity, true)?
         }
+        Err(err) => return Err(err),
     };
     let mut extended = [0; 40];
     let raw_guid = match control(file, 0x2d1084, &[], &mut extended) {
@@ -397,6 +486,7 @@ fn inspect(file: &File, number: u32) -> io::Result<Disk> {
             partitions,
             volumes: Vec::new(),
             raw_guid,
+            erase_mbr,
         },
     })
 }
@@ -405,8 +495,8 @@ fn physical_path(number: u32) -> PathBuf {
     PathBuf::from(format!(r"\\.\PhysicalDrive{number}"))
 }
 
-pub(super) fn usb_storage() -> io::Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
+fn usb_disk_numbers() -> io::Result<Vec<u32>> {
+    let mut numbers = Vec::new();
     for number in disk_numbers()? {
         let path = physical_path(number);
         // Query transport without read/write access to the medium. Count USB
@@ -423,23 +513,43 @@ pub(super) fn usb_storage() -> io::Result<Vec<PathBuf>> {
             ));
         }
         if u32_at(&props, 28) == 7 {
-            paths.push(path);
+            numbers.push(number);
         }
     }
-    Ok(paths)
+    Ok(numbers)
 }
 
-pub(super) fn disks() -> io::Result<Vec<Disk>> {
+pub(super) fn usb_storage() -> io::Result<Vec<PathBuf>> {
+    Ok(usb_disk_numbers()?.into_iter().map(physical_path).collect())
+}
+
+pub(super) fn disks(erase: bool) -> io::Result<Vec<Disk>> {
     let mut disks = Vec::new();
-    for number in disk_numbers()? {
-        if let Ok(disk) = open(&physical_path(number), false, 0).and_then(|f| inspect(&f, number)) {
-            disks.push(disk);
+    let candidates = if erase {
+        usb_disk_numbers()?
+    } else {
+        disk_numbers()?
+    };
+    for number in candidates {
+        match open(&physical_path(number), false, 0).and_then(|f| inspect(&f, number, erase)) {
+            Ok(disk) => disks.push(disk),
+            Err(error) if erase => {
+                return Err(io::Error::other(format!(
+                    "USB drive {number} failed preflight: {error}"
+                )));
+            }
+            Err(_) => {}
         }
     }
     if disks.is_empty() {
         return Ok(disks);
     }
-    let protected = system_disk_numbers()?;
+    let mut protected = system_disk_numbers()?;
+    if erase {
+        protected.extend(startup_disk_numbers().map_err(|error| {
+            io::Error::other(format!("cannot verify the Windows startup disk: {error}"))
+        })?);
+    }
     let volumes = volume_inventory()?;
     disks.retain_mut(|disk| {
         let id = &mut disk.identity;
@@ -484,8 +594,8 @@ pub(super) fn disks() -> io::Result<Vec<Disk>> {
     Ok(disks)
 }
 
-fn same_handle(file: &File, selected: &Disk) -> io::Result<bool> {
-    let mut observed = inspect(file, selected.identity.number)?;
+fn same_handle(file: &File, selected: &Disk, erase: bool) -> io::Result<bool> {
+    let mut observed = inspect(file, selected.identity.number, erase)?;
     observed
         .identity
         .volumes
@@ -495,16 +605,17 @@ fn same_handle(file: &File, selected: &Disk) -> io::Result<bool> {
 
 const DIRECT: u32 = 0xa000_0000; // NO_BUFFERING | WRITE_THROUGH
 
-pub(super) fn write_image(disk: &Disk, image: &[u8], only_usb: bool) -> io::Result<()> {
+pub(super) fn write_image(disk: &Disk, image: &[u8], mode: WriteMode) -> io::Result<()> {
     if !privileged() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "Administrator needed",
         ));
     }
+    let erase = matches!(mode, WriteMode::Auto { erase: true });
     let file = open(&disk.path, true, DIRECT)?;
     let before = volume_names()?;
-    if !disks()?.contains(disk) || !same_handle(&file, disk)? {
+    if !disks(erase)?.contains(disk) || !same_handle(&file, disk, erase)? {
         return Err(io::Error::other("USB instance changed; no bytes written"));
     }
     let mut locks = Vec::new();
@@ -524,10 +635,10 @@ pub(super) fn write_image(disk: &Disk, image: &[u8], only_usb: bool) -> io::Resu
     }
     // Do not reopen a locked volume. Confirm its exact handle above, and
     // ensure the volume set and physical layout did not change in the interim.
-    if volume_names()? != before || !same_handle(&file, disk)? {
+    if volume_names()? != before || !same_handle(&file, disk, erase)? {
         return Err(io::Error::other("USB layout changed; no bytes written"));
     }
-    if only_usb {
+    if matches!(mode, WriteMode::Auto { .. }) {
         require_only_usb(disk, usb_storage)?;
     }
     for lock in &locks {
@@ -591,12 +702,64 @@ mod tests {
         layout[64..72].copy_from_slice(&4096u64.to_le_bytes());
         layout[72] = 1;
         layout[80] = 0x0c;
-        assert_eq!(partitions(&layout, 8192, false).unwrap(), [(1024, 4096)]);
+        assert_eq!(
+            partitions(&layout, 8192, LayoutPolicy::Normal).unwrap(),
+            [(1024, 4096)]
+        );
         layout[80] = 0xef;
-        assert!(partitions(&layout, 8192, false).is_err());
-        assert!(partitions(&layout, 8192, true).is_ok());
+        assert!(partitions(&layout, 8192, LayoutPolicy::Normal).is_err());
+        assert!(partitions(&layout, 8192, LayoutPolicy::Owned).is_ok());
         layout[81] = 1;
-        assert!(partitions(&layout, 8192, true).is_err());
+        assert!(partitions(&layout, 8192, LayoutPolicy::Owned).is_err());
+    }
+
+    #[test]
+    fn explicit_erase_allows_existing_mbr_boot_media_but_not_protected_layouts() {
+        let mut layout = [0u8; 48 + 2 * 144];
+        layout[4] = 2;
+        for (i, (start, kind, active)) in [(1024u64, 0xef, 0), (2048, 0xa5, 1)]
+            .into_iter()
+            .enumerate()
+        {
+            let row = &mut layout[48 + i * 144..][..144];
+            row[8..16].copy_from_slice(&start.to_le_bytes());
+            row[16..24].copy_from_slice(&512u64.to_le_bytes());
+            row[24] = i as u8 + 1;
+            row[32] = kind;
+            row[33] = active;
+        }
+        assert!(partitions(&layout, 8192, LayoutPolicy::Normal).is_err());
+        assert_eq!(
+            partitions(&layout, 8192, LayoutPolicy::EraseMbr).unwrap(),
+            [(1024, 512), (2048, 512)]
+        );
+        assert!(partitions(&layout, 2304, LayoutPolicy::EraseMbr).is_err());
+        layout[77] = 1; // IsServicePartition
+        assert!(partitions(&layout, 8192, LayoutPolicy::EraseMbr).is_err());
+        layout[77] = 0;
+        layout[80] = 0xee; // protective MBR, not ordinary MBR media
+        assert!(partitions(&layout, 8192, LayoutPolicy::EraseMbr).is_err());
+        layout[80] = 0xef;
+        layout[200..208].copy_from_slice(&1280u64.to_le_bytes());
+        assert!(partitions(&layout, 8192, LayoutPolicy::EraseMbr).is_err());
+        layout[0] = 1; // GPT is never promoted by this override
+        assert!(partitions(&layout, 8192, LayoutPolicy::EraseMbr).is_err());
+    }
+
+    #[test]
+    fn startup_registry_path_accepts_only_nt_volume_names() {
+        assert_eq!(
+            system_partition_path(r"\Device\HarddiskVolume13").unwrap(),
+            PathBuf::from(r"\\?\GLOBALROOT\Device\HarddiskVolume13")
+        );
+        for path in [
+            r"\Device\HarddiskVolume",
+            r"\Device\HarddiskVolume1\x",
+            r"\\.\PhysicalDrive1",
+            "C:",
+        ] {
+            assert!(system_partition_path(path).is_err());
+        }
     }
     #[test]
     fn unbuffered_transfer_uses_an_aligned_buffer() {

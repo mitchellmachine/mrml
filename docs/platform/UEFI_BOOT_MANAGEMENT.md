@@ -84,6 +84,22 @@ inventory cannot be determined or changes during the checks, it stops
 instead of picking another drive. Use interactive `burn` when you need
 to select a drive.
 
+To reuse a spare USB installer whose **MBR** contains an EFI or active
+partition, first check the existing target in the Administrator terminal:
+
+```text
+mrml usb list --erase
+mrml usb autoburn --erase
+```
+
+`-e` is shorthand for `--erase`. The first command is read-only. The second
+will overwrite the stick without prompting. On Windows this flag allows
+ordinary MBR boot layouts, not GPT EFI, service, malformed or overlapping
+partitions. The writer still requires exactly one USB storage device,
+protects the Windows installation and startup disks, and rechecks the
+original MBR and device before writing. Linux already accepts eligible
+unmounted boot media; the flag does not change its safety checks.
+
 **Native MRML USB writing is planned.** Keep the same image and workflow,
 but use the deployment service for typed removable-device enumeration,
 explicit owner authorization bound to the exact device generation and image

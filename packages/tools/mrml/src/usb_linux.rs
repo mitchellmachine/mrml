@@ -7,7 +7,7 @@ use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _}
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{BYTES, Disk, require_only_usb, transfer};
+use super::{BYTES, Disk, WriteMode, require_only_usb, transfer};
 use crate::usb_image::SECTOR;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,7 +181,7 @@ fn candidate(link: &Path, occupied: &BTreeSet<u64>) -> io::Result<Option<Disk>> 
     }))
 }
 
-pub(super) fn disks() -> io::Result<Vec<Disk>> {
+pub(super) fn disks(_erase: bool) -> io::Result<Vec<Disk>> {
     let occupied = occupied()?;
     let mut result = Vec::new();
     for entry in fs::read_dir("/sys/class/block")? {
@@ -226,7 +226,7 @@ pub(super) fn usb_storage() -> io::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-pub(super) fn write_image(disk: &Disk, image: &[u8], only_usb: bool) -> io::Result<()> {
+pub(super) fn write_image(disk: &Disk, image: &[u8], mode: WriteMode) -> io::Result<()> {
     if !privileged() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -246,13 +246,15 @@ pub(super) fn write_image(disk: &Disk, image: &[u8], only_usb: bool) -> io::Resu
         || u64::from_ne_bytes(ioctl_number(&file, 0x8008_1280)?) != disk.identity.generation
         || u64::from_ne_bytes(ioctl_number(&file, 0x8008_1272)?) != disk.capacity
         || u32::from_ne_bytes(ioctl_number(&file, 0x1268)?) as usize != SECTOR
-        || !disks()?.contains(disk)
+        || !disks(false)?.contains(disk)
     {
         return Err(io::Error::other(
             "Linux drive identity or geometry changed; no bytes written",
         ));
     }
-    if only_usb {
+    // Linux already admits unmounted boot media; --erase never relaxes its checks.
+    if let WriteMode::Auto { erase } = mode {
+        let _ = erase;
         require_only_usb(disk, usb_storage)?;
     }
     transfer(&mut file, image, |file| {

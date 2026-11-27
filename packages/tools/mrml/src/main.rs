@@ -301,7 +301,7 @@ fn print_help() {
     println!("       mrml manifest <check|fmt|lock> [--check]");
     println!("       mrml assurance <check|generate|inspect>");
     println!(
-        "       mrml usb image OUTPUT.img | mrml usb list | mrml usb burn IMAGE.img | mrml usb autoburn"
+        "       mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e]"
     );
     println!("       mrml usb test OVMF_CODE OVMF_VARS QEMU");
     println!("       mrml cert caa <recommend|verify> ...");

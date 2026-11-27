@@ -15,7 +15,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list | mrml usb burn IMAGE.img | mrml usb autoburn | mrml usb test OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU";
 
 pub(super) fn command(args: &[String]) -> Result<(), String> {
     match args {
@@ -48,11 +48,17 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
 fn device_command(args: &[String]) -> io::Result<()> {
     match args {
         [mode] if mode == "list" => {
-            preview(&host::disks()?);
+            preview(&host::disks(false)?);
+            Ok(())
+        }
+        [mode, flag] if mode == "list" && erase_flag(flag) => {
+            let disk = discover_autoburn(true)?;
+            preview(std::slice::from_ref(&disk));
             Ok(())
         }
         [mode, file] if mode == "burn" => burn(Path::new(file), false),
-        [mode] if mode == "autoburn" => autoburn(),
+        [mode] if mode == "autoburn" => autoburn(false),
+        [mode, flag] if mode == "autoburn" && erase_flag(flag) => autoburn(true),
         [mode, file, marker]
             if cfg!(windows) && mode == "burn" && marker == "--elevated-console" =>
         {
@@ -65,6 +71,11 @@ fn device_command(args: &[String]) -> io::Result<()> {
         }
         _ => Err(io::Error::other(USAGE)),
     }
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn erase_flag(flag: &str) -> bool {
+    matches!(flag, "--erase" | "-e")
 }
 
 #[cfg(not(all(any(windows, target_os = "linux"), target_arch = "x86_64")))]
@@ -173,19 +184,32 @@ fn burn(path: &Path, child: bool) -> io::Result<()> {
     }
     let digest = sha3(&image);
     println!("Image SHA3-512: {digest}");
-    let available = host::disks()?;
+    let available = host::disks(false)?;
     preview(&available);
     let disk = &available[authorized_index(&available, answer)?];
-    if !host::disks()?.contains(disk) {
+    if !host::disks(false)?.contains(disk) {
         return Err(io::Error::other(
             "target identity changed; no bytes written",
         ));
     }
-    write_verified(disk, &image, false)
+    write_verified(disk, &image, WriteMode::Manual)
 }
 
 #[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
-fn autoburn() -> io::Result<()> {
+#[derive(Clone, Copy)]
+enum WriteMode {
+    Manual,
+    Auto { erase: bool },
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn discover_autoburn(erase: bool) -> io::Result<Disk> {
+    let connected = host::usb_storage()?;
+    select_single(&connected, || host::disks(erase))
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn autoburn(erase: bool) -> io::Result<()> {
     if !host::privileged() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -193,10 +217,7 @@ fn autoburn() -> io::Result<()> {
         ));
     }
     run_autoburn(
-        || {
-            let connected = host::usb_storage()?;
-            select_single(&connected, host::disks)
-        },
+        || discover_autoburn(erase),
         || {
             let workspace = load_workspace().map_err(io::Error::other)?;
             let image = build_image(&workspace).map_err(io::Error::other)?;
@@ -204,7 +225,7 @@ fn autoburn() -> io::Result<()> {
             println!("Image SHA3-512: {}", sha3(&image));
             Ok(image)
         },
-        |disk, image| write_verified(disk, image, true),
+        |disk, image| write_verified(disk, image, WriteMode::Auto { erase }),
     )
 }
 
@@ -259,8 +280,8 @@ fn require_only_usb(
 }
 
 #[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
-fn write_verified(disk: &Disk, image: &[u8], only_usb: bool) -> io::Result<()> {
-    host::write_image(disk, image, only_usb)?;
+fn write_verified(disk: &Disk, image: &[u8], mode: WriteMode) -> io::Result<()> {
+    host::write_image(disk, image, mode)?;
     println!(
         "Verified {} bytes on {}. Safely eject the drive.",
         image.len(),
@@ -619,6 +640,16 @@ mod tests {
     mod unattended {
         use super::*;
         use std::cell::Cell;
+
+        #[test]
+        fn explicit_erase_accepts_only_documented_flags() {
+            for option in ["--erase", "-e"] {
+                assert!(erase_flag(option));
+            }
+            for option in ["erase", "e", "--force", "--erase=yes"] {
+                assert!(!erase_flag(option));
+            }
+        }
 
         fn disk(path: &str) -> Disk {
             Disk {
