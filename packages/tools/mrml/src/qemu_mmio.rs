@@ -27,6 +27,13 @@ pub(super) fn verify_paused_q35_resources(child: &mut Child) -> Result<(), Strin
     inspect_q35(child, None, false, None, None).map(|_| ())
 }
 
+pub(super) fn verify_paused_no_remapper(
+    child: &mut Child,
+    trace: &std::path::Path,
+) -> Result<(), String> {
+    inspect_q35(child, None, true, Some((trace, &[])), None).map(|_| ())
+}
+
 pub(super) fn release_q35_fixture(
     child: &mut Child,
     release: u8,
@@ -91,6 +98,16 @@ fn inspect_qmp(
         "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f\"},\"id\":73}\n",
     )?;
     let map = read_monitor(&mut *reader, 73)?;
+    if release.is_none()
+        && let Some((trace, _)) = post
+    {
+        validate_resources(&map, false)?;
+        verify_scratch_state(stdin, reader, trace, false, false)?;
+        println!(
+            "q35-usb-no-remapper|status=PASS|loader_rejected=true|native_driver_entered=false|scratch_writes=0|unchanged=true"
+        );
+        return Ok(None);
+    }
     validate(&map)?;
     let bar = if matches!(release, Some(0xa6..=0xac)) {
         if isolated {
@@ -1283,6 +1300,10 @@ fn flat_range(line: &str) -> Result<(u64, u64, &str, &str), String> {
 }
 
 fn validate(map: &str) -> Result<(), String> {
+    validate_resources(map, true)
+}
+
+fn validate_resources(map: &str, expect_drhd: bool) -> Result<(), String> {
     let mut ecam = false;
     let mut drhd = false;
     for line in cpu_ranges(map)? {
@@ -1300,7 +1321,7 @@ fn validate(map: &str) -> Result<(), String> {
             drhd = true;
         }
     }
-    if !ecam || !drhd {
+    if !ecam || drhd != expect_drhd {
         return Err("missing exact QEMU ECAM or DRHD register resource".into());
     }
     Ok(())
@@ -1376,6 +1397,14 @@ mod tests {
 
     #[test]
     fn exact_system_view_excludes_padding_conflicts_and_ignores_dma_views() {
+        let no_drhd = VIEW
+            .lines()
+            .filter(|line| !line.contains("intel_iommu"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(validate_resources(&no_drhd, false).is_ok());
+        assert!(validate_resources(VIEW, false).is_err());
+        assert!(validate_resources(&no_drhd, true).is_err());
         assert!(validate(VIEW).is_ok());
         assert!(
             validate(&format!(

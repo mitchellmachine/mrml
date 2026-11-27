@@ -109,6 +109,7 @@ pub(super) enum Q35FixtureCase {
     StorageRead,
     StorageWriteDenied,
     StorageWrite,
+    StorageNoRemapper,
 }
 
 impl Q35FixtureCase {
@@ -131,6 +132,7 @@ impl Q35FixtureCase {
                 | Self::StorageRead
                 | Self::StorageWriteDenied
                 | Self::StorageWrite
+                | Self::StorageNoRemapper
         )
     }
     fn profile(self) -> u8 {
@@ -140,7 +142,7 @@ impl Q35FixtureCase {
             Self::BarWrongRelease | Self::BarValidRelease => 4,
             Self::CommandWrongRelease | Self::CommandDenied | Self::CommandCompleted => 5,
             Self::StorageDenied | Self::StorageRead => 6,
-            Self::StorageWriteDenied | Self::StorageWrite => 7,
+            Self::StorageWriteDenied | Self::StorageWrite | Self::StorageNoRemapper => 7,
             _ => 1,
         }
     }
@@ -326,7 +328,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         format!("q35,accel={accelerator}")
     };
     let mut command = Command::new(qemu);
-    if intel_iommu {
+    if intel_iommu && map_only_marker != Some(Q35FixtureCase::StorageNoRemapper) {
         let remapper = if isolated {
             "intel-iommu,id=mrml_probe_vtd,aw-bits=48,intremap=off"
         } else {
@@ -453,7 +455,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         .map_err(|error| format!("PackageQemuLaunchError {{ detail: {error} }}"))?;
     let start = Instant::now();
     let release = map_only_marker.and_then(|case| match case {
-        Q35FixtureCase::NoMarker => None,
+        Q35FixtureCase::NoMarker | Q35FixtureCase::StorageNoRemapper => None,
         Q35FixtureCase::WrongRelease
         | Q35FixtureCase::IsolatedWrongRelease
         | Q35FixtureCase::ShutdownWrongRelease
@@ -544,17 +546,25 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 bytes == expected
             };
             if rejection.is_none() && exact_trace {
-                let evidence = (verify_q35 && !released)
-                    .then(|| crate::qemu_mmio::verify_paused_q35_resources(&mut child));
+                let no_remapper = map_only_marker == Some(Q35FixtureCase::StorageNoRemapper);
+                let evidence = (verify_q35 && !released).then(|| {
+                    if no_remapper {
+                        crate::qemu_mmio::verify_paused_no_remapper(&mut child, trace)
+                    } else {
+                        crate::qemu_mmio::verify_paused_q35_resources(&mut child)
+                    }
+                });
                 child
                     .kill()
                     .map_err(|error| format!("PackageQemuStopError {{ detail: {error} }}"))?;
                 let _ = child.wait();
                 if let Some(evidence) = evidence {
                     evidence?;
-                    println!(
-                        "qemu-mmio-model|status=PASS|ecam=0xe0000000..=0xefffffff|drhd=0xfed90000..=0xfed9022f|padding=unmapped"
-                    );
+                    if !no_remapper {
+                        println!(
+                            "qemu-mmio-model|status=PASS|ecam=0xe0000000..=0xefffffff|drhd=0xfed90000..=0xfed9022f|padding=unmapped"
+                        );
+                    }
                 }
                 if let Some(case) = map_only_marker {
                     if let Some(report) = report {

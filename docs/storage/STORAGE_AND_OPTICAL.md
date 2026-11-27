@@ -3273,6 +3273,13 @@ with zero writes and no new translation. The fixture then verifies halt,
 revocation, and scrubbing as in the read-only case. This is a QEMU-only
 storage-transport result, not physical or filesystem write evidence.
 
+The absent-remapper control runs the same signed writable fixture with the
+emulated IOMMU removed. The signed loader refuses it at the missing DMAR
+stage before any native USB probe or host release. QEMU independently
+verifies the DRHD resource is absent and the unattached writable scratch
+backend has zero reads and writes and identical bytes. The firmware's
+prior PCI command state is not treated as a native device assignment.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The
