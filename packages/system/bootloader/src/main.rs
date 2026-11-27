@@ -4048,15 +4048,20 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         // SAFETY: this is the signed fixture's BSP and no secondary CPU has
         // started. Loader tables are identity-mapped and not mutated here.
         let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
-        for mapping in mrml_kernel::arch::x86_64::q35_fixture_probe_mappings()
-            .unwrap_or_else(|_| halt())
-        {
+        let mappings = mrml_kernel::arch::x86_64::q35_fixture_probe_mappings()
+            .unwrap_or_else(|_| halt());
+        for mapping in mappings {
             active
                 .verify_read_only_mmio_leaves(mapping)
                 .unwrap_or_else(|_| halt());
         }
-        native_fat32_probe::dma_fixture_rendezvous();
-        // This fixture ends on the BSP before any PCI or DRHD register access.
+        if native_fat32_probe::dma_fixture_rendezvous() {
+            // SAFETY: the exact RO/NX UC xHCI and remapper leaves were
+            // verified in the current root. Only the isolated signed QEMU
+            // test can get this far; host QMP proved the apertures before
+            // setting the release byte. No APs or mutable access exist.
+            unsafe { native_fat32_probe::dma_fixture_register_snapshot(mappings) };
+        }
         halt();
     }
     #[cfg(feature = "uefi-fat32-restart-probe")]

@@ -3120,10 +3120,15 @@ rendezvous before AP startup. The host runner pauses the same instance
 and checks both the exact live q35 memory map and the dedicated emulated
 UART's port range. Only then does it set the UART scratch byte over private
 QMP pipes and resume. The same signed image rejects the wrong release byte
-and stops after accepting the right one. There are no PCI or remapper
-register accesses and no MRML USB DMA in this test. The marker is an opt-in for the
-isolated model, not authenticated hardware provenance. Do not flash this
-profile or use it in a real hardware test.
+without touching either mapped device. With the right byte, it samples only
+fixed VT-d version, capability, extended capability and global status
+registers, and the exact xHCI function's PCI identity, command and class.
+It checks both capability-derived register arrays against the proven byte
+extent before admitting the report; it does not read the arrays. The report
+includes the observed bus-master bit, not an ownership or shutdown proof.
+There are no device register writes or MRML USB DMA in this test. The marker
+is an opt-in for the isolated model, not authenticated hardware provenance.
+Do not flash this profile or use it in a real hardware test.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

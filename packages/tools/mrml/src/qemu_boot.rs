@@ -344,7 +344,24 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 );
                 return Ok(());
             }
-            if rejection.is_none() && bytes == expected {
+            let report = if released && release == Some(true) {
+                match crate::qemu_mmio::register_snapshot(expected, &bytes) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(error);
+                    }
+                }
+            } else {
+                None
+            };
+            let exact_trace = if release == Some(true) {
+                report.is_some()
+            } else {
+                bytes == expected
+            };
+            if rejection.is_none() && exact_trace {
                 let evidence = (verify_q35 && !released)
                     .then(|| crate::qemu_mmio::verify_paused_q35_resources(&mut child));
                 child
@@ -358,8 +375,16 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                     );
                 }
                 if let Some(case) = map_only_marker {
+                    if let Some(report) = report {
+                        println!("{report}");
+                    }
+                    let access = if release == Some(true) {
+                        "fixed-read-only"
+                    } else {
+                        "none"
+                    };
                     println!(
-                        "q35-mmio-map-only|status=PASS|case={case:?}|qmp_release={released}|register_access=none|trace={}",
+                        "q35-mmio-probe|status=PASS|case={case:?}|qmp_release={released}|register_access={access}|trace={}",
                         encode_hex(&bytes)
                     );
                     return Ok(());
@@ -372,7 +397,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 );
                 return Ok(());
             }
-            if rejection.is_none() && bytes.len() >= expected.len() {
+            if rejection.is_none() && release != Some(true) && bytes.len() >= expected.len() {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(format!(

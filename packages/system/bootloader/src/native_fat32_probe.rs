@@ -199,7 +199,7 @@ pub(super) fn dma_mmio_coverage(covered: bool) {
 }
 
 #[cfg(feature = "q35-mmio-probe")]
-pub(super) fn dma_fixture_rendezvous() {
+pub(super) fn dma_fixture_rendezvous() -> bool {
     let scratch = || {
         let byte: u8;
         // SAFETY: this signed QEMU-only BSP fixture reads only the dedicated
@@ -209,7 +209,7 @@ pub(super) fn dma_fixture_rendezvous() {
     };
     if scratch() != 0 {
         trace(0xdf);
-        return;
+        return false;
     }
     trace(0xdc);
     for _ in 0..100_000_000 {
@@ -217,15 +217,63 @@ pub(super) fn dma_fixture_rendezvous() {
             0 => core::hint::spin_loop(),
             0xa6 => {
                 trace(0xde);
-                return;
+                return true;
             }
             _ => {
                 trace(0xdd);
-                return;
+                return false;
             }
         }
     }
     trace(0xdf);
+    false
+}
+
+/// Samples only aligned fixed RO registers of the two verified fixture pages.
+/// The caller must keep the verified root active throughout these reads.
+#[cfg(feature = "q35-mmio-probe")]
+pub(super) unsafe fn dma_fixture_register_snapshot(
+    mappings: [mrml_kernel::arch::x86_64::Mapping; 2],
+) {
+    use mrml_kernel::arch::x86_64::VtdRegisterLayout;
+    let [drhd, ecam] = mappings.map(|mapping| mapping.virtual_start().get() as usize);
+    // SAFETY: the caller establishes the current, exact, alias-free UC leaves
+    // and release. Only fixed aligned widths inside the proven apertures.
+    let (version, cap, ecap, status, pci_id, pci_command, pci_class) = unsafe {
+        (
+            core::ptr::read_volatile((drhd) as *const u32),
+            core::ptr::read_volatile((drhd + 0x08) as *const u64),
+            core::ptr::read_volatile((drhd + 0x10) as *const u64),
+            core::ptr::read_volatile((drhd + 0x1c) as *const u32),
+            core::ptr::read_volatile(ecam as *const u32),
+            core::ptr::read_volatile((ecam + 0x04) as *const u16),
+            core::ptr::read_volatile((ecam + 0x08) as *const u32),
+        )
+    };
+    if version != 0x10
+        || VtdRegisterLayout::from_capabilities(cap, ecap)
+            .and_then(|layout| layout.require_aperture(0x230))
+            .is_err()
+        || pci_id != 0x000d_1b36
+        || pci_class >> 8 != 0x0c0330
+    {
+        trace(0xdb);
+        return;
+    }
+    for bytes in [
+        &version.to_le_bytes()[..],
+        &cap.to_le_bytes(),
+        &ecap.to_le_bytes(),
+        &status.to_le_bytes(),
+        &pci_id.to_le_bytes(),
+        &pci_command.to_le_bytes(),
+        &pci_class.to_le_bytes(),
+    ] {
+        for &byte in bytes {
+            trace(byte);
+        }
+    }
+    trace(0xda);
 }
 
 fn trace(stage: u8) {

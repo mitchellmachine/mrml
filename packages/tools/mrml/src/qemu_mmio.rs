@@ -172,6 +172,36 @@ fn validate_scratch_uart(map: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub(super) fn register_snapshot(prefix: &[u8], bytes: &[u8]) -> Result<Option<String>, String> {
+    if prefix.starts_with(bytes) {
+        return Ok(None);
+    }
+    let data = bytes
+        .strip_prefix(prefix)
+        .ok_or("unexpected q35 fixed-register trace prefix")?;
+    if data.first() == Some(&0xdb) {
+        return Err("q35 guest rejected the VT-d extent or exact xHCI PCI identity".into());
+    }
+    if data.len() < 35 {
+        return Ok(None);
+    }
+    if data.len() != 35 || data[34] != 0xda {
+        return Err("wrong q35 fixed-register report length or trailer".into());
+    }
+    let long = |at| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+    let quad = |at| u64::from_le_bytes(data[at..at + 8].try_into().unwrap());
+    let (ver, cap, ecap, gsts, pci, class) =
+        (long(0), quad(4), quad(12), long(20), long(24), long(30));
+    let command = u16::from_le_bytes(data[28..30].try_into().unwrap());
+    if ver != 0x10 || cap == 0 || ecap == 0 || pci != 0x000d_1b36 || class >> 8 != 0x0c0330 {
+        return Err("q35 fixed-register report disagrees with the exact fixture".into());
+    }
+    Ok(Some(format!(
+        "q35-read-only-registers|status=PASS|ver={ver:#x}|cap={cap:#018x}|ecap={ecap:#018x}|gsts={gsts:#010x}|pci={pci:#010x}|command={command:#06x}|class_revision={class:#010x}|bme={}",
+        command & (1 << 2) != 0
+    )))
+}
+
 fn decode_map(data: &str) -> Result<String, String> {
     let mut out = String::with_capacity(data.len());
     let mut chars = data.chars();
@@ -314,5 +344,38 @@ mod tests {
             assert_eq!(sent.contains("o /b"), allowed);
             assert_eq!(sent.contains("\"cont\""), allowed);
         }
+    }
+
+    #[test]
+    fn snapshot_requires_the_release_prefix_and_a_complete_exact_report() {
+        let prefix = [0xdc, 0xde];
+        let data = [
+            &prefix[..],
+            &0x10_u32.to_le_bytes(),
+            &0x80d2_008c_222f_0606_u64.to_le_bytes(),
+            &0xf42_u64.to_le_bytes(),
+            &0_u32.to_le_bytes(),
+            &0x000d_1b36_u32.to_le_bytes(),
+            &4_u16.to_le_bytes(),
+            &0x0c03_3001_u32.to_le_bytes(),
+            &[0xda],
+        ]
+        .concat();
+        for end in 0..data.len() {
+            assert_eq!(register_snapshot(&prefix, &data[..end]).unwrap(), None);
+        }
+        assert!(
+            register_snapshot(&prefix, &data)
+                .unwrap()
+                .unwrap()
+                .contains("|bme=true")
+        );
+        for at in [0, 1, 2, 26, 35, 36] {
+            let mut wrong = data.clone();
+            wrong[at] ^= 0xff;
+            assert!(register_snapshot(&prefix, &wrong).is_err());
+        }
+        assert!(register_snapshot(&prefix, &[0xdc, 0xde, 0xdb]).is_err());
+        assert!(register_snapshot(&prefix, &[data.as_slice(), &[0]].concat()).is_err());
     }
 }
