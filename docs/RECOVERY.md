@@ -1991,7 +1991,9 @@ simultaneous guest's GPA mapping in the same process with a typed VID collision.
 A separate-process WHP diagnostic runs both signed guests without reusing a
 partition. The
 fixture duplicates only its anonymous, one-page RW/NX section into the exact
-child it spawned. A fixed-size private-pipe frame binds the child-local handle
+child it spawned, after rechecking the shared object's authority and both
+exact live target capabilities and one-page RW/NX ledger reservations. A
+fixed-size private-pipe frame binds the child-local handle
 to the expected signed provider payload digest before mapping. Both guest and
 native mappings are withdrawn. This is test-only evidence, not worker
 attestation, an installed storage service, or recovered Total placement.

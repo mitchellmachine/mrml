@@ -4278,7 +4278,7 @@ mod tests {
         let target = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
         let consumer = caps.insert(ObjectId(0x772), target).unwrap();
         let provider = caps.insert(ObjectId(0x773), target).unwrap();
-        let (projection, _) = reserve_microvm_peer_page_projection(
+        let (projection, object_capability) = reserve_microvm_peer_page_projection(
             &mut memory, pool, quota, consumer, provider,
             virtual_page / PAGE_SIZE, virtual_page / PAGE_SIZE, &mut caps,
         ).unwrap();
@@ -4312,8 +4312,15 @@ mod tests {
             .stdout(Stdio::null())
             .spawn().expect("start exact WHP fixture worker"));
         let deadline = Instant::now() + Duration::from_secs(15);
-        // The parent writes only one fixed-size frame and closes the pipe.
+        // Revalidate against the parent's authoritative ledger immediately
+        // before exporting the native page. The child cannot mint this grant.
+        // The parent retains the live ledger and does not mutate it until the
+        // exact child has exited and its alias is gone.
+        projection.validate_live_reservations(
+            &memory, consumer, provider, object_capability, &caps,
+        ).expect("live peer reservation required for WHP worker export");
         let handle = first.backing.as_ref().unwrap().duplicate_into(&worker.0);
+        // The parent writes only one fixed-size frame and closes the pipe.
         let mut input = worker.0.stdin.take().unwrap();
         input.write_all(&fixture_bootstrap(handle, provider_digest)).unwrap();
         drop(input);

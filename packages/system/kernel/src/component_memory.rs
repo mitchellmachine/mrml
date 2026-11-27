@@ -200,6 +200,58 @@ impl MicrovmPeerPageProjection {
         }
         Ok((first_target, second_target))
     }
+
+    /// Revalidates both target capabilities and the exact live ledger entries
+    /// before exporting a native alias. The caller still has to prove that the
+    /// native backing belongs to this shared object and prevent retirement
+    /// until every exported alias is withdrawn.
+    pub fn validate_live_reservations<
+        const P: usize,
+        const O: usize,
+        const M: usize,
+        const C: usize,
+    >(
+        &self,
+        table: &MemoryPoolTable<P, O, M>,
+        first: Capability,
+        second: Capability,
+        object: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<(), MemoryResourceError> {
+        self.validate_targets(first, second, capabilities)?;
+        capabilities.authorize_exact(object, MICROVM_PEER_PAGE_RIGHTS)?;
+        // Check the object capability against the ledger's exact authority,
+        // even for shared objects without physical backing in this table.
+        table.object_physical_backing(self.object, object, capabilities)?;
+        if table.object_backing(self.object)? != MemoryBackingKind::Shared {
+            return Err(MemoryResourceError::InvalidMapping);
+        }
+        self.validate_mapping_pair(table, first, second, capabilities)
+    }
+
+    fn validate_mapping_pair<const P: usize, const O: usize, const M: usize, const C: usize>(
+        &self,
+        table: &MemoryPoolTable<P, O, M>,
+        first: Capability,
+        second: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<(), MemoryResourceError> {
+        for (mapping, target, page) in [
+            (self.first_mapping, first, self.first_virtual_page),
+            (self.second_mapping, second, self.second_virtual_page),
+        ] {
+            let info = table.mapping_info(mapping, target, capabilities)?;
+            if info.object() != self.object
+                || info.virtual_page() != page
+                || info.object_page() != 0
+                || info.pages() != 1
+                || info.access() != Rights::READ.union(Rights::WRITE)
+            {
+                return Err(MemoryResourceError::InvalidMapping);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -600,30 +652,12 @@ pub unsafe fn release_microvm_peer_page_projection<
             second_target_capability,
             capabilities,
         )?;
-        let access = Rights::READ.union(Rights::WRITE);
-        let first = table.mapping_info(
-            projection.first_mapping,
+        projection.validate_mapping_pair(
+            table,
             first_target_capability,
-            capabilities,
-        )?;
-        let second = table.mapping_info(
-            projection.second_mapping,
             second_target_capability,
             capabilities,
         )?;
-        if first.object() != projection.object
-            || second.object() != projection.object
-            || first.virtual_page() != projection.first_virtual_page
-            || second.virtual_page() != projection.second_virtual_page
-            || first.object_page() != 0
-            || second.object_page() != 0
-            || first.pages() != 1
-            || second.pages() != 1
-            || first.access() != access
-            || second.access() != access
-        {
-            return Err(MemoryResourceError::InvalidMapping);
-        }
         // SAFETY: inherited from this function's native teardown contract. The
         // table method preflights the complete atomic ledger mutation.
         unsafe {
@@ -1493,6 +1527,63 @@ mod tests {
             assert!(!info.access().contains(Rights::EXECUTE));
         }
 
+        assert_eq!(
+            projection.validate_live_reservations(
+                &table, first_target, second_target, object_capability, &capabilities,
+            ),
+            Ok(())
+        );
+        let empty = MemoryPoolTable::<1, 1, 2>::new(31).unwrap();
+        assert!(
+            projection.validate_live_reservations(
+                &empty, first_target, second_target, object_capability, &capabilities,
+            ).is_err()
+        );
+        assert!(
+            projection.validate_live_reservations(
+                &table, second_target, first_target, object_capability, &capabilities,
+            ).is_err()
+        );
+        let unrelated_object = capabilities
+            .insert(ObjectId(0x803), MICROVM_PEER_PAGE_RIGHTS)
+            .unwrap();
+        assert!(
+            projection.validate_live_reservations(
+                &table, first_target, second_target, unrelated_object, &capabilities,
+            ).is_err()
+        );
+        // SAFETY: these are ledger-only fixtures, not installed native aliases.
+        unsafe {
+            table.release_mapping(projection.first_mapping(), first_target, &capabilities)
+                .unwrap();
+        }
+        let replacement_mapping = table
+            .reserve_mapping(
+                projection.object(),
+                object_capability,
+                first_target,
+                0x900,
+                0,
+                1,
+                Rights::READ.union(Rights::WRITE),
+                &capabilities,
+            )
+            .unwrap();
+        assert_ne!(replacement_mapping, projection.first_mapping());
+        assert_eq!(
+            projection.validate_live_reservations(
+                &table, first_target, second_target, object_capability, &capabilities,
+            ),
+            Err(MemoryResourceError::InvalidMapping)
+        );
+
+        capabilities.revoke(object_capability).unwrap();
+        assert_eq!(
+            projection.validate_live_reservations(
+                &table, first_target, second_target, object_capability, &capabilities,
+            ),
+            Err(MemoryResourceError::Capability(CapabilityError::Invalid))
+        );
         capabilities.revoke(first_target).unwrap();
         let replacement = capabilities
             .insert(ObjectId(0x801), MICROVM_PEER_TARGET_RIGHTS)
