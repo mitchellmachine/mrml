@@ -6530,8 +6530,20 @@ fn decode_character(token: Token<'_>) -> Result<u32, ExpressionError> {
                 u32::from_str_radix(&value[1..], 16).map_err(|_| invalid())
             }
             value if value.starts_with("u{") && value.ends_with('}') => {
-                let scalar =
-                    u32::from_str_radix(&value[2..value.len() - 1], 16).map_err(|_| invalid())?;
+                let mut bytes = value[2..value.len() - 1].bytes();
+                let mut scalar = bytes
+                    .next()
+                    .and_then(|byte| char::from(byte).to_digit(16))
+                    .ok_or_else(invalid)?;
+                let mut digits = 1;
+                for byte in bytes.filter(|&byte| byte != b'_') {
+                    if digits == 6 {
+                        return Err(invalid());
+                    }
+                    let digit = char::from(byte).to_digit(16).ok_or_else(invalid)?;
+                    scalar = scalar * 16 + digit;
+                    digits += 1;
+                }
                 char::from_u32(scalar).map(u32::from).ok_or_else(invalid)
             }
             _ => Err(invalid()),

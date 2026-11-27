@@ -82,6 +82,35 @@ mod tests {
     }
 
     #[test]
+    fn unicode_character_escapes_count_hex_digits_and_validate_scalars() {
+        for (source, scalar) in [
+            (r"'\u{41}'", 0x41),
+            (r"'\u{4__1_}'", 0x41),
+            (r"'\u{0000_41}'", 0x41),
+            (r"'\u{10_ff_ff}'", 0x10_ffff),
+        ] {
+            assert_eq!(evaluate(source), Ok(scalar));
+        }
+        for source in [
+            r"'\u{_41}'",
+            r"'\u{0000041}'",
+            r"'\u{}'",
+            r"'\u{D800}'",
+            r"'\u{110000}'",
+        ] {
+            let error = ExpressionParser::<4>::new(source).parse().unwrap_err();
+            assert_eq!(error.kind, ExpressionErrorKind::InvalidCharacter);
+            assert_eq!(
+                error.span,
+                Span {
+                    start: 0,
+                    end: source.len()
+                }
+            );
+        }
+    }
+
+    #[test]
     fn rejects_noncanonical_tuple_fields_at_the_index_token() {
         for source in ["pair.00", "pair.0_", "pair.0x0", "pair.0u8"] {
             let error = ExpressionParser::<4>::new(source).parse().unwrap_err();
