@@ -3007,8 +3007,23 @@ fn application_main() -> Result<()> {
                 .map_err(|error| {
                     anyhow!("WHP recovered complete preparation failed: {:?}", error)
                 })?;
-            let route = prepared.take(configured.identity.domain()).ok_or_else(|| {
+            let domain = configured.identity.domain();
+            let spec = prepared.spec(domain).ok_or_else(|| {
                 anyhow!("WHP complete preparation omitted the recovered component domain")
+            })?;
+            let verified = provider_executable
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing verified WHP Zstd provider"))?;
+            if !total.installed_admission().release().matches_service_executable(
+                spec, "org.mrml.zstd", verified,
+            ) {
+                prepared.cancel_all(total.admission_mut()).map_err(|error| {
+                    anyhow!("WHP recovered provider cancellation failed: {:?}", error)
+                })?;
+                return Err(anyhow!("WHP provider not bound to recovered domain and release"));
+            }
+            let route = prepared.take(domain).ok_or_else(|| {
+                anyhow!("WHP complete preparation omitted the recovered component route")
             })?;
             complete_isolation_preparation = Some(prepared);
             Some(route)

@@ -2483,6 +2483,27 @@ with its default 1 MiB PE stack. The runner now reserves 8 MiB with the same
 4 KiB initial commitment; the rebuilt executable completed the same signed
 probe. This is a bounded hosted-runner setting, not a guest stack change.
 
+Recovered activation now retains a bounded mapping from each authenticated
+package ID to its assigned domain, version, class, and payload digest. The
+hosted KVM and WHP component probes check the independently authenticated
+Zstd executable against that exact assignment before constructing the guest.
+This check does not grant routing or memory authority.
+
+The opt-in KVM recovery test now builds two distinct PE service fixtures,
+signs them under separate test roots, includes their actual payload digests
+in one signed release, and rejects wrong-root or cross-domain substitutions.
+The recovered owner starts the two executable images in separate KVM VMs.
+They produce distinct markers; a write to the same guest-physical address
+in the first does not appear in the second; and the second resumes after the
+first is retired. The same test exercises failed startup, retries teardown
+on the original guest, and rejects its retired endpoint after restart.
+Windows and Arch Linux kernel suites passed (763 each). KVM runner tests
+passed (16 plus the explicit live test); WHP runner tests passed (12). Fresh
+signed grouped ZIM/Zstd component probes still pass on both KVM and WHP.
+The separately signed two-VM test runs small diagnostic executables on hosted
+KVM; it does not boot the installed service set, exercise peer IPC, or qualify
+physical hardware. The grouped runner still launches ZIM and Zstd together.
+
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and
 operation-specific unused fields must be zero, sequences are exact and advance

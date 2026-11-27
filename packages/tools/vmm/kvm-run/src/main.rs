@@ -3199,8 +3199,23 @@ fn application_main() -> Result<()> {
                 .map_err(|error| {
                     anyhow!("KVM recovered complete preparation failed: {:?}", error)
                 })?;
-            let route = prepared.take(configured.identity.domain()).ok_or_else(|| {
+            let domain = configured.identity.domain();
+            let spec = prepared.spec(domain).ok_or_else(|| {
                 anyhow!("KVM complete preparation omitted the recovered component domain")
+            })?;
+            let verified = provider_executable
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing verified KVM Zstd provider"))?;
+            if !total.installed_admission().release().matches_service_executable(
+                spec, "org.mrml.zstd", verified,
+            ) {
+                prepared.cancel_all(total.admission_mut()).map_err(|error| {
+                    anyhow!("KVM recovered provider cancellation failed: {:?}", error)
+                })?;
+                return Err(anyhow!("KVM provider not bound to recovered domain and release"));
+            }
+            let route = prepared.take(domain).ok_or_else(|| {
+                anyhow!("KVM complete preparation omitted the recovered component route")
             })?;
             complete_isolation_preparation = Some(prepared);
             Some(route)
@@ -5901,8 +5916,80 @@ mrml_runtime::mrml_entrypoint!(application_main);
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
     use mrml_kernel::BootHandoff;
+
+    #[cfg(target_os = "linux")]
+    fn signed_recovery_service_fixture(marker: u8) -> (std::vec::Vec<u8>, TrustRoot) {
+        use mrml_crypto::{
+            LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, lamport_public_key, lamport_sign,
+        };
+        use mrml_kernel::{SIGNED_ARTIFACT_HEADER_BYTES, artifact_statement};
+
+        let mut image = [0u8; 1024];
+        image[..2].copy_from_slice(b"MZ");
+        image[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        image[0x80..0x84].copy_from_slice(b"PE\0\0");
+        image[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+        image[0x86..0x88].copy_from_slice(&1u16.to_le_bytes());
+        image[0x94..0x96].copy_from_slice(&240u16.to_le_bytes());
+        image[0x96..0x98].copy_from_slice(&2u16.to_le_bytes());
+        let optional = 0x98;
+        image[optional..optional + 2].copy_from_slice(&0x20bu16.to_le_bytes());
+        image[optional + 16..optional + 20].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[optional + 24..optional + 32]
+            .copy_from_slice(&RECOVERY_SERVICE_IMAGE_BASE.to_le_bytes());
+        image[optional + 32..optional + 36].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[optional + 36..optional + 40].copy_from_slice(&0x200u32.to_le_bytes());
+        image[optional + 56..optional + 60].copy_from_slice(&0x2000u32.to_le_bytes());
+        image[optional + 60..optional + 64].copy_from_slice(&0x200u32.to_le_bytes());
+        image[optional + 70..optional + 72].copy_from_slice(&0x100u16.to_le_bytes());
+        let section = optional + 240;
+        image[section..section + 5].copy_from_slice(b".text");
+        image[section + 8..section + 12].copy_from_slice(&9u32.to_le_bytes());
+        image[section + 12..section + 16].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[section + 16..section + 20].copy_from_slice(&0x200u32.to_le_bytes());
+        image[section + 20..section + 24].copy_from_slice(&0x200u32.to_le_bytes());
+        image[section + 36..section + 40].copy_from_slice(&0x6000_0000u32.to_le_bytes());
+        // Two inert marker writes to the hosted test adapter, then halt.
+        image[0x200..0x209].copy_from_slice(&[
+            0xb0,
+            marker,
+            0xe6,
+            0xe9,
+            0xb0,
+            marker + 2,
+            0xe6,
+            0xe9,
+            0xf4,
+        ]);
+
+        let private = std::vec![marker; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut public = std::vec![0; LAMPORT_PUBLIC_KEY_BYTES];
+        let mut signature = std::vec![0; LAMPORT_SIGNATURE_BYTES];
+        lamport_public_key(&private, &mut public).unwrap();
+        let root = TrustRoot::new(ArtifactKind::ServiceImage, Sha3_512::digest(&public), 1);
+        let digest = Sha3_512::digest(&image);
+        let statement =
+            artifact_statement(ArtifactKind::ServiceImage, 1, image.len() as u64, digest);
+        lamport_sign(&private, &statement, &mut signature).unwrap();
+        let mut signed = std::vec![0; SIGNED_ARTIFACT_OVERHEAD_BYTES + image.len()];
+        signed[..16].copy_from_slice(b"MRML-SIGNED-v1\0\0");
+        signed[16] = ArtifactKind::ServiceImage as u8;
+        signed[24..32].copy_from_slice(&1u64.to_le_bytes());
+        signed[32..40].copy_from_slice(&(image.len() as u64).to_le_bytes());
+        signed[40..104].copy_from_slice(&digest);
+        let signature_at = SIGNED_ARTIFACT_HEADER_BYTES + public.len();
+        signed[SIGNED_ARTIFACT_HEADER_BYTES..signature_at].copy_from_slice(&public);
+        signed[signature_at..SIGNED_ARTIFACT_OVERHEAD_BYTES].copy_from_slice(&signature);
+        signed[SIGNED_ARTIFACT_OVERHEAD_BYTES..].copy_from_slice(&image);
+        (signed, root)
+    }
+
+    #[cfg(target_os = "linux")]
+    const RECOVERY_SERVICE_IMAGE_BASE: u64 = 0xffff_8001_4000_0000;
 
     // The signed inventory exercises the real admission transaction; the
     // tiny guests are test payloads, not installed service artifacts.
@@ -5910,14 +5997,12 @@ mod tests {
     #[test]
     #[ignore = "requires a usable /dev/kvm; execute explicitly on a KVM host"]
     fn live_kvm_total_startup_rollback_and_same_spec_restart() {
-        extern crate std;
         use mrml_config::{
             CompleteTotalServiceConstructionError, CompleteTotalServiceStartError,
             PreparedMicrovmConfigurationAccessError, PreparedMicrovmConfigurationError,
         };
         use mrml_crypto::{LAMPORT_PRIVATE_KEY_BYTES, lamport_public_key};
         use mrml_kernel::IsolationServiceSpec;
-        use mrml_kvm::PreparedKvmFirmware;
         use mrml_package_format::{
             ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
             encode_system_release_with_runtime_inventory,
@@ -5928,10 +6013,9 @@ mod tests {
             [HOSTED_TOTAL_COMPONENT_DOMAIN, HOSTED_TOTAL_SECONDARY_DOMAIN];
         const IDS: [&str; 2] = ["org.mrml.test.first", "org.mrml.test.second"];
         const INTERFACES: [&str; 2] = ["org.mrml.interface.first", "org.mrml.interface.second"];
-        const DIGESTS: [[u8; 64]; 2] = [[0x61; 64], [0x62; 64]];
         const GEN: u64 = 33;
         let recovery = RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14).unwrap();
-        let handoff = boot_handoff(
+        let handoff_bytes = boot_handoff(
             21,
             [0x38; 32],
             [0xaa; 64],
@@ -5941,11 +6025,26 @@ mod tests {
             true,
         )
         .unwrap();
-        let handoff = BootHandoff::decode(handoff.as_slice(), |_| {}).unwrap();
+        let handoff = BootHandoff::decode(handoff_bytes.as_slice(), |_| {}).unwrap();
+        let signed = [
+            signed_recovery_service_fixture(0x51),
+            signed_recovery_service_fixture(0x52),
+        ];
+        let executables = [0, 1].map(|i| {
+            let container = SignedArtifact::decode(&signed[i].0).unwrap();
+            assert!(
+                container
+                    .verify_executable(&signed[1 - i].1, ArtifactKind::ServiceImage)
+                    .is_err()
+            );
+            container
+                .verify_executable(&signed[i].1, ArtifactKind::ServiceImage)
+                .unwrap()
+        });
         let versions = [0, 1].map(|i| SystemGenerationDigestRecord {
             package_id: IDS[i],
             version: 1,
-            artifact_digest: &DIGESTS[i],
+            artifact_digest: executables[i].artifact().digest(),
         });
         let providers = [0, 1].map(|i| {
             ComponentInterfaceProvider::exact(
@@ -5964,7 +6063,7 @@ mod tests {
         let classifications = [0, 1].map(|i| RuntimeInventoryRecord {
             package_id: IDS[i],
             version: 1,
-            artifact_digest: &DIGESTS[i],
+            artifact_digest: executables[i].artifact().digest(),
             class: RuntimeIsolationClass::MicrovmEligible,
             must_run: true,
             preferred: RuntimeIsolationPlacement::Microvm,
@@ -6029,31 +6128,34 @@ mod tests {
         });
 
         let kvm = KvmSystem::open().expect("this explicit live test requires usable KVM");
+        let marker_for = |i| if i == 0 { 0x51u8 } else { 0x52u8 };
+        let layout = KvmLaunchLayout::new(
+            0x10_0000,
+            32,
+            0x20_0000,
+            RECOVERY_SERVICE_IMAGE_BASE,
+            0x50_0000,
+            0xffff_8000_0050_0000,
+            0x100_0000,
+            0xffff_8000_0100_0000,
+            PRIVILEGE_STACK_ARENA_PAGES,
+            false,
+        )
+        .unwrap();
         type TestLauncher = PreparedMicrovmConfigurationLauncher<
-            AdmittedConfigurationGuestFactory<PreparedKvmFirmware>,
+            AdmittedConfigurationGuestFactory<PreparedKvmGuest<16>>,
         >;
         let launch = |spec: IsolationServiceSpec| {
-            let marker = if spec.domain() == DOMAINS[0] {
-                0x51
-            } else {
-                0x52
-            };
-            let mut firmware = [0; 4096];
-            // Two marker writes, then halt. This has no device or host authority.
-            firmware[4080..4089].copy_from_slice(&[
-                0xb0,
-                marker,
-                0xe6,
-                0xe9,
-                0xb0,
-                marker + 2,
-                0xe6,
-                0xe9,
-                0xf4,
-            ]);
-            let mut guest = kvm.prepare_firmware_probe(&firmware).unwrap();
+            let i = DOMAINS
+                .iter()
+                .position(|domain| *domain == spec.domain())
+                .unwrap();
+            let marker = marker_for(i);
+            let mut guest = kvm
+                .prepare_guest::<16>(0, &executables[i], handoff_bytes.as_slice(), layout)
+                .unwrap();
             assert_eq!(
-                guest.run().unwrap(),
+                VmBackend::run(&mut guest, 0).unwrap(),
                 VmExit::Io {
                     port: 0xe9,
                     size: 1,
@@ -6066,10 +6168,21 @@ mod tests {
             let endpoint = launcher.launch_microvm(spec).unwrap();
             (launcher, endpoint)
         };
+        let prepare = |owner: &mut RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>| {
+            let prepared = owner.prepare_complete_service_set(&bindings).unwrap();
+            let release = owner.installed_admission().release();
+            for i in 0..2 {
+                let spec = prepared.spec(DOMAINS[i]).unwrap();
+                assert!(release.matches_service_executable(spec, IDS[i], &executables[i]));
+                assert!(!release.matches_service_executable(spec, IDS[1 - i], &executables[1 - i]));
+                assert!(!release.matches_service_executable(spec, IDS[i], &executables[1 - i]));
+            }
+            prepared
+        };
         let stale = core::cell::Cell::new(None);
         let mut owner = recover();
         assert_eq!(owner.admission().running().count(), 0);
-        let prepared = owner.prepare_complete_service_set(&bindings).unwrap();
+        let prepared = prepare(&mut owner);
         let stops = core::cell::Cell::new(0);
         let mut stop =
             |domain, (mut launcher, endpoint): (TestLauncher, ConfigurationMicrovmEndpoint)| {
@@ -6116,7 +6229,7 @@ mod tests {
         assert_eq!(stops.get(), 2);
 
         let mut owner = recover();
-        let prepared = owner.prepare_complete_service_set(&bindings).unwrap();
+        let prepared = prepare(&mut owner);
         let (runtime, mut routed) = owner
             .start_prepared_services(
                 prepared,
@@ -6138,6 +6251,19 @@ mod tests {
 
         let (mut first, live) = routed.take(DOMAINS[0]).unwrap().into_endpoint();
         let (mut second, other) = routed.take(DOMAINS[1]).unwrap().into_endpoint();
+        // Both guests use the same guest-physical stack address, but the
+        // hosted adapter observes independent backing before either retires.
+        const STACK_SAMPLE: u64 = 0x100_0040;
+        let mut sample = [0xff; 4];
+        VmBackend::write_guest(first.active_guest_mut(live).unwrap(), STACK_SAMPLE, b"MRML")
+            .unwrap();
+        VmBackend::read_guest(first.active_guest(live).unwrap(), STACK_SAMPLE, &mut sample)
+            .unwrap();
+        assert_eq!(&sample, b"MRML");
+        VmBackend::read_guest(second.active_guest(other).unwrap(), STACK_SAMPLE, &mut sample)
+            .unwrap();
+        assert_eq!(sample, [0; 4]);
+
         let stale = stale.get().unwrap();
         assert_eq!(stale.spec(), live.spec());
         assert!(matches!(
@@ -6149,7 +6275,7 @@ mod tests {
             Err(PreparedMicrovmConfigurationError::WrongEndpoint)
         );
         assert_eq!(
-            first.active_guest_mut(live).unwrap().run().unwrap(),
+            VmBackend::run(first.active_guest_mut(live).unwrap(), 0).unwrap(),
             VmExit::Io {
                 port: 0xe9,
                 size: 1,
@@ -6161,7 +6287,7 @@ mod tests {
         first.revoke_microvm(&live).unwrap();
         // The other real VM continues independently after retirement.
         assert_eq!(
-            second.active_guest_mut(other).unwrap().run().unwrap(),
+            VmBackend::run(second.active_guest_mut(other).unwrap(), 0).unwrap(),
             VmExit::Io {
                 port: 0xe9,
                 size: 1,
