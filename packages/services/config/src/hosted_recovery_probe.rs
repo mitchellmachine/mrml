@@ -212,7 +212,7 @@ unsafe impl FileReadBackend for CheckpointBackend {
     }
 }
 
-struct ReachableMetadataBackend {
+struct ReachableMetadataBackend<'data> {
     fail_block: Option<u64>,
     header: [u8; BLOCK_BYTES],
     primary: [u8; BLOCK_BYTES],
@@ -231,9 +231,11 @@ struct ReachableMetadataBackend {
     object_ids: [u8; BLOCK_BYTES],
     service: [u8; BLOCK_BYTES],
     service_extents: [u8; BLOCK_BYTES],
+    service_data_start: u64,
+    service_data: &'data [u8],
 }
 
-unsafe impl BlockServiceBackend for ReachableMetadataBackend {
+unsafe impl BlockServiceBackend for ReachableMetadataBackend<'_> {
     type Error = ();
 
     fn read_blocks(
@@ -245,11 +247,16 @@ unsafe impl BlockServiceBackend for ReachableMetadataBackend {
         if device != recovery_device() || self.fail_block == Some(block) {
             return Err(());
         }
-        const SERVICE_DATA: [u8; BLOCK_BYTES] = {
-            let mut bytes = [0; BLOCK_BYTES];
-            bytes[0] = 0x53;
-            bytes
-        };
+        if (self.service_data_start..header().block_count()).contains(&block)
+            && output.len() == BLOCK_BYTES
+        {
+            let start = usize::try_from(block - self.service_data_start).map_err(|_| ())? * BLOCK_BYTES;
+            let end = (start + BLOCK_BYTES).min(self.service_data.len());
+            let bytes = self.service_data.get(start..end).ok_or(())?;
+            output.fill(0);
+            output[..bytes.len()].copy_from_slice(bytes);
+            return Ok(());
+        }
         let source = match block {
             0 => &self.header,
             1 => &self.primary,
@@ -268,7 +275,6 @@ unsafe impl BlockServiceBackend for ReachableMetadataBackend {
             21 => &self.object_ids,
             22 => &self.service,
             23 => &self.service_extents,
-            99 => &SERVICE_DATA,
             _ => return Err(()),
         };
         if output.len() != source.len() {
@@ -423,7 +429,7 @@ fn padded_extent_digest(bytes: &[u8], extent_bytes: usize) -> Option<[u8; 32]> {
     Some(digest.finalize())
 }
 
-fn build_reachable_total_device(
+fn build_reachable_total_device<'data>(
     root_generation: u64,
     configuration_length: usize,
     configuration_bytes: &[u8; BLOCK_BYTES],
@@ -432,8 +438,9 @@ fn build_reachable_total_device(
     deployment_length: usize,
     deployment_bytes: &[u8; BLOCK_BYTES],
     release_bytes: &[u8],
+    service_data: &'data [u8],
     fail_block: Option<u64>,
-) -> Result<ReachableMetadataBackend, HostedRecoveryProbeError> {
+) -> Result<ReachableMetadataBackend<'data>, HostedRecoveryProbeError> {
     if deployment_length == 0
         || deployment_length > BLOCK_BYTES
         || release_bytes.is_empty()
@@ -634,13 +641,18 @@ fn build_reachable_total_device(
     .encode(&mut deployment_extents)
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
 
+    let service_blocks = service_data.len().div_ceil(BLOCK_BYTES);
+    if service_blocks == 0 || service_blocks > 32 {
+        return Err(HostedRecoveryProbeError::StorageLayout);
+    }
+    let service_data_start = header().block_count() - service_blocks as u64;
     let release_block_count = release_bytes.len().div_ceil(BLOCK_BYTES);
     if RELEASE_BLOCK_BASE
         .checked_add(
             u64::try_from(release_block_count)
                 .map_err(|_| HostedRecoveryProbeError::ReleaseLayout)?,
         )
-        .is_none_or(|end| end > 99)
+        .is_none_or(|end| end > service_data_start)
     {
         return Err(HostedRecoveryProbeError::ReleaseLayout);
     }
@@ -686,25 +698,24 @@ fn build_reachable_total_device(
     .encode(&mut release_extents)
     .map_err(|_| HostedRecoveryProbeError::ReleaseLayout)?;
 
-    // One regular service-shaped file in the validated graph. The byte is
-    // only a selection fixture, not an executable or a trust grant.
+    // A distinct service file in this controlled recovery graph.
     let mut service_metadata = [0; BLOCK_BYTES];
     FileMetadata::new(
-        header(), service, CONFIGURATION_GENERATION, 1, 1,
-        service_extents_pointer, digest(&[0x53]),
+        header(), service, CONFIGURATION_GENERATION, service_data.len() as u64, 1,
+        service_extents_pointer, digest(service_data),
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
     .encode(
         (&mut service_metadata[..mrml_storage::FILE_METADATA_BYTES]).try_into().unwrap(),
     );
     let service_extent = ExtentRecord::data(
-        service, CONFIGURATION_GENERATION, 0, 1, 99,
-        padded_extent_digest(&[0x53], BLOCK_BYTES).unwrap(),
+        service, CONFIGURATION_GENERATION, 0, service_blocks as u32, service_data_start,
+        padded_extent_digest(service_data, service_blocks * BLOCK_BYTES).unwrap(),
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     let mut service_extents = [0; BLOCK_BYTES];
     ExtentImage::<1>::build(
-        header(), service, CONFIGURATION_GENERATION, 1, service_extents_pointer, &[service_extent],
+        header(), service, CONFIGURATION_GENERATION, service_data.len() as u64, service_extents_pointer, &[service_extent],
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
     .encode(&mut service_extents)
@@ -828,7 +839,7 @@ fn build_reachable_total_device(
             AllocationKind::FileData,
         )
         .unwrap(),
-        AllocationRecord::new(service, CONFIGURATION_GENERATION, 99, 1, AllocationKind::FileData).unwrap(),
+        AllocationRecord::new(service, CONFIGURATION_GENERATION, service_data_start, service_blocks as u32, AllocationKind::FileData).unwrap(),
     ];
     let mut allocation = [0; BLOCK_BYTES];
     AllocationImage::<20>::build(header(), root_generation, allocation_pointer, &records)
@@ -870,6 +881,8 @@ fn build_reachable_total_device(
         object_ids,
         service: service_metadata,
         service_extents,
+        service_data_start,
+        service_data,
     })
 }
 
@@ -881,7 +894,7 @@ fn build_reachable_device(
     authority_length: usize,
     authority_bytes: &[u8; BLOCK_BYTES],
     fail_block: Option<u64>,
-) -> Result<ReachableMetadataBackend, HostedRecoveryProbeError> {
+) -> Result<ReachableMetadataBackend<'static>, HostedRecoveryProbeError> {
     let deployment = [0x44; BLOCK_BYTES];
     build_reachable_total_device(
         root_generation,
@@ -892,17 +905,18 @@ fn build_reachable_device(
         1,
         &deployment,
         &[0x52],
+        &[0x53],
         fail_block,
     )
 }
 
-fn recover_reachable_files<'a>(
+fn recover_reachable_files<'a, 'data>(
     service: &'a mut BlockService<1, 1>,
-    backend: &'a mut ReachableMetadataBackend,
+    backend: &'a mut ReachableMetadataBackend<'data>,
     boot: InstalledRecoveryBootIdentity,
     volume_scratch: &'a mut [u8],
 ) -> Result<
-    RecoveredInstalledStableTotalSystemSelection<'a, ReachableMetadataBackend, 1, 1, 1, 6>,
+    RecoveredInstalledStableTotalSystemSelection<'a, ReachableMetadataBackend<'data>, 1, 1, 1, 6>,
     HostedRecoveryProbeError,
 > {
     let installed = reacquire_handoff_installed_recovery_device(
@@ -1246,6 +1260,7 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
         deployment_checkpoint.len(),
         &checkpoint_backend.bytes,
         release_bytes,
+        &[0x53],
         None,
     )?;
     let mut recovery_block_service = recovery_block_service()?;
@@ -1424,7 +1439,138 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
+    use mrml_crypto::Sha3_512;
+    use mrml_kernel::{ArtifactKind, SIGNED_ARTIFACT_OVERHEAD_BYTES, TrustRoot};
+
+    fn signed_recovery_service_fixture(marker: u8) -> (std::vec::Vec<u8>, TrustRoot) {
+        use mrml_crypto::{
+            LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES,
+            lamport_public_key, lamport_sign,
+        };
+        use mrml_kernel::{SIGNED_ARTIFACT_HEADER_BYTES, artifact_statement};
+
+        let mut image = [0u8; 1024];
+        image[..2].copy_from_slice(b"MZ");
+        image[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        image[0x80..0x84].copy_from_slice(b"PE\0\0");
+        image[0x84..0x86].copy_from_slice(&0x8664u16.to_le_bytes());
+        image[0x86..0x88].copy_from_slice(&1u16.to_le_bytes());
+        image[0x94..0x96].copy_from_slice(&240u16.to_le_bytes());
+        image[0x96..0x98].copy_from_slice(&2u16.to_le_bytes());
+        let optional = 0x98;
+        image[optional..optional + 2].copy_from_slice(&0x20bu16.to_le_bytes());
+        image[optional + 16..optional + 20].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[optional + 24..optional + 32]
+            .copy_from_slice(&(0xffff_8001_4000_0000u64).to_le_bytes());
+        image[optional + 32..optional + 36].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[optional + 36..optional + 40].copy_from_slice(&0x200u32.to_le_bytes());
+        image[optional + 56..optional + 60].copy_from_slice(&0x2000u32.to_le_bytes());
+        image[optional + 60..optional + 64].copy_from_slice(&0x200u32.to_le_bytes());
+        image[optional + 70..optional + 72].copy_from_slice(&0x100u16.to_le_bytes());
+        let section = optional + 240;
+        image[section..section + 5].copy_from_slice(b".text");
+        image[section + 8..section + 12].copy_from_slice(&9u32.to_le_bytes());
+        image[section + 12..section + 16].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[section + 16..section + 20].copy_from_slice(&0x200u32.to_le_bytes());
+        image[section + 20..section + 24].copy_from_slice(&0x200u32.to_le_bytes());
+        image[section + 36..section + 40].copy_from_slice(&0x6000_0000u32.to_le_bytes());
+        // Two inert marker writes to the hosted test adapter, then halt.
+        image[0x200..0x209].copy_from_slice(&[
+            0xb0,
+            marker,
+            0xe6,
+            0xe9,
+            0xb0,
+            marker + 2,
+            0xe6,
+            0xe9,
+            0xf4,
+        ]);
+
+        let private = std::vec![marker; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut public = std::vec![0; LAMPORT_PUBLIC_KEY_BYTES];
+        let mut signature = std::vec![0; LAMPORT_SIGNATURE_BYTES];
+        lamport_public_key(&private, &mut public).unwrap();
+        let root = TrustRoot::new(ArtifactKind::ServiceImage, Sha3_512::digest(&public), 1);
+        let digest = Sha3_512::digest(&image);
+        let statement =
+            artifact_statement(ArtifactKind::ServiceImage, 1, image.len() as u64, digest);
+        lamport_sign(&private, &statement, &mut signature).unwrap();
+        let mut signed = std::vec![0; SIGNED_ARTIFACT_OVERHEAD_BYTES + image.len()];
+        signed[..16].copy_from_slice(b"MRML-SIGNED-v1\0\0");
+        signed[16] = ArtifactKind::ServiceImage as u8;
+        signed[24..32].copy_from_slice(&1u64.to_le_bytes());
+        signed[32..40].copy_from_slice(&(image.len() as u64).to_le_bytes());
+        signed[40..104].copy_from_slice(&digest);
+        let signature_at = SIGNED_ARTIFACT_HEADER_BYTES + public.len();
+        signed[SIGNED_ARTIFACT_HEADER_BYTES..signature_at].copy_from_slice(&public);
+        signed[signature_at..SIGNED_ARTIFACT_OVERHEAD_BYTES].copy_from_slice(&signature);
+        signed[SIGNED_ARTIFACT_OVERHEAD_BYTES..].copy_from_slice(&image);
+        (signed, root)
+    }
+
+    #[test]
+    fn installed_service_reader_verifies_the_exact_signed_executable() {
+        use crate::InstalledServiceExecutableError as Error;
+        let (signed, key) = signed_recovery_service_fixture(0x71);
+        let data = [0x42; BLOCK_BYTES];
+        let mut backend = build_reachable_total_device(
+            14, 1, &data, 1, &data, 1, &data, &[0x52], &signed, None,
+        ).unwrap();
+        let mut scratch = [0; BLOCK_BYTES];
+        let mut block = recovery_block_service().unwrap();
+        let mut recovered = recover_reachable_files(
+            &mut block, &mut backend, installed_boot_identity(14).unwrap(), &mut scratch,
+        ).unwrap();
+        let mut table = StorageAuthorityTable::<2>::new();
+        let requested = (object(13), CONFIGURATION_GENERATION);
+        let handle = table.insert(requested.0, StorageObjectKind::File, StorageRights::READ, principal()).unwrap();
+        let wrong = table.insert(object(12), StorageObjectKind::File, StorageRights::READ, principal()).unwrap();
+        let mut buffer = std::vec![0xff; signed.len() + 1];
+        assert!(matches!(
+            recovered.read_verified_service_executable(requested, &table, handle, principal(), &key, &mut buffer[..signed.len() - 1]),
+            Err(Error::BufferTooSmall)
+        ));
+        assert!(matches!(
+            recovered.read_verified_service_executable(requested, &table, wrong, principal(), &key, &mut buffer),
+            Err(Error::File(crate::InstalledServiceFileReadError::Read(mrml_storage::FileReadError::WrongFile)))
+        ));
+        let wrong_key = TrustRoot::new(ArtifactKind::ServiceImage, [0x20; 64], 1);
+        assert!(matches!(
+            recovered.read_verified_service_executable(requested, &table, handle, principal(), &wrong_key, &mut buffer),
+            Err(Error::Executable(mrml_kernel::ExecutableArtifactError::Signature(
+                mrml_kernel::ArtifactError::UntrustedPublicKey
+            )))
+        ));
+        let newer_floor = TrustRoot::new(
+            ArtifactKind::ServiceImage,
+            Sha3_512::digest(&signed[mrml_kernel::SIGNED_ARTIFACT_HEADER_BYTES
+                ..mrml_kernel::SIGNED_ARTIFACT_HEADER_BYTES + mrml_crypto::LAMPORT_PUBLIC_KEY_BYTES]),
+            2,
+        );
+        assert!(matches!(
+            recovered.read_verified_service_executable(
+                requested, &table, handle, principal(), &newer_floor, &mut buffer,
+            ),
+            Err(Error::Executable(mrml_kernel::ExecutableArtifactError::Signature(
+                mrml_kernel::ArtifactError::RollbackDetected
+            )))
+        ));
+        let executable = recovered.read_verified_service_executable(
+            requested, &table, handle, principal(), &key, &mut buffer,
+        ).unwrap();
+        assert_eq!(executable.artifact().kind(), ArtifactKind::ServiceImage);
+        assert_eq!(executable.artifact().version(), 1);
+        assert_eq!(
+            *executable.artifact().digest(),
+            Sha3_512::digest(&signed[SIGNED_ARTIFACT_OVERHEAD_BYTES..])
+        );
+        assert_eq!(&buffer[..signed.len()], signed.as_slice());
+        assert_eq!(buffer[signed.len()], 0xff);
+    }
     use crate::{
         SelectedStableSystemRecovery, SelectedStableSystemRecoveryError,
         SelectedStableTotalSystemRecovery,

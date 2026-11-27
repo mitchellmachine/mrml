@@ -109,6 +109,17 @@ in a hosted fixture, not an installed boot or executable signature. The
 next integration step is to pass authenticated recovered service bytes to
 the complete executable preflight before creating guests.
 
+Recovery now also reads the full selected service file into a bounded
+caller buffer, using the length from the recovered metadata. It verifies
+the container signature and version under a separately supplied service
+trust root before parsing the PE. The read handle, file generation, trust
+root, and release assignment remain separate checks. A controlled block
+fixture recovered an independently signed multi-block executable and checked
+its payload digest; wrong file authority, insufficient output, wrong key,
+and an artifact below the pinned version floor were rejected. The returned
+executable can enter release preflight, but this test does not launch it or
+boot from installed media.
+
 ## Implementation evidence
 
 The current UEFI filesystem calls load boot artifacts and the current GOP

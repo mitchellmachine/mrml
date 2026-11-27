@@ -13,8 +13,10 @@ use mrml_kernel::arch::x86_64::UserContext;
 #[cfg(not(target_os = "uefi"))]
 use mrml_kernel::{IsolationBackendFailure, ServiceAddressSpaceEraser, ServiceCleanupError};
 use mrml_kernel::{
-    ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride,
+    ActivatedReleaseTotalMicrovmInventory, ArtifactError, ArtifactKind, BootHandoff, BootIsolationOverride,
     BootRecoveryEnvelope, Capability, CapabilityError, CapabilitySpace, EarlyKernelContext,
+    ExecutableArtifactError, MAX_SERVICE_IMAGE_BYTES, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    SignedArtifact, TrustRoot, VerifiedExecutable,
     HostSubstrateReason, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
     InstalledRecoverySource, IsolationAdmissionTable, IsolationMode,
     IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
@@ -33,7 +35,7 @@ use mrml_storage::{
     BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle, BlockVolume,
     BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
     FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteCommitError,
-    FileWriteError, InstalledRecoverySessionError, MetadataError, MetadataPointer,
+    FileWriteError, InstalledRecoverySessionError, MAX_FILE_READ_BYTES, MetadataError, MetadataPointer,
     NativeBlockCorrelationError, NativeSataBlockRoute, PlatformBlockDeviceDescriptor,
     PlatformBlockDeviceIdentity, PlatformBlockTransport, PreparedFileWrite, ReachableFileSelection,
     RecoveredReachableState, RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend,
@@ -1588,6 +1590,16 @@ pub enum InstalledServiceFileReadError<E> {
     Read(FileReadError<BlockVolumeError<BlockServiceError<E>>>),
 }
 
+#[derive(Debug)]
+pub enum InstalledServiceExecutableError<E> {
+    File(InstalledServiceFileReadError<E>),
+    InvalidLength,
+    BufferTooSmall,
+    ShortRead,
+    Container(ArtifactError),
+    Executable(ExecutableArtifactError),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StableSystemSelectionError<E> {
     Recovery(RecoveryError<E>),
@@ -2382,6 +2394,50 @@ impl<
         file.file_state()
             .read(authority, handle, principal, offset, output, &mut self.recovered.volume)
             .map_err(InstalledServiceFileReadError::Read)
+    }
+
+    /// Reads the entire selected generation, using its metadata length rather
+    /// than a caller-supplied length, and authenticates it with the caller's
+    /// pinned service root before interpreting PE offsets. The output may
+    /// retain unauthenticated bytes on failure; only success yields authority-
+    /// neutral executable evidence that can be checked against a release.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_verified_service_executable<'out, const A: usize>(
+        &mut self,
+        requested: (StorageObjectId, u64),
+        authority: &StorageAuthorityTable<A>,
+        handle: StorageHandle,
+        principal: StoragePrincipal,
+        root: &TrustRoot,
+        output: &'out mut [u8],
+    ) -> Result<VerifiedExecutable<'out>, InstalledServiceExecutableError<B::Error>> {
+        use InstalledServiceExecutableError as Error;
+        let [selected] = self
+            .recovered
+            .selected
+            .select_service_files([requested])
+            .map_err(|error| Error::File(InstalledServiceFileReadError::Selection(error)))?;
+        let file = selected.file_state();
+        let length = usize::try_from(file.length()).map_err(|_| Error::InvalidLength)?;
+        let maximum = SIGNED_ARTIFACT_OVERHEAD_BYTES + MAX_SERVICE_IMAGE_BYTES as usize;
+        if !(SIGNED_ARTIFACT_OVERHEAD_BYTES + 1..=maximum).contains(&length) {
+            return Err(Error::InvalidLength);
+        }
+        let bytes = output.get_mut(..length).ok_or(Error::BufferTooSmall)?;
+        let mut offset = 0;
+        for chunk in bytes.chunks_mut(MAX_FILE_READ_BYTES) {
+            let read = file
+                .read(authority, handle, principal, offset, chunk, &mut self.recovered.volume)
+                .map_err(|error| Error::File(InstalledServiceFileReadError::Read(error)))?;
+            if read != chunk.len() {
+                return Err(Error::ShortRead);
+            }
+            offset += read as u64;
+        }
+        SignedArtifact::decode(bytes)
+            .map_err(Error::Container)?
+            .verify_executable(root, ArtifactKind::ServiceImage)
+            .map_err(Error::Executable)
     }
 
     pub const fn volume(&self) -> &BlockVolume<'a, ServicedBlockDevice<'a, B, DEVICES, SESSIONS>> {
