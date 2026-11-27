@@ -4015,6 +4015,13 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         initialized
     });
     #[cfg(feature = "uefi-fat32-restart-probe")]
+    if let Some((dmar, mcfg)) = handoff.dma_acpi(encoded) {
+        use mrml_kernel::arch::x86_64::{DmarTopology, McfgTopology};
+        DmarTopology::<8, 64>::parse(dmar).unwrap_or_else(|_| halt());
+        McfgTopology::<8>::parse(mcfg).unwrap_or_else(|_| halt());
+        native_fat32_probe::dma_topology_verified();
+    }
+    #[cfg(feature = "uefi-fat32-restart-probe")]
     let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML KERNEL ENTRY");
     #[cfg(feature = "certificate-service-probe")]
     let _ = &early;

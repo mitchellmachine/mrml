@@ -3060,6 +3060,14 @@ restart trace. This exercises the CPU mapping, not controller DMA. It
 does not issue device capabilities, write PCI configuration or touch
 physical media.
 
+The opt-in loader also copies the unique DMAR and MCFG ACPI tables when
+both exist. The kernel validates the bounded snapshots and their topology
+before reporting success; an absent pair carries no DMA authority.
+`mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU` checks the ACPI handoff
+with QEMU's Intel IOMMU. The `test-dma` companion omits the IOMMU and
+expects no topology-success marker. Neither boot accesses PCI registers or
+activates DMA for the MRML xHCI driver.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

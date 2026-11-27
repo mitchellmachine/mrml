@@ -19,7 +19,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU";
 
 pub(super) fn command(args: &[String]) -> Result<(), String> {
     match args {
@@ -28,17 +28,22 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         [mode, file] if mode == "image" => create(&load_workspace()?, Path::new(file), false),
-        [mode, code, vars, qemu] if matches!(mode.as_str(), "test" | "test-dma") => {
-            let dma_probe = mode == "test-dma";
+        [mode, code, vars, qemu]
+            if matches!(mode.as_str(), "test" | "test-dma" | "test-dma-acpi") =>
+        {
+            let acpi_probe = mode == "test-dma-acpi";
+            let dma_probe = acpi_probe || mode == "test-dma";
             let scratch = Scratch::new().map_err(|error| error.to_string())?;
             let image = scratch.path("bringup.img");
             create(&load_workspace()?, &image, dma_probe)?;
-            let expected_trace = if dma_probe {
+            let expected_trace = if acpi_probe {
+                "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d4d5d0d1d2d3"
+            } else if dma_probe {
                 "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d4d0d1d2d3"
             } else {
                 "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3"
             };
-            crate::qemu_boot::run_qemu(&words(&[
+            let mut options = words(&[
                 &string(&image),
                 code,
                 vars,
@@ -48,7 +53,11 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
                 expected_trace,
                 "--timeout-seconds",
                 "60",
-            ]))
+            ]);
+            if acpi_probe {
+                options.extend(words(&["--iommu", "intel"]));
+            }
+            crate::qemu_boot::run_qemu(&options)
         }
         _ => device_command(args).map_err(|error| format!("mrml usb: {error}")),
     }

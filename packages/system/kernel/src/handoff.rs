@@ -9,6 +9,8 @@ pub const HANDOFF_HEADER_BYTES: usize = 168;
 pub const HANDOFF_REGION_BYTES: usize = 24;
 pub const MAX_HANDOFF_REGIONS: usize = 128;
 pub const MAX_HANDOFF_MADT_BYTES: usize = 8 * 1024;
+pub const MAX_HANDOFF_DMA_ACPI_TABLE_BYTES: usize = 4 * 1024;
+const DMA_ACPI_LENGTH_BYTES: usize = 4;
 pub const HANDOFF_SERVICE_BYTES: usize = 160;
 pub const HANDOFF_APPLICATION_BYTES: usize = 160;
 pub const HANDOFF_RECOVERY_STATE_BYTES: usize = 40;
@@ -20,7 +22,9 @@ pub const MAX_HANDOFF_BYTES: usize = HANDOFF_HEADER_BYTES
     + HANDOFF_APPLICATION_BYTES
     + HANDOFF_RECOVERY_STATE_BYTES
     + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES
-    + INSTALLED_RECOVERY_SATA_ROUTE_BYTES;
+    + INSTALLED_RECOVERY_SATA_ROUTE_BYTES
+    + DMA_ACPI_LENGTH_BYTES
+    + 2 * MAX_HANDOFF_DMA_ACPI_TABLE_BYTES;
 
 const FLAG_SECURE_BOOT: u16 = 1;
 const FLAG_MEASURED_BOOT: u16 = 1 << 1;
@@ -34,6 +38,7 @@ const FLAG_APPLICATION_IMAGE: u16 = 1 << 8;
 const FLAG_TOTAL_MICROVM_ONCE: u16 = 1 << 9;
 const FLAG_INSTALLED_RECOVERY_IDENTITY: u16 = 1 << 10;
 const FLAG_INSTALLED_RECOVERY_SATA_ROUTE: u16 = 1 << 11;
+const FLAG_DMA_ACPI: u16 = 1 << 12;
 const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_MEASURED_BOOT
     | FLAG_ROLLBACK_PROTECTED
@@ -45,7 +50,8 @@ const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_APPLICATION_IMAGE
     | FLAG_TOTAL_MICROVM_ONCE
     | FLAG_INSTALLED_RECOVERY_IDENTITY
-    | FLAG_INSTALLED_RECOVERY_SATA_ROUTE;
+    | FLAG_INSTALLED_RECOVERY_SATA_ROUTE
+    | FLAG_DMA_ACPI;
 
 /// Authority-free, nonpersistent isolation overlay requested by the trusted
 /// loader for this boot. Runtime admission must still prove that Total mode is
@@ -405,6 +411,7 @@ pub struct BootHandoff {
     boot_dma: Option<MemoryRegion>,
     madt_offset: usize,
     madt_length: usize,
+    dma_acpi_lengths: Option<(usize, usize)>,
     ap_trampoline: Option<u64>,
     ap_stack_arena: Option<u64>,
     service: Option<ServiceLaunch>,
@@ -439,6 +446,16 @@ impl BootHandoff {
     pub fn madt<'a>(&self, encoded: &'a [u8]) -> Option<&'a [u8]> {
         (self.madt_length != 0)
             .then(|| &encoded[self.madt_offset..self.madt_offset + self.madt_length])
+    }
+
+    /// Returns checked firmware snapshots, not permission to access PCI or DMA.
+    pub fn dma_acpi<'a>(&self, encoded: &'a [u8]) -> Option<(&'a [u8], &'a [u8])> {
+        let (dmar, mcfg) = self.dma_acpi_lengths?;
+        let start = self.madt_offset + self.madt_length + DMA_ACPI_LENGTH_BYTES;
+        Some((
+            encoded.get(start..start + dmar)?,
+            encoded.get(start + dmar..start + dmar + mcfg)?,
+        ))
     }
 
     pub const fn ap_trampoline(&self) -> Option<u64> {
@@ -544,14 +561,33 @@ impl BootHandoff {
         let madt_offset = trampoline_offset
             .checked_add(trampoline_bytes)
             .ok_or(HandoffError::NonCanonical)?;
-        let expected_length = madt_offset
+        let madt_end = madt_offset
             .checked_add(madt_length)
             .ok_or(HandoffError::NonCanonical)?;
+        let (expected_length, dma_acpi_lengths) = if flags & FLAG_DMA_ACPI == 0 {
+            (madt_end, None)
+        } else {
+            let trailer = input.get(madt_end..).ok_or(HandoffError::NonCanonical)?;
+            let counts = trailer
+                .get(..DMA_ACPI_LENGTH_BYTES)
+                .ok_or(HandoffError::NonCanonical)?;
+            let dmar = usize::from(read_u16(counts, 0));
+            let mcfg = usize::from(read_u16(counts, 2));
+            let end = DMA_ACPI_LENGTH_BYTES + dmar + mcfg;
+            if trailer.len() != end {
+                return Err(HandoffError::NonCanonical);
+            }
+            validate_dma_acpi_tables(
+                &trailer[DMA_ACPI_LENGTH_BYTES..DMA_ACPI_LENGTH_BYTES + dmar],
+                &trailer[DMA_ACPI_LENGTH_BYTES + dmar..end],
+            )?;
+            (madt_end + end, Some((dmar, mcfg)))
+        };
         if encoded_length != expected_length || input.len() != expected_length {
             return Err(HandoffError::NonCanonical);
         }
         if madt_length != 0 {
-            let madt = &input[madt_offset..expected_length];
+            let madt = &input[madt_offset..madt_end];
             if &madt[..4] != b"APIC"
                 || read_u32(madt, 4) as usize != madt_length
                 || madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0
@@ -682,6 +718,9 @@ impl BootHandoff {
         if !framebuffer_is_mmio {
             return Err(HandoffError::FramebufferOutsideMmio);
         }
+        if dma_acpi_lengths.is_some() && boot_dma.is_none() {
+            return Err(HandoffError::NonCanonical);
+        }
         if let Some(service) = service {
             for (start, pages) in [
                 (
@@ -750,6 +789,7 @@ impl BootHandoff {
             boot_dma,
             madt_offset,
             madt_length,
+            dma_acpi_lengths,
             ap_trampoline,
             ap_stack_arena,
             service,
@@ -760,6 +800,47 @@ impl BootHandoff {
             isolation_override,
         })
     }
+}
+
+fn validate_dma_acpi_tables(dmar: &[u8], mcfg: &[u8]) -> Result<(), HandoffError> {
+    for (table, signature, minimum) in [(dmar, b"DMAR", 48), (mcfg, b"MCFG", 44)] {
+        if !(minimum..=MAX_HANDOFF_DMA_ACPI_TABLE_BYTES).contains(&table.len())
+            || &table[..4] != signature
+            || read_u32(table, 4) as usize != table.len()
+            || table.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0
+        {
+            return Err(HandoffError::NonCanonical);
+        }
+    }
+    Ok(())
+}
+
+/// Appends snapshots to an already encoded handoff containing a boot DMA tag.
+/// Failure does not modify the encoded handoff.
+pub fn append_boot_dma_acpi(
+    length: usize,
+    dmar: &[u8],
+    mcfg: &[u8],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    validate_dma_acpi_tables(dmar, mcfg)?;
+    let total = length
+        .checked_add(DMA_ACPI_LENGTH_BYTES + dmar.len() + mcfg.len())
+        .filter(|&total| total <= output.len() && total <= MAX_HANDOFF_BYTES)
+        .ok_or(HandoffError::NonCanonical)?;
+    let handoff = BootHandoff::decode(&output[..length], |_| {})?;
+    if handoff.boot_dma().is_none() || handoff.dma_acpi_lengths.is_some() {
+        return Err(HandoffError::NonCanonical);
+    }
+    let flags = read_u16(output, 22) | FLAG_DMA_ACPI;
+    output[22..24].copy_from_slice(&flags.to_le_bytes());
+    output[16..20].copy_from_slice(&(total as u32).to_le_bytes());
+    let start = length + DMA_ACPI_LENGTH_BYTES;
+    output[length..length + 2].copy_from_slice(&(dmar.len() as u16).to_le_bytes());
+    output[length + 2..start].copy_from_slice(&(mcfg.len() as u16).to_le_bytes());
+    output[start..start + dmar.len()].copy_from_slice(dmar);
+    output[start + dmar.len()..total].copy_from_slice(mcfg);
+    Ok(total)
 }
 
 // Each argument is an independently validated field of the fixed wire format;
@@ -2056,14 +2137,11 @@ mod tests {
         encoded[16..20].copy_from_slice(&(THREE_REGION_BYTES as u32).to_le_bytes());
         encoded[20..22].copy_from_slice(&3u16.to_le_bytes());
         encoded[22..24].copy_from_slice(
-            &(KNOWN_FLAGS
-                & !(FLAG_MADT_SNAPSHOT
-                    | FLAG_AP_TRAMPOLINE
-                    | FLAG_SERVICE_IMAGE
-                    | FLAG_APPLICATION_IMAGE
-                    | FLAG_RECOVERY_STATE
-                    | FLAG_INSTALLED_RECOVERY_IDENTITY
-                    | FLAG_INSTALLED_RECOVERY_SATA_ROUTE))
+            &(FLAG_SECURE_BOOT
+                | FLAG_MEASURED_BOOT
+                | FLAG_ROLLBACK_PROTECTED
+                | FLAG_COHERENT_RELEASE
+                | FLAG_TOTAL_MICROVM_ONCE)
                 .to_le_bytes(),
         );
         encoded[24..32].copy_from_slice(&7u64.to_le_bytes());
@@ -2128,6 +2206,41 @@ mod tests {
                 .unwrap()
                 .acpi_root(),
             0x9008
+        );
+    }
+
+    #[test]
+    fn boot_dma_acpi_pair_round_trips_and_corruption_is_rejected_before_emit() {
+        let base = valid_handoff();
+        let mut output = [0; THREE_REGION_BYTES + DMA_ACPI_LENGTH_BYTES + 48 + 44];
+        output[..base.len()].copy_from_slice(&base);
+        let table = |signature: &[u8; 4], bytes: &mut [u8]| {
+            let length = bytes.len() as u32;
+            bytes[..4].copy_from_slice(signature);
+            bytes[4..8].copy_from_slice(&length.to_le_bytes());
+            bytes[9] =
+                0u8.wrapping_sub(bytes.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        };
+        let (mut dmar, mut mcfg) = ([0; 48], [0; 44]);
+        table(b"DMAR", &mut dmar);
+        table(b"MCFG", &mut mcfg);
+        assert_eq!(
+            append_boot_dma_acpi(base.len(), &dmar, &mcfg, &mut output),
+            Err(HandoffError::NonCanonical)
+        );
+        output[HANDOFF_HEADER_BYTES + HANDOFF_REGION_BYTES + 16] = MemoryKind::BootDma as u8;
+        let total = append_boot_dma_acpi(base.len(), &dmar, &mcfg, &mut output).unwrap();
+        assert_eq!(total, output.len());
+        let decoded = BootHandoff::decode(&output, |_| {}).unwrap();
+        assert_eq!(decoded.dma_acpi(&output), Some((&dmar[..], &mcfg[..])));
+        assert_eq!(
+            append_boot_dma_acpi(total, &dmar, &mcfg, &mut output),
+            Err(HandoffError::NonCanonical)
+        );
+        output[total - 1] ^= 1;
+        assert_eq!(
+            BootHandoff::decode(&output, |_| panic!("must validate before emit")).err(),
+            Some(HandoffError::NonCanonical)
         );
     }
 

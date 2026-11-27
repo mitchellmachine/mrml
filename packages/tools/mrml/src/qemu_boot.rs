@@ -82,7 +82,7 @@ pub fn create_media(args: &[String]) -> Result<(), String> {
 
 pub fn run_qemu(args: &[String]) -> Result<(), String> {
     if args.len() < 5 {
-        return Err("PackageQemuBootUsage { expected: IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--accelerator tcg|whpx|kvm] [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX] }".into());
+        return Err("PackageQemuBootUsage { expected: IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--accelerator tcg|whpx|kvm] [--iommu intel] [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX] }".into());
     }
     for input in &args[..3] {
         if !Path::new(input).is_file() {
@@ -107,6 +107,11 @@ pub fn run_qemu(args: &[String]) -> Result<(), String> {
     if !matches!(accelerator, "tcg" | "whpx" | "kvm") {
         return Err("PackageQemuAcceleratorInvalid".into());
     }
+    let intel_iommu = match option(args, "--iommu")? {
+        None => false,
+        Some("intel") => true,
+        Some(_) => return Err("PackageQemuIommuInvalid".into()),
+    };
     let expected = option(args, "--expect-hex")?
         .map(parse_hex)
         .transpose()?
@@ -146,6 +151,7 @@ pub fn run_qemu(args: &[String]) -> Result<(), String> {
         rejection: rejection.as_deref(),
         timeout,
         accelerator,
+        intel_iommu,
     });
     let _ = fs::remove_file(vars);
     result
@@ -161,6 +167,7 @@ struct QemuChildOptions<'a> {
     rejection: Option<&'a [u8]>,
     timeout: u64,
     accelerator: &'a str,
+    intel_iommu: bool,
 }
 
 fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
@@ -174,9 +181,14 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         rejection,
         timeout,
         accelerator,
+        intel_iommu,
     } = options;
     let machine = format!("q35,accel={accelerator}");
-    let mut child = Command::new(qemu)
+    let mut command = Command::new(qemu);
+    if intel_iommu {
+        command.args(["-device", "intel-iommu,aw-bits=48,intremap=off"]);
+    }
+    let mut child = command
         .args(["-machine", &machine, "-m", "512M", "-display", "none"])
         .args(["-serial", "none", "-monitor", "none", "-no-reboot"])
         .arg("-drive")
@@ -316,7 +328,11 @@ fn validate_options(args: &[String]) -> Result<(), String> {
     while index < args.len() {
         if !matches!(
             args[index].as_str(),
-            "--accelerator" | "--timeout-seconds" | "--expect-hex" | "--expect-rejection-hex"
+            "--accelerator"
+                | "--iommu"
+                | "--timeout-seconds"
+                | "--expect-hex"
+                | "--expect-rejection-hex"
         ) || index + 1 == args.len()
         {
             return Err("PackageQemuBootUsage { unknown_option }".into());

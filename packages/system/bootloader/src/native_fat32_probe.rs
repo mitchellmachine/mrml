@@ -186,6 +186,10 @@ pub(super) fn dma_handoff_verified() {
     trace(0xd4);
 }
 
+pub(super) fn dma_topology_verified() {
+    trace(0xd5);
+}
+
 fn trace(stage: u8) {
     // SAFETY: this diagnostic runs at CPL0 on x86 and port 0xe9 is the opt-in trace.
     unsafe { asm!("out dx, al", in("dx") 0xe9u16, in("al") stage, options(nomem, nostack)) };

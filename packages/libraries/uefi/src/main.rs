@@ -11,11 +11,11 @@ use mrml_kernel::{
     ArtifactKind, BOOTSTRAP_STATE_BYTES, BootDmaReservation, BootIsolationOverride, BuildReceipt,
     Color, FramebufferInfo, FramebufferSurface, InstalledRecoveryBootIdentity,
     InstalledRecoverySataRoute, MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_HANDOFF_BYTES,
-    MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
-    MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MemoryKind, MemoryRegion, MonotonicStateStore,
-    PeImage, PendingBootRelease, PhysAddr, PixelFormat, RELEASE_MANIFEST_BYTES,
-    RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact,
-    TrustRoot,
+    MAX_HANDOFF_DMA_ACPI_TABLE_BYTES, MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES,
+    MAX_LAUNCH_POLICY_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MemoryKind, MemoryRegion,
+    MonotonicStateStore, PeImage, PendingBootRelease, PhysAddr, PixelFormat,
+    RELEASE_MANIFEST_BYTES, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch,
+    SignedArtifact, TrustRoot, append_boot_dma_acpi,
     arch::x86_64::{
         AcpiMemory, BOOT_DMA_VIRTUAL_START, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES,
         PagePermissions, PageTableBuildError, PageTableBuilder, PageTableStore,
@@ -1226,6 +1226,28 @@ unsafe fn launch_after_exit(
         Ok(length) => length,
         Err(_) => halt(),
     };
+    let mut dmar = [0; MAX_HANDOFF_DMA_ACPI_TABLE_BYTES];
+    let mut mcfg = [0; MAX_HANDOFF_DMA_ACPI_TABLE_BYTES];
+    let dma_acpi = if transition.boot_dma.is_some() {
+        use mrml_kernel::arch::x86_64::{AcpiError, copy_dmar, copy_mcfg};
+        match copy_dmar(&mut acpi_memory, acpi_root, &mut dmar) {
+            Ok(dmar_len) => match copy_mcfg(&mut acpi_memory, acpi_root, &mut mcfg) {
+                Ok(mcfg_len) => Some((&dmar[..dmar_len], &mcfg[..mcfg_len])),
+                Err(AcpiError::MissingMcfg) => None,
+                Err(_) => {
+                    paint_boot_stage(framebuffer, b"MRML BOOT MCFG FAIL");
+                    halt();
+                }
+            },
+            Err(AcpiError::MissingDmar) => None,
+            Err(_) => {
+                paint_boot_stage(framebuffer, b"MRML BOOT DMAR FAIL");
+                halt();
+            }
+        }
+    } else {
+        None
+    };
     loader_trace(0xb2);
     paint_boot_stage(framebuffer, b"MRML MADT PASS");
     if enter_kernel(
@@ -1242,6 +1264,7 @@ unsafe fn launch_after_exit(
         framebuffer,
         &regions[..region_count],
         &madt_storage[..madt_length],
+        dma_acpi,
         service,
         recovery_state,
         installed_recovery,
@@ -2088,6 +2111,7 @@ fn enter_kernel(
     framebuffer: Framebuffer,
     regions: &[NormalizedRegion],
     madt: &[u8],
+    dma_acpi: Option<(&[u8], &[u8])>,
     service: PreparedService,
     recovery_state: Option<RecoveryStateMetadata>,
     installed_recovery: Option<InstalledRecoveryHandoff>,
@@ -2164,6 +2188,11 @@ fn enter_kernel(
             handoff,
         )
         .map_err(|_| LOAD_ERROR)?;
+    let handoff_length = if let Some((dmar, mcfg)) = dma_acpi {
+        append_boot_dma_acpi(handoff_length, dmar, mcfg, handoff).map_err(|_| LOAD_ERROR)?
+    } else {
+        handoff_length
+    };
     loader_trace(0xb3);
     if kernel_entry == 0 {
         return Err(LOAD_ERROR);
