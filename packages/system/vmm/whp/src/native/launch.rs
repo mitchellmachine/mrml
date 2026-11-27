@@ -4123,8 +4123,8 @@ mod tests {
         pe
     }
 
-    // Test-only owner of one pagefile-backed Windows section. Each worker
-    // maps the same section independently; neither receives a process handle.
+    // Test-only owner of one anonymous pagefile-backed Windows section.
+    // Only the child selected by the parent receives a duplicate.
     struct FixtureSection {
         handle: core::ptr::NonNull<core::ffi::c_void>,
         view: core::ptr::NonNull<core::ffi::c_void>,
@@ -4134,45 +4134,96 @@ mod tests {
     unsafe extern "system" {
         fn CreateFileMappingW(file: *mut core::ffi::c_void, attributes: *const core::ffi::c_void,
             protection: u32, high: u32, low: u32, name: *const u16) -> *mut core::ffi::c_void;
-        fn OpenFileMappingW(access: u32, inherit: i32, name: *const u16) -> *mut core::ffi::c_void;
+        fn GetCurrentProcess() -> *mut core::ffi::c_void;
+        fn DuplicateHandle(source_process: *mut core::ffi::c_void,
+            source: *mut core::ffi::c_void, target_process: *mut core::ffi::c_void,
+            target: *mut *mut core::ffi::c_void, access: u32, inherit: i32, options: u32) -> i32;
         fn MapViewOfFile(section: *mut core::ffi::c_void, access: u32,
             high: u32, low: u32, size: usize) -> *mut core::ffi::c_void;
         fn UnmapViewOfFile(base: *const core::ffi::c_void) -> i32;
         fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
     }
 
+    const FIXTURE_SECTION_ACCESS: u32 = 0x0006; // SECTION_MAP_READ | SECTION_MAP_WRITE
+    const FIXTURE_BOOTSTRAP_MAGIC: &[u8; 8] = b"MRMLWP01";
+    const FIXTURE_BOOTSTRAP_BYTES: usize = 80;
+
+    fn fixture_bootstrap(handle: usize, digest: &[u8; 64]) -> [u8; FIXTURE_BOOTSTRAP_BYTES] {
+        let mut bytes = [0; FIXTURE_BOOTSTRAP_BYTES];
+        bytes[..8].copy_from_slice(FIXTURE_BOOTSTRAP_MAGIC);
+        bytes[8..16].copy_from_slice(&(handle as u64).to_le_bytes());
+        bytes[16..].copy_from_slice(digest);
+        bytes
+    }
+
+    fn decode_fixture_bootstrap(bytes: &[u8], digest: &[u8; 64]) -> Option<usize> {
+        let bytes: &[u8; FIXTURE_BOOTSTRAP_BYTES] = bytes.try_into().ok()?;
+        if &bytes[..8] != FIXTURE_BOOTSTRAP_MAGIC || &bytes[16..] != digest {
+            return None;
+        }
+        let handle = usize::try_from(u64::from_le_bytes(bytes[8..16].try_into().ok()?)).ok()?;
+        (handle != 0 && handle != usize::MAX).then_some(handle)
+    }
+
+    #[test]
+    fn worker_bootstrap_rejects_noncanonical_or_mismatched_frames() {
+        let digest = [0x5a; 64];
+        let bytes = fixture_bootstrap(56, &digest);
+        assert_eq!(decode_fixture_bootstrap(&bytes, &digest), Some(56));
+        for len in 0..bytes.len() {
+            assert_eq!(decode_fixture_bootstrap(&bytes[..len], &digest), None);
+        }
+        let mut long = [0; FIXTURE_BOOTSTRAP_BYTES + 1];
+        long[..bytes.len()].copy_from_slice(&bytes);
+        assert_eq!(decode_fixture_bootstrap(&long, &digest), None);
+        for index in (0..8).chain(16..bytes.len()) {
+            let mut changed = bytes;
+            changed[index] ^= 1;
+            assert_eq!(decode_fixture_bootstrap(&changed, &digest), None);
+        }
+        for handle in [0, usize::MAX] {
+            assert_eq!(decode_fixture_bootstrap(&fixture_bootstrap(handle, &digest), &digest), None);
+        }
+    }
+
     impl FixtureSection {
-        fn open(directory: &std::path::Path, create: bool) -> Self {
-            const ACCESS: u32 = 0x0006; // FILE_MAP_READ | FILE_MAP_WRITE
-            let suffix = directory.file_name().unwrap().to_str().unwrap();
-            assert!(suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'));
-            let name: std::vec::Vec<u16> = suffix.encode_utf16()
-                .chain(std::iter::once(0)).collect();
-            // SAFETY: the name is NUL-terminated and the section is a single
-            // non-executable, pagefile-backed page using the caller's default ACL.
+        fn create() -> Self {
+            // SAFETY: no name or security-attributes pointer is supplied.
+            // INVALID_HANDLE_VALUE requests an anonymous, RW/NX pagefile page.
             let handle = unsafe {
-                let handle = if create {
-                    let value = CreateFileMappingW(
-                        core::ptr::without_provenance_mut(usize::MAX),
-                        core::ptr::null(), 4, 0, PAGE_SIZE as u32, name.as_ptr(),
-                    );
-                    if !value.is_null()
-                        && std::io::Error::last_os_error().raw_os_error() == Some(183)
-                    {
-                        CloseHandle(value);
-                        panic!("unexpected existing test section");
-                    }
-                    value
-                } else {
-                    OpenFileMappingW(ACCESS, 0, name.as_ptr())
-                };
-                core::ptr::NonNull::new(handle).unwrap_or_else(|| {
-                    panic!("open WHP test section: {}", std::io::Error::last_os_error())
-                })
+                CreateFileMappingW(
+                    core::ptr::without_provenance_mut(usize::MAX),
+                    core::ptr::null(), 4, 0, PAGE_SIZE as u32, core::ptr::null(),
+                )
             };
+            Self::from_fixture_handle(handle)
+        }
+
+        fn duplicate_into(&self, child: &std::process::Child) -> usize {
+            use std::os::windows::io::AsRawHandle;
+            let mut target = core::ptr::null_mut();
+            // SAFETY: the source handle is our owned pagefile section. The
+            // target is the exact owned child process, not looked up by PID.
+            // Only its local RW mapping handle is returned, non-inheritable.
+            let success = unsafe {
+                DuplicateHandle(GetCurrentProcess(), self.handle.as_ptr(),
+                    child.as_raw_handle(), &mut target, FIXTURE_SECTION_ACCESS, 0, 0)
+            };
+            assert_ne!(success, 0, "duplicate WHP test section: {}", std::io::Error::last_os_error());
+            assert!(!target.is_null());
+            target.addr()
+        }
+
+        // Receives only handles created above or sent by the test parent over
+        // the dedicated stdin pipe. A handle value in arbitrary bytes is not
+        // authority, and this is not a supported production bootstrap.
+        fn from_fixture_handle(handle: *mut core::ffi::c_void) -> Self {
+            let handle = core::ptr::NonNull::new(handle).unwrap_or_else(|| {
+                panic!("open WHP test section: {}", std::io::Error::last_os_error())
+            });
             // SAFETY: handle owns a section; this maps exactly one page at zero.
             let view = unsafe {
-                let address = MapViewOfFile(handle.as_ptr(), ACCESS, 0, 0, PAGE_SIZE as usize);
+                let address = MapViewOfFile(handle.as_ptr(), FIXTURE_SECTION_ACCESS, 0, 0, PAGE_SIZE as usize);
                 core::ptr::NonNull::new(address).unwrap_or_else(|| {
                     let error = std::io::Error::last_os_error();
                     CloseHandle(handle.as_ptr());
@@ -4200,25 +4251,25 @@ mod tests {
     fn run_peer_block_in_worker(
         first: PreparedWhpGuest<'_>,
         virtual_page: u64,
+        provider_digest: &[u8; 64],
     ) {
         use mrml_interface_storage_block_provider_v1::OpaqueHandle;
         use mrml_kernel::VmDeadlineOutcome;
         use mrml_storage::{ReadOnlyBlockImage, bind_microvm_block_read};
-        use std::time::{SystemTime, UNIX_EPOCH};
+        use std::io::Write;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
 
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let directory = std::env::temp_dir().join(mrml_runtime::mrml_format!(
-            "mrml-whp-peer-{}-{stamp:x}", std::process::id()
-        ).as_str());
-        std::fs::create_dir(&directory).unwrap();
-        struct Scratch(std::path::PathBuf);
-        impl Drop for Scratch {
+        // Reap the exact process on every error path before the first guest
+        // may run again or release its view.
+        struct Worker(std::process::Child);
+        impl Drop for Worker {
             fn drop(&mut self) {
-                let _ = std::fs::remove_dir(&self.0);
+                let _ = self.0.kill();
+                let _ = self.0.wait();
             }
         }
-        let directory = Scratch(directory);
-        let backing = FixtureSection::open(&directory.0, true);
+        let backing = FixtureSection::create();
         let mut caps = CapabilitySpace::<8>::new();
         let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x771).unwrap();
         let (pool, quota) = memory.create_root(
@@ -4251,14 +4302,29 @@ mod tests {
         let notification = client.submit(1, &mut page, &projection, &caps).unwrap();
         first.write(&page).unwrap();
         let executable = std::env::current_exe().unwrap();
-        let completed = mrml_runtime::Command::new(executable.to_str().unwrap())
-            .args(["--ignored", "--exact", "native::launch::tests::peer_block_partition_worker"])
-            .current_dir(directory.0.to_str().unwrap())
-            .output_with_limits(64 * 1024, 15_000)
-            .expect("WHP worker execution");
-        assert!(completed.status.success(), "WHP worker failed: {} {}",
-            core::str::from_utf8(&completed.stdout).unwrap_or(""),
-            core::str::from_utf8(&completed.stderr).unwrap_or(""));
+        // MRML compiles tests with panic=abort. Run this exact test in the
+        // launched process, or libtest creates a grandchild which has neither
+        // the private stdin nor the non-inheritable duplicated section handle.
+        let mut worker = Worker(std::process::Command::new(executable)
+            .args(["-Z", "unstable-options", "--force-run-in-process", "--ignored", "--exact",
+                "native::launch::tests::peer_block_partition_worker", "--nocapture"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn().expect("start exact WHP fixture worker"));
+        let deadline = Instant::now() + Duration::from_secs(15);
+        // The parent writes only one fixed-size frame and closes the pipe.
+        let handle = first.backing.as_ref().unwrap().duplicate_into(&worker.0);
+        let mut input = worker.0.stdin.take().unwrap();
+        input.write_all(&fixture_bootstrap(handle, provider_digest)).unwrap();
+        drop(input);
+        let status = loop {
+            if let Some(status) = worker.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "WHP fixture worker timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(status.success(), "WHP fixture worker failed: {status}");
         let mut expected = page;
         expected[1024..1536].fill(0xa6);
         let mut worker_page = [0u8; PAGE_SIZE as usize];
@@ -4280,22 +4346,21 @@ mod tests {
         first.retire().unwrap();
         caps.revoke(provider).unwrap();
         mrml_runtime::mrml_println!(
-            "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-shared-section"
+            "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-duplicated-section"
         );
     }
 
     #[test]
-    #[ignore = "run only by the WHP two-partition test in its private scratch directory"]
+    #[ignore = "run only by the WHP two-partition test with its private stdin pipe"]
     fn peer_block_partition_worker() {
         use mrml_kernel::VmDeadlineOutcome;
-        let directory = std::env::current_dir().unwrap();
-        if !directory.file_name().and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("mrml-whp-peer-")) {
-            return;
-        }
-        let backing = FixtureSection::open(&directory, false);
-
-        let system = WhpSystem::open().unwrap();
+        use std::io::{IsTerminal, Read};
+        let stdin = std::io::stdin();
+        assert!(!stdin.is_terminal(), "WHP fixture worker requires redirected stdin");
+        let mut input = stdin.lock();
+        let mut frame = [0; FIXTURE_BOOTSTRAP_BYTES];
+        input.read_exact(&mut frame).unwrap();
+        assert_eq!(input.read(&mut [0; 1]).unwrap(), 0, "trailing fixture data");
         let virtual_page = 0xffff_8000_004f_0000;
         let mut encoded = [0; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024];
         write_signed_fixture(peer_block_probe_pe(true, virtual_page), ArtifactKind::VmImage, &mut encoded, 1);
@@ -4309,6 +4374,10 @@ mod tests {
             0x10_0000, 16, 0x20_0000, 0x20_0000, 0x30_0000, 0x30_0000,
             0x40_0000, 0xffff_8000_0040_0000, PRIVILEGE_STACK_ARENA_PAGES, true,
         ).unwrap();
+        let handle = decode_fixture_bootstrap(&frame, executable.artifact().digest())
+            .expect("WHP fixture worker image or bootstrap mismatch");
+        let backing = FixtureSection::from_fixture_handle(core::ptr::without_provenance_mut(handle));
+        let system = WhpSystem::open().unwrap();
         let guest = system.prepare_boot_kernel(&executable, &valid_handoff(), layout).unwrap();
         let mut caps = CapabilitySpace::<8>::new();
         let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x771).unwrap();
@@ -4324,7 +4393,7 @@ mod tests {
         ).unwrap();
 
         let view = backing.view;
-        // SAFETY: this test worker opens the parent's single section view,
+        // SAFETY: this worker maps the exact duplicate of the parent's section,
         // with the parent waiting until this guest's mapping is retired.
         let mut guest = unsafe {
             PreparedWhpWorkerPage::prepare(
@@ -4400,7 +4469,7 @@ mod tests {
             // A second partition object can be created on this host, but
             // its first GPA mapping collides with the live in-process owner.
             Err(WhpError::PartitionAlreadyExists) => {
-                run_peer_block_in_worker(first, peer_virtual);
+                run_peer_block_in_worker(first, peer_virtual, provider_executable.artifact().digest());
                 return;
             }
             Err(error) => panic!("second WHP partition failed: {error:?}"),

@@ -65,9 +65,9 @@ path = "packages/system/vmm/whp/src/native.rs"
 reason = "Bind the declared native library kernel32 for the reviewed native FFI boundary in org.mrml.system.vmm-whp."
 
 [[build_input]]
-fingerprint = "fnv1a64:80364249546dda0f"
-id = "external-command.run-peer-block-in-worker.current-test-exe"
+fingerprint = "fnv1a64:dd8883981408e1a8"
+id = "external-command.module.executable"
 kind = "external-command"
-line = 4254
+line = 4308
 path = "packages/system/vmm/whp/src/native/launch.rs"
-reason = "Run the current Rust test executable with the exact WHP provider fixture selector and bounded output in an isolated temporary directory."
+reason = "Run only the current Rust test executable with the exact WHP provider fixture selector, the dedicated bootstrap pipe, and a finite deadline."

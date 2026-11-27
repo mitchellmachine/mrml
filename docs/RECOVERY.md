@@ -1986,10 +1986,15 @@ target objects and exact target capability generations. A second-map failure
 rolls back the first reservation and object charge before recovery can publish
 either domain. WHP/KVM now retain one host page while mapping it into both exact
 GPAs and remove both mappings before ledger retirement. Nested KVM proved this
-across two live VMs. This nested WHP environment rejects a second simultaneous
-partition with a typed VID collision; recovery must report Total placement
-unavailable and never reuse one partition. Guest page-table projection,
-translation invalidation, queue activation, and recovered execution remain.
+across two live VMs. On the tested Windows host, WHP rejects the second
+simultaneous guest's GPA mapping in the same process with a typed VID collision.
+A separate-process WHP diagnostic runs both signed guests without reusing a
+partition. The
+fixture duplicates only its anonymous, one-page RW/NX section into the exact
+child it spawned. A fixed-size private-pipe frame binds the child-local handle
+to the expected signed provider payload digest before mapping. Both guest and
+native mappings are withdrawn. This is test-only evidence, not worker
+attestation, an installed storage service, or recovered Total placement.
 
 Recovery's retained peer owner now also installs and verifies the two exact
 supervisor RW/NX guest leaves before use. It removes and verifies both leaves
