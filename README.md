@@ -30,6 +30,30 @@ architectural priority or formal verification. See the
 [architecture comparison](docs/GIGAKERNEL.md#how-the-gigakernel-compares)
 and [placement rules](docs/ISOLATION_PLACEMENT.md).
 
+## Software for Windows and Linux
+
+You can run parts of MRML directly on x86-64 Windows and Linux without
+booting the MRML operating system. These are host programs and libraries.
+The no-native-fallback rule applies to workloads inside MRML OS, not to
+software built for Windows or Linux.
+
+| Category | Examples |
+| --- | --- |
+| Build and compiler tools | The `mrml` build, test, and audit frontend; the experimental Rust compiler driver |
+| Local machine learning | The `mrml-cli` inference CLI, `mrml-trainer`, and model, tokenizer, and tensor libraries |
+| Media and compression | Experimental AV1 and Opus codecs and a bounded Zstandard implementation |
+| Source control | The native MRML Git client; Gitd and its authority services are tracked separately as Linux components |
+| Virtualization tools | The WHP backend and runner on Windows; the KVM backend and runner on Linux |
+
+Support varies by component, feature, and host. See
+[Getting started](docs/human/GETTING_STARTED.md) for build commands and
+[platform test results](docs/PLATFORM_TESTS.md) for what has been verified.
+A hosted library or tool does not establish native MRML OS support.
+
+**Platform roadmap:** x86-64 remains the primary target for MRML OS and
+hardware bring-up. macOS host support and ARM64 (AArch64) support are planned;
+neither is currently a supported target.
+
 ## Contributing and security review
 
 Effective work across MRML requires either advanced systems and security
