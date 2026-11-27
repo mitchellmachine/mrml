@@ -3032,8 +3032,14 @@ failure; an uncertain rollback requires discarding that inactive hierarchy.
 After activation, the initializer consumes the handle, rechecks the root and
 every 4 KiB leaf, then clears the exact reservation. These checks do not
 establish alias exclusion, cache type or DMA coherency. The live boot path
-still needs to use these primitives, issue scoped resource capabilities,
-and connect the backing to native xHCI startup and teardown.
+still needs to use these primitives. The UEFI library can now check the
+exact allocation in the raw final memory map before normalization merges
+LoaderData with other reserved types. This check requires a bounded
+non-runtime LoaderData descriptor that covers the full range without a
+second overlapping descriptor. It does not allocate pages, transfer
+ownership, or authorize DMA. The loader still needs to allocate the range,
+preserve it across handoff, and have the kernel issue scoped capabilities
+before connecting it to xHCI startup and teardown.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

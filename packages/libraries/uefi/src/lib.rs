@@ -1839,6 +1839,77 @@ pub enum NormalizeError {
     FramebufferConflict,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootDmaBackingError {
+    InvalidExtent,
+    MalformedMap,
+    MissingLoaderData,
+    ConflictingDescriptor,
+}
+
+/// Checks the raw final map before normalization can merge LoaderData with
+/// unrelated reserved memory. The caller must supply the exact range it
+/// allocated as EfiLoaderData and the validated device/host address limit.
+/// Coverage is not proof of allocation ownership, CPU cache policy or DMA
+/// isolation. The caller must also exclude aliases (including framebuffer
+/// overlaps) and preserve the range as reserved in the kernel handoff.
+pub fn verify_boot_dma_backing(
+    bytes: &[u8],
+    descriptor_size: usize,
+    start: u64,
+    pages: u16,
+    physical_bits: u8,
+) -> Result<(), BootDmaBackingError> {
+    const LOADER_DATA: u32 = 2;
+    const RUNTIME: u64 = 1 << 63;
+
+    if !(1..=256).contains(&pages)
+        || !(32..=52).contains(&physical_bits)
+        || start == 0
+        || !start.is_multiple_of(PAGE_SIZE)
+    {
+        return Err(BootDmaBackingError::InvalidExtent);
+    }
+    let end = start
+        .checked_add(u64::from(pages) * PAGE_SIZE)
+        .filter(|&end| end <= (1u64 << physical_bits))
+        .ok_or(BootDmaBackingError::InvalidExtent)?;
+    if bytes.is_empty()
+        || bytes.len() > MAX_MEMORY_MAP_BYTES
+        || descriptor_size < core::mem::size_of::<MemoryDescriptor>()
+        || !bytes.len().is_multiple_of(descriptor_size)
+    {
+        return Err(BootDmaBackingError::MalformedMap);
+    }
+    let mut found = false;
+    for row in bytes.chunks_exact(descriptor_size) {
+        let base = u64::from_le_bytes(row[8..16].try_into().unwrap());
+        let pages = u64::from_le_bytes(row[24..32].try_into().unwrap());
+        let limit = pages
+            .checked_mul(PAGE_SIZE)
+            .and_then(|length| base.checked_add(length))
+            .ok_or(BootDmaBackingError::MalformedMap)?;
+        if pages == 0 || !base.is_multiple_of(PAGE_SIZE) {
+            return Err(BootDmaBackingError::MalformedMap);
+        }
+        if limit <= start || end <= base {
+            continue;
+        }
+        let kind = u32::from_le_bytes(row[..4].try_into().unwrap());
+        let attributes = u64::from_le_bytes(row[32..40].try_into().unwrap());
+        if found || kind != LOADER_DATA || attributes & RUNTIME != 0 || base > start || limit < end
+        {
+            return Err(BootDmaBackingError::ConflictingDescriptor);
+        }
+        found = true;
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(BootDmaBackingError::MissingLoaderData)
+    }
+}
+
 /// Converts an untrusted variable-stride UEFI map into the fixed MRML memory
 /// model. Only conventional memory becomes free; boot-service and loader pages
 /// remain reserved until a later kernel phase can prove they are reclaimable.
@@ -3935,6 +4006,75 @@ mod tests {
         bytes[8..16].copy_from_slice(&start.to_le_bytes());
         bytes[24..32].copy_from_slice(&pages.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn final_dma_map_requires_single_uncontested_loader_data_cover() {
+        let mut raw = [0xa5; 3 * 48];
+        raw[0..40].copy_from_slice(&descriptor(7, 0x1_0000_0000, 4));
+        raw[48..88].copy_from_slice(&descriptor(2, 0xffff_c000, 4));
+        raw[96..136].copy_from_slice(&descriptor(11, 0x1000, 1));
+        let verify = |map: &[u8]| verify_boot_dma_backing(map, 48, 0xffff_e000, 2, 32);
+
+        assert_eq!(verify(&raw), Ok(()));
+        assert_eq!(
+            verify_boot_dma_backing(&raw, 48, 0xffff_e000, 3, 32),
+            Err(BootDmaBackingError::InvalidExtent)
+        );
+        assert_eq!(verify(&raw[..143]), Err(BootDmaBackingError::MalformedMap));
+        assert_eq!(
+            verify(&raw[..48]),
+            Err(BootDmaBackingError::MissingLoaderData)
+        );
+
+        let mut altered = raw;
+        altered[96..136].copy_from_slice(&descriptor(2, 0xffff_f000, 1));
+        assert_eq!(
+            verify(&altered),
+            Err(BootDmaBackingError::ConflictingDescriptor)
+        );
+        altered[96..136].copy_from_slice(&raw[96..136]);
+        for row in [
+            descriptor(7, 0xffff_c000, 4),
+            descriptor(4, 0xffff_c000, 4),
+            descriptor(2, 0xffff_c000, 3),
+        ] {
+            altered[48..88].copy_from_slice(&row);
+            assert_eq!(
+                verify(&altered),
+                Err(BootDmaBackingError::ConflictingDescriptor)
+            );
+        }
+        altered[48..88].copy_from_slice(&raw[48..88]);
+        altered[80..88].copy_from_slice(&(1u64 << 63).to_le_bytes());
+        assert_eq!(
+            verify(&altered),
+            Err(BootDmaBackingError::ConflictingDescriptor)
+        );
+    }
+
+    #[test]
+    fn final_dma_map_rejects_bad_range_and_overflowing_descriptors() {
+        let raw = descriptor(2, 0x1000, 256);
+        for (start, pages, bits) in [
+            (0, 1, 32),
+            (0x1001, 1, 32),
+            (0x1000, 0, 32),
+            (0x1000, 257, 32),
+            (0x1000, 1, 31),
+            (0x1000, 1, 53),
+            (u64::MAX - 4095, 1, 52),
+        ] {
+            assert_eq!(
+                verify_boot_dma_backing(&raw, 40, start, pages, bits),
+                Err(BootDmaBackingError::InvalidExtent)
+            );
+        }
+        assert_eq!(verify_boot_dma_backing(&raw, 40, 0x1000, 256, 32), Ok(()));
+        assert_eq!(
+            verify_boot_dma_backing(&descriptor(2, 0x1000, u64::MAX), 40, 0x1000, 1, 32),
+            Err(BootDmaBackingError::MalformedMap)
+        );
     }
 
     #[test]
