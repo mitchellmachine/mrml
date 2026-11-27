@@ -2,6 +2,16 @@
 #![cfg_attr(not(test), no_main)]
 #![cfg_attr(test, allow(dead_code))]
 
+// A recovered component startup holds several bounded admission and
+// capability tables at once. Reserve an 8 MiB stack for the hosted runner,
+// matching the Linux test host limit instead of the 1 MiB PE default.
+// SAFETY: the linker consumes only this static ASCII COFF directive; no
+// runtime object or code is placed at a custom address.
+#[cfg(all(target_os = "windows", not(test)))]
+#[used]
+#[unsafe(link_section = ".drectve")]
+static WINDOWS_STACK_RESERVE: [u8; 15] = *b"/STACK:8388608 ";
+
 #[cfg(target_os = "windows")]
 use mrml_config::{
     AdmittedConfigurationGuestFactory, ConfigTransaction, ConfigurationMicrovmEndpoint,

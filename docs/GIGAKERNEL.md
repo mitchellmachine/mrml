@@ -2476,6 +2476,13 @@ restart authority. The explicit live KVM test withdraws both admissions,
 then retires the exact endpoints. This does not add crash supervision,
 installed-media service restarts, or physical device/DMA teardown.
 
+The same freshly signed `component-service-probe` fixture completed on KVM
+and WHP and reported `runtime=withdrawn|retired_domains=1`. The Windows
+release runner initially exited with `0xc00000fd` after authenticated recovery
+with its default 1 MiB PE stack. The runner now reserves 8 MiB with the same
+4 KiB initial commitment; the rebuilt executable completed the same signed
+probe. This is a bounded hosted-runner setting, not a guest stack change.
+
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and
 operation-specific unused fields must be zero, sequences are exact and advance
