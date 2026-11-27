@@ -4051,12 +4051,12 @@ fn rust_extern_active(
             .is_none_or(|feature| rust_features(action, target, profile).contains(feature))
 }
 
-fn rust_binary_active(binary: &RustBinary, action: &RustAction, target: &str) -> bool {
+fn rust_binary_active(binary: &RustBinary, action: &RustAction, target: &str, profile: &str) -> bool {
     binary.targets.iter().any(|candidate| candidate == target)
         && binary
             .feature
             .as_ref()
-            .is_none_or(|feature| rust_features(action, target, "default").contains(feature))
+            .is_none_or(|feature| rust_features(action, target, profile).contains(feature))
 }
 
 fn rust_example_active(example: &RustExample, action: &RustAction, target: &str) -> bool {
@@ -4496,7 +4496,7 @@ fn run_rust_action(
     for binary in action
         .binaries
         .iter()
-        .filter(|binary| rust_binary_active(binary, action, target))
+        .filter(|binary| rust_binary_active(binary, action, target, feature_profile))
     {
         compile_declared_binary(
             workspace,
@@ -4571,7 +4571,7 @@ fn run_rust_action(
         for binary in action
             .binaries
             .iter()
-            .filter(|binary| rust_binary_active(binary, action, test_target))
+            .filter(|binary| rust_binary_active(binary, action, test_target, "default"))
         {
             compile_declared_binary(
                 workspace,

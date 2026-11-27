@@ -187,6 +187,14 @@ path = "packages/tools/mrml/src/usb_media.rs"
 reason = "Invoke only the graph-built MRML signer to create and consume disposable diagnostic keys and bind signed boot artifacts."
 
 [[build_input]]
+fingerprint = "fnv1a64:3bd8ab45a5647af2"
+id = "external-command.usb-xhci-inventory-qemu"
+kind = "external-command"
+line = 96
+path = "packages/tools/mrml/src/usb_xhci_inventory.rs"
+reason = "Run the caller-selected QEMU interpreter on a private virtual FAT directory and copy of OVMF variables to verify read-only EFI inventory and return to firmware."
+
+[[build_input]]
 fingerprint = "fnv1a64:e852a2a6dec3fd08"
 id = "external-command.usb-polkit"
 kind = "external-command"

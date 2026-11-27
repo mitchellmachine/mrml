@@ -3287,6 +3287,11 @@ out-of-range legacy capabilities. It never reads the adjacent legacy SMI
 control dword or writes ownership state. The sealed QEMU preflight
 independently expects no legacy interface. A semaphore observation alone
 is not authority for reset, DMA, or firmware handoff.
+The standalone [UEFI xHCI inventory](../platform/UEFI_BOOT_MANAGEMENT.md#read-only-xhci-inventory-before-native-bring-up)
+uses the same sampler through the firmware PCI I/O protocol. It also
+reports validated MCFG coverage and the DMAR route for that exact
+requester, then returns to firmware without touching storage. Its QEMU
+test covers a controller with and without a remapper and an absent controller.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

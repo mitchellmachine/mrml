@@ -47,6 +47,32 @@ Secure Boot state and exact GOP mode were not recorded. The result verifies
 firmware handoff and the embedded FAT32 service restart on this machine,
 not native USB I/O, an installation, or Secure Boot trust for the image.
 
+### Read-only xHCI inventory before native bring-up
+
+Build the standalone EFI application with
+`mrml build org.mrml.library.uefi --target uefi-x86_64 --release --feature-profile xhci_inventory`.
+It produces `target/mrml-native/uefi/release/mrml-xhci-inventory.efi`.
+Reproduce the QEMU/OVMF test first with
+`mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU`.
+
+This is not the normal MRML loader or a flash image. To inspect a machine,
+copy the EFI file as `XHCIINV.EFI` to the root of an existing FAT USB volume.
+Do not replace `BOOTX64.EFI`, raw-write the drive, enroll a test key, or change
+boot order or Secure Boot policy. Launch the firmware's EFI Shell, run
+`map -r` and identify the USB filesystem, then run
+`fsN:\XHCIINV.EFI` for that mapping. If current firmware trust policy rejects
+the executable, stop and record the refusal. An SSH-signed source commit does
+not sign the EFI executable for Secure Boot.
+
+Record the controller's PCI address, IDs, command state, BAR0, ownership,
+MCFG coverage and DMAR route as shown on the console. The application
+returns to the shell without leaving UEFI Boot Services. It does not write
+a report to storage, read disk contents, change bus mastering, write
+controller registers, or hand off DMA. A firmware-owned or contended
+controller, an unavailable BAR, or a missing, ambiguous or reserved-memory
+route is not clearance for a native test. A listed route is only firmware
+inventory and is not authorization to start the native driver.
+
 ### Diagnose a return to firmware
 
 Boot the UEFI Shell and run `map -r`, then use the USB filesystem mapping

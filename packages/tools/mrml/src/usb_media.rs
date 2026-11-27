@@ -19,7 +19,10 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU";
+
+#[path = "usb_xhci_inventory.rs"]
+mod xhci_inventory;
 
 #[derive(Clone, Copy)]
 enum DiagnosticImage {
@@ -38,6 +41,9 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             create(&load_workspace()?, Path::new(file), DiagnosticImage::Fat32)
         }
         [mode, code, vars, qemu] if mode == "test-dma-map" => test_dma_map(code, vars, qemu),
+        [mode, code, vars, qemu] if mode == "test-xhci-inventory" => {
+            xhci_inventory::test(&load_workspace()?, code, vars, qemu)
+        }
         [mode, code, vars, qemu]
             if matches!(mode.as_str(), "test" | "test-dma" | "test-dma-acpi") =>
         {
