@@ -304,6 +304,18 @@ fn halt_timeout_and_revocation_failure_allow_only_their_own_retry() {
     failed.retry().unwrap();
 }
 
+#[test]
+fn supervisor_controller_retirement_preserves_pending_halt_and_revocation() {
+    let mut controller = Controller::start(Fake::new(), 0x2400, DMA, 5).unwrap();
+    controller.platform.ignore_stop_once = true;
+    controller.platform.fail_revoke_once = true;
+    let mut retire = ControllerRetirement::new(controller);
+    assert_eq!(retire.withdraw(5), Err(ControllerRetirementPending::Halt));
+    assert_eq!(retire.withdraw(5), Err(ControllerRetirementPending::Revocation));
+    assert_eq!(retire.withdraw(5), Ok(()));
+    assert_eq!(retire.withdraw(5), Ok(()));
+}
+
 fn activation_snapshot() -> pci::PciSnapshot {
     pci::PciSnapshot {
         location: pci::PciLocation {

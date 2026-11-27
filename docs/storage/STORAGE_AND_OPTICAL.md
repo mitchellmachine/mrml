@@ -3283,8 +3283,16 @@ The consumer reads back the FAT32 file sector, then sees an I/O failure on
 unplug and a stale session on retry, with no partial sector copied. The
 provider stops advertising the removed disk, and the fixture halts the
 controller and revokes bus mastering. These are hosted queue and emulated
-device results, not an executing service MicroVM. The adapter is not an
-installed provider and does not authenticate IPC or retire DMA leases by itself. The kernel grants and
+device results, not an executing service MicroVM. The xHCI retirement owner
+now keeps the exact controller while halt or revocation is pending, never
+reopening its I/O path on retry. The service MicroVM supervisor separately
+retains one host device lease for the exact launch generation and refuses
+guest access or replacement until withdrawal and destruction finish. Live
+KVM rollback exercises that ordering with a modeled device lease; the QEMU
+USB fixture exercises actual emulated controller halt and bus-master revocation.
+Neither test establishes a DMA mapping from xHCI to an executing service
+MicroVM. The adapter is not an installed provider and does not authenticate
+IPC or retire DMA leases by itself. The kernel grants and
 revokes scoped device, interrupt, and DMA resources; it does not run USB
 commands or implement a fallback transport. Until a service can receive and
 retire such a lease, native USB storage is unavailable. The driver library has one slot, no scratchpads,

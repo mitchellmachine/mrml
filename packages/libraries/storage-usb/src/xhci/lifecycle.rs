@@ -2,6 +2,66 @@
 use super::{Controller, Error, Platform};
 use core::fmt;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ControllerRetirementPending {
+    Halt,
+    Revocation,
+}
+
+enum ControllerRetirementState<P: RevocablePlatform> {
+    Running(Controller<P>),
+    Halting(StopFailure<P>),
+    Revoking(RevocationFailure<P>),
+    Complete,
+}
+
+/// Owns exactly one controller after its I/O view has been withdrawn. The
+/// supervisor can retry this object but cannot recover the old I/O path or
+/// substitute a newer controller. The backend retains quarantine on drop.
+#[must_use]
+pub struct ControllerRetirement<P: RevocablePlatform> {
+    state: ControllerRetirementState<P>,
+}
+
+impl<P: RevocablePlatform> ControllerRetirement<P> {
+    pub fn new(controller: Controller<P>) -> Self {
+        Self {
+            state: ControllerRetirementState::Running(controller),
+        }
+    }
+
+    pub fn withdraw(&mut self, ticks: u32) -> Result<(), ControllerRetirementPending> {
+        use ControllerRetirementState as State;
+        let state = core::mem::replace(&mut self.state, State::Complete);
+        let halted = match state {
+            State::Running(controller) => controller.stop(ticks),
+            State::Halting(pending) => pending.retry(ticks),
+            State::Revoking(pending) => return self.record_revocation(pending.retry()),
+            State::Complete => return Ok(()),
+        };
+        match halted {
+            Ok(halted) => self.record_revocation(halted.revoke()),
+            Err(pending) => {
+                self.state = State::Halting(pending);
+                Err(ControllerRetirementPending::Halt)
+            }
+        }
+    }
+
+    fn record_revocation(
+        &mut self,
+        result: Result<(), RevocationFailure<P>>,
+    ) -> Result<(), ControllerRetirementPending> {
+        match result {
+            Ok(()) => Ok(()),
+            Err(pending) => {
+                self.state = ControllerRetirementState::Revoking(pending);
+                Err(ControllerRetirementPending::Revocation)
+            }
+        }
+    }
+}
+
 /// Privileged assignment owner that can withdraw all resources for the same
 /// generation. Discovery and controller halt do not perform PCI or IOMMU
 /// operations themselves.

@@ -870,6 +870,67 @@ mod tests {
     }
 
     #[test]
+    fn device_withdrawal_gates_guest_destruction_and_cannot_transfer_to_replacement() {
+        use core::cell::Cell;
+        type Launcher<'a> = PreparedMicrovmConfigurationLauncher<PreparedGuestFactoryProbe, Lease<'a>>;
+        #[derive(Debug)]
+        struct Lease<'a> {
+            endpoint: ConfigurationMicrovmEndpoint,
+            withdrawals: &'a Cell<u8>,
+        }
+        impl ConfigurationMicrovmDeviceLease for Lease<'_> {
+            type Error = ();
+            fn endpoint(&self) -> ConfigurationMicrovmEndpoint {
+                self.endpoint
+            }
+            fn withdraw(&mut self) -> Result<(), ()> {
+                let calls = self.withdrawals.get() + 1;
+                self.withdrawals.set(calls);
+                if calls == 1 { Err(()) } else { Ok(()) }
+            }
+        }
+        let spec = configuration_service_spec(IsolationPlacement::Microvm);
+        let mut launcher = Launcher::with_device_leases(PreparedGuestFactoryProbe {
+            fail_first_destruction: true,
+            ..PreparedGuestFactoryProbe::default()
+        });
+        let withdrawals = Cell::new(0);
+        let endpoint = launcher.launch_microvm(spec).unwrap();
+        let lease = || Lease { endpoint, withdrawals: &withdrawals };
+        launcher.attach_device_lease(lease()).unwrap();
+        assert!(matches!(
+            launcher.attach_device_lease(lease()),
+            Err((ConfigurationMicrovmLeaseAttachError::AlreadyAttached, _))
+        ));
+        assert_eq!(launcher.revoke_microvm(&endpoint), Err(PreparedMicrovmConfigurationError::DeviceLease(())));
+        assert_eq!(withdrawals.get(), 1);
+        assert_eq!(launcher.factory().destructions, 0);
+        assert_eq!(launcher.active(), Some(endpoint));
+        assert!(matches!(launcher.launch_microvm(spec), Err((_, PreparedMicrovmConfigurationError::AlreadyRunning))));
+        assert_eq!(launcher.active_guest(endpoint), Err(PreparedMicrovmConfigurationAccessError::Retiring));
+        assert!(matches!(
+            launcher.attach_device_lease(lease()),
+            Err((ConfigurationMicrovmLeaseAttachError::Retiring, _))
+        ));
+        assert_eq!(launcher.revoke_microvm(&endpoint), Err(PreparedMicrovmConfigurationError::Backend(())));
+        assert_eq!(withdrawals.get(), 2);
+        assert_eq!(launcher.factory().destructions, 1);
+        assert_eq!(launcher.active_guest_mut(endpoint), Err(PreparedMicrovmConfigurationAccessError::Retiring));
+        launcher.revoke_microvm(&endpoint).unwrap();
+        assert_eq!(withdrawals.get(), 2);
+        assert_eq!(launcher.factory().destructions, 2);
+        let replacement = launcher.launch_microvm(spec).unwrap();
+        assert_ne!(replacement, endpoint);
+        assert!(matches!(
+            launcher.attach_device_lease(lease()),
+            Err((ConfigurationMicrovmLeaseAttachError::WrongEndpoint, _))
+        ));
+        assert_eq!(launcher.revoke_microvm(&endpoint), Err(PreparedMicrovmConfigurationError::WrongEndpoint));
+        assert!(launcher.active_guest(replacement).is_ok());
+        launcher.revoke_microvm(&replacement).unwrap();
+    }
+
+    #[test]
     fn retired_microvm_endpoint_cannot_name_a_fresh_launcher_with_the_same_spec() {
         let spec = configuration_service_spec(IsolationPlacement::Microvm);
         let mut old = PreparedMicrovmConfigurationLauncher::new(
@@ -6677,7 +6738,11 @@ mod tests {
             (PreparedMicrovmConfigurationLauncher<PreparedGuestFactoryProbe>, ConfigurationMicrovmEndpoint)| {
             assert_eq!(domain, first_domain);
             assert_eq!(endpoint.domain(), domain);
-            assert!(launcher.active_guest(endpoint).is_ok());
+            if attempts.get() == 0 {
+                assert!(launcher.active_guest(endpoint).is_ok());
+            } else {
+                assert!(matches!(launcher.active_guest(endpoint), Err(PreparedMicrovmConfigurationAccessError::Retiring)));
+            }
             attempts.set(attempts.get() + 1);
             if launcher.revoke_microvm(&endpoint).is_ok() {
                 assert_eq!(launcher.factory().destructions, 2);

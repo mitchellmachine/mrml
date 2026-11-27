@@ -14,7 +14,8 @@ use mrml_storage_fat32::{
 };
 use mrml_storage_usb::block_provider::UsbReadProvider;
 use mrml_storage_usb::xhci::{
-    BulkDma, Controller, DeviceDma, DmaLayout, Error, Platform, RevocablePlatform,
+    BulkDma, Controller, ControllerRetirement, DeviceDma, DmaLayout, Error, Platform,
+    RevocablePlatform,
 };
 use std::{
     format, fs,
@@ -524,7 +525,9 @@ fn exercise_qemu(super_speed: bool) {
             Err(mrml_storage_usb::Error::Faulted)
         ));
     }
-    controller.stop(100).unwrap().revoke().unwrap();
+    let mut retirement = ControllerRetirement::new(controller);
+    retirement.withdraw(100).unwrap();
+    retirement.withdraw(100).unwrap();
     sector_mut(&mut expected, FILE_SECTOR)[..3].copy_from_slice(b"new");
     let bytes = fs::read(&media).unwrap();
     assert_eq!(bytes.len(), expected.len());

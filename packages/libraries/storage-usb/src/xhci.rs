@@ -13,7 +13,10 @@ pub use managed_vtd::{ManagedVtd, ManagedVtdError, VtdPciPlatform};
 pub use native_owner::{NativePciBinding, NativePciLease, NativePciOwner, NativePciOwnerError};
 pub mod pci;
 pub use bulk::{BulkDma, BulkPipe};
-pub use lifecycle::{Halted, RevocablePlatform, RevocationFailure, StartFailure, StopFailure};
+pub use lifecycle::{
+    ControllerRetirement, ControllerRetirementPending, Halted, RevocablePlatform,
+    RevocationFailure, StartFailure, StopFailure,
+};
 
 const RUN: u32 = 1;
 const RESET: u32 = 2;

@@ -267,32 +267,105 @@ impl ConfigurationMicrovmEndpoint {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PreparedMicrovmConfigurationError<E> {
+pub enum PreparedMicrovmConfigurationError<E, D = core::convert::Infallible> {
     AlreadyRunning,
     WrongEndpoint,
     GenerationExhausted,
+    DeviceLease(D),
     Backend(E),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PreparedMicrovmConfigurationAccessError {
     WrongEndpoint,
+    Retiring,
+}
+
+/// Host-side lease for an already provisioned device projection. The backend
+/// must bind the exact endpoint before handing it to this supervisor. On
+/// successful withdrawal it has fenced guest device access, stopped bus
+/// mastering, drained and invalidated DMA, and withdrawn device mappings.
+/// A failed or dropped lease must quarantine its independently pinned DMA
+/// backing, even if the MicroVM or its launcher is dropped.
+pub trait ConfigurationMicrovmDeviceLease {
+    type Error;
+
+    fn endpoint(&self) -> ConfigurationMicrovmEndpoint;
+    fn withdraw(&mut self) -> Result<(), Self::Error>;
+}
+
+pub enum NoConfigurationMicrovmDeviceLease {}
+
+impl ConfigurationMicrovmDeviceLease for NoConfigurationMicrovmDeviceLease {
+    type Error = core::convert::Infallible;
+
+    fn endpoint(&self) -> ConfigurationMicrovmEndpoint {
+        match *self {}
+    }
+
+    fn withdraw(&mut self) -> Result<(), Self::Error> {
+        match *self {}
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfigurationMicrovmLeaseAttachError {
+    WrongEndpoint,
+    Retiring,
+    AlreadyAttached,
 }
 
 /// Owns one backend-prepared configuration microVM from successful construction
 /// through confirmed destruction. Failed destruction retains both the guest and
 /// endpoint for an exact retry; there is no native-service fallback.
-pub struct PreparedMicrovmConfigurationLauncher<Factory: ConfigurationMicrovmFactory> {
-    factory: Factory,
+pub struct PreparedMicrovmConfigurationLauncher<
+    Factory: ConfigurationMicrovmFactory,
+    Lease: ConfigurationMicrovmDeviceLease = NoConfigurationMicrovmDeviceLease,
+> {
+    device_lease: Option<Lease>,
     active: Option<(ConfigurationMicrovmEndpoint, Factory::Guest)>,
+    factory: Factory,
+    retiring: bool,
 }
 
 impl<Factory: ConfigurationMicrovmFactory> PreparedMicrovmConfigurationLauncher<Factory> {
     pub const fn new(factory: Factory) -> Self {
+        Self::with_device_leases(factory)
+    }
+}
+
+impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLease>
+    PreparedMicrovmConfigurationLauncher<Factory, Lease>
+{
+    pub const fn with_device_leases(factory: Factory) -> Self {
         Self {
-            factory,
+            device_lease: None,
             active: None,
+            factory,
+            retiring: false,
         }
+    }
+
+    /// Attach only to the exact active launch, including its runtime generation.
+    /// A rejected lease is returned to its original owner for cleanup. The
+    /// attachment does not grant device capabilities or install IOMMU mappings.
+    pub fn attach_device_lease(
+        &mut self,
+        lease: Lease,
+    ) -> Result<(), (ConfigurationMicrovmLeaseAttachError, Lease)> {
+        use ConfigurationMicrovmLeaseAttachError as Error;
+        let endpoint = lease.endpoint();
+        if endpoint.placement() != IsolationPlacement::Microvm || self.active() != Some(endpoint) {
+            return Err((Error::WrongEndpoint, lease));
+        }
+        if self.retiring {
+            return Err((Error::Retiring, lease));
+        }
+        if self.device_lease.is_some() {
+            return Err((Error::AlreadyAttached, lease));
+        }
+        self.device_lease = Some(lease);
+        Ok(())
     }
 
     pub fn factory(&self) -> &Factory {
@@ -312,6 +385,9 @@ impl<Factory: ConfigurationMicrovmFactory> PreparedMicrovmConfigurationLauncher<
         endpoint: ConfigurationMicrovmEndpoint,
     ) -> Result<&Factory::Guest, PreparedMicrovmConfigurationAccessError> {
         match self.active.as_ref() {
+            Some((active, _)) if *active == endpoint && self.retiring => {
+                Err(PreparedMicrovmConfigurationAccessError::Retiring)
+            }
             Some((active, guest)) if *active == endpoint => Ok(guest),
             _ => Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint),
         }
@@ -322,17 +398,20 @@ impl<Factory: ConfigurationMicrovmFactory> PreparedMicrovmConfigurationLauncher<
         endpoint: ConfigurationMicrovmEndpoint,
     ) -> Result<&mut Factory::Guest, PreparedMicrovmConfigurationAccessError> {
         match self.active.as_mut() {
+            Some((active, _)) if *active == endpoint && self.retiring => {
+                Err(PreparedMicrovmConfigurationAccessError::Retiring)
+            }
             Some((active, guest)) if *active == endpoint => Ok(guest),
             _ => Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint),
         }
     }
 }
 
-impl<Factory: ConfigurationMicrovmFactory> MicrovmConfigurationServiceLauncher
-    for PreparedMicrovmConfigurationLauncher<Factory>
+impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLease>
+    MicrovmConfigurationServiceLauncher for PreparedMicrovmConfigurationLauncher<Factory, Lease>
 {
     type Endpoint = ConfigurationMicrovmEndpoint;
-    type Error = PreparedMicrovmConfigurationError<Factory::Error>;
+    type Error = PreparedMicrovmConfigurationError<Factory::Error, Lease::Error>;
 
     fn launch_microvm(
         &mut self,
@@ -360,6 +439,7 @@ impl<Factory: ConfigurationMicrovmFactory> MicrovmConfigurationServiceLauncher
             spec,
         };
         self.active = Some((endpoint, guest));
+        self.retiring = false;
         Ok(endpoint)
     }
 
@@ -370,6 +450,14 @@ impl<Factory: ConfigurationMicrovmFactory> MicrovmConfigurationServiceLauncher
             .ok_or(PreparedMicrovmConfigurationError::WrongEndpoint)?;
         if active != endpoint {
             return Err(PreparedMicrovmConfigurationError::WrongEndpoint);
+        }
+        // Block all further guest access as soon as either teardown stage
+        // begins. A failed lease withdrawal never reaches guest destruction;
+        // a failed guest destruction never retries a completed withdrawal.
+        self.retiring = true;
+        if let Some(lease) = self.device_lease.as_mut() {
+            lease.withdraw().map_err(PreparedMicrovmConfigurationError::DeviceLease)?;
+            self.device_lease = None;
         }
         self.factory
             .destroy(guest)

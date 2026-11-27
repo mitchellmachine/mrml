@@ -6005,7 +6005,8 @@ mod tests {
     fn live_kvm_total_startup_rollback_and_same_spec_restart() {
         use mrml_config::{
             CompleteTotalServiceConstructionError, CompleteTotalServiceStartError,
-            PreparedMicrovmConfigurationAccessError, PreparedMicrovmConfigurationError,
+            ConfigurationMicrovmDeviceLease, PreparedMicrovmConfigurationAccessError,
+            PreparedMicrovmConfigurationError,
         };
         use mrml_crypto::{LAMPORT_PRIVATE_KEY_BYTES, lamport_public_key};
         use mrml_kernel::IsolationServiceSpec;
@@ -6249,8 +6250,22 @@ mod tests {
             false,
         )
         .unwrap();
+        // Real KVM guest, modeled device withdrawal. This does not map any
+        // physical USB resource or stand in for an IOMMU implementation.
+        #[derive(Debug)]
+        struct ProbeDeviceLease {
+            endpoint: ConfigurationMicrovmEndpoint,
+            pending: bool,
+        }
+        impl ConfigurationMicrovmDeviceLease for ProbeDeviceLease {
+            type Error = ();
+            fn endpoint(&self) -> ConfigurationMicrovmEndpoint { self.endpoint }
+            fn withdraw(&mut self) -> core::result::Result<(), Self::Error> {
+                if core::mem::take(&mut self.pending) { Err(()) } else { Ok(()) }
+            }
+        }
         type TestLauncher = PreparedMicrovmConfigurationLauncher<
-            AdmittedConfigurationGuestFactory<PreparedKvmGuest<16>>,
+            AdmittedConfigurationGuestFactory<PreparedKvmGuest<16>>, ProbeDeviceLease,
         >;
         let launch = |spec: IsolationServiceSpec, executables: &[VerifiedExecutable<'_>; 2]| {
             let i = DOMAINS
@@ -6271,7 +6286,7 @@ mod tests {
                 }
             );
             let mut launcher =
-                TestLauncher::new(AdmittedConfigurationGuestFactory::new(spec, guest));
+                TestLauncher::with_device_leases(AdmittedConfigurationGuestFactory::new(spec, guest));
             let endpoint = launcher.launch_microvm(spec).unwrap();
             (launcher, endpoint)
         };
@@ -6317,11 +6332,18 @@ mod tests {
             |domain, (mut launcher, endpoint): (TestLauncher, ConfigurationMicrovmEndpoint)| {
                 assert_eq!(domain, DOMAINS[0]);
                 assert_eq!(Some(endpoint), stale.get());
-                assert!(launcher.active_guest(endpoint).is_ok());
                 stops.set(stops.get() + 1);
                 if stops.get() == 1 {
-                    // Simulate the owner not yet being able to confirm teardown.
-                    // The exact real VM must remain owned by the failure for retry.
+                    assert!(launcher.active_guest(endpoint).is_ok());
+                    assert_eq!(
+                        launcher.revoke_microvm(&endpoint),
+                        Err(PreparedMicrovmConfigurationError::DeviceLease(()))
+                    );
+                    assert!(matches!(
+                        launcher.active_guest(endpoint),
+                        Err(PreparedMicrovmConfigurationAccessError::Retiring)
+                    ));
+                    assert_eq!(launcher.active(), Some(endpoint));
                     return Err((launcher, endpoint));
                 }
                 launcher.revoke_microvm(&endpoint).unwrap();
@@ -6335,7 +6357,10 @@ mod tests {
                     if spec.domain() == DOMAINS[1] {
                         return Err("second service intentionally not ready");
                     }
-                    let launched = launch(spec, &executables);
+                    let mut launched = launch(spec, &executables);
+                    launched.0.attach_device_lease(ProbeDeviceLease {
+                        endpoint: launched.1, pending: true,
+                    }).unwrap();
                     stale.set(Some(launched.1));
                     Ok(launched)
                 },
