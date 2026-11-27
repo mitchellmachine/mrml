@@ -1,12 +1,14 @@
 //! Executable model of the xHCI legacy ownership handshake (xHCI 1.2 §7.1).
 //! This module is compiled only in tests. It cannot reset, program, or read
 //! real hardware, grant a device assignment, or enable DMA.
-use super::{LegacyOwnership, LegacySample, sample_legacy_ownership};
+use super::{
+    LegacyOwnershipAcknowledgment, LegacyOwnershipPoll, LegacyOwnershipSequence, LegacySample,
+    LegacyTransitionError, sample_legacy_ownership,
+};
 
 const FIRMWARE: u32 = 1 << 16;
 const OS: u32 = 1 << 24;
 const SEMAPHORES: u32 = FIRMWARE | OS;
-const OBSERVATIONS: usize = 8;
 
 #[derive(Clone, Copy)]
 struct Prerequisites {
@@ -37,6 +39,18 @@ enum Failure {
     ChangedLease,
     RequestLost,
     Timeout,
+}
+
+impl From<LegacyTransitionError> for Failure {
+    fn from(value: LegacyTransitionError) -> Self {
+        match value {
+            LegacyTransitionError::InvalidInitialOwner => Self::InitialOwner,
+            LegacyTransitionError::ChangedLease => Self::ChangedLease,
+            LegacyTransitionError::ChangedCapability => Self::ChangedCapability,
+            LegacyTransitionError::RequestLost => Self::RequestLost,
+            LegacyTransitionError::Timeout => Self::Timeout,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -135,8 +149,7 @@ impl<'a> Script<'a> {
 
     fn compare_and_accept(
         &mut self,
-        generation: u64,
-        acknowledged: LegacySample,
+        acknowledged: LegacyOwnershipAcknowledgment,
     ) -> Result<(), Failure> {
         // The consuming owner rechecks the last acknowledged state and all
         // prerequisites under the same lease. A poll is not a transfer.
@@ -146,16 +159,7 @@ impl<'a> Script<'a> {
             return Err(Failure::Prerequisite);
         }
         let (live_generation, live) = Self::decode(sample)?;
-        if live_generation != generation {
-            return Err(Failure::ChangedLease);
-        }
-        if live.ownership != LegacyOwnership::OperatingSystem {
-            return Err(Failure::RequestLost);
-        }
-        if live != acknowledged {
-            return Err(Failure::ChangedCapability);
-        }
-        self.accepted_generation = Some(generation);
+        self.accepted_generation = Some(acknowledged.finish(live_generation, live)?);
         Ok(())
     }
 }
@@ -165,40 +169,16 @@ fn simulate(script: &mut Script<'_>, ready: Prerequisites) -> Result<(), Failure
         return Err(Failure::Prerequisite);
     }
     let (generation, initial) = script.observe()?;
-    if generation == 0 {
-        return Err(Failure::ChangedLease);
-    }
-    if initial.ownership != LegacyOwnership::Firmware {
-        return Err(Failure::InitialOwner);
-    }
-    let (offset, raw) = initial.capability.ok_or(Failure::InitialOwner)?;
-    // The only modeled write is one byte to the OS-owned semaphore. In
-    // particular, it cannot clear firmware's byte or touch the next dword.
+    let mut sequence = LegacyOwnershipSequence::begin(generation, initial)?;
+    // The only modeled write is one byte to the OS-owned semaphore.
     script.compare_and_request(generation, initial)?;
-    let mut acknowledged = false;
-    for _ in 0..OBSERVATIONS {
+    loop {
         let (live_generation, current) = script.observe()?;
-        if live_generation != generation {
-            return Err(Failure::ChangedLease);
-        }
-        if current.hcc1 != initial.hcc1
-            || current
-                .capability
-                .map(|(at, value)| (at, value & !SEMAPHORES))
-                != Some((offset, raw & !SEMAPHORES))
-        {
-            return Err(Failure::ChangedCapability);
-        }
-        match current.ownership {
-            LegacyOwnership::OperatingSystem if acknowledged => {
-                return script.compare_and_accept(generation, current);
-            }
-            LegacyOwnership::OperatingSystem => acknowledged = true,
-            LegacyOwnership::Contended if !acknowledged => (),
-            _ => return Err(Failure::RequestLost),
+        match sequence.poll(live_generation, current)? {
+            LegacyOwnershipPoll::Pending(next) => sequence = next,
+            LegacyOwnershipPoll::Acknowledged(seen) => return script.compare_and_accept(seen),
         }
     }
-    Err(Failure::Timeout)
 }
 
 #[test]
@@ -220,7 +200,7 @@ fn model_times_out_without_reasserting_or_clearing_firmware_ownership() {
         Err(Failure::Timeout)
     );
     assert_eq!(script.request, Some((0x93, 1)));
-    assert_eq!(script.observed, 1 + OBSERVATIONS);
+    assert_eq!(script.observed, 1 + 8);
     assert_eq!(script.accepted_generation, None);
 }
 

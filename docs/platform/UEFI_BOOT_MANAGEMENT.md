@@ -307,7 +307,9 @@ capability again at the OS-semaphore write boundary. If any changed since
 observation, it records no write. After a request, losing DMA containment
 while polling or observing a changed lease or owner at the final acceptance
 check prevents transfer; the model never retries the write. This is not a
-real firmware handshake.
+real firmware handshake. The bounded ownership-sequence validator is Rust
+library code shared with the model. Its result is not an authorization to
+write registers, enable DMA, or reset the controller.
 
 ### Diagnose a return to firmware
 

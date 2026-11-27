@@ -7,6 +7,8 @@ mod ecam_lease;
 pub use activation::{DmaAssignment, PciActivation, VtdActivation};
 pub use ecam_lease::{EcamLeaseError, EcamPciLease, NativePciBacking};
 mod lifecycle;
+mod legacy_transition;
+pub use legacy_transition::{LegacyOwnershipAcknowledgment, LegacyOwnershipPoll, LegacyOwnershipSequence, LegacyTransitionError};
 mod managed_vtd;
 mod native_owner;
 pub use managed_vtd::{ManagedVtd, ManagedVtdError, ProjectedNativeXhci, VtdPciPlatform, install_projected_native_xhci};
