@@ -123,6 +123,16 @@ deny case leaves PCI state unchanged and the guest stops. This is a
 host-side emulator calibration, not a guest-implemented shutdown,
 firmware ownership transfer, or hardware qualification.
 
+In a distinct marked guest case, the post-exit loader verifies the exact
+emulated PCI function and baseline command, updates only Bus Master
+Enable, restores the PCI configuration address, and pauses for independent
+QEMU readback. The host detaches the virtual boot disk and supplies the
+release through the test UART; it does not write PCI configuration in
+the guest case. A denied release writes no command and stops. The allow
+case continues from RAM only after the host verifies the exact change.
+This diagnostic is not in the normal boot profile and does not claim
+legacy semaphore transfer or enable DMA.
+
 ### Diagnose a return to firmware
 
 Boot the UEFI Shell and run `map -r`, then use the USB filesystem mapping

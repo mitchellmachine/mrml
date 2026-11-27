@@ -124,10 +124,11 @@ fn inspect_qmp(
         return Ok(None);
     }
     validate(&map)?;
-    if matches!(release, Some(0xad..=0xaf | 0xb4)) {
+    let mut guest_before = None;
+    if matches!(release, Some(0xad..=0xaf | 0xb4 | 0xb5 | 0xb7)) {
         validate_scratch_uart(&map)?;
         verify_shared_boot(stdin, reader)?;
-        if matches!(release, Some(0xad | 0xaf | 0xb4)) {
+        if matches!(release, Some(0xad | 0xaf | 0xb4 | 0xb5 | 0xb7)) {
             let before = sample_shared_controller(stdin, reader)?;
             qmp_write(
                 stdin,
@@ -154,6 +155,12 @@ fn inspect_qmp(
                     "virtual USB removal changed PCI identity, controller control or VT-d state"
                         .into(),
                 );
+            }
+            if matches!(release, Some(0xb5 | 0xb7)) {
+                if after.disable_command() != Some(3) {
+                    return Err("guest BME fixture does not have the exact halted baseline".into());
+                }
+                guest_before = Some(after);
             }
             if matches!(release, Some(0xaf | 0xb4)) {
                 let command = after
@@ -272,7 +279,7 @@ fn inspect_qmp(
             byte => byte,
         };
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xae | 0x5a) {
+        if !matches!(byte, 0xa6..=0xae | 0x5a | 0xb5 | 0xb7) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -284,6 +291,11 @@ fn inspect_qmp(
         ack(reader, "{\"return\": \"\", \"id\": 74}")?;
         qmp_write(stdin, "{\"execute\":\"cont\",\"id\":75}\n")?;
         ack(reader, "{\"return\": {}, \"id\": 75}")?;
+    }
+    if let Some(before) = guest_before {
+        let allow = release == Some(0xb5);
+        let (path, expected) = post.ok_or("missing signed guest BME trace expectation")?;
+        verify_guest_bme(stdin, reader, path, expected, before, allow)?;
     }
     if let (Some(before), Some((path, prefix)), Some(state)) = (before, post, bar) {
         if let Some(allow) = cold {
@@ -861,6 +873,66 @@ fn sample_shared_controller(
         root,
         fsts,
     })
+}
+
+fn verify_guest_bme(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    path: &std::path::Path,
+    expected: &[u8],
+    before: SharedController,
+    allow: bool,
+) -> Result<(), String> {
+    let verdict = if allow { 0xef } else { 0xeb };
+    let stop_at = expected
+        .iter()
+        .position(|&byte| byte == verdict)
+        .ok_or("missing signed guest PCI verdict")?;
+    let prefix = &expected[..=stop_at];
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(512).read_to_end(&mut bytes))
+            .map_err(|e| format!("guest PCI trace read: {e}"))?;
+        if bytes == prefix {
+            break;
+        }
+        if !prefix.starts_with(&bytes) || std::time::Instant::now() >= deadline {
+            return Err(format!(
+                "unexpected or missing signed guest PCI verdict: {bytes:02x?}"
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(3));
+    }
+    qmp_write(stdin, "{\"execute\":\"stop\",\"id\":168}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 168}")?;
+    let after = sample_shared_controller(stdin, reader)?;
+    let expected = SharedController {
+        pci_command: if allow {
+            before.pci_command & !4
+        } else {
+            before.pci_command
+        },
+        ..before
+    };
+    if expected.pci_command != after.pci_command || !expected.matches_control(after) {
+        return Err("independent QEMU readback disagrees with guest PCI verdict".into());
+    }
+    println!(
+        "q35-shared-bme|status=PASS|actor=mrml-guest|allowed={allow}|command_before={:#06x}|command_after={:#06x}|halted=true|vtd_unchanged=true",
+        before.pci_command as u16, after.pci_command as u16
+    );
+    if allow {
+        // Only the test UART release register is written by the host.
+        qmp_write(
+            stdin,
+            "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"o /b 0x2ff 0xb6\"},\"id\":169}\n",
+        )?;
+        ack(reader, "{\"return\": \"\", \"id\": 169}")?;
+    }
+    qmp_write(stdin, "{\"execute\":\"cont\",\"id\":170}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 170}")
 }
 
 // This is a host-only action on the paused disposable q35 machine. The CPU

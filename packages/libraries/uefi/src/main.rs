@@ -2869,12 +2869,15 @@ fn loader_trace(stage: u8) {
 #[cfg(feature = "usb-preload-probe")]
 fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
     use mrml_kernel::arch::x86_64::q35_fixture_marker;
-    if !matches!(q35_fixture_marker(memory, acpi_root), Ok(marker) if marker[32] == 1) {
-        loader_trace(0xeb);
-        halt();
-    }
+    let profile = match q35_fixture_marker(memory, acpi_root).map(|marker| marker[32]) {
+        Ok(profile @ (1 | 2)) => profile,
+        _ => {
+            loader_trace(0xeb);
+            halt();
+        }
+    };
     // Both this opt-in image and the exact emulator table are required.
-    // No controller registers, DMA, or firmware services are used here.
+    // Only the second profile permits the exact test-only PCI command write.
     let scratch = || {
         let byte: u8;
         // SAFETY: the sealed emulator fixture uses only its dedicated
@@ -2890,7 +2893,24 @@ fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
     for _ in 0..100_000_000 {
         match scratch() {
             0 => core::hint::spin_loop(),
-            0xad => {
+            0xb5 if profile == 2 => {
+                if !usb_preload_clear_fixture_bme() {
+                    break;
+                }
+                loader_trace(0xef);
+                for _ in 0..100_000_000 {
+                    match scratch() {
+                        0xb5 => core::hint::spin_loop(),
+                        0xb6 => {
+                            loader_trace(0xea);
+                            return;
+                        }
+                        _ => break,
+                    }
+                }
+                break;
+            }
+            0xad if profile == 1 => {
                 loader_trace(0xea);
                 return;
             }
@@ -2899,6 +2919,44 @@ fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
     }
     loader_trace(0xeb);
     halt();
+}
+
+#[cfg(feature = "usb-preload-probe")]
+fn usb_preload_clear_fixture_bme() -> bool {
+    // SAFETY: only the sealed, single-vCPU QEMU fixture executes here,
+    // after UEFI exit and host verification of the sole halted device and
+    // removal of its emulated boot disk. Only 00:1b.0 is selectable. Restore
+    // the selector on every path; never write the PCI status half or BARs.
+    unsafe {
+        let select = |value: u32| {
+            core::arch::asm!("out dx, eax", in("dx") 0xcf8u16, in("eax") value, options(nomem, nostack));
+        };
+        let read = |port: u16| {
+            let value: u32;
+            core::arch::asm!("in eax, dx", in("dx") port, out("eax") value, options(nomem, nostack));
+            value
+        };
+        let saved = read(0xcf8);
+        const DEVICE: u32 = 0x8000_d800;
+        select(DEVICE);
+        let identity = read(0xcfc);
+        select(DEVICE | 8);
+        let class = read(0xcfc);
+        select(DEVICE | 4);
+        let original = read(0xcfc);
+        let admitted = read(0xcf8) == DEVICE | 4
+            && identity == 0x000d_1b36
+            && class == 0x0c03_3001
+            && original as u16 == 7;
+        let changed = if admitted {
+            core::arch::asm!("out dx, ax", in("dx") 0xcfcu16, in("ax") 3u16, options(nomem, nostack));
+            read(0xcfc) == original & !4
+        } else {
+            false
+        };
+        select(saved);
+        changed && read(0xcf8) == saved
+    }
 }
 
 fn halt() -> ! {

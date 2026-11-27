@@ -97,6 +97,8 @@ pub(super) enum Q35FixtureCase {
     SharedPreload,
     SharedDisableBme,
     SharedDenyBme,
+    SharedGuestBme,
+    SharedGuestBmeDenied,
     WrongRelease,
     ValidRelease,
     IsolatedWrongRelease,
@@ -149,6 +151,7 @@ impl Q35FixtureCase {
             Self::CommandWrongRelease | Self::CommandDenied | Self::CommandCompleted => 5,
             Self::StorageDenied | Self::StorageRead => 6,
             Self::StorageWriteDenied | Self::StorageWrite | Self::StorageNoRemapper => 7,
+            Self::SharedGuestBme | Self::SharedGuestBmeDenied => 2,
             _ => 1,
         }
     }
@@ -337,6 +340,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 | Q35FixtureCase::SharedPreload
                 | Q35FixtureCase::SharedDisableBme
                 | Q35FixtureCase::SharedDenyBme
+                | Q35FixtureCase::SharedGuestBme
+                | Q35FixtureCase::SharedGuestBmeDenied
         )
     );
     let machine = if isolated {
@@ -504,6 +509,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::SharedPreloadDenied => Some(0xae),
         Q35FixtureCase::SharedDisableBme => Some(0xaf),
         Q35FixtureCase::SharedDenyBme => Some(0xb4),
+        Q35FixtureCase::SharedGuestBme => Some(0xb5),
+        Q35FixtureCase::SharedGuestBmeDenied => Some(0xb7),
     });
     let cold = map_only_marker.and_then(Q35FixtureCase::cold);
     let mut released = false;
@@ -511,7 +518,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     loop {
         if let Ok(bytes) = fs::read(trace) {
             if let Some(valid) = release {
-                let ready = if matches!(valid, 0xad..=0xaf | 0xb4) {
+                let ready = if matches!(valid, 0xad..=0xaf | 0xb4 | 0xb5 | 0xb7) {
                     let index = expected
                         .iter()
                         .position(|&byte| byte == 0xe7)
@@ -525,7 +532,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         &mut child,
                         valid,
                         isolated,
-                        matches!(valid, 0xa7 | 0xa8 | 0xaa..=0xac).then_some((trace, expected)),
+                        matches!(valid, 0xa7 | 0xa8 | 0xaa..=0xac | 0xb5 | 0xb7)
+                            .then_some((trace, expected)),
                         cold,
                     ) {
                         Ok(bar) => bar,
@@ -615,7 +623,9 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                     if let Some(report) = report {
                         println!("{report}");
                     }
-                    let access = if release == Some(0xa7) {
+                    let access = if release == Some(0xb5) {
+                        "guest-pci-bme-only-verified"
+                    } else if release == Some(0xa7) {
                         "pci-bme-only-verified"
                     } else if release == Some(0xa9) {
                         "fixed-read-only-three-bar-pages"
