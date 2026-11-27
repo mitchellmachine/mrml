@@ -243,7 +243,6 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         &mrml_kernel::arch::x86_64::InitializedBootDma,
         &[u8],
     )>,
-    release: u8,
 ) {
     use mrml_kernel::arch::x86_64::VtdRegisterLayout;
     let [Some(drhd), Some(ecam), bridge, xhci] =
@@ -440,12 +439,6 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
             dmar,
             pci_id,
             bridge_buses,
-            if matches!(release, 0xaa..=0xac) {
-                mappings[3]
-            } else {
-                None
-            },
-            matches!(release, 0xab | 0xac),
         )
     {
         trace(0xdb);
@@ -459,8 +452,6 @@ fn fixture_activate(
     dmar: &[u8],
     endpoint_id: u32,
     bridge_buses: u32,
-    command_bar: Option<mrml_kernel::arch::x86_64::Mapping>,
-    media: bool,
 ) -> bool {
     use mrml_kernel::arch::x86_64::{
         DmarTopology, PciConfigSpace, SINGLE_REQUESTER_VTD_TABLE_PAGES, VerifiedVtdUnit,
@@ -516,7 +507,7 @@ fn fixture_activate(
             hardware_domain: 1,
             device_base: 0x20_0000,
             physical_base: payload,
-            pages: if media { 4 } else { 1 },
+            pages: 1,
         };
         // SAFETY: the sole BSP just checked the exact exclusive WB mapping
         // and owns the dedicated 16-page boot-lifetime allocation. Both
@@ -535,7 +526,7 @@ fn fixture_activate(
         trace(0xc2);
         for _ in 0..100_000_000 {
             match fixture_scratch() {
-                0xa8 | 0xaa..=0xac => core::hint::spin_loop(),
+                0xa8 => core::hint::spin_loop(),
                 0xb8 => {
                     // SAFETY: signed cold mode, checked exact live branch
                     // and cleared PCI BME bits, then independently verified
@@ -548,31 +539,6 @@ fn fixture_activate(
                         let backing = &mut *(dma.mapping().virtual_start().get()
                             as *mut [[u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES]);
                         let mut tables = unit.borrow_boot_tables(route, root, backing).ok()?;
-                        if let Some(bar) = command_bar {
-                            use mrml_kernel::arch::x86_64::{Mapping, PagePermissions, VirtAddr};
-                            let cpu = VirtAddr::new(
-                                dma.mapping()
-                                    .virtual_start()
-                                    .get()
-                                    .checked_add(table_bytes)?,
-                            )
-                            .ok()?;
-                            let payload = Mapping::new(
-                                cpu,
-                                aperture.physical_base,
-                                u64::from(aperture.pages),
-                                PagePermissions::KERNEL_READ_WRITE,
-                            )
-                            .ok()?;
-                            return super::q35_xhci_command::run(
-                                &mut tables,
-                                &mut unit,
-                                aperture,
-                                payload,
-                                bar,
-                            )
-                            .then_some(());
-                        }
                         unit.install_routed_dma_aperture(&mut tables, aperture)
                             .ok()?;
                         unit.verify_routed_dma_aperture(

@@ -64,7 +64,7 @@ pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{
     PlatformMmioError, PlatformMmioManifest, PlatformMmioPurpose, PlatformMmioRequirement,
     VerifiedPlatformMmio, check_boot_mmio_cpu_policy, extend_vtd_mmio_requirement,
-    Q35FixtureTopology, q35_fixture_activation_mappings, q35_fixture_bar_preflight_mappings, q35_fixture_command_mappings, q35_fixture_storage_mappings, q35_fixture_write_mappings, verify_q35_activation_mmio, q35_fixture_probe_mappings, q35_fixture_shutdown_mappings, verify_active_platform_mmio,
+    Q35FixtureTopology, q35_fixture_activation_mappings, q35_fixture_bar_preflight_mappings, verify_q35_activation_mmio, q35_fixture_probe_mappings, q35_fixture_shutdown_mappings, verify_active_platform_mmio,
 };
 pub use privilege_stack::{
     CpuPrivilegeStacks, EARLY_STACK_PAGES, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES,

@@ -3233,52 +3233,14 @@ RTSOFF, halted controller state, IMAN reserved bits, and doorbell readback.
 A distinct release is required. This preflight adds no xHCI or PCI writes,
 does not program queues, and does not start a transfer.
 
-The separately sealed command diagnostic uses the existing xHCI driver,
-not a second implementation. After the exact endpoint and bridge stop with
-bus mastering off, it prepares and activates the same scoped legacy root.
-The driver publishes its rings in the one allowed DMA page and gates bus
-mastering on a fresh translation check. A paused host checks the exact
-DMA-written successful no-op completion in that page, with no IOMMU fault,
-before releasing teardown. The driver then halts, clears both BME bits,
-withdraws and drains the aperture, scrubs the page and removes its CPU
-payload and BAR mappings. The host independently checks the halted state,
-non-present leaf and zeroed payload. The boot allocation stays reserved for
-the life of the diagnostic VM. A denied release does not start the driver.
-This exercises controller DMA, not USB media, on the emulator only.
-
-A sixth profile adds native USB mass-storage reads, still only in the
-signed emulator diagnostic. The host creates a deterministic 1 MiB
-read-only image without a boot index, then attaches it to the isolated
-controller only after firmware exit and the exact PCI shutdown checks.
-The driver maps four payload pages, addresses the sole connected port,
-reads and validates its configuration, and uses the existing BOT/SCSI
-implementation to read sector 17. The guest checks every byte and the
-reported capacity. The monitor verifies reads on the named scratch backend,
-zero bytes and operations written, and byte-for-byte image identity before
-and after cleanup. A denied second release leaves the test disk unattached
-and its counters at zero. The four payload pages are scrubbed and unmapped
-after halt and revocation. This is not physical USB, filesystem or write
-support evidence.
-
-The seventh profile gives the same isolated transport a distinct disposable
-writable scratch image. It verifies the seed read and zero backend writes
-while the guest is paused, then sends a separate release that permits only
-a single WRITE(10) to sector 17. The existing BOT implementation sends
-SYNCHRONIZE CACHE and reads back the sector. The host requires exactly one
-512-byte backend write and independently compares the whole image against
-the expected one-sector change. It also verifies fresh, page-granular VT-d
-translations for requester 41:00.0 against the non-identity payload range.
-A denied activation leaves the writable image unattached and unchanged,
-with zero writes and no new translation. The fixture then verifies halt,
-revocation, and scrubbing as in the read-only case. This is a QEMU-only
-storage-transport result, not physical or filesystem write evidence.
-
-The absent-remapper control runs the same signed writable fixture with the
-emulated IOMMU removed. The signed loader refuses it at the missing DMAR
-stage before any native USB probe or host release. QEMU independently
-verifies the DRHD resource is absent and the unattached writable scratch
-backend has zero reads and writes and identical bytes. The firmware's
-prior PCI command state is not treated as a native device assignment.
+The former profiles 5–7 ran xHCI command completion and USB mass-storage
+read/write tests at CPL0. They were QEMU-only milestones, not a production
+storage path. Their kernel-side driver wrapper and writable controller BAR
+mappings have been removed. The signed loader now rejects all three marker
+values before mapping. The no-remapper control separately rejects a missing
+DMAR before guest register access. The other profiles remain tests of the
+kernel’s mapping, quiescence, and DMA isolation mechanisms, with no native
+USB transfers.
 
 The driver and the read-only ownership sampler share one bounded xHCI
 extended-capability walker. It reports absent, unclaimed, firmware-owned,
@@ -3309,12 +3271,15 @@ reports validated MCFG coverage and the DMAR route for that exact
 requester, then returns to firmware without touching storage. Its QEMU
 test covers a controller with and without a remapper and an absent controller.
 
-Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
-partition admission, and connection to the native FAT32 service remain
-unimplemented. The
-controller has one slot, no scratchpads, nonwrapping command and control
-queues, and no hub support. The existing Dragonair test exercises
-firmware USB access and embedded FAT32, not this native path.
+The single xHCI transport implementation remains in `storage-usb`. Its
+runtime caller must be an isolated block-provider service implementing the
+existing generation-1 block-provider protocol; FAT32 stays in its separate
+filesystem service. The kernel grants and revokes scoped device, interrupt,
+and DMA resources; it does not run USB commands or implement a fallback
+transport. Until a service can receive and retire such a lease, native USB
+storage is unavailable. The driver library has one slot, no scratchpads,
+nonwrapping command and control queues, and no hub support. Dragonair boot
+exercises firmware USB access and embedded FAT32, not native USB I/O.
 
 The forward compatibility target is [USB4 v2.0](https://usb.org/documents).
 This storage path does not implement a USB4 connection manager, router or

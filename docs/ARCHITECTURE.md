@@ -412,6 +412,14 @@ services. A service failure should revoke its authority and resources, notify
 affected peers, permit bounded restart, and leave unrelated services and the
 kernel running.
 
+Native USB has no privileged runtime fallback. The kernel may retain device
+quiescence, requester isolation, and capability binding and revocation. USB
+controller operation and mass-storage commands belong to one isolated block
+provider; FAT32 remains a separate service using the block protocol. Firmware
+reads of boot artifacts and read-only bring-up inspection do not constitute
+native driver ownership. Until the isolated USB provider can be provisioned,
+native USB I/O is unavailable rather than routed through privileged code.
+
 Storage's modular provider boundary is **PARTIALLY IMPLEMENTED** at the stable
 interface-schema layer. Block transports and filesystems are immutable library
 packages dynamically bound as isolated supervised services to `mrml-storage`;

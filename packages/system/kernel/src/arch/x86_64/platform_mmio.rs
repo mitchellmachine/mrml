@@ -100,54 +100,6 @@ pub fn q35_fixture_bar_preflight_mappings() -> Result<[Option<Mapping>; 4], Plat
     Ok(mappings)
 }
 
-/// Sealed command diagnostic: same three BAR pages, with UC/RW/NX.
-pub fn q35_fixture_command_mappings() -> Result<[Option<Mapping>; 4], PlatformMmioError> {
-    let mut mappings = q35_fixture_activation_mappings()?;
-    let bar = q35_fixture_bar_preflight_mappings()?[3].ok_or(PlatformMmioError::InvalidRange)?;
-    mappings[3] = Some(
-        Mapping::new(
-            bar.virtual_start(),
-            bar.physical_start(),
-            bar.pages(),
-            PagePermissions::KERNEL_HIGH_MMIO_READ_WRITE,
-        )
-        .map_err(|_| PlatformMmioError::MappingMismatch)?,
-    );
-    Ok(mappings)
-}
-
-/// Sealed storage diagnostic, with a distinct three-page virtual BAR lease.
-pub fn q35_fixture_storage_mappings() -> Result<[Option<Mapping>; 4], PlatformMmioError> {
-    let mut mappings = q35_fixture_command_mappings()?;
-    let bar = mappings[3].ok_or(PlatformMmioError::InvalidRange)?;
-    mappings[3] = Some(
-        Mapping::new(
-            VirtAddr::new(0xffff_d800_0010_7000).map_err(|_| PlatformMmioError::InvalidRange)?,
-            bar.physical_start(),
-            3,
-            bar.permissions(),
-        )
-        .map_err(|_| PlatformMmioError::MappingMismatch)?,
-    );
-    Ok(mappings)
-}
-
-/// Command resources for an independently sealed disposable write test.
-pub fn q35_fixture_write_mappings() -> Result<[Option<Mapping>; 4], PlatformMmioError> {
-    let mut mappings = q35_fixture_storage_mappings()?;
-    let bar = mappings[3].ok_or(PlatformMmioError::InvalidRange)?;
-    mappings[3] = Some(
-        Mapping::new(
-            VirtAddr::new(0xffff_d800_0010_b000).map_err(|_| PlatformMmioError::InvalidRange)?,
-            bar.physical_start(),
-            bar.pages(),
-            bar.permissions(),
-        )
-        .map_err(|_| PlatformMmioError::MappingMismatch)?,
-    );
-    Ok(mappings)
-}
-
 /// Writable DRHD page only for the separately released, isolated model.
 pub fn q35_fixture_activation_mappings() -> Result<[Option<Mapping>; 4], PlatformMmioError> {
     let mut mappings = q35_fixture_shutdown_mappings()?;
@@ -728,9 +680,6 @@ pub unsafe fn verify_q35_activation_mmio(
         return Err(PlatformMmioError::MappingMismatch);
     }
     if active.verify_q35_activation_leaves().is_err()
-        && active.verify_q35_command_leaves().is_err()
-        && active.verify_q35_storage_leaves().is_err()
-        && active.verify_q35_write_leaves().is_err()
     {
         return Err(PlatformMmioError::PageTable);
     }

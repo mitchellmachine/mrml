@@ -110,14 +110,8 @@ pub(super) enum Q35FixtureCase {
     ColdActivate,
     BarWrongRelease,
     BarValidRelease,
-    CommandWrongRelease,
-    CommandDenied,
-    CommandCompleted,
-    StorageDenied,
-    StorageRead,
-    StorageWriteDenied,
-    StorageWrite,
-    StorageNoRemapper,
+    RetiredPrivileged(u8),
+    NoRemapper,
 }
 
 impl Q35FixtureCase {
@@ -133,14 +127,8 @@ impl Q35FixtureCase {
                 | Self::ColdActivate
                 | Self::BarWrongRelease
                 | Self::BarValidRelease
-                | Self::CommandWrongRelease
-                | Self::CommandDenied
-                | Self::CommandCompleted
-                | Self::StorageDenied
-                | Self::StorageRead
-                | Self::StorageWriteDenied
-                | Self::StorageWrite
-                | Self::StorageNoRemapper
+                | Self::RetiredPrivileged(_)
+                | Self::NoRemapper
         )
     }
     fn profile(self) -> u8 {
@@ -148,9 +136,7 @@ impl Q35FixtureCase {
             Self::ColdWrongRelease | Self::ColdDenyActivation | Self::ColdActivate => 3,
             Self::ShutdownWrongRelease | Self::ShutdownValidRelease => 2,
             Self::BarWrongRelease | Self::BarValidRelease => 4,
-            Self::CommandWrongRelease | Self::CommandDenied | Self::CommandCompleted => 5,
-            Self::StorageDenied | Self::StorageRead => 6,
-            Self::StorageWriteDenied | Self::StorageWrite | Self::StorageNoRemapper => 7,
+            Self::RetiredPrivileged(profile) => profile,
             Self::SharedGuestBme | Self::SharedGuestBmeDenied => 2,
             _ => 1,
         }
@@ -158,14 +144,8 @@ impl Q35FixtureCase {
 
     fn cold(self) -> Option<bool> {
         match self {
-            Self::ColdDenyActivation
-            | Self::CommandDenied
-            | Self::StorageDenied
-            | Self::StorageWriteDenied => Some(false),
-            Self::ColdActivate
-            | Self::CommandCompleted
-            | Self::StorageRead
-            | Self::StorageWrite => Some(true),
+            Self::ColdDenyActivation => Some(false),
+            Self::ColdActivate => Some(true),
             _ => None,
         }
     }
@@ -242,8 +222,7 @@ fn run_qemu_config(
             | Q35FixtureCase::IsolatedWrongRelease
             | Q35FixtureCase::ShutdownWrongRelease
             | Q35FixtureCase::ColdWrongRelease
-            | Q35FixtureCase::BarWrongRelease
-            | Q35FixtureCase::CommandWrongRelease,
+            | Q35FixtureCase::BarWrongRelease,
         ) => Some([0xdc, 0xdd]),
         Some(
             Q35FixtureCase::ValidRelease
@@ -251,13 +230,7 @@ fn run_qemu_config(
             | Q35FixtureCase::ShutdownValidRelease
             | Q35FixtureCase::ColdDenyActivation
             | Q35FixtureCase::ColdActivate
-            | Q35FixtureCase::BarValidRelease
-            | Q35FixtureCase::CommandDenied
-            | Q35FixtureCase::CommandCompleted
-            | Q35FixtureCase::StorageDenied
-            | Q35FixtureCase::StorageRead
-            | Q35FixtureCase::StorageWriteDenied
-            | Q35FixtureCase::StorageWrite,
+            | Q35FixtureCase::BarValidRelease,
         ) => Some([0xdc, 0xde]),
         _ => None,
     };
@@ -307,14 +280,6 @@ struct QemuChildOptions<'a> {
     map_only_marker: Option<Q35FixtureCase>,
 }
 
-pub(super) fn scratch_read_seed() -> Vec<u8> {
-    let mut image = vec![0; 1_048_576];
-    for (i, byte) in image[17 * 512..18 * 512].iter_mut().enumerate() {
-        *byte = ((i ^ (i >> 3)) as u8).wrapping_mul(29) ^ 0xa7;
-    }
-    image
-}
-
 fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     let QemuChildOptions {
         qemu,
@@ -350,7 +315,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         format!("q35,accel={accelerator}")
     };
     let mut command = Command::new(qemu);
-    if intel_iommu && map_only_marker != Some(Q35FixtureCase::StorageNoRemapper) {
+    if intel_iommu && map_only_marker != Some(Q35FixtureCase::NoRemapper) {
         let remapper = if isolated {
             "intel-iommu,id=mrml_probe_vtd,aw-bits=48,intremap=off"
         } else {
@@ -367,26 +332,6 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             .filter(|p| p.is_absolute())
             .ok_or("missing private q35 fixture directory")?;
         command.current_dir(scratch).args(["-nic", "none"]);
-        if case.profile() == 7 {
-            command.args(["-d", "trace:vtd_dmar_translate", "-D", "mrml-vtd.log"]);
-        }
-        if matches!(case.profile(), 6 | 7) {
-            use std::io::Write as _;
-            std::fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(scratch.join("mrml-read.img"))
-                .and_then(|mut file| file.write_all(&scratch_read_seed()))
-                .map_err(|e| format!("create private scratch: {e}"))?;
-            command.args([
-                "-drive",
-                if case.profile() == 7 {
-                    "if=none,id=mrml_read,file=mrml-read.img,format=raw,readonly=off"
-                } else {
-                    "if=none,id=mrml_read,file=mrml-read.img,format=raw,readonly=on"
-                },
-            ]);
-        }
         if isolated {
             command.args([
                 "-nodefaults",
@@ -491,20 +436,17 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::NoMarker
         | Q35FixtureCase::SharedBootNoMarker
         | Q35FixtureCase::SharedPreloadUnmarked
-        | Q35FixtureCase::StorageNoRemapper => None,
+        | Q35FixtureCase::RetiredPrivileged(_)
+        | Q35FixtureCase::NoRemapper => None,
         Q35FixtureCase::WrongRelease
         | Q35FixtureCase::IsolatedWrongRelease
         | Q35FixtureCase::ShutdownWrongRelease
         | Q35FixtureCase::ColdWrongRelease
-        | Q35FixtureCase::BarWrongRelease
-        | Q35FixtureCase::CommandWrongRelease => Some(0x5a),
+        | Q35FixtureCase::BarWrongRelease => Some(0x5a),
         Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease => Some(0xa6),
         Q35FixtureCase::ShutdownValidRelease => Some(0xa7),
         Q35FixtureCase::ColdDenyActivation | Q35FixtureCase::ColdActivate => Some(0xa8),
         Q35FixtureCase::BarValidRelease => Some(0xa9),
-        Q35FixtureCase::CommandDenied | Q35FixtureCase::CommandCompleted => Some(0xaa),
-        Q35FixtureCase::StorageDenied | Q35FixtureCase::StorageRead => Some(0xab),
-        Q35FixtureCase::StorageWriteDenied | Q35FixtureCase::StorageWrite => Some(0xac),
         Q35FixtureCase::SharedPreload => Some(0xad),
         Q35FixtureCase::SharedPreloadDenied => Some(0xae),
         Q35FixtureCase::SharedDisableBme => Some(0xaf),
@@ -532,7 +474,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         &mut child,
                         valid,
                         isolated,
-                        matches!(valid, 0xa7 | 0xa8 | 0xaa..=0xac | 0xb5 | 0xb7)
+                        matches!(valid, 0xa7 | 0xa8 | 0xb5 | 0xb7)
                             .then_some((trace, expected)),
                         cold,
                     ) {
@@ -597,7 +539,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 bytes == expected
             };
             if rejection.is_none() && exact_trace {
-                let no_remapper = map_only_marker == Some(Q35FixtureCase::StorageNoRemapper);
+                let no_remapper = map_only_marker == Some(Q35FixtureCase::NoRemapper);
                 let evidence = (verify_q35 && !released).then(|| {
                     if no_remapper {
                         crate::qemu_mmio::verify_paused_no_remapper(&mut child, trace)

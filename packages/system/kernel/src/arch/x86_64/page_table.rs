@@ -1366,42 +1366,6 @@ impl ActivePageTables {
         Ok(())
     }
 
-    /// Rechecks the exact writable scratch diagnostic mapping set.
-    pub fn verify_q35_write_leaves(&self) -> Result<(), PageTableBuildError> {
-        for mapping in super::q35_fixture_write_mappings()
-            .map_err(|_| PageTableBuildError::MappingMismatch)?
-            .into_iter()
-            .flatten()
-        {
-            verify_exclusive_mapping_from_store(&IdentityMappedPageTables, self.root, mapping)?;
-        }
-        Ok(())
-    }
-
-    /// Rechecks the separately addressed storage diagnostic root.
-    pub fn verify_q35_storage_leaves(&self) -> Result<(), PageTableBuildError> {
-        for mapping in super::q35_fixture_storage_mappings()
-            .map_err(|_| PageTableBuildError::MappingMismatch)?
-            .into_iter()
-            .flatten()
-        {
-            verify_exclusive_mapping_from_store(&IdentityMappedPageTables, self.root, mapping)?;
-        }
-        Ok(())
-    }
-
-    /// Rechecks the command model's entire exact UC/NX mapping set.
-    pub fn verify_q35_command_leaves(&self) -> Result<(), PageTableBuildError> {
-        for mapping in super::q35_fixture_command_mappings()
-            .map_err(|_| PageTableBuildError::MappingMismatch)?
-            .into_iter()
-            .flatten()
-        {
-            verify_exclusive_mapping_from_store(&IdentityMappedPageTables, self.root, mapping)?;
-        }
-        Ok(())
-    }
-
     /// Rechecks every leaf of the distinct, exact cold-activation model.
     pub fn verify_q35_activation_leaves(&self) -> Result<(), PageTableBuildError> {
         for mapping in super::q35_fixture_activation_mappings()
