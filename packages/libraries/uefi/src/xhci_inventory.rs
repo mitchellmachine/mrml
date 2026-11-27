@@ -48,6 +48,28 @@ pub fn inspect_bar0(
     Some((base, u32::try_from(length).ok()?))
 }
 
+/// Read xHCI DMA geometry without taking ownership of the controller.
+pub fn inspect_dma_geometry<E>(
+    bar_bytes: u32,
+    mut read: impl FnMut(u32) -> Result<u32, E>,
+) -> Option<(u16, u16)> {
+    // xHCI 1.2 sections 5.3.1, 5.3.4 and 5.4.3.
+    if bar_bytes < 0x20 {
+        return None;
+    }
+    let cap_length = read(0).ok()? & 0xff;
+    if cap_length < 0x20 || cap_length % 4 != 0 || cap_length + 12 > bar_bytes {
+        return None;
+    }
+    let structural = read(8).ok()?;
+    let page_mask = read(cap_length + 8).ok()?;
+    if structural == u32::MAX || page_mask == 0 || page_mask > u32::from(u16::MAX) {
+        return None;
+    }
+    let count = ((structural >> 21) & 31) << 5 | ((structural >> 27) & 31);
+    Some((count as u16, page_mask as u16))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceTransport {
     Usb,
@@ -92,6 +114,55 @@ pub fn source_transport(path: &[u8], remaining: usize) -> Option<SourceTransport
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reports_split_scratchpad_count_and_page_mask_including_non_4k() {
+        for (bits, pages, count) in [(0, 1, 0), ((1 << 21) | (2 << 27), 0x10, 34)] {
+            let mut offsets = [0; 3];
+            let mut reads = 0;
+            let report = inspect_dma_geometry(0x80, |offset| {
+                offsets[reads] = offset;
+                reads += 1;
+                match offset {
+                    0 => Ok(0x0110_0040),
+                    8 => Ok(bits),
+                    0x48 => Ok(pages),
+                    _ => Err(()),
+                }
+            });
+            assert_eq!(report, Some((count, pages as u16)));
+            assert_eq!(reads, 3);
+            assert_eq!(offsets, [0, 8, 0x48]);
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_offsets_and_does_not_read_past_the_bar() {
+        for (bytes, cap, expected_reads) in [(0, 0x20, 0), (32, 0, 1), (64, 0x21, 1), (64, 0x38, 1)]
+        {
+            let mut reads = 0;
+            assert_eq!(
+                inspect_dma_geometry(bytes, |offset| {
+                    reads += 1;
+                    assert_eq!(offset, 0);
+                    Ok::<_, ()>(cap)
+                }),
+                None
+            );
+            assert_eq!(reads, expected_reads);
+        }
+        for pages in [Ok(0), Ok(0x1_0001), Ok(u32::MAX), Err(())] {
+            assert_eq!(
+                inspect_dma_geometry(0x2c, |offset| match offset {
+                    0 => Ok(0x20),
+                    8 => Ok(0),
+                    0x28 => pages,
+                    _ => panic!("unexpected offset"),
+                }),
+                None
+            );
+        }
+    }
 
     #[test]
     fn classifies_only_bounded_unambiguous_source_suffixes() {

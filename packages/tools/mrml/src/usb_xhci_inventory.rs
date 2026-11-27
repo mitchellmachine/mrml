@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 const MAX_SERIAL: u64 = 128 * 1024;
 const RETURN: &str = "xhci-inventory: returning to firmware; no controller handoff";
 const MENU: &str = "BdsDxe: starting Boot0000 \"BootManagerMenuApp\"";
+const GEOMETRY: &str = "xhci DMA: scratchpads=0 page-mask=0x0001";
 const START: &str = "MRML xhci-inventory: read-only";
 
 #[derive(Clone, Copy, Debug)]
@@ -37,6 +38,7 @@ impl Case {
         }
         if matches!(self, Self::UsbBoot) {
             return reported("xhci-inventory: controllers=2 incomplete=0")
+                && report.lines().filter(|line| *line == GEOMETRY).count() == 2
                 && report
                     .split("xhci 0000:00:05.0")
                     .nth(1)
@@ -55,7 +57,8 @@ impl Case {
                             .any(|line| line == "xhci boot source: shared-usb")
                     });
         }
-        reported("xhci 0000:00:05.0 pci=1b36:000d rev=01 cmd=0007")
+        reported(GEOMETRY)
+            && reported("xhci 0000:00:05.0 pci=1b36:000d rev=01 cmd=0007")
             && reported("xhci MCFG: valid, entries=1, covered=true")
             && reported("xhci-inventory: controllers=1 incomplete=0")
             && reported("xhci boot source: non-usb")

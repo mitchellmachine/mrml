@@ -12,7 +12,9 @@ use mrml_kernel::arch::x86_64::PciConfigSpace;
 use mrml_storage_usb::xhci::inspect_legacy_ownership;
 #[path = "xhci_inventory_acpi.rs"]
 mod acpi;
-use mrml_uefi::xhci_inventory::{BAR_RESOURCE_BYTES, BAR_RESOURCE_HEADER, inspect_bar0};
+use mrml_uefi::xhci_inventory::{
+    BAR_RESOURCE_BYTES, BAR_RESOURCE_HEADER, inspect_bar0, inspect_dma_geometry,
+};
 use mrml_uefi::{
     BootServices, Guid, Handle, LOAD_ERROR, LOCATE_BY_PROTOCOL, NOT_FOUND, SUCCESS, Status,
     SystemTable,
@@ -301,11 +303,10 @@ unsafe fn scan(
         // SAFETY: this PCI interface and its owning services remain live.
         match unsafe { bar0(services, io, command, header) } {
             Ok((base, bytes)) => {
-                let ownership = inspect_legacy_ownership(bytes, |offset| {
+                let read = |offset| {
                     let mut word = 0u32;
-                    // The capability visitor is bounded by the exact validated
-                    // BAR0 resource. The protocol uses BAR-relative offsets.
-                    // SAFETY: the shared walker bounds aligned offsets and the destination is one u32.
+                    // SAFETY: both callers bound aligned BAR0-relative offsets;
+                    // the destination is a single aligned u32.
                     check(unsafe {
                         ((*io).mem_read)(
                             io,
@@ -317,8 +318,10 @@ unsafe fn scan(
                         )
                     })?;
                     Ok::<u32, Status>(word)
-                });
-                if ownership.is_err() {
+                };
+                let ownership = inspect_legacy_ownership(bytes, read);
+                let geometry = inspect_dma_geometry(bytes, read);
+                if ownership.is_err() || geometry.is_none() {
                     incomplete += 1;
                 }
                 // SAFETY: the console remains live and only report text is sent.
@@ -328,8 +331,15 @@ unsafe fn scan(
                         format_args!(
                             "xhci BAR0={base:#018x} size={bytes:#x} ownership={ownership:?}"
                         ),
-                    )?
-                };
+                    )?;
+                    match geometry {
+                        Some((count, mask)) => line(
+                            output,
+                            format_args!("xhci DMA: scratchpads={count} page-mask={mask:#06x}"),
+                        )?,
+                        None => line(output, format_args!("xhci DMA: unavailable"))?,
+                    }
+                }
             }
             Err(status) => {
                 incomplete += 1;

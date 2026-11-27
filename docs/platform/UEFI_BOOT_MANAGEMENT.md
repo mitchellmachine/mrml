@@ -226,7 +226,11 @@ the executable, stop and record the refusal. An SSH-signed source commit does
 not sign the EFI executable for Secure Boot.
 
 Record the controller's PCI address, IDs, command state, BAR0, ownership,
-MCFG coverage and DMAR route as shown on the console. The application
+MCFG coverage, DMAR route, and the `xhci DMA` line as shown on the console.
+The DMA line reports the controller's scratchpad buffer count and supported
+page-size bitmask (bit 0 is 4 KiB). An unavailable line is not a zero count.
+These reads do not allocate scratchpads or qualify the controller for transfer.
+The application
 returns to the shell without leaving UEFI Boot Services. It does not write
 a report to storage, read disk contents, change bus mastering, write
 controller registers, or hand off DMA. A firmware-owned or contended
