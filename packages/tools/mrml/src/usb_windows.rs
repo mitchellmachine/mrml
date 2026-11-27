@@ -1,5 +1,5 @@
 //! Native Win32 USB discovery and exclusive volume claims.
-use super::{BYTES, Disk, transfer};
+use super::{BYTES, Disk, require_only_usb, transfer};
 use std::ffi::{OsStr, c_void};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -15,6 +15,17 @@ pub(super) struct Identity {
     partitions: Vec<(u64, u64)>,
     volumes: Vec<PathBuf>,
     raw_guid: Option<[u8; 16]>,
+}
+
+#[cfg(test)]
+pub(super) fn test_identity() -> Identity {
+    Identity {
+        number: 0,
+        serial: "fixture".into(),
+        partitions: Vec::new(),
+        volumes: Vec::new(),
+        raw_guid: None,
+    }
 }
 
 #[link(name = "kernel32")]
@@ -394,6 +405,30 @@ fn physical_path(number: u32) -> PathBuf {
     PathBuf::from(format!(r"\\.\PhysicalDrive{number}"))
 }
 
+pub(super) fn usb_storage() -> io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for number in disk_numbers()? {
+        let path = physical_path(number);
+        // Query transport without read/write access to the medium. Count USB
+        // storage even if its layout, writability or identity makes it ineligible.
+        let file = OpenOptions::new()
+            .access_mode(0)
+            .share_mode(3)
+            .open(&path)?;
+        let mut props = [0; 4096];
+        let count = control(&file, 0x2d1400, &[0; 12], &mut props)?;
+        if count < 36 || u32_at(&props, 28) == 0 {
+            return Err(io::Error::other(
+                "cannot classify Windows disk transport; no bytes written",
+            ));
+        }
+        if u32_at(&props, 28) == 7 {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
 pub(super) fn disks() -> io::Result<Vec<Disk>> {
     let mut disks = Vec::new();
     for number in disk_numbers()? {
@@ -460,7 +495,7 @@ fn same_handle(file: &File, selected: &Disk) -> io::Result<bool> {
 
 const DIRECT: u32 = 0xa000_0000; // NO_BUFFERING | WRITE_THROUGH
 
-pub(super) fn write_image(disk: &Disk, image: &[u8]) -> io::Result<()> {
+pub(super) fn write_image(disk: &Disk, image: &[u8], only_usb: bool) -> io::Result<()> {
     if !privileged() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -491,6 +526,9 @@ pub(super) fn write_image(disk: &Disk, image: &[u8]) -> io::Result<()> {
     // ensure the volume set and physical layout did not change in the interim.
     if volume_names()? != before || !same_handle(&file, disk)? {
         return Err(io::Error::other("USB layout changed; no bytes written"));
+    }
+    if only_usb {
+        require_only_usb(disk, usb_storage)?;
     }
     for lock in &locks {
         control(lock, 0x90020, &[], &mut [])?;

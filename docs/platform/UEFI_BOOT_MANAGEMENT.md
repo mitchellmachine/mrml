@@ -11,8 +11,10 @@ dbx update, dual boot, or physical-firmware behavior.
 The bring-up test uses a dedicated, expendable USB flash drive, not the
 installer. First reproduce the signed FAT32 restart in QEMU/OVMF with
 `mrml usb test OVMF_CODE OVMF_VARS QEMU`. Both paths
-use the signed UEFI loader, kernel and FAT32 service, with one-use diagnostic
-keys and the same read-only fixture embedded in the kernel.
+use MRML package and service signatures with one-use diagnostic keys, and
+the same read-only fixture embedded in the kernel. The USB EFI executable
+itself is not signed for firmware Secure Boot. Passing QEMU/OVMF does not
+mean firmware enforcing Secure Boot will trust this image.
 
 1. [Create and write the diagnostic USB image](#create-and-write-the-diagnostic-usb-image).
    Firmware loads its x86-64 entry at `\EFI\BOOT\BOOTX64.EFI`.
@@ -63,6 +65,24 @@ automatically; otherwise choose a number. Check the exact drive shown and
 type `ERASE <number>`. The writer rechecks and claims the device, writes
 and flushes the image, then compares every written byte. Safely eject
 afterward. This is imaging, not secure wiping of the rest of the disk.
+
+For unattended use on a trusted host, open an Administrator terminal on
+Windows or use an already authorized root session on Linux, then run:
+
+```text
+mrml usb autoburn
+```
+
+**This command erases the sole eligible USB storage drive without asking.**
+Connect only the spare USB stick you intend to erase. The command does not
+prompt for elevation, selection or confirmation. It refuses to build or
+write if there is no USB storage drive, more than one (even if another is
+ineligible), or if the only drive fails the normal safety checks. It builds
+the diagnostic in memory, rechecks the original drive and USB inventory
+before claiming and writing, and verifies every written byte. If the
+inventory cannot be determined or changes during the checks, it stops
+instead of picking another drive. Use interactive `burn` when you need
+to select a drive.
 
 **Native MRML USB writing is planned.** Keep the same image and workflow,
 but use the deployment service for typed removable-device enumeration,

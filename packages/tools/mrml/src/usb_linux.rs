@@ -7,7 +7,7 @@ use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _}
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{BYTES, Disk, transfer};
+use super::{BYTES, Disk, require_only_usb, transfer};
 use crate::usb_image::SECTOR;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +16,16 @@ pub(super) struct Identity {
     dev: u64,
     generation: u64,
     geometry: Vec<(String, String, String)>,
+}
+
+#[cfg(test)]
+pub(super) fn test_identity() -> Identity {
+    Identity {
+        node: PathBuf::new(),
+        dev: 0,
+        generation: 1,
+        geometry: Vec::new(),
+    }
 }
 
 unsafe extern "C" {
@@ -193,7 +203,30 @@ fn ioctl_number<const N: usize>(file: &File, request: usize) -> io::Result<[u8; 
     Ok(buffer)
 }
 
-pub(super) fn write_image(disk: &Disk, image: &[u8]) -> io::Result<()> {
+pub(super) fn usb_storage() -> io::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for entry in fs::read_dir("/sys/class/block")? {
+        let entry = entry?;
+        let node = entry.path().canonicalize()?;
+        if node.join("partition").try_exists()? {
+            continue;
+        }
+        for parent in node.ancestors() {
+            match fs::read_link(parent.join("subsystem")) {
+                Ok(kind) if kind.file_name().is_some_and(|part| part == "usb") => {
+                    paths.push(PathBuf::from("/dev").join(entry.file_name()));
+                    break;
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(paths)
+}
+
+pub(super) fn write_image(disk: &Disk, image: &[u8], only_usb: bool) -> io::Result<()> {
     if !privileged() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -218,6 +251,9 @@ pub(super) fn write_image(disk: &Disk, image: &[u8]) -> io::Result<()> {
         return Err(io::Error::other(
             "Linux drive identity or geometry changed; no bytes written",
         ));
+    }
+    if only_usb {
+        require_only_usb(disk, usb_storage)?;
     }
     transfer(&mut file, image, |file| {
         file.sync_all()?;

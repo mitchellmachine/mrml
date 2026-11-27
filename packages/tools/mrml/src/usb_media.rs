@@ -15,7 +15,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list | mrml usb burn IMAGE.img | mrml usb test OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list | mrml usb burn IMAGE.img | mrml usb autoburn | mrml usb test OVMF_CODE OVMF_VARS QEMU";
 
 pub(super) fn command(args: &[String]) -> Result<(), String> {
     match args {
@@ -52,6 +52,7 @@ fn device_command(args: &[String]) -> io::Result<()> {
             Ok(())
         }
         [mode, file] if mode == "burn" => burn(Path::new(file), false),
+        [mode] if mode == "autoburn" => autoburn(),
         [mode, file, marker]
             if cfg!(windows) && mode == "burn" && marker == "--elevated-console" =>
         {
@@ -180,7 +181,86 @@ fn burn(path: &Path, child: bool) -> io::Result<()> {
             "target identity changed; no bytes written",
         ));
     }
-    host::write_image(disk, &image)?;
+    write_verified(disk, &image, false)
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn autoburn() -> io::Result<()> {
+    if !host::privileged() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "autoburn requires an Administrator or root session; no elevation prompt is used",
+        ));
+    }
+    run_autoburn(
+        || {
+            let connected = host::usb_storage()?;
+            select_single(&connected, host::disks)
+        },
+        || {
+            let workspace = load_workspace().map_err(io::Error::other)?;
+            let image = build_image(&workspace).map_err(io::Error::other)?;
+            usb_image::check_image(&image)?;
+            println!("Image SHA3-512: {}", sha3(&image));
+            Ok(image)
+        },
+        |disk, image| write_verified(disk, image, true),
+    )
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn select_single(
+    connected: &[PathBuf],
+    eligible: impl FnOnce() -> io::Result<Vec<Disk>>,
+) -> io::Result<Disk> {
+    match connected {
+        [] => Err(io::Error::other(
+            "no USB storage drive connected; no bytes written",
+        )),
+        [path] => eligible()?
+            .into_iter()
+            .find(|disk| disk.path == *path)
+            .ok_or_else(|| {
+                io::Error::other("the only USB storage drive is not eligible; no bytes written")
+            }),
+        _ => Err(io::Error::other(
+            "more than one USB storage drive connected; no bytes written",
+        )),
+    }
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn run_autoburn(
+    discover: impl Fn() -> io::Result<Disk>,
+    build: impl FnOnce() -> io::Result<Vec<u8>>,
+    write: impl FnOnce(&Disk, &[u8]) -> io::Result<()>,
+) -> io::Result<()> {
+    let disk = discover()?;
+    println!("Autoburn will erase this USB drive:");
+    preview(std::slice::from_ref(&disk));
+    let image = build()?;
+    if discover()? != disk {
+        return Err(io::Error::other(
+            "target identity changed; no bytes written",
+        ));
+    }
+    write(&disk, &image)
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn require_only_usb(
+    selected: &Disk,
+    connected: impl FnOnce() -> io::Result<Vec<PathBuf>>,
+) -> io::Result<()> {
+    if connected()?.as_slice() != std::slice::from_ref(&selected.path) {
+        return Err(io::Error::other("USB inventory changed; no bytes written"));
+    }
+    Ok(())
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn write_verified(disk: &Disk, image: &[u8], only_usb: bool) -> io::Result<()> {
+    host::write_image(disk, image, only_usb)?;
     println!(
         "Verified {} bytes on {}. Safely eject the drive.",
         image.len(),
@@ -264,6 +344,18 @@ fn create(workspace: &Workspace, output: &Path) -> Result<(), String> {
     {
         return Err("Choose a new .img filename; images are never overwritten".into());
     }
+    let bytes = build_image(workspace)?;
+    publish(output, &bytes).map_err(|e| format!("USB image output error: {e}"))?;
+    println!(
+        "usb-image|bytes={}|sha3-512={}|output={}",
+        bytes.len(),
+        sha3(&bytes),
+        output.display()
+    );
+    Ok(())
+}
+
+fn build_image(workspace: &Workspace) -> Result<Vec<u8>, String> {
     let usb = Scratch::new().map_err(|e| e.to_string())?;
     let target = if cfg!(windows) { "windows" } else { "linux" };
     let native = workspace.root.join("target/mrml-native");
@@ -424,7 +516,7 @@ fn create(workspace: &Workspace, output: &Path) -> Result<(), String> {
         workspace,
         &words(&["verify", &string(&release), &key("release", "public")]),
     )?;
-    let bytes = usb_image::compose([
+    usb_image::compose([
         &loader,
         &loader_package,
         &kernel_package,
@@ -432,15 +524,7 @@ fn create(workspace: &Workspace, output: &Path) -> Result<(), String> {
         &release,
         &service_signed,
     ])
-    .map_err(|e| e.to_string())?;
-    publish(output, &bytes).map_err(|e| format!("USB image output error: {e}"))?;
-    println!(
-        "usb-image|bytes={}|sha3-512={}|output={}",
-        bytes.len(),
-        sha3(&bytes),
-        output.display()
-    );
-    Ok(())
+    .map_err(|e| e.to_string())
 }
 
 fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -529,5 +613,103 @@ mod tests {
             .map(|i| PathBuf::from(format!("USB {i}")))
             .collect();
         authorize(&choices, ask)
+    }
+
+    #[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+    mod unattended {
+        use super::*;
+        use std::cell::Cell;
+
+        fn disk(path: &str) -> Disk {
+            Disk {
+                path: path.into(),
+                label: "test device".into(),
+                capacity: BYTES as u64,
+                identity: host::test_identity(),
+            }
+        }
+
+        #[test]
+        fn counts_ineligible_connected_drives_and_requires_the_exact_path() {
+            let target = disk("target");
+            for connected in [vec![], vec![target.path.clone(), "ineligible".into()]] {
+                assert!(select_single(&connected, || panic!("must not select")).is_err());
+            }
+            assert!(select_single(std::slice::from_ref(&target.path), || Ok(vec![])).is_err());
+            assert!(select_single(&["other".into()], || Ok(vec![target.clone()])).is_err());
+            assert_eq!(
+                select_single(std::slice::from_ref(&target.path), || Ok(vec![
+                    target.clone()
+                ]))
+                .unwrap(),
+                target
+            );
+        }
+
+        #[test]
+        fn builds_once_and_verifies_the_pinned_target_without_prompting() {
+            let target = disk("target");
+            let sightings = Cell::new(0);
+            run_autoburn(
+                || {
+                    sightings.set(sightings.get() + 1);
+                    Ok(target.clone())
+                },
+                || {
+                    assert_eq!(sightings.get(), 1);
+                    Ok(b"diagnostic".to_vec())
+                },
+                |selected, image| {
+                    assert_eq!(sightings.get(), 2);
+                    assert_eq!(selected, &target);
+                    require_only_usb(selected, || Ok(vec![target.path.clone()]))?;
+                    let mut file = Cursor::new(Vec::new());
+                    transfer(&mut file, image, |_| Ok(()))?;
+                    assert_eq!(file.into_inner(), b"diagnostic");
+                    Ok(())
+                },
+            )
+            .unwrap();
+        }
+
+        #[test]
+        fn refuses_target_swaps_inventory_changes_and_build_failure() {
+            let target = disk("target");
+            let mut replacement = target.clone();
+            replacement.capacity += 512;
+            let before = Cell::new(true);
+            let never_write = |_: &Disk, _: &[u8]| panic!("must not write");
+            assert!(
+                run_autoburn(
+                    || Ok(if before.replace(false) {
+                        target.clone()
+                    } else {
+                        replacement.clone()
+                    }),
+                    || Ok(vec![1]),
+                    never_write,
+                )
+                .is_err()
+            );
+            assert!(
+                run_autoburn(
+                    || Ok(target.clone()),
+                    || Err(io::Error::other("build failed")),
+                    never_write,
+                )
+                .is_err()
+            );
+            for changed in [
+                vec![],
+                vec!["replacement".into()],
+                vec![target.path.clone(), "additional drive".into()],
+            ] {
+                assert!(require_only_usb(&target, || Ok(changed)).is_err());
+            }
+            assert!(
+                require_only_usb(&target, || Err(io::Error::other("inventory unavailable")))
+                    .is_err()
+            );
+        }
     }
 }
