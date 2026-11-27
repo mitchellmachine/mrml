@@ -81,7 +81,7 @@ pub use vmx::{
     VmxLaunchOutcome, VmxPrerequisites, VmxState,
 };
 pub use vtd::{
-    CompleteVtdRoutes, DmarDeviceScope, DmarError, DmarTopology, DmarUnit, EcamCommandError,
+    CompleteVtdRoutes, DmarDeviceScope, DmarError, DmarReservedRegion, DmarTopology, DmarUnit, EcamCommandError,
     EcamSegments, McfgAllocation, McfgError, McfgTopology, NativeEcamSegment, NativeVtdMmio,
     PciConfigSpace, PciPathElement, VtdDmaIsolation, VtdDmaSet, VtdError, VtdFaultSnapshot,
     VtdInvalidator, VtdRegisterIo, VtdRegisterLayout, VtdRequesterRoute,

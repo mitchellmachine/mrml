@@ -2952,6 +2952,13 @@ ACPI namespace scopes rather than guessing. This is read-only routing evidence
 and does not establish device isolation, requester-alias safety, or DMA
 authority.
 
+The DMAR parser also retains firmware Reserved Memory Region Reporting
+(RMRR) extents and their PCI scopes. The bounded assignment route refuses
+requesters covered by such an extent instead of silently omitting required
+firmware memory mappings or granting them implicitly. An unrelated
+requester can still be routed. This does not establish which RMRRs, if any,
+the running Dragonair firmware reports.
+
 The verified VT-d unit can now check a contiguous DMA aperture against its
 active legacy root, exact requester and expected hardware domain. It checks
 every 4 KiB page in the bounded aperture against the expected physical backing,

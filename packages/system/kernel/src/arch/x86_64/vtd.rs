@@ -28,6 +28,7 @@ const FAULT_STATUS_MASK: u32 = 0xff;
 const FAULT_VALID: u64 = 1 << 63;
 const DMAR_HEADER_BYTES: usize = 48;
 const DRHD_HEADER_BYTES: usize = 16;
+const RMRR_HEADER_BYTES: usize = 24;
 const DEVICE_SCOPE_HEADER_BYTES: usize = 6;
 const MAX_PCI_PATH_DEPTH: usize = 8;
 const MCFG_HEADER_BYTES: usize = 44;
@@ -134,6 +135,8 @@ pub enum DmarError {
     NoRemappingUnit,
     IncompleteUnitCoverage,
     DuplicateUnitCoverage,
+    InvalidReservedRegion,
+    RequesterNeedsReservedMemory,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -498,6 +501,15 @@ pub struct DmarUnit {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DmarReservedRegion {
+    pub segment: u16,
+    pub base: PhysAddr,
+    pub end_exclusive: u64,
+    scope_start: usize,
+    scope_end: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VtdRequesterRoute {
     requester: DeviceAddress,
     register_base: PhysAddr,
@@ -547,8 +559,10 @@ pub struct DmarTopology<const UNITS: usize, const SCOPES: usize> {
     pub flags: u8,
     units: [Option<DmarUnit>; UNITS],
     scopes: [Option<DmarDeviceScope>; SCOPES],
+    reserved: [Option<DmarReservedRegion>; SCOPES],
     unit_count: usize,
     scope_count: usize,
+    reserved_count: usize,
 }
 
 impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
@@ -577,8 +591,10 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
             flags: table[37],
             units: [None; UNITS],
             scopes: [None; SCOPES],
+            reserved: [None; SCOPES],
             unit_count: 0,
             scope_count: 0,
+            reserved_count: 0,
         };
         let mut offset = DMAR_HEADER_BYTES;
         while offset < length {
@@ -597,8 +613,10 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
             if end > length {
                 return Err(DmarError::Truncated);
             }
-            if structure_type == 0 {
-                topology.parse_drhd(&table[offset..end])?;
+            match structure_type {
+                0 => topology.parse_drhd(&table[offset..end])?,
+                1 => topology.parse_rmrr(&table[offset..end])?,
+                _ => {}
             }
             offset = end;
         }
@@ -610,6 +628,10 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
 
     pub fn units(&self) -> impl Iterator<Item = &DmarUnit> {
         self.units[..self.unit_count].iter().flatten()
+    }
+
+    pub fn reserved_regions(&self) -> impl Iterator<Item = &DmarReservedRegion> {
+        self.reserved[..self.reserved_count].iter().flatten()
     }
 
     pub fn scopes(&self, unit: &DmarUnit) -> impl Iterator<Item = &DmarDeviceScope> {
@@ -715,10 +737,65 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
             return Err(DmarError::MissingDevice);
         }
         let unit = self.unit_for_requester(requester, config)?;
+        // These routes authorize a single bounded assignment, not auxiliary
+        // firmware identity mappings. Reject rather than ignoring an RMRR.
+        for region in self
+            .reserved_regions()
+            .filter(|region| region.segment == requester.segment())
+        {
+            for scope in self.scopes[region.scope_start..region.scope_end]
+                .iter()
+                .flatten()
+            {
+                if self.scope_covers(region.segment, scope, requester, config)? {
+                    return Err(DmarError::RequesterNeedsReservedMemory);
+                }
+            }
+        }
         Ok(VtdRequesterRoute {
             requester,
             register_base: unit.register_base,
         })
+    }
+
+    fn parse_rmrr(&mut self, bytes: &[u8]) -> Result<(), DmarError> {
+        if bytes.len() <= RMRR_HEADER_BYTES || bytes[4..6] != [0, 0] {
+            return Err(DmarError::InvalidReservedRegion);
+        }
+        let segment = read_u16(bytes, 6)?;
+        let base =
+            PhysAddr::new(read_u64(bytes, 8)?).map_err(|_| DmarError::InvalidReservedRegion)?;
+        let end_exclusive = read_u64(bytes, 16)?
+            .checked_add(1)
+            .filter(|&end| {
+                end > base.get()
+                    && end.is_multiple_of(PAGE_SIZE)
+                    && end <= (1u64 << self.host_address_width)
+            })
+            .ok_or(DmarError::InvalidReservedRegion)?;
+        let scope_start = self.scope_count;
+        let mut offset = RMRR_HEADER_BYTES;
+        while offset < bytes.len() {
+            let scope = next_dmar_scope(bytes, &mut offset)?;
+            if !matches!(scope.scope_type, 1 | 2) {
+                return Err(DmarError::UnsupportedRequesterScope);
+            }
+            if self.scope_count == SCOPES {
+                return Err(DmarError::ScopeTableFull);
+            }
+            self.scopes[self.scope_count] = Some(scope);
+            self.scope_count += 1;
+        }
+        // Every reserved region consumed at least one bounded scope.
+        self.reserved[self.reserved_count] = Some(DmarReservedRegion {
+            segment,
+            base,
+            end_exclusive,
+            scope_start,
+            scope_end: self.scope_count,
+        });
+        self.reserved_count += 1;
+        Ok(())
     }
 
     /// Resolves exactly one live requester through every discovered DRHD and
@@ -783,20 +860,7 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
         let scope_start = self.scope_count;
         let mut offset = DRHD_HEADER_BYTES;
         while offset < bytes.len() {
-            if offset + 2 > bytes.len() {
-                return Err(DmarError::Truncated);
-            }
-            let scope_len = bytes[offset + 1] as usize;
-            if scope_len < DEVICE_SCOPE_HEADER_BYTES + 2 || !scope_len.is_multiple_of(2) {
-                return Err(DmarError::InvalidScope);
-            }
-            let end = offset
-                .checked_add(scope_len)
-                .ok_or(DmarError::InvalidLength)?;
-            if end > bytes.len() {
-                return Err(DmarError::Truncated);
-            }
-            let scope = parse_scope(&bytes[offset..end])?;
+            let scope = next_dmar_scope(bytes, &mut offset)?;
             if include_all && matches!(scope.scope_type, 1 | 2) {
                 return Err(DmarError::InvalidScope);
             }
@@ -818,7 +882,6 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
             }
             self.scopes[self.scope_count] = Some(scope);
             self.scope_count += 1;
-            offset = end;
         }
         self.units[self.unit_count] = Some(DmarUnit {
             segment,
@@ -831,6 +894,19 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
         self.unit_count += 1;
         Ok(())
     }
+}
+
+fn next_dmar_scope(bytes: &[u8], offset: &mut usize) -> Result<DmarDeviceScope, DmarError> {
+    let scope_len = *bytes.get(*offset + 1).ok_or(DmarError::Truncated)? as usize;
+    if scope_len < DEVICE_SCOPE_HEADER_BYTES + 2 || !scope_len.is_multiple_of(2) {
+        return Err(DmarError::InvalidScope);
+    }
+    let end = offset
+        .checked_add(scope_len)
+        .ok_or(DmarError::InvalidLength)?;
+    let scope = parse_scope(bytes.get(*offset..end).ok_or(DmarError::Truncated)?)?;
+    *offset = end;
+    Ok(scope)
 }
 
 fn bridge_window<C: PciConfigSpace>(
@@ -1625,6 +1701,48 @@ mod tests {
             DmarTopology::<2, 4>::parse(&duplicate),
             Err(DmarError::AmbiguousUnit)
         );
+    }
+
+    #[test]
+    fn rmrr_gates_only_covered_requester_routes_without_adding_identity_maps() {
+        let endpoint = DeviceAddress::new(0, 5, 1, 0).unwrap();
+        let fallback = DeviceAddress::new(0, 7, 2, 0).unwrap();
+        for (kind, bus, device) in [(1, 5, 1), (2, 2, 3)] {
+            let mut table = [0u8; 122];
+            table[..90].copy_from_slice(&routing_dmar());
+            table[4..8].copy_from_slice(&122u32.to_le_bytes());
+            table[90..94].copy_from_slice(&[1, 0, 32, 0]);
+            table[98..106].copy_from_slice(&0x7000u64.to_le_bytes());
+            table[106..114].copy_from_slice(&0x8fffu64.to_le_bytes());
+            table[114..].copy_from_slice(&[kind, 8, 0, 0, 0, bus, device, 0]);
+            finalize_table(&mut table);
+            let topology = DmarTopology::<2, 2>::parse(&table).unwrap();
+            let region = topology.reserved_regions().next().unwrap();
+            assert_eq!(
+                (region.segment, region.base.get(), region.end_exclusive),
+                (0, 0x7000, 0x9000)
+            );
+            let mut config = Config {
+                bridge_header: 1 << 16,
+            };
+            assert!(topology.unit_for_requester(endpoint, &mut config).is_ok());
+            assert_eq!(
+                topology.route_for_requester(endpoint, &mut config),
+                Err(DmarError::RequesterNeedsReservedMemory)
+            );
+            assert!(topology.route_for_requester(fallback, &mut config).is_ok());
+            assert_eq!(
+                DmarTopology::<2, 1>::parse(&table),
+                Err(DmarError::ScopeTableFull)
+            );
+
+            table[106..114].copy_from_slice(&0x9000u64.to_le_bytes());
+            finalize_table(&mut table);
+            assert_eq!(
+                DmarTopology::<2, 2>::parse(&table),
+                Err(DmarError::InvalidReservedRegion)
+            );
+        }
     }
 
     #[test]
