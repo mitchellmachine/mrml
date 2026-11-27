@@ -522,13 +522,13 @@ mod tests {
                 1, 2, 0, Rights::ALLOCATE.union(Rights::CONTROL).union(Rights::INSPECT),
                 &mut caps,
             ).unwrap();
-            let (projection, _) = reserve_microvm_peer_page_projection(
+            let (projection, object) = reserve_microvm_peer_page_projection(
                 &mut memory, pool, quota, first, second, 0x700, 0x800, &mut caps,
             ).unwrap();
-            (memory, projection)
+            (memory, projection, object)
         };
-        let (_local_ledger, local) = reserve(0x901);
-        let (_foreign_ledger, foreign) = reserve(0x904);
+        let (mut local_ledger, local, local_object) = reserve(0x901);
+        let (mut foreign_ledger, foreign, foreign_object) = reserve(0x904);
         assert_eq!(local.object(), foreign.object());
         assert_eq!(local.first_mapping(), foreign.first_mapping());
         assert_eq!(local.second_mapping(), foreign.second_mapping());
@@ -553,12 +553,12 @@ mod tests {
         let wrong = foreign_client.submit(&mut foreign_page, &foreign, &caps, 1, b"other").unwrap();
 
         let vm = crate::VmTable::<1>::new().create(1).unwrap();
-        let mut route = crate::MicrovmInterfaceRequestInterrupt::new(
+        let mut request_route = crate::MicrovmInterfaceRequestInterrupt::new(
             identity(), local.identity(), vm, 0, 64, ObjectId(0x991),
         );
-        assert_eq!(route.publish(wrong), Err(crate::MicrovmInterfaceInterruptError::InvalidNotification));
-        assert!(route.pending().is_none());
-        route.publish(request).unwrap();
+        assert_eq!(request_route.publish(wrong), Err(crate::MicrovmInterfaceInterruptError::InvalidNotification));
+        assert!(request_route.pending().is_none());
+        request_route.publish(request).unwrap();
 
         let mut output = [0x5a; 8];
         assert_eq!(
@@ -590,6 +590,31 @@ mod tests {
             Ok((1, 5))
         );
         assert_eq!(&output[..5], b"local");
+
+        // SAFETY: both fixture ledgers reserve only stack-backed test pages;
+        // neither has a native mapping or outstanding backend consumer.
+        let (foreign_retired, local_retired) = unsafe {
+            (
+                crate::release_microvm_peer_page_projection(
+                    &mut foreign_ledger, foreign, foreign_object, first, second, &mut caps,
+                ).unwrap(),
+                crate::release_microvm_peer_page_projection(
+                    &mut local_ledger, local, local_object, first, second, &mut caps,
+                ).unwrap(),
+            )
+        };
+        use crate::MicrovmInterfaceInterruptError::{Retired, WrongRetirement};
+        assert_eq!(request_route.retire(&foreign_retired), Err(WrongRetirement));
+        assert_eq!(route.retire(&foreign_retired), Err(WrongRetirement));
+        assert_eq!(request_route.pending(), Some(request));
+        assert_eq!(route.pending(), Some(response));
+        assert_eq!(request_route.retire(&local_retired), Ok(true));
+        assert_eq!(route.retire(&local_retired), Ok(true));
+        assert!(request_route.pending().is_none());
+        assert!(route.pending().is_none());
+        assert_eq!(request_route.publish(request), Err(Retired));
+        assert_eq!(route.publish(response), Err(Retired));
+        assert_eq!(route.retire(&local_retired), Err(Retired));
     }
 
     #[test]

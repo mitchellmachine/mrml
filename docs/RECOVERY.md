@@ -2023,7 +2023,9 @@ request/response slot. Recovery cannot infer authority from its bytes: every
 transition revalidates both exact target capabilities and the retained projection
 identity. Queue endpoints and interrupt notifications also bind the memory
 ledger namespace, so matching slots and generations in another ledger do not
-permit request, response, or interrupt delivery. Nested KVM proves the wire across two live mappings, including response
+permit request, response, or interrupt delivery. Once the exact page is retired,
+its receipt permanently closes both interrupt routes and discards queued
+notifications. This does not withdraw interrupts already delivered to a vCPU. Nested KVM proves the wire across two live mappings, including response
 return before leaf/GPA/ledger retirement. Recovery has not yet launched signed
 ZIM and Zstd guests to execute this queue.
 

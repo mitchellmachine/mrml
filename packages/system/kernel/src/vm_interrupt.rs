@@ -1,6 +1,7 @@
 use crate::{
     Capability, CapabilitySpace, MicrovmInterfaceQueueIdentity,
     MicrovmInterfaceRequestNotification, MicrovmInterfaceResponseNotification, MicrovmPeerPageIdentity,
+    MicrovmPeerPageRetirement,
     ObjectId, Rights,
     VirtualBlockDevice, VirtualBlockError, VmBackend, VmError, VmId, VmRunError, VmState, VmTable,
 };
@@ -88,6 +89,8 @@ pub enum VirtualBlockInterruptError<E> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MicrovmInterfaceInterruptError<E> {
     AlreadyPending,
+    Retired,
+    WrongRetirement,
     InvalidNotification,
     SequenceExhausted,
     Injection(VmRunError<E>),
@@ -102,6 +105,7 @@ struct MicrovmInterfaceInterruptRoute<N> {
     interrupt_object: ObjectId,
     pending: Option<N>,
     delivered_sequence: u64,
+    retired: bool,
 }
 
 pub struct MicrovmInterfaceRequestInterrupt {
@@ -133,6 +137,7 @@ macro_rules! interface_interrupt_route {
                         interrupt_object,
                         pending: None,
                         delivered_sequence: 0,
+                        retired: false,
                     },
                 }
             }
@@ -141,6 +146,9 @@ macro_rules! interface_interrupt_route {
                 &mut self,
                 notification: $notification,
             ) -> Result<(), MicrovmInterfaceInterruptError<core::convert::Infallible>> {
+                if self.route.retired {
+                    return Err(MicrovmInterfaceInterruptError::Retired);
+                }
                 if self.route.pending.is_some() {
                     return Err(MicrovmInterfaceInterruptError::AlreadyPending);
                 }
@@ -157,6 +165,23 @@ macro_rules! interface_interrupt_route {
                 }
                 self.route.pending = Some(notification);
                 Ok(())
+            }
+
+            /// Permanently closes the route once the exact shared page is
+            /// retired. Returns whether a queued notification was discarded.
+            /// Does not cancel an interrupt already delivered to a vCPU.
+            pub fn retire(
+                &mut self,
+                receipt: &MicrovmPeerPageRetirement,
+            ) -> Result<bool, MicrovmInterfaceInterruptError<core::convert::Infallible>> {
+                if receipt.identity() != self.route.projection {
+                    return Err(MicrovmInterfaceInterruptError::WrongRetirement);
+                }
+                if self.route.retired {
+                    return Err(MicrovmInterfaceInterruptError::Retired);
+                }
+                self.route.retired = true;
+                Ok(self.route.pending.take().is_some())
             }
 
             pub const fn pending(&self) -> Option<$notification> {
@@ -184,6 +209,9 @@ fn deliver_interface_interrupt<B: VmBackend, N: Copy, const V: usize, const C: u
     capabilities: &CapabilitySpace<C>,
     capability: Capability,
 ) -> Result<Option<N>, MicrovmInterfaceInterruptError<B::Error>> {
+    if route.retired {
+        return Err(MicrovmInterfaceInterruptError::Retired);
+    }
     let Some(notification) = route.pending else {
         return Ok(None);
     };

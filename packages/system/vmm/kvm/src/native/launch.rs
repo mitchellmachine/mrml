@@ -3389,18 +3389,28 @@ mod tests {
             VmBackend::read_guest(&second, 0x80_0000, &mut observed),
             Err(KvmError::UnmappedMemory)
         );
+        // SAFETY: both guest translations and GPA aliases were withdrawn above.
+        let retired = unsafe {
+            release_microvm_peer_page_projection(
+                &mut memory,
+                projection,
+                object_capability,
+                first_target,
+                second_target,
+                &mut capabilities,
+            )
+        }.unwrap();
+        assert_eq!(retired.released_pages(), 1);
+        assert_eq!(request_route.retire(&retired), Ok(false));
+        assert_eq!(response_route.retire(&retired), Ok(false));
+        assert_eq!(request_route.publish(request_notification), Err(mrml_kernel::MicrovmInterfaceInterruptError::Retired));
+        assert_eq!(response_route.publish(response_notification), Err(mrml_kernel::MicrovmInterfaceInterruptError::Retired));
         assert_eq!(
-            unsafe {
-                release_microvm_peer_page_projection(
-                    &mut memory,
-                    projection,
-                    object_capability,
-                    first_target,
-                    second_target,
-                    &mut capabilities,
-                )
-            }.map(|retired| retired.released_pages()),
-            Ok(1)
+            mrml_kernel::deliver_microvm_interface_request_interrupt(
+                &mut request_route, &mut second, &mut vms, &interrupt_policy,
+                &capabilities, request_interrupt,
+            ),
+            Err(mrml_kernel::MicrovmInterfaceInterruptError::Retired)
         );
         let usage = memory.usage(pool, pool_capability, &capabilities).unwrap();
         assert_eq!(usage.object_pages(), 0);
