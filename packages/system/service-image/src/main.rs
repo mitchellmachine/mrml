@@ -109,16 +109,17 @@ global_asm!(
             .org efi_main + 512, 0xcc
             .global mrml_service_sender
         mrml_service_sender:
+            and rsp, -16
+            sub rsp, 32
+            mov [rsp], r10
+            mov [rsp + 8], r11
+            mov [rsp + 16], rsi
             mov rdi, r13
             mov rsi, r14
             mov rdx, r15
             mov rcx, rbx
             mov r8, r12
             mov r9, rbp
-            and rsp, -16
-            sub rsp, 16
-            mov [rsp], r10
-            mov [rsp + 8], r11
             call mrml_configuration_sender
             ud2
 
@@ -788,8 +789,13 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     loop {
         request.fill(0);
         capability.fill(0);
-        let (payload_length, capability_count) =
-            unsafe { receive_buffer(&mut request, &mut capability) };
+        let (payload_length, capability_count, received_sender) =
+            receive_buffer_from(&mut request, &mut capability);
+        if received_sender == 0 || received_sender != sender {
+            request.fill(0);
+            // Fail closed: never dispatch or acknowledge a different peer's envelope.
+            halt();
+        }
         if capability_count == 0 {
             if let Some(completed) = decode_probe_block_completion(&request) {
                 if payload_length != request.len() || completed != served || served == 0 {
@@ -2301,11 +2307,12 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     endpoint: u64,
     receiver: u64,
     shared_resource: u64,
-    setting_capability: u64,
-    _generation: u64,
+    setting_write: u64,
+    root_read: u64,
     shared_transfer: u64,
-    root_capability: u64,
+    root_control: u64,
     shared_read: u64,
+    setting_read: u64,
 ) -> ! {
     let mut ready = [0u8; 8 + BOOT_RECOVERY_ENVELOPE_BYTES];
     let mut no_capabilities = [0u64; 0];
@@ -2352,14 +2359,14 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     update
         .push(ConfigUpdate::new(
             setting,
-            Capability::from_token(setting_capability),
+            Capability::from_token(setting_write),
             ConfigValue::bytes(&encoded_policy).unwrap_or_else(|_| halt()),
         ))
         .unwrap_or_else(|_| halt());
     configuration
         .commit(
             &KernelAuthorizer,
-            Capability::from_token(root_capability),
+            Capability::from_token(root_control),
             &update,
         )
         .unwrap_or_else(|_| halt());
@@ -2367,7 +2374,7 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     let exported = configuration
         .export_checkpoint(
             &KernelAuthorizer,
-            Capability::from_token(root_capability),
+            Capability::from_token(root_read),
             &mut checkpoint,
         )
         .unwrap_or_else(|_| halt());
@@ -2498,7 +2505,7 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     let prepared = prepare_block_stable_configuration(
         &configuration,
         &KernelAuthorizer,
-        Capability::from_token(root_capability),
+        Capability::from_token(root_read),
         &current,
         &authority,
         file,
@@ -2566,8 +2573,8 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         principal,
         2,
         &KernelAuthorizer,
-        Capability::from_token(root_capability),
-        Capability::from_token(setting_capability),
+        Capability::from_token(root_control),
+        Capability::from_token(setting_read),
         setting,
         ObjectId(0xa1),
         &mut recovered_scratch,
@@ -2818,6 +2825,15 @@ fn buffer_send_status(endpoint: u64, receiver: u64, payload: &[u8], descriptors:
 
 #[cfg(not(feature = "preemption-probe"))]
 unsafe fn receive_buffer(payload: &mut [u8], capabilities: &mut [u64]) -> (usize, usize) {
+    let (length, count, _) = receive_buffer_from(payload, capabilities);
+    (length, count)
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+fn receive_buffer_from(
+    payload: &mut [u8],
+    capabilities: &mut [u64],
+) -> (usize, usize, u64) {
     let mut status = 5u64;
     let capability_address = if capabilities.is_empty() {
         0
@@ -2826,6 +2842,9 @@ unsafe fn receive_buffer(payload: &mut [u8], capabilities: &mut [u64]) -> (usize
     };
     let payload_length: u64;
     let capability_count: u64;
+    let sender: u64;
+    // SAFETY: the trap receives only the two live output slices and their
+    // exact capacities. Its checked completion reports the kernel sender.
     unsafe {
         asm!(
             "int 0x80",
@@ -2834,7 +2853,7 @@ unsafe fn receive_buffer(payload: &mut [u8], capabilities: &mut [u64]) -> (usize
             in("rsi") payload.len() as u64,
             inlateout("rdx") capability_address => payload_length,
             inlateout("r10") capabilities.len() as u64 => capability_count,
-            inlateout("r8") 0u64 => _,
+            inlateout("r8") 0u64 => sender,
             inlateout("r9") 0u64 => _,
             options(nostack)
         )
@@ -2847,7 +2866,7 @@ unsafe fn receive_buffer(payload: &mut [u8], capabilities: &mut [u64]) -> (usize
     if payload_length > payload.len() || capability_count > capabilities.len() {
         halt();
     }
-    (payload_length, capability_count)
+    (payload_length, capability_count, sender)
 }
 
 #[cfg(not(feature = "preemption-probe"))]

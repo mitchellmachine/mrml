@@ -2156,8 +2156,8 @@ fn application_main() -> Result<()> {
     let scanout_denied_mode = arguments.len() == 9 && arguments[5] == "scanout-service-denied-probe";
     let scanout_mode = scanout_denied_mode
         || (arguments.len() == 9 && arguments[5] == "scanout-service-probe");
-    let total_service_mode = service_mode || component_service_mode || scanout_mode;
     let block_service_mode = arguments.len() == 9 && arguments[5] == "block-service-probe";
+    let total_service_mode = service_mode || component_service_mode || scanout_mode || block_service_mode;
     let service_restart_request_mode =
         arguments.len() == 9 && arguments[5] == "service-restart-request-probe";
     let fat32_data_mode = arguments.len() == 9 && arguments[5] == "fat32-data-probe";
@@ -2435,8 +2435,13 @@ fn application_main() -> Result<()> {
         || smp_service_migration_mode
         || smp_periodic_balance_mode;
     let total_recovery = total_service_mode.then(|| {
-        RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14)
-            .expect("fixed Total recovery metadata")
+        if block_service_mode {
+            RecoveryStateMetadata::new(8, 2, Some([0x51; 16]), 1)
+                .expect("fixed block-service recovery metadata")
+        } else {
+            RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14)
+                .expect("fixed Total recovery metadata")
+        }
     });
     let total_override = total_service_mode.then_some(BootIsolationOverride::TotalMicrovmOnce);
     let handoff = if let Some(application) = application_launch {
@@ -2461,12 +2466,7 @@ fn application_main() -> Result<()> {
             entropy,
             *executable.artifact().digest(),
             u64::from(block_guest_driver_mode || pci_configuration_mode) + 1,
-            total_recovery.or_else(|| {
-                block_service_mode.then(|| {
-                    RecoveryStateMetadata::new(8, 2, Some([0x51; 16]), 1)
-                        .expect("fixed recovery metadata")
-                })
-            }),
+            total_recovery,
             total_override,
             false,
         )?
@@ -2877,6 +2877,19 @@ fn application_main() -> Result<()> {
                     provider_executable
                         .as_ref()
                         .ok_or_else(|| anyhow!("missing verified Zstd provider"))?
+                        .artifact()
+                        .version(),
+                )
+            } else if block_service_mode {
+                // This identity labels the signed RAM-backed test service, not
+                // readiness of the required installed storage coordinator.
+                (
+                    ObjectId(0x424c_4f43_4b),
+                    ObjectId(0x424c_4f43_4b00_0001),
+                    1,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified block-service fixture"))?
                         .artifact()
                         .version(),
                 )
@@ -4361,6 +4374,15 @@ fn application_main() -> Result<()> {
                 }
                 cleanup_stage += 1;
                 if value == 0x30 {
+                    let report = isolation_admission
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing WHP block-service admission"))?
+                        .total_microvm_report();
+                    if !report.satisfied() || report.running_in_microvm != 1 || report.native_fallback != 0 {
+                        return Err(anyhow!("WHP block-service fixture lost its admitted microVM"));
+                    }
+                    guest.finish()?;
+                    println!("storage-block-probe|status=PASS|backend=whp|scope=ram-backed-fixture|microvm=1|native_fallback=0");
                     println!(
                         "verified independently signed CPL3 block-service stable-policy publication/recovery and lifecycle cleanup under WHP: verify={}us prepare={}us execute={}us total={}us",
                         verification_micros,

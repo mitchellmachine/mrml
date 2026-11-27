@@ -37,7 +37,11 @@ Every checked-in service package now declares a runtime classification. The
 compositor and deployment service are required microVM-eligible services when
 included in an active release; placement eligibility does not attest that
 an executable has launched. The storage coordinator is explicitly a required
-blocker until its supervised guest and transport exist. The former direct FAT32 provider
+blocker until its installed guest and runtime transport exist. The separately signed
+RAM-backed block-service probe exercises a supervised Total MicroVM guest. Its
+client and service are separate CPL3 tasks within that one diagnostic guest;
+the fixture does not establish production inter-VM transport or physical I/O.
+The former direct FAT32 provider
 launcher is available only for hosted regression and is not an OS launch path.
 The standalone
 service-image package is an optional diagnostic blocker, not a production

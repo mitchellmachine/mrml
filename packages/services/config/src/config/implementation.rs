@@ -9,18 +9,20 @@ use mrml_deployment::{
     recover_and_read_runtime_assignment_shared_backend,
 };
 use mrml_kernel::arch::x86_64::UserContext;
+#[cfg(not(target_os = "uefi"))]
+use mrml_kernel::{IsolationBackendFailure, ServiceAddressSpaceEraser, ServiceCleanupError};
 use mrml_kernel::{
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride,
     BootRecoveryEnvelope, Capability, CapabilityError, CapabilitySpace, EarlyKernelContext,
     HostSubstrateReason, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
-    InstalledRecoverySource, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
+    InstalledRecoverySource, IsolationAdmissionTable, IsolationMode,
     IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
     IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
     PreparedIsolationServiceRoute, Priority, RecoveryStateMetadata, ReleaseInventoryError,
     RestartPolicy, Rights, RoutedIsolationService, RuntimeDomainAssignment,
-    RuntimeDomainAssignmentPlan, RuntimeDomainPolicyAssignmentError, ServiceAddressSpaceEraser,
-    ServiceCleanupError, ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState,
+    RuntimeDomainAssignmentPlan, RuntimeDomainPolicyAssignmentError, ServiceError, ServiceId,
+    ServiceRegistrationPlan, ServiceState,
     ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError,
     launch_prepared_isolation_service_route, prepare_isolation_service_route,
     route_isolation_service,
@@ -117,6 +119,7 @@ pub trait ServicePolicyAuthorizer {
 /// A concrete configuration-service launcher for the native-service form.
 /// The returned endpoint is opaque; names and manifest metadata grant no
 /// authority to use it.
+#[cfg(not(target_os = "uefi"))]
 pub trait NativeConfigurationServiceLauncher {
     type Endpoint;
     type Error;
@@ -368,12 +371,14 @@ impl<Factory: ConfigurationMicrovmFactory> MicrovmConfigurationServiceLauncher
     }
 }
 
+#[cfg(not(target_os = "uefi"))]
 #[derive(Debug, Eq, PartialEq)]
 pub enum ConfigurationServiceEndpoint<Native, Microvm> {
     Native(Native),
     Microvm(Microvm),
 }
 
+#[cfg(not(target_os = "uefi"))]
 impl<Native, Microvm> ConfigurationServiceEndpoint<Native, Microvm> {
     pub const fn placement(&self) -> IsolationPlacement {
         match self {
@@ -383,12 +388,14 @@ impl<Native, Microvm> ConfigurationServiceEndpoint<Native, Microvm> {
     }
 }
 
+#[cfg(not(target_os = "uefi"))]
 #[derive(Debug, Eq, PartialEq)]
 pub enum ConfigurationPlacementError<Native, Microvm> {
     Native(Native),
     Microvm(Microvm),
 }
 
+#[cfg(not(target_os = "uefi"))]
 /// Adapts the two concrete configuration-service forms to the kernel's one
 /// fail-closed placement route. It does not choose placement or provider.
 pub struct ConfigurationPlacementBackend<Native, Microvm> {
@@ -396,6 +403,7 @@ pub struct ConfigurationPlacementBackend<Native, Microvm> {
     microvm: Microvm,
 }
 
+#[cfg(not(target_os = "uefi"))]
 impl<Native, Microvm> ConfigurationPlacementBackend<Native, Microvm> {
     pub const fn new(native: Native, microvm: Microvm) -> Self {
         Self { native, microvm }
@@ -637,6 +645,7 @@ impl<
     }
 }
 
+#[cfg(not(target_os = "uefi"))]
 impl<Native, Microvm> IsolationServiceBackend for ConfigurationPlacementBackend<Native, Microvm>
 where
     Native: NativeConfigurationServiceLauncher,

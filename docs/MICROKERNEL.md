@@ -4053,8 +4053,22 @@ The resulting exact volume/root/file selections are checked before cleanup.
 This increases the monotonic block protocol from 18 to 51 requests. A fresh
 one-use-signed WHP run completed the established cleanup sequence; KVM was not
 rerun because the configured Linux cross-host Rust target was unavailable.
-The deployment/release placeholder contents are not authenticated and this is
-not Total admission or runtime-placement evidence.
+The deployment/release placeholder contents in that historical run were not
+authenticated, and that run did not exercise Total admission.
+
+The current `block-service-probe` uses the same strict Total service admission
+as the signed compositor fixture. Both hosted runners reserve the exact test
+service route before constructing the guest, with separately verified kernel
+and service images. The block-service receiver compares the kernel-reported
+sender token to its launch-bound peer before processing block requests or the
+completion message. The client receives separate exact configuration read,
+write, and control grants rather than reusing broad handles across operations.
+On success the runner verifies the complete ordered
+cleanup and retires the guest before reporting one microVM and zero fallback.
+This remains a RAM-backed diagnostic: the client and service share one hardware
+microVM but have separate address spaces, and the installed coordinator and
+cross-VM block-provider transport are not yet wired. The same signed artifact
+set passed under nested KVM and WHP on 2026-11-27.
 
 Fresh independently signed version-1 artifacts passed on 2026-08-24:
 

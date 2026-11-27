@@ -4568,7 +4568,11 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     space
                         .insert(
                             ObjectId(0x92),
-                            Rights::READ.union(Rights::CONTROL).union(Rights::DELEGATE),
+                            if cfg!(feature = "block-service-probe") {
+                                Rights::CONTROL
+                            } else {
+                                Rights::READ.union(Rights::CONTROL).union(Rights::DELEGATE)
+                            },
                         )
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
@@ -4580,7 +4584,11 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     space
                         .insert(
                             ObjectId(0x93),
-                            Rights::READ.union(Rights::WRITE).union(Rights::DELEGATE),
+                            if cfg!(feature = "block-service-probe") {
+                                Rights::WRITE
+                            } else {
+                                Rights::READ.union(Rights::WRITE).union(Rights::DELEGATE)
+                            },
                         )
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
@@ -4653,6 +4661,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 receiver_context.rbp = manager.token();
                 receiver_context.r10 = restart_receiver_signal.token();
             }
+            #[cfg(feature = "block-service-probe")]
+            let (root_read, setting_read) = {
+                let space = runtime.capabilities_mut(sender).unwrap_or_else(|_| halt());
+                (
+                    space.insert(ObjectId(0x92), Rights::READ).unwrap_or_else(|_| halt()),
+                    space.insert(ObjectId(0x93), Rights::READ).unwrap_or_else(|_| halt()),
+                )
+            };
             let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
             sender_context.r13 = capability.token();
             #[cfg(not(feature = "deadline-receive-cancel-probe"))]
@@ -4684,6 +4700,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             {
                 sender_context.r15 = sender_write.token();
                 sender_context.r11 = sender_read.token();
+                sender_context.r12 = root_read.token();
+                sender_context.rsi = setting_read.token();
             }
             #[cfg(not(feature = "component-service-probe"))]
             {
