@@ -80,10 +80,10 @@ pub use vmx::{
     VmxLaunchOutcome, VmxPrerequisites, VmxState,
 };
 pub use vtd::{
-    CompleteVtdRoutes, DmarDeviceScope, DmarError, DmarTopology, DmarUnit, EcamSegments,
-    McfgAllocation, McfgError, McfgTopology, NativeEcamSegment, NativeVtdMmio, PciConfigSpace,
-    PciPathElement, VtdDmaIsolation, VtdDmaSet, VtdError, VtdFaultSnapshot, VtdInvalidator,
-    VtdRegisterIo, VtdRegisterLayout, VtdRequesterRoute,
+    CompleteVtdRoutes, DmarDeviceScope, DmarError, DmarTopology, DmarUnit, EcamCommandError,
+    EcamSegments, McfgAllocation, McfgError, McfgTopology, NativeEcamSegment, NativeVtdMmio,
+    PciConfigSpace, PciPathElement, VtdDmaIsolation, VtdDmaSet, VtdError, VtdFaultSnapshot,
+    VtdInvalidator, VtdRegisterIo, VtdRegisterLayout, VtdRequesterRoute,
 };
 pub use vtd_tables::{
     DirectVtdTables, VerifiedVtdUnit, VtdApertureInstallError, VtdApertureRevokeError,

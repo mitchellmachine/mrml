@@ -3008,8 +3008,13 @@ the PCI, BAR, allocation and DMA generations and the complete VT-d
 aperture, including physical backing and hardware domain. It samples
 configuration space through the lease and changes only the bus-master
 bit using a command-width write after checking the live identity. The
-adapter does not implement the allocator, pin/unpin, or ECAM writer
-itself; those remain required from the platform lease implementation.
+adapter does not implement the allocator or pin/unpin itself. The kernel
+ECAM adapter now provides the 16-bit bus-master toggle with exact command
+readback for a supervisor holding the writable function's exclusive lease.
+Its memory-backed test covers stale command rejection, range checking and
+preservation of adjacent PCI Status. A concrete allocator/lease still
+needs to wire this writer to the xHCI owner and keep the mapping pinned
+through shutdown. No physical ECAM was accessed by the test.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

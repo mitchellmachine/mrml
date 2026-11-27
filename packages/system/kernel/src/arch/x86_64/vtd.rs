@@ -275,6 +275,14 @@ pub trait PciConfigSpace {
     fn read_u32(&mut self, address: DeviceAddress, offset: u16) -> Option<u32>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EcamCommandError {
+    OutsideWindow,
+    Absent,
+    CommandChanged,
+    ReadbackMismatch,
+}
+
 /// One uniquely mapped PCIe ECAM segment window.
 pub struct NativeEcamSegment {
     base: *const u8,
@@ -337,6 +345,72 @@ impl NativeEcamSegment {
         }
     }
 
+    /// Changes only PCI Command.BusMasterEnable and checks the readback.
+    /// A readback error is uncertain: retain the assignment and its backing.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold the exact function's exclusive PCI assignment,
+    /// guarantee that its ECAM page is writable device memory, and prevent
+    /// replacement, unmapping, or concurrent configuration writers for the
+    /// whole sequence. Before enabling, the caller must independently verify
+    /// the live identity and have installed and synchronized DMA isolation.
+    pub unsafe fn set_bus_master(
+        &mut self,
+        address: DeviceAddress,
+        before: u16,
+        enabled: bool,
+    ) -> Result<(), EcamCommandError> {
+        let location = self
+            .dword_location(address, 4)
+            .ok_or(EcamCommandError::OutsideWindow)?;
+        let identity = self
+            .read_u32(address, 0)
+            .ok_or(EcamCommandError::OutsideWindow)?;
+        if matches!(identity as u16, 0 | u16::MAX) {
+            return Err(EcamCommandError::Absent);
+        }
+        let live = self
+            .read_u32(address, 4)
+            .ok_or(EcamCommandError::OutsideWindow)?;
+        if live as u16 != before {
+            return Err(EcamCommandError::CommandChanged);
+        }
+        let next = (before & !4) | if enabled { 4 } else { 0 };
+        if next == before {
+            return Ok(());
+        }
+        // SAFETY: the dword location bounds and aligns this narrower write.
+        // The caller retains the writable, mapped ECAM page and exclusive
+        // configuration authority; the adjacent Status word is not written.
+        unsafe {
+            self.base
+                .cast_mut()
+                .add(location)
+                .cast::<u16>()
+                .write_volatile(next)
+        };
+        let after = self
+            .read_u32(address, 4)
+            .ok_or(EcamCommandError::ReadbackMismatch)?;
+        if after as u16 != next {
+            return Err(EcamCommandError::ReadbackMismatch);
+        }
+        Ok(())
+    }
+
+    fn dword_location(&self, address: DeviceAddress, offset: u16) -> Option<usize> {
+        if !self.covers(address) || offset > 4092 || !offset.is_multiple_of(4) {
+            return None;
+        }
+        let relative_bus = usize::from(address.bus() - self.start_bus);
+        let location = (relative_bus << 20)
+            | (usize::from(address.device()) << 15)
+            | (usize::from(address.function()) << 12)
+            | usize::from(offset);
+        (location <= self.bytes.checked_sub(4)?).then_some(location)
+    }
+
     fn covers(&self, address: DeviceAddress) -> bool {
         address.segment() == self.segment
             && address.bus() >= self.start_bus
@@ -346,22 +420,7 @@ impl NativeEcamSegment {
 
 impl PciConfigSpace for NativeEcamSegment {
     fn read_u32(&mut self, address: DeviceAddress, offset: u16) -> Option<u32> {
-        if address.segment() != self.segment
-            || address.bus() < self.start_bus
-            || address.bus() > self.end_bus
-            || offset > 4092
-            || !offset.is_multiple_of(4)
-        {
-            return None;
-        }
-        let relative_bus = usize::from(address.bus() - self.start_bus);
-        let location = (relative_bus << 20)
-            | (usize::from(address.device()) << 15)
-            | (usize::from(address.function()) << 12)
-            | usize::from(offset);
-        if location > self.bytes.saturating_sub(4) {
-            return None;
-        }
+        let location = self.dword_location(address, offset)?;
         // SAFETY: construction establishes the mapped ECAM window and the
         // checked location is naturally aligned within a 4 KiB function.
         Some(unsafe { self.base.add(location).cast::<u32>().read_volatile() })
@@ -1425,6 +1484,43 @@ mod tests {
                 function: 0
             }
         );
+    }
+
+    #[test]
+    fn ecam_bus_master_write_preserves_status_and_other_functions() {
+        #[repr(align(4096))]
+        struct Window([u8; 1 << 20]);
+        let mut memory = Window([0; 1 << 20]);
+        let function = (3 << 15) | (1 << 12);
+        memory.0[function..function + 4].copy_from_slice(&0x1234_8086u32.to_le_bytes());
+        memory.0[function + 4..function + 8].copy_from_slice(&0xabcd_0402u32.to_le_bytes());
+        let addr = DeviceAddress::new(7, 42, 3, 1).unwrap();
+        let absent = DeviceAddress::new(7, 42, 3, 0).unwrap();
+        let outside = DeviceAddress::new(7, 43, 3, 1).unwrap();
+        // SAFETY: this aligned, uniquely owned buffer stands in for one bus
+        // of writable ECAM; the test retains it throughout all access.
+        unsafe {
+            let mut ecam =
+                NativeEcamSegment::new(memory.0.as_mut_ptr(), memory.0.len(), 7, 42, 42).unwrap();
+            assert_eq!(
+                ecam.set_bus_master(absent, 0, true),
+                Err(EcamCommandError::Absent)
+            );
+            assert_eq!(
+                ecam.set_bus_master(outside, 0, true),
+                Err(EcamCommandError::OutsideWindow)
+            );
+            assert_eq!(
+                ecam.set_bus_master(addr, 2, true),
+                Err(EcamCommandError::CommandChanged)
+            );
+            assert_eq!(ecam.read_u32(addr, 4), Some(0xabcd_0402));
+            ecam.set_bus_master(addr, 0x402, true).unwrap();
+            assert_eq!(ecam.read_u32(addr, 4), Some(0xabcd_0406));
+            ecam.set_bus_master(addr, 0x406, false).unwrap();
+            assert_eq!(ecam.read_u32(addr, 4), Some(0xabcd_0402));
+            assert_eq!(ecam.read_u32(absent, 4), Some(0));
+        }
     }
 
     #[test]
