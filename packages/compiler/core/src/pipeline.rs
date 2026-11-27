@@ -791,6 +791,67 @@ mod tests {
     }
 
     #[test]
+    fn emits_rust_string_escapes_with_literal_specific_byte_ranges() {
+        for (source, expected) in [
+            (
+                r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> *const i8 { c"\x80\xFF\u{1_F980_}".as_ptr() }"#,
+                b"\x80\xff\xf0\x9f\xa6\x80\0".as_slice(),
+            ),
+            (
+                r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> &'static [u8] { b"\x80\xFF" }"#,
+                b"\x80\xff",
+            ),
+            (
+                r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> &'static str { "\x7f\u{4__1_}\u{10_FF_FF_}" }"#,
+                b"\x7fA\xf4\x8f\xbf\xbf",
+            ),
+        ] {
+            for format in [ObjectFormat::Coff, ObjectFormat::Elf64] {
+                let object = compile_wide(source, "probe", format).unwrap();
+                assert!(
+                    object
+                        .bytes()
+                        .windows(expected.len())
+                        .any(|bytes| bytes == expected),
+                    "incorrect escape bytes in {format:?} for {source:?}"
+                );
+            }
+        }
+
+        for (source, kind) in [
+            (
+                r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> &'static str { "\x80" }"#,
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
+            (
+                r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> &'static str { "\u{_41}" }"#,
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
+            (
+                r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> *const i8 { c"\u{_41}".as_ptr() }"#,
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
+            (
+                r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> &'static [u8] { b"\u{41}" }"#,
+                CodegenErrorKind::RuntimeExpressionUnsupported,
+            ),
+            (
+                r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> *const i8 { c"\x00".as_ptr() }"#,
+                CodegenErrorKind::UnsupportedCStringLiteral,
+            ),
+            (
+                r#"#[unsafe(no_mangle)] pub extern "C" fn probe() -> *const i8 { c"\u{0}".as_ptr() }"#,
+                CodegenErrorKind::UnsupportedCStringLiteral,
+            ),
+        ] {
+            for format in [ObjectFormat::Coff, ObjectFormat::Elf64] {
+                let error = compile_wide(source, "probe", format).unwrap_err();
+                assert_eq!(error.kind, CompileErrorKind::Codegen(kind));
+            }
+        }
+    }
+
+    #[test]
     fn emits_runtime_byte_string_literals_as_internal_readonly_data() {
         let cooked = r##"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &[u8], choose: bool) -> &[u8] { if choose { input } else { b"A\xFF\n" } }"##;
         for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {

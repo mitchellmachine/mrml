@@ -10587,15 +10587,6 @@ impl<
         literal: &str,
         kind: ReadonlyStringLiteralKind,
     ) -> Result<(usize, usize), CodegenError> {
-        fn hex(byte: u8) -> Option<u32> {
-            match byte {
-                b'0'..=b'9' => Some(u32::from(byte - b'0')),
-                b'a'..=b'f' => Some(u32::from(byte - b'a' + 10)),
-                b'A'..=b'F' => Some(u32::from(byte - b'A' + 10)),
-                _ => None,
-            }
-        }
-
         // Normalize source CRLF without changing the token or its source span.
         fn take_source_byte(bytes: &[u8], index: &mut usize) -> Option<u8> {
             let byte = *bytes.get(*index)?;
@@ -10708,56 +10699,24 @@ impl<
                 b'\'' => push(b'\'')?,
                 b'"' => push(b'"')?,
                 b'x' => {
-                    let high = bytes
-                        .get(index)
-                        .and_then(|byte| hex(*byte))
-                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-                    let low = bytes
-                        .get(index + 1)
-                        .and_then(|byte| hex(*byte))
-                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-                    let value = (high << 4) | low;
-                    if !byte_string && value > 0x7f {
-                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    let value = bytes
+                        .get(index..index + 2)
+                        .and_then(crate::expression::decode_hex_byte)
+                        .ok_or(malformed)?;
+                    if kind == ReadonlyStringLiteralKind::Utf8 && !value.is_ascii() {
+                        return Err(malformed);
                     }
-                    push(value as u8)?;
+                    push(value)?;
                     index += 2;
                 }
                 b'u' => {
                     if byte_string {
-                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                        return Err(malformed);
                     }
-                    if bytes.get(index) != Some(&b'{') {
-                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-                    }
-                    index += 1;
-                    let mut value = 0u32;
-                    let mut digits = 0usize;
-                    while let Some(&byte) = bytes.get(index) {
-                        if byte == b'}' {
-                            break;
-                        }
-                        index += 1;
-                        if byte == b'_' {
-                            continue;
-                        }
-                        let digit = hex(byte)
-                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-                        if digits == 6 {
-                            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-                        }
-                        value = value
-                            .checked_mul(16)
-                            .and_then(|value| value.checked_add(digit))
-                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-                        digits += 1;
-                    }
-                    if digits == 0 || bytes.get(index) != Some(&b'}') {
-                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-                    }
-                    index += 1;
-                    let value = char::from_u32(value)
-                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                    let (value, consumed) =
+                        crate::expression::decode_unicode_escape(&bytes[index..])
+                            .ok_or(malformed)?;
+                    index += consumed;
                     let mut encoded = [0u8; 4];
                     for byte in value.encode_utf8(&mut encoded).as_bytes() {
                         push(*byte)?;

@@ -6517,13 +6517,36 @@ fn decode_integer(token: Token<'_>) -> Result<IntegerLiteral<'_>, ExpressionErro
     })
 }
 
-fn decode_hex_character_escape(escaped: &str) -> Option<u8> {
-    let [b'x', high, low] = escaped.as_bytes() else {
+pub(crate) fn decode_hex_byte(bytes: &[u8]) -> Option<u8> {
+    let [high, low] = bytes else {
         return None;
     };
     let high = char::from(*high).to_digit(16)?;
     let low = char::from(*low).to_digit(16)?;
     Some(((high << 4) | low) as u8)
+}
+
+// The input begins after the escape's 'u'. The consumed length includes both braces.
+pub(crate) fn decode_unicode_escape(bytes: &[u8]) -> Option<(char, usize)> {
+    let mut contents = bytes.strip_prefix(b"{")?.iter().copied().enumerate();
+    let (_, first) = contents.next()?;
+    let mut scalar = char::from(first).to_digit(16)?;
+    let mut digits = 1;
+    for (index, byte) in contents {
+        if byte == b'}' {
+            return Some((char::from_u32(scalar)?, index + 2));
+        }
+        if byte == b'_' {
+            continue;
+        }
+        if digits == 6 {
+            return None;
+        }
+        let digit = char::from(byte).to_digit(16)?;
+        scalar = scalar * 16 + digit;
+        digits += 1;
+    }
+    None
 }
 
 fn decode_unescaped_character(inner: &str) -> Option<char> {
@@ -6554,26 +6577,16 @@ fn decode_character(token: Token<'_>) -> Result<u32, ExpressionError> {
             "\\" => Ok(u32::from(b'\\')),
             "'" => Ok(u32::from(b'\'')),
             "\"" => Ok(u32::from(b'\"')),
-            value if value.starts_with('x') => decode_hex_character_escape(value)
+            value if value.starts_with('x') => decode_hex_byte(&value.as_bytes()[1..])
                 .filter(u8::is_ascii)
                 .map(u32::from)
                 .ok_or_else(invalid),
-            value if value.starts_with("u{") && value.ends_with('}') => {
-                let mut bytes = value[2..value.len() - 1].bytes();
-                let mut scalar = bytes
-                    .next()
-                    .and_then(|byte| char::from(byte).to_digit(16))
-                    .ok_or_else(invalid)?;
-                let mut digits = 1;
-                for byte in bytes.filter(|&byte| byte != b'_') {
-                    if digits == 6 {
-                        return Err(invalid());
-                    }
-                    let digit = char::from(byte).to_digit(16).ok_or_else(invalid)?;
-                    scalar = scalar * 16 + digit;
-                    digits += 1;
-                }
-                char::from_u32(scalar).map(u32::from).ok_or_else(invalid)
+            value if value.starts_with('u') => {
+                let escape = &value.as_bytes()[1..];
+                decode_unicode_escape(escape)
+                    .filter(|(_, consumed)| *consumed == escape.len())
+                    .map(|(scalar, _)| u32::from(scalar))
+                    .ok_or_else(invalid)
             }
             _ => Err(invalid()),
         };
@@ -6603,7 +6616,7 @@ fn decode_byte_character(token: Token<'_>) -> Result<u8, ExpressionError> {
             "'" => Ok(b'\''),
             "\"" => Ok(b'\"'),
             value if value.starts_with('x') => {
-                decode_hex_character_escape(value).ok_or_else(invalid)
+                decode_hex_byte(&value.as_bytes()[1..]).ok_or_else(invalid)
             }
             _ => Err(invalid()),
         };
