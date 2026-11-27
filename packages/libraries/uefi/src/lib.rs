@@ -45,6 +45,7 @@ pub mod boot_random {
     }
 }
 
+pub mod dxe_mmio;
 pub mod tpm;
 
 pub const BOOT_REPORT_BYTES: usize = 16 * 1024;

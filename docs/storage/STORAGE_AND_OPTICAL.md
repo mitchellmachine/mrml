@@ -3072,6 +3072,15 @@ registers. The `test-dma` companion omits the IOMMU and expects neither
 marker. Neither boot installs device mappings, accesses PCI or DRHD
 registers, or activates DMA for the MRML xHCI driver.
 
+The UEFI library has a boot-only, read-only
+[DXE resource query](https://uefi.org/specs/PI/1.8/V2_Services_DXE_Services.html#getmemoryspacedescriptor)
+for the next discovery step. It checks the declared table signature, size,
+revision, CRC and query slot, then requires explicit MMIO with uncacheable
+capability across the whole requested range. It rejects holes, overlaps,
+non-MMIO descriptors and excessive fragmentation. This mechanism currently
+has hosted tests only. It does not issue mapping authority, confer ownership
+of firmware resources, or prove that a CPU mapping is uncacheable.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The
