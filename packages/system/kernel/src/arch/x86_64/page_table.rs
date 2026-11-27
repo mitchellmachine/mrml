@@ -480,6 +480,47 @@ impl<S: PageTableStore> PageTableBuilder<S> {
         Ok(())
     }
 
+    /// Installs the boot DMA reservation into an exclusively owned inactive
+    /// hierarchy. No alias scan, activation or device authorization occurs.
+    /// On a recoverable failure, newly installed leaves are removed; empty
+    /// intermediate tables can remain allocated. A rollback failure requires
+    /// discarding the hierarchy without activating it.
+    pub fn install_boot_dma(
+        &mut self,
+        reservation: BootDmaReservation,
+        virtual_start: VirtAddr,
+    ) -> Result<InstalledBootDma, BootDmaInstallError> {
+        let mapping = Mapping::new(
+            virtual_start,
+            reservation.physical_base(),
+            u64::from(reservation.pages()),
+            PagePermissions::KERNEL_READ_WRITE,
+        )
+        .map_err(|_| BootDmaInstallError::PageTable(PageTableBuildError::MappingMismatch))?;
+        self.verify_available(mapping)
+            .map_err(BootDmaInstallError::PageTable)?;
+        let mut attempted = 0;
+        let install = (|| {
+            for page in 0..mapping.pages() {
+                let (virt, phys) = mapping_page(mapping, page)?;
+                attempted = page + 1;
+                self.map_page(virt, phys, mapping.permissions())?;
+            }
+            verify_active_mapping_from_store(&self.store, self.root, self.root, mapping)
+        })();
+        if let Err(error) = install {
+            return match self.rollback_new_mapping(mapping, attempted) {
+                Ok(()) => Err(BootDmaInstallError::PageTable(error)),
+                Err(_) => Err(BootDmaInstallError::RollbackUncertain),
+            };
+        }
+        Ok(InstalledBootDma {
+            reservation,
+            root: self.root,
+            mapping,
+        })
+    }
+
     pub fn map_page(
         &mut self,
         virtual_address: VirtAddr,
@@ -1079,6 +1120,22 @@ pub struct ActivePageTables {
     root: PhysAddr,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootDmaInstallError {
+    PageTable(PageTableBuildError),
+    RollbackUncertain,
+}
+
+/// Owns a reservation and the identity of the inactive root and mapping
+/// built for it. Consumed by active initialization; not proof of activation.
+#[must_use]
+#[derive(Debug, Eq, PartialEq)]
+pub struct InstalledBootDma {
+    reservation: BootDmaReservation,
+    root: PhysAddr,
+    mapping: Mapping,
+}
+
 /// Boot-lifetime RAM after a complete CPU mapping check and initial zeroing.
 /// This is not a runtime pin, a live mapping guard or permission for device DMA.
 #[must_use]
@@ -1298,27 +1355,18 @@ impl ActivePageTables {
     /// check. Later device publication has its own coherency and ordering rules.
     pub unsafe fn initialize_boot_dma(
         &mut self,
-        expected_root: PhysAddr,
-        virtual_start: VirtAddr,
-        reservation: BootDmaReservation,
+        installed: InstalledBootDma,
     ) -> Result<InitializedBootDma, PageTableBuildError> {
-        initialize_boot_dma_from_store(
-            &IdentityMappedPageTables,
-            self.root,
-            expected_root,
-            virtual_start,
-            reservation,
-            |mapping| {
-                // SAFETY: all leaves have been checked; their current,
-                // exclusive normal-RAM translations are the caller's contract.
-                unsafe {
-                    zero_boot_dma_words(
-                        mapping.virtual_start().get() as *mut u64,
-                        (mapping.pages() * (PAGE_SIZE / 8)) as usize,
-                    );
-                }
-            },
-        )
+        initialize_boot_dma_from_store(&IdentityMappedPageTables, self.root, installed, |mapping| {
+            // SAFETY: all leaves have been checked; their current,
+            // exclusive normal-RAM translations are the caller's contract.
+            unsafe {
+                zero_boot_dma_words(
+                    mapping.virtual_start().get() as *mut u64,
+                    (mapping.pages() * (PAGE_SIZE / 8)) as usize,
+                );
+            }
+        })
     }
 
     /// Validates every active leaf touched by a bounded user copy. The caller
@@ -1415,24 +1463,15 @@ impl ActivePageTables {
 fn initialize_boot_dma_from_store<S: PageTableStore>(
     store: &S,
     root: PhysAddr,
-    expected_root: PhysAddr,
-    virtual_start: VirtAddr,
-    reservation: BootDmaReservation,
+    installed: InstalledBootDma,
     zero: impl FnOnce(Mapping),
 ) -> Result<InitializedBootDma, PageTableBuildError> {
-    let mapping = Mapping::new(
-        virtual_start,
-        reservation.physical_base(),
-        u64::from(reservation.pages()),
-        PagePermissions::KERNEL_READ_WRITE,
-    )
-    .map_err(|_| PageTableBuildError::MappingMismatch)?;
-    verify_active_mapping_from_store(store, root, expected_root, mapping)?;
-    zero(mapping);
+    verify_active_mapping_from_store(store, root, installed.root, installed.mapping)?;
+    zero(installed.mapping);
     Ok(InitializedBootDma {
-        reservation,
+        reservation: installed.reservation,
         root,
-        mapping,
+        mapping: installed.mapping,
     })
 }
 
@@ -2105,24 +2144,20 @@ mod tests {
             used: 0,
         })
         .unwrap();
-        builder.map(mapping).unwrap();
+        let installed = builder
+            .install_boot_dma(reservation, virtual_start)
+            .unwrap();
         let root = builder.root();
         let mut memory = [u64::MAX; 1026];
-        let initialized = initialize_boot_dma_from_store(
-            builder.store(),
-            root,
-            root,
-            virtual_start,
-            reservation,
-            |checked| {
+        let initialized =
+            initialize_boot_dma_from_store(builder.store(), root, installed, |checked| {
                 assert_eq!(checked, mapping);
                 let backing = &mut memory[1..1025];
                 // SAFETY: the test owns the writable aligned slice for its
                 // full length, and the guard words lie outside the slice.
                 unsafe { zero_boot_dma_words(backing.as_mut_ptr(), backing.len()) };
-            },
-        )
-        .unwrap();
+            })
+            .unwrap();
         assert_eq!(initialized.reservation().bytes(), 2 * PAGE_SIZE);
         assert_eq!(initialized.root(), root);
         assert_eq!(initialized.mapping(), mapping);
@@ -2194,13 +2229,62 @@ mod tests {
                 initialize_boot_dma_from_store(
                     builder.store(),
                     root,
-                    expected_root,
-                    virtual_start,
-                    reservation,
+                    InstalledBootDma {
+                        reservation,
+                        root: expected_root,
+                        mapping: Mapping::new(
+                            virtual_start,
+                            physical_start,
+                            2,
+                            PagePermissions::KERNEL_READ_WRITE,
+                        )
+                        .unwrap(),
+                    },
                     |_| panic!("must preflight the complete mapping before clearing"),
                 ),
                 Err(PageTableBuildError::MappingMismatch),
             );
+        }
+    }
+
+    #[test]
+    fn boot_dma_install_preserves_occupied_slots_and_rolls_back_late_failure() {
+        // The reservation spans the last leaf of one table and the first
+        // leaf of the next table. Keep a neighboring mapping in the first.
+        let start = VirtAddr::new(0xffff_9000_001f_f000).unwrap();
+        let guard = VirtAddr::new(start.get() - PAGE_SIZE).unwrap();
+        let guard_frame = PhysAddr::new(0x60_0000).unwrap();
+        let second = VirtAddr::new(start.get() + PAGE_SIZE).unwrap();
+        for collide in [true, false] {
+            let mut builder = PageTableBuilder::new(Tables {
+                pages: [[0; 512]; 8],
+                used: 0,
+            })
+            .unwrap();
+            builder
+                .map_page(guard, guard_frame, PagePermissions::KERNEL_READ)
+                .unwrap();
+            let root = builder.root();
+            let existing = if collide {
+                builder
+                    .map_page(second, guard_frame, PagePermissions::KERNEL_READ)
+                    .unwrap();
+                PageTableBuildError::AlreadyMapped
+            } else {
+                builder.store.used = builder.store.pages.len();
+                PageTableBuildError::Storage
+            };
+            assert_eq!(
+                builder.install_boot_dma(boot_dma_test_reservation(), start),
+                Err(BootDmaInstallError::PageTable(existing))
+            );
+            let leaf = |addr| active_leaf_from_store(builder.store(), root, addr).unwrap();
+            assert_eq!(leaf(start), None);
+            assert_eq!(
+                leaf(second).map(ActiveLeaf::physical),
+                collide.then_some(guard_frame)
+            );
+            assert_eq!(leaf(guard).unwrap().physical(), guard_frame);
         }
     }
 
