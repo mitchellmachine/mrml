@@ -84,7 +84,14 @@ then reached `VMX 2 VM PASS` on the same Dragonair in a launch-only test.
 The switch-and-resume image required
 `d0 d1 d2 d3 d4 f2 f3 f4 d7 d8 d9 f7 f8 f9 df d6` under nested KVM; the
 no-VMX trace remains unchanged. The operator also reported `VMX ABA PASS`
-on Dragonair. Further checks are emulator-only until the runtime is ready.
+on Dragonair. Later versions of this fixture require that each resumed guest
+compute its second memory marker from its own restored register value. The
+earlier physical pass did not check software-owned general-purpose registers.
+The updated `mrml usb test-vmx-kernel` image passed the two-guest switch,
+long-mode, timer-exit, and signed kernel-runtime stages in nested KVM; the
+same image retained the expected `d0 e0 e6` fail-closed trace under TCG.
+All 760 kernel tests passed on Windows and Arch WSL. Further hardware checks
+are deferred until the runtime is ready.
 
 On the Dragonair, use its one-time boot menu or launch
 `fsN:\EFI\BOOT\BOOTX64.EFI` from the EFI Shell as in the FAT32 test. Preserve

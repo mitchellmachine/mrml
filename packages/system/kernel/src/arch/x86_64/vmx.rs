@@ -844,8 +844,14 @@ pub trait VmxInstructions {
     fn vmxoff(&mut self) -> Result<(), VmxInstructionError>;
     fn vmclear(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError>;
     fn vmptrld(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError>;
-    fn vmlaunch(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError>;
-    fn vmresume(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError>;
+    fn vmlaunch(
+        &mut self,
+        registers: &mut [u64; 15],
+    ) -> Result<VmxLaunchOutcome, VmxInstructionError>;
+    fn vmresume(
+        &mut self,
+        registers: &mut [u64; 15],
+    ) -> Result<VmxLaunchOutcome, VmxInstructionError>;
     fn vmwrite(&mut self, field: VmcsField, value: u64) -> Result<(), VmxInstructionError>;
     fn vmread(&mut self, field: VmcsField) -> Result<u64, VmxInstructionError>;
     fn invept_single_context(&mut self, ept: EptPointer) -> Result<(), VmxInstructionError>;
@@ -933,69 +939,75 @@ core::arch::global_asm!(
     r#"
     .text
     .p2align 4
-    .globl mrml_native_vmlaunch
-mrml_native_vmlaunch:
+    .globl mrml_native_vmentry
+mrml_native_vmentry:
     push rbp
     push rbx
     push r12
     push r13
     push r14
     push r15
+    push rdi
     mov rax, 0x6c14
     vmwrite rax, rsp
-    setna cl
-    test cl, cl
-    jnz 3f
+    jbe 3f
     lea rdx, [rip + 2f]
     mov rax, 0x6c16
     vmwrite rax, rdx
-    setna cl
-    test cl, cl
-    jnz 3f
+    jbe 3f
+
+    // Choose launch or resume before replacing every caller register.
+    // MOV preserves the condition flags until the branch.
+    test sil, sil
+    mov rax, [rdi + 0]
+    mov rbx, [rdi + 8]
+    mov rcx, [rdi + 16]
+    mov rdx, [rdi + 24]
+    mov rbp, [rdi + 32]
+    mov rsi, [rdi + 40]
+    mov r8, [rdi + 56]
+    mov r9, [rdi + 64]
+    mov r10, [rdi + 72]
+    mov r11, [rdi + 80]
+    mov r12, [rdi + 88]
+    mov r13, [rdi + 96]
+    mov r14, [rdi + 104]
+    mov r15, [rdi + 112]
+    mov rdi, [rdi + 48]
+    jnz 1f
     vmlaunch
     jmp 3f
+1:
+    vmresume
+    jmp 3f
+
 2:
+    // VM exit loads the host RSP from the VMCS. Retrieve the frame pointer
+    // from that private stack without using any guest-controlled pointer.
+    push rax
+    mov rax, [rsp + 8]
+    mov [rax + 8], rbx
+    mov [rax + 16], rcx
+    mov [rax + 24], rdx
+    mov [rax + 32], rbp
+    mov [rax + 40], rsi
+    mov [rax + 48], rdi
+    mov [rax + 56], r8
+    mov [rax + 64], r9
+    mov [rax + 72], r10
+    mov [rax + 80], r11
+    mov [rax + 88], r12
+    mov [rax + 96], r13
+    mov [rax + 104], r14
+    mov [rax + 112], r15
+    pop rdx
+    mov [rax + 0], rdx
     xor eax, eax
     jmp 4f
 3:
     mov eax, 1
 4:
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop rbx
-    pop rbp
-    ret
-
-    .p2align 4
-    .globl mrml_native_vmresume
-mrml_native_vmresume:
-    push rbp
-    push rbx
-    push r12
-    push r13
-    push r14
-    push r15
-    mov rax, 0x6c14
-    vmwrite rax, rsp
-    setna cl
-    test cl, cl
-    jnz 7f
-    lea rdx, [rip + 6f]
-    mov rax, 0x6c16
-    vmwrite rax, rdx
-    setna cl
-    test cl, cl
-    jnz 7f
-    vmresume
-    jmp 7f
-6:
-    xor eax, eax
-    jmp 8f
-7:
-    mov eax, 1
-8:
+    add rsp, 8
     pop r15
     pop r14
     pop r13
@@ -1008,8 +1020,7 @@ mrml_native_vmresume:
 
 #[cfg(target_arch = "x86_64")]
 unsafe extern "sysv64" {
-    fn mrml_native_vmlaunch() -> u8;
-    fn mrml_native_vmresume() -> u8;
+    fn mrml_native_vmentry(registers: *mut [u64; 15], resume: u8) -> u8;
 }
 
 impl VmxInstructions for NativeVmx {
@@ -1042,21 +1053,27 @@ impl VmxInstructions for NativeVmx {
         Self::physical_operand(native_vmptrld, vmcs)
     }
 
-    fn vmlaunch(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+    fn vmlaunch(
+        &mut self,
+        registers: &mut [u64; 15],
+    ) -> Result<VmxLaunchOutcome, VmxInstructionError> {
         // SAFETY: construction of NativeVmx requires CPL0 and a completely
-        // programmed active VMCS. The assembly routine preserves the SysV
-        // callee-saved registers and returns zero only through the host RIP
-        // installed immediately before VMLAUNCH.
-        if unsafe { mrml_native_vmlaunch() } == 0 {
+        // programmed active VMCS. The private frame is live for this call.
+        // Entry loads its GPRs and exit saves them before returning to Rust.
+        // RSP lives in the VMCS; the trampoline preserves host SysV state.
+        if unsafe { mrml_native_vmentry(registers, 0) } == 0 {
             Ok(VmxLaunchOutcome::VmExit)
         } else {
             Err(VmxInstructionError::Failed)
         }
     }
 
-    fn vmresume(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+    fn vmresume(
+        &mut self,
+        registers: &mut [u64; 15],
+    ) -> Result<VmxLaunchOutcome, VmxInstructionError> {
         // SAFETY: identical host-stack and register contract to VMLAUNCH above.
-        if unsafe { mrml_native_vmresume() } == 0 {
+        if unsafe { mrml_native_vmentry(registers, 1) } == 0 {
             Ok(VmxLaunchOutcome::VmExit)
         } else {
             Err(VmxInstructionError::Failed)
@@ -1131,6 +1148,13 @@ impl VmxInstructions for NativeVmx {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SuspendedProbeGuest {
+    vmcs: PhysAddr,
+    ept: EptPointer,
+    registers: [u64; 15],
+}
+
 pub struct VmxController<I: VmxInstructions> {
     instructions: I,
     capabilities: VmxCapabilities,
@@ -1138,7 +1162,9 @@ pub struct VmxController<I: VmxInstructions> {
     active_vmcs: Option<PhysAddr>,
     active_ept: Option<EptPointer>,
     failed_vmwrite_index: Option<u8>,
-    suspended_probe_guests: [Option<(PhysAddr, EptPointer)>; 2],
+    // Software-owned GPRs, excluding the VMCS-owned RSP.
+    active_registers: [u64; 15],
+    suspended_probe_guests: [Option<SuspendedProbeGuest>; 2],
     probe_resume_only: bool,
 }
 
@@ -1151,6 +1177,7 @@ impl<I: VmxInstructions> VmxController<I> {
             active_vmcs: None,
             active_ept: None,
             failed_vmwrite_index: None,
+            active_registers: [0; 15],
             suspended_probe_guests: [None; 2],
             probe_resume_only: false,
         }
@@ -1185,7 +1212,7 @@ impl<I: VmxInstructions> VmxController<I> {
                 .suspended_probe_guests
                 .iter()
                 .flatten()
-                .any(|&(address, _)| address == vmcs)
+                .any(|guest| guest.vmcs == vmcs)
         {
             return Err(VmxError::InvalidState);
         }
@@ -1193,6 +1220,7 @@ impl<I: VmxInstructions> VmxController<I> {
             .vmclear(vmcs)
             .map_err(|_| VmxError::InstructionFailed)?;
         self.active_vmcs = Some(vmcs);
+        self.active_registers.fill(0);
         self.active_ept = None;
         self.probe_resume_only = false;
         self.state = VmxState::VmcsClear;
@@ -1222,7 +1250,8 @@ impl<I: VmxInstructions> VmxController<I> {
         if self.probe_resume_only {
             return Err(VmxError::InvalidState);
         }
-        match self.instructions.vmlaunch() {
+        self.active_registers.fill(0);
+        match self.instructions.vmlaunch(&mut self.active_registers) {
             Ok(VmxLaunchOutcome::GuestRunning) => self.state = VmxState::GuestRunning,
             Ok(VmxLaunchOutcome::VmExit) => self.state = VmxState::VmExitPending,
             Err(_) => {
@@ -1332,7 +1361,11 @@ impl<I: VmxInstructions> VmxController<I> {
             self.state = VmxState::Poisoned;
             return result;
         }
-        self.suspended_probe_guests[slot] = Some((vmcs, ept));
+        self.suspended_probe_guests[slot] = Some(SuspendedProbeGuest {
+            vmcs,
+            ept,
+            registers: core::mem::take(&mut self.active_registers),
+        });
         self.active_vmcs = None;
         self.active_ept = None;
         self.state = VmxState::Root;
@@ -1351,8 +1384,9 @@ impl<I: VmxInstructions> VmxController<I> {
         let slot = self
             .suspended_probe_guests
             .iter()
-            .position(|entry| *entry == Some((vmcs, ept)))
+            .position(|entry| entry.is_some_and(|guest| guest.vmcs == vmcs && guest.ept == ept))
             .ok_or(VmxError::InvalidState)?;
+        let guest = self.suspended_probe_guests[slot].ok_or(VmxError::InvalidState)?;
         let result = (|| {
             self.instructions.vmptrld(vmcs)?;
             if self.instructions.vmread(VmcsField::EPT_POINTER)? != ept.bits() {
@@ -1364,6 +1398,7 @@ impl<I: VmxInstructions> VmxController<I> {
             self.state = VmxState::Poisoned;
             return Err(VmxError::InstructionFailed);
         }
+        self.active_registers = guest.registers;
         self.suspended_probe_guests[slot] = None;
         self.active_vmcs = Some(vmcs);
         self.active_ept = Some(ept);
@@ -1417,7 +1452,7 @@ impl<I: VmxInstructions> VmxController<I> {
         if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() {
             return Err(VmxError::InvalidState);
         }
-        match self.instructions.vmresume() {
+        match self.instructions.vmresume(&mut self.active_registers) {
             Ok(VmxLaunchOutcome::GuestRunning) => self.state = VmxState::GuestRunning,
             Ok(VmxLaunchOutcome::VmExit) => self.state = VmxState::VmExitPending,
             Err(_) => {
@@ -1439,6 +1474,7 @@ impl<I: VmxInstructions> VmxController<I> {
         self.active_vmcs = None;
         self.active_ept = None;
         self.failed_vmwrite_index = None;
+        self.active_registers.fill(0);
         self.suspended_probe_guests = [None; 2];
         self.probe_resume_only = false;
         self.state = VmxState::Disabled;
@@ -1491,15 +1527,24 @@ mod tests {
         fn vmptrld(&mut self, _: PhysAddr) -> Result<(), VmxInstructionError> {
             self.step(4)
         }
-        fn vmlaunch(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+        fn vmlaunch(
+            &mut self,
+            registers: &mut [u64; 15],
+        ) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+            assert_eq!(*registers, [0; 15]);
             self.step(6)?;
+            registers[14] = self.probe_ept;
             Ok(if self.exit_on_launch {
                 VmxLaunchOutcome::VmExit
             } else {
                 VmxLaunchOutcome::GuestRunning
             })
         }
-        fn vmresume(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+        fn vmresume(
+            &mut self,
+            registers: &mut [u64; 15],
+        ) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+            assert_eq!(registers[14], self.probe_ept);
             self.step(7)?;
             Ok(if self.exit_on_launch {
                 VmxLaunchOutcome::VmExit

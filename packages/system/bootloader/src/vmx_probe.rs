@@ -178,19 +178,20 @@ unsafe fn prepare_pages(pages: &[PhysAddr; PAGE_COUNT], revision: u32) {
                 .write(pages[at(PRIVATE_BACKING_PAGE)].get() | write_back | 0b011);
             let [own_lo, own_hi] = PRIVATE_GPAS[guest].to_le_bytes();
             let [peer_lo, peer_hi] = PRIVATE_GPAS[peer].to_le_bytes();
-            // Write own byte and yield at +5. On resume, increment that same
-            // byte, then read peer (VMCALL fallback if the read did not fault).
+            // Set AL, store it, and yield at +5. On resume, increment the
+            // restored AX and store AL again. The monitor verifies the second
+            // marker before accepting the existing EPT-isolation result.
             let code = [
-                0xc6,
-                0x06,
+                0xb0,
+                WRITTEN_BYTES[guest],
+                0xa2,
                 own_lo,
                 own_hi,
-                WRITTEN_BYTES[guest],
                 0x0f,
                 0x01,
                 0xc1,
-                0xfe,
-                0x06,
+                0x40,
+                0xa2,
                 own_lo,
                 own_hi,
                 0xa1,

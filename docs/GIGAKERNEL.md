@@ -2391,9 +2391,15 @@ two-task scheduler smoke inside L2. The guest task runtime blocks an empty
 receiver, denies a wrong endpoint capability, and completes an authorized
 request/reply with the expected sender and sequence. Only then does the
 monitor observe the designated completion exit. This verifies in-kernel
-runtime APIs inside L2, not user-space task execution, real timer
-preemption, installed services, or general
-untrusted-guest CPU-state isolation. Bare-metal retesting remains deferred.
+runtime APIs inside L2, not user-space task execution or installed services.
+A separate non-yielding fixture returns control through the VMX preemption
+timer; that does not yet establish preemptive task scheduling. The native
+entry trampoline starts each freshly launched guest with zeroed general-purpose
+registers (RSP is VMCS-owned). The cooperative switch test now requires each
+of two guests to resume with its own register value, not merely with its
+memory intact. This does not establish floating-point/vector state isolation
+or general untrusted-guest CPU-state isolation. Bare-metal retesting remains
+deferred.
 
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and
