@@ -2387,9 +2387,12 @@ handoff carrying the verified measurement, and entry through the actual
 kernel ABI. The monitor must see a bounded, kernel-generated terminal result;
 merely reaching VM entry does not qualify. The opt-in signed nested image
 now reaches real kernel entry, validates its early boot handoff, and runs a
-two-task scheduler smoke inside L2. The monitor observes the designated
-completion exit only after the guest's scheduler changes tasks. This is
-early runtime evidence, not preemption, installed services, or general
+two-task scheduler smoke inside L2. The guest task runtime blocks an empty
+receiver, denies a wrong endpoint capability, and completes an authorized
+request/reply with the expected sender and sequence. Only then does the
+monitor observe the designated completion exit. This verifies in-kernel
+runtime APIs inside L2, not user-space task execution, real timer
+preemption, installed services, or general
 untrusted-guest CPU-state isolation. Bare-metal retesting remains deferred.
 
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`

@@ -154,7 +154,9 @@ inside the signed opt-in monitor. It tests wrong-root rejection before PE
 materialization. The monitor sets final PE rights in both EPT and guest
 tables, provides a read-only measured handoff and guard-separated stacks, and
 enters the real kernel through the EFI ABI. It reports `VMX KERNEL PASS`
-only after the guest's early handoff validation and two-task scheduler check.
+only after the guest's early handoff validation, two-task scheduler check,
+and capability-checked, scheduler-driven IPC request/reply. The wrong
+endpoint must fail before the authorized request gets sequence 1.
 Nested KVM reaches `c0 c1 c2 c3 df d6`; without VMX the artifact does not
 try to enter the guest. The L2 topology is synthetic and no device is
 forwarded. This does not establish installed-service readiness, hardware

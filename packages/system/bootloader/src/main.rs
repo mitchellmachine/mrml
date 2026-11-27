@@ -612,10 +612,63 @@ fn vmx_kernel_payload_ready(_early: &EarlyKernelContext<'_>) -> ! {
     {
         halt();
     }
-    // SAFETY: this opt-in payload's exact terminal port is intercepted by
-    // the monitor. It reaches this point only after early kernel admission.
-    unsafe { asm!("out 0xe8, al", in("al") 1u8, options(nomem, nostack, preserves_flags)) };
+    if vmx_kernel_ipc_check().is_none() {
+        halt();
+    }
+    // SAFETY: this opt-in payload's terminal port is intercepted by the monitor
+    // only after early kernel admission, scheduler and IPC checks.
+    unsafe { asm!("out 0xe7, al", in("al") 1u8, options(nomem, nostack, preserves_flags)) };
     halt()
+}
+
+#[cfg(feature = "vmx-kernel-payload")]
+fn vmx_kernel_ipc_check() -> Option<()> {
+    use mrml_kernel::arch::x86_64::UserContext;
+    use mrml_kernel::{ControlEvent, Endpoint, ObjectId, PhysAddr, Priority, Rights, ScheduleOutcome, TaskRuntime};
+
+    // These are runtime-only task records, not addresses installed in CR3.
+    let context = |root, entry| UserContext::new(PhysAddr::new(root).ok()?, entry, 0x70_0000).ok();
+    let mut runtime = TaskRuntime::<2, 2>::new(1000, 1).ok()?;
+    let receiver = runtime.create(Priority::NORMAL, context(0x20_0000, 0x40_0000)?).ok()?;
+    let sender = runtime.create(Priority::NORMAL, context(0x30_0000, 0x50_0000)?).ok()?;
+    if runtime.start() != (ScheduleOutcome::Switch { from: None, to: receiver }) {
+        return None;
+    }
+    let blocked = runtime.receive_or_block_current().ok()?.err()?;
+    if blocked.task() != receiver
+        || !matches!(blocked.outcome(), ScheduleOutcome::Switch { from: Some(from), to } if from == receiver && to == sender)
+    {
+        return None;
+    }
+    let object = ObjectId(0x4755_4553_54);
+    let caps = runtime.capabilities_mut(sender).ok()?;
+    let wrong = caps.insert(ObjectId(object.0 + 1), Rights::SIGNAL).ok()?;
+    let right = caps.insert(object, Rights::SIGNAL).ok()?;
+    let mut endpoint = Endpoint::new(object);
+    if runtime.deliver_ipc(sender, receiver, &mut endpoint, wrong, b"denied", &[]).is_ok()
+        || runtime.deliver_ipc(sender, receiver, &mut endpoint, right, b"nested request", &[]).ok()? != 1
+        || runtime.yield_current().ok()? != (ScheduleOutcome::Switch { from: Some(sender), to: receiver })
+    {
+        return None;
+    }
+    let ControlEvent::Message(request) = runtime.receive_control(receiver).ok()? else {
+        return None;
+    };
+    if request.sender() != sender || request.sequence() != 1 || request.message().payload() != b"nested request" {
+        return None;
+    }
+    let reply_object = ObjectId(0x5245_504c_59);
+    let reply_cap = runtime.capabilities_mut(receiver).ok()?.insert(reply_object, Rights::SIGNAL).ok()?;
+    let mut replies = Endpoint::new(reply_object);
+    if runtime.deliver_ipc(receiver, sender, &mut replies, reply_cap, b"nested reply", &[]).ok()? != 1
+        || runtime.yield_current().ok()? != (ScheduleOutcome::Switch { from: Some(receiver), to: sender })
+    {
+        return None;
+    }
+    let ControlEvent::Message(reply) = runtime.receive_control(sender).ok()? else {
+        return None;
+    };
+    (reply.sender() == receiver && reply.sequence() == 1 && reply.message().payload() == b"nested reply").then_some(())
 }
 
 #[cfg(feature = "vmx-root-probe")]

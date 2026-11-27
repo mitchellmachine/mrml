@@ -60,7 +60,7 @@ impl KernelLaunch {
         unsafe { asm!("fxrstor64 [{}]", in(reg) fx.0.as_ptr(), options(nostack, preserves_flags)) };
         launched.ok()?;
         let exit = controller.record_vm_exit_snapshot().ok()?;
-        (exit.reason() == 30 && exit.qualification() == (0xe8 << 16) | (1 << 6)).then_some(())
+        (exit.reason() == 30 && exit.qualification() == (0xe7 << 16) | (1 << 6)).then_some(())
     }
 }
 
