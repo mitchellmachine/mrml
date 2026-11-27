@@ -66,8 +66,8 @@ type `ERASE <number>`. The writer rechecks and claims the device, writes
 and flushes the image, then compares every written byte. Safely eject
 afterward. This is imaging, not secure wiping of the rest of the disk.
 
-For unattended use on a trusted host, open an Administrator terminal on
-Windows or use an already authorized root session on Linux, then run:
+For unattended use on a trusted host, use an Administrator terminal on
+Windows or an already authorized root session on Linux, then run:
 
 ```text
 mrml usb autoburn
@@ -75,7 +75,7 @@ mrml usb autoburn
 
 **This command erases the sole eligible USB storage drive without asking.**
 Connect only the spare USB stick you intend to erase. The command does not
-prompt for elevation, selection or confirmation. It refuses to build or
+prompt for selection or confirmation. It refuses to build or
 write if there is no USB storage drive, more than one (even if another is
 ineligible), or if the only drive fails the normal safety checks. It builds
 the diagnostic in memory, rechecks the original drive and USB inventory
@@ -83,6 +83,21 @@ before claiming and writing, and verifies every written byte. If the
 inventory cannot be determined or changes during the checks, it stops
 instead of picking another drive. Use interactive `burn` when you need
 to select a drive.
+
+On Linux, running autoburn as a normal user builds the image without
+privilege and asks the system polkit agent to authorize only the USB writer.
+The installed helper receives the device fingerprint and exact image bytes
+over a pipe, verifies both, and never builds or opens a caller-supplied file.
+This uses the distribution's `/usr/bin/pkexec`; no MRML Rust dependency or
+terminal authentication fallback is installed. If polkit, its session agent,
+or the helper is unavailable, run from a trusted checkout as root. Do not
+grant capabilities to the general-purpose builder. The writer requires both
+device access and a privileged cache-flush operation for verified read-back.
+
+To package the Linux helper, run `mrml build org.mrml.tool.build --target linux --release`
+and install the resulting `mrml-usb-writer` as a regular root-owned executable
+at `/usr/lib/mrml/mrml-usb-writer` (mode 0755, no setuid bit or capabilities).
+Install only a reviewed binary; do not symlink to a user-writable build output.
 
 To reuse a spare USB installer whose **MBR** contains an EFI or active
 partition, first check the existing target in the Administrator terminal:

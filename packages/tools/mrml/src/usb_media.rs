@@ -1,11 +1,15 @@
 //! Hosted front end for the signed MRML diagnostic media.
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufRead as _, IsTerminal as _, Read, SeekFrom, Write};
+use std::io::{self, BufRead as _, IsTerminal as _, Read as _, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::usb_image::{self, BYTES};
+#[cfg(any(test, all(any(windows, target_os = "linux"), target_arch = "x86_64")))]
+use crate::usb_transfer::transfer;
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+use crate::usb_transfer::{WriteMode, require_only_usb};
 use crate::{Sha3_512, Workspace, build_or_test, load_workspace, package_command, release_command};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -85,13 +89,7 @@ fn device_command(_args: &[String]) -> io::Result<()> {
     ))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Disk {
-    path: PathBuf,
-    label: String,
-    capacity: u64,
-    identity: host_identity::Identity,
-}
+type Disk = crate::usb_transfer::Disk<host_identity::Identity>;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use host as host_identity;
@@ -196,13 +194,6 @@ fn burn(path: &Path, child: bool) -> io::Result<()> {
 }
 
 #[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
-#[derive(Clone, Copy)]
-enum WriteMode {
-    Manual,
-    Auto { erase: bool },
-}
-
-#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
 fn discover_autoburn(erase: bool) -> io::Result<Disk> {
     let connected = host::usb_storage()?;
     select_single(&connected, || host::disks(erase))
@@ -210,12 +201,19 @@ fn discover_autoburn(erase: bool) -> io::Result<Disk> {
 
 #[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
 fn autoburn(erase: bool) -> io::Result<()> {
+    #[cfg(windows)]
     if !host::privileged() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "autoburn requires an Administrator or root session; no elevation prompt is used",
         ));
     }
+    #[cfg(target_os = "linux")]
+    let elevated_writer = if host::privileged() {
+        None
+    } else {
+        Some(crate::usb_polkit::Writer::locate()?)
+    };
     run_autoburn(
         || discover_autoburn(erase),
         || {
@@ -225,7 +223,13 @@ fn autoburn(erase: bool) -> io::Result<()> {
             println!("Image SHA3-512: {}", sha3(&image));
             Ok(image)
         },
-        |disk, image| write_verified(disk, image, WriteMode::Auto { erase }),
+        |disk, image| {
+            #[cfg(target_os = "linux")]
+            if let Some(writer) = elevated_writer {
+                return writer.write(host::fingerprint(disk), image);
+            }
+            write_verified(disk, image, WriteMode::Auto { erase })
+        },
     )
 }
 
@@ -269,17 +273,6 @@ fn run_autoburn(
 }
 
 #[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
-fn require_only_usb(
-    selected: &Disk,
-    connected: impl FnOnce() -> io::Result<Vec<PathBuf>>,
-) -> io::Result<()> {
-    if connected()?.as_slice() != std::slice::from_ref(&selected.path) {
-        return Err(io::Error::other("USB inventory changed; no bytes written"));
-    }
-    Ok(())
-}
-
-#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
 fn write_verified(disk: &Disk, image: &[u8], mode: WriteMode) -> io::Result<()> {
     host::write_image(disk, image, mode)?;
     println!(
@@ -287,30 +280,6 @@ fn write_verified(disk: &Disk, image: &[u8], mode: WriteMode) -> io::Result<()> 
         image.len(),
         disk.path.display()
     );
-    Ok(())
-}
-
-fn transfer<T: Read + Write + std::io::Seek>(
-    disk: &mut T,
-    image: &[u8],
-    flush_media: impl FnOnce(&mut T) -> io::Result<()>,
-) -> io::Result<()> {
-    const CHUNK: usize = 1024 * 1024;
-    for block in image.chunks(CHUNK) {
-        disk.write_all(block)?;
-    }
-    flush_media(disk)?;
-    disk.seek(SeekFrom::Start(0))?;
-    let mut readback = vec![0; CHUNK];
-    for (index, block) in image.chunks(CHUNK).enumerate() {
-        disk.read_exact(&mut readback[..block.len()])?;
-        if readback[..block.len()] != *block {
-            return Err(io::Error::other(format!(
-                "USB verification failed at byte {}",
-                index * CHUNK
-            )));
-        }
-    }
     Ok(())
 }
 

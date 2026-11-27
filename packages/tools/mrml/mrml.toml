@@ -21,6 +21,10 @@ environment = "linux"
 kind = "bin"
 name = "mrml"
 
+[[artifact]]
+kind = "bin"
+name = "mrml-usb-writer"
+
 [rust]
 crate_name = "mrml_build_action"
 crate_type = "none"
@@ -38,6 +42,13 @@ crate_name = "mrml"
 output = "mrml"
 self_extern = false
 source = "packages/tools/mrml/src/main.rs"
+
+[[binary]]
+crate_name = "mrml_usb_writer"
+output = "mrml-usb-writer"
+self_extern = false
+source = "packages/tools/mrml/src/usb_writer.rs"
+targets = ["LINUX"]
 
 [[build_input]]
 fingerprint = "fnv1a64:5ceade778ecc365a"
@@ -176,6 +187,14 @@ path = "packages/tools/mrml/src/usb_media.rs"
 reason = "Invoke only the graph-built MRML signer to create and consume disposable diagnostic keys and bind signed boot artifacts."
 
 [[build_input]]
+fingerprint = "fnv1a64:e852a2a6dec3fd08"
+id = "external-command.usb-polkit"
+kind = "external-command"
+line = 27
+path = "packages/tools/mrml/src/usb_polkit.rs"
+reason = "Invoke the system pkexec at a fixed trusted path to authorize only the installed Rust diagnostic USB writer."
+
+[[build_input]]
 fingerprint = "fnv1a64:75d8d5a0ba5e6f33"
 id = "native-link.usb-kernel32"
 kind = "native-link"
@@ -190,3 +209,11 @@ kind = "native-link"
 line = 39
 path = "packages/tools/mrml/src/usb_windows.rs"
 reason = "Use Windows UAC to relaunch the same MRML executable in an interactive elevated console; there is no shell-script implementation."
+
+[[build_input]]
+fingerprint = "fnv1a64:dc138525d08694bd"
+id = "native-link.usb-advapi32"
+kind = "native-link"
+line = 32
+path = "packages/tools/mrml/src/usb_windows.rs"
+reason = "Read the Windows startup-partition registry value to exclude the startup disk from explicit USB erase."

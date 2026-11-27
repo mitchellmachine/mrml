@@ -226,6 +226,26 @@ pub(super) fn usb_storage() -> io::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+pub(super) fn fingerprint(disk: &Disk) -> [u8; 64] {
+    // Length-prefix variable fields; exclude presentation-only labels.
+    let mut bytes = b"mrml-usb-linux-target-v1\0".to_vec();
+    let mut append = |field: &[u8]| {
+        bytes.extend_from_slice(&(field.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(field);
+    };
+    append(disk.path.as_os_str().as_encoded_bytes());
+    append(disk.identity.node.as_os_str().as_encoded_bytes());
+    append(&disk.identity.dev.to_le_bytes());
+    append(&disk.identity.generation.to_le_bytes());
+    append(&disk.capacity.to_le_bytes());
+    for (dev, start, span) in &disk.identity.geometry {
+        append(dev.as_bytes());
+        append(start.as_bytes());
+        append(span.as_bytes());
+    }
+    crate::Sha3_512::digest(&bytes)
+}
+
 pub(super) fn write_image(disk: &Disk, image: &[u8], mode: WriteMode) -> io::Result<()> {
     if !privileged() {
         return Err(io::Error::new(
@@ -278,5 +298,27 @@ mod tests {
         assert_eq!(linux_dev("8:19"), Some(8 * 256 + 19));
         assert_eq!(linux_dev("8:256"), Some(8 * 256 + (256 << 12)));
         assert_eq!(linux_dev("8:x"), None);
+    }
+
+    #[test]
+    fn writer_fingerprint_pins_media_generation_and_partition_geometry() {
+        let original = Disk {
+            path: "/dev/sda".into(),
+            label: "USB".into(),
+            capacity: BYTES as u64,
+            identity: test_identity(),
+        };
+        let digest = fingerprint(&original);
+        let mut changed = original;
+        changed.label = "different label".into();
+        assert_eq!(fingerprint(&changed), digest);
+        changed
+            .identity
+            .geometry
+            .push(("8:1".into(), "2048".into(), "4096".into()));
+        assert_ne!(fingerprint(&changed), digest);
+        changed.identity.geometry.clear();
+        changed.identity.generation += 1;
+        assert_ne!(fingerprint(&changed), digest);
     }
 }

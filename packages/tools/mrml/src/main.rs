@@ -1666,6 +1666,9 @@ fn write_new(path: &str, bytes: &[u8], role: &str) -> Result<(), String> {
 mod qemu_boot;
 mod usb_image;
 mod usb_media;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod usb_polkit;
+mod usb_transfer;
 
 fn manifest_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
