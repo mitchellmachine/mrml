@@ -6,6 +6,28 @@ evidence ledger in `packages/compiler/core/README.md`. If chat history or a loca
 worktree is lost, recover this checkpoint first and verify every claim against
 the named commit and current source.
 
+## Integrated frontend checkpoint
+
+Commit `d2aeb100` on `main` includes four signed frontend changes:
+
+- `6858447f`: locate malformed or unsupported struct and enum headers.
+- `509af8ed`: accept a leading parameterless `#![no_std]` in the existing
+  freestanding subset.
+- `9917fe48`: restore the hosted Windows debug frontend's 32 MiB stack budget.
+- `d2aeb100`: require canonical decimal tuple field indices in reads and
+  assignments.
+
+The commit messages retain the Windows, Arch WSL2, and ORACLE-0004 checks.
+On the combined tree, the compiler core and driver suites passed on Arch
+WSL2. On Windows, all 19 driver tests and the focused parser tests passed.
+The Windows core run stopped after 853 tests passed and one failed:
+`generated_pe_executes_on_the_controlled_windows_host` hit Windows loader
+error 623. That test's PE linker and fixed machine-code input are unchanged
+by these commits. The public experimental frontend emitted the scalar PE on
+Windows, but that run did not verify execution. These changes neither
+implement general aggregate support nor change the production compiler
+selection.
+
 ## Recoverable baseline
 
 - Branch: `main`
