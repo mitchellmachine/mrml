@@ -3064,9 +3064,13 @@ The opt-in loader also copies the unique DMAR and MCFG ACPI tables when
 both exist. The kernel validates the bounded snapshots and their topology
 before reporting success; an absent pair carries no DMA authority.
 `mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU` checks the ACPI handoff
-with QEMU's Intel IOMMU. The `test-dma` companion omits the IOMMU and
-expects no topology-success marker. Neither boot accesses PCI registers or
-activates DMA for the MRML xHCI driver.
+with QEMU's Intel IOMMU. After parsing the tables, the probe reports whether
+the normalized handoff map covers every DRHD bootstrap page and full ECAM
+window as MMIO. On the tested q35/OVMF image it reports missing coverage
+(`d7` after `d5`), so ACPI discovery alone does not justify mapping the
+registers. The `test-dma` companion omits the IOMMU and expects neither
+marker. Neither boot installs device mappings, accesses PCI or DRHD
+registers, or activates DMA for the MRML xHCI driver.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

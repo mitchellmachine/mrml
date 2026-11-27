@@ -4016,10 +4016,20 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     });
     #[cfg(feature = "uefi-fat32-restart-probe")]
     if let Some((dmar, mcfg)) = handoff.dma_acpi(encoded) {
-        use mrml_kernel::arch::x86_64::{DmarTopology, McfgTopology};
-        DmarTopology::<8, 64>::parse(dmar).unwrap_or_else(|_| halt());
-        McfgTopology::<8>::parse(mcfg).unwrap_or_else(|_| halt());
+        use mrml_kernel::arch::x86_64::{
+            DmarTopology, McfgTopology, PlatformMmioError, PlatformMmioManifest,
+        };
+        let dmar = DmarTopology::<8, 64>::parse(dmar).unwrap_or_else(|_| halt());
+        let mcfg = McfgTopology::<8>::parse(mcfg).unwrap_or_else(|_| halt());
         native_fat32_probe::dma_topology_verified();
+        // This reports map coverage only. It neither maps nor reads the registers.
+        match PlatformMmioManifest::<16>::from_topology(&dmar, &mcfg, &regions[..region_count]) {
+            Ok(_) => native_fat32_probe::dma_mmio_coverage(true),
+            Err(PlatformMmioError::OutsideFirmwareMmio) => {
+                native_fat32_probe::dma_mmio_coverage(false);
+            }
+            Err(_) => halt(),
+        }
     }
     #[cfg(feature = "uefi-fat32-restart-probe")]
     let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML KERNEL ENTRY");
