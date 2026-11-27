@@ -92,7 +92,7 @@ pub use vtd_tables::{
     VtdAuthorizedDmaSet, VtdAuthorizedRoutes, VtdBindingError, VtdDmaAperture, VtdDomainAuthority,
     VtdDomainError, VtdIdentityLeaf, VtdSetBindingError, VtdTableError, VtdTableMemory,
     VtdTableProvenance, bind_legacy_identity_leaf, bind_routed_dma_isolation, bind_routed_dma_set,
-    bind_routed_legacy_identity_leaf, build_single_requester_legacy_root, prepare_direct_vtd_tables,
+    bind_routed_legacy_identity_leaf, build_single_requester_legacy_root, prepare_direct_vtd_tables, write_back_vtd_table_words,
 };
 
 /// Dedicated high-half CPU mapping used by the UEFI boot DMA handoff.

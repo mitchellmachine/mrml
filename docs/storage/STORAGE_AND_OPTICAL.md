@@ -3173,6 +3173,17 @@ command or status, and no change to xHCI status or remapper GSTS. The wrong-byte
 case still stops before device access. This is shutdown only: no reset,
 new translation, bus-master re-enable, or USB transfer.
 
+The bounded VT-d aperture path now supports a non-snooping table walker
+only when its trusted table backend explicitly provides ordered writeback.
+The x86 helper requires CPUID CLFSH, validates cache-line geometry, and
+flushes only lines intersecting the supplied pinned write-back table
+slice (at most six pages). Publication, rollback and revocation flush
+each changed leaf before context/IOTLB invalidation. An uncertain
+writeback is never reported as completed invalidation or released DMA
+memory. The normal direct-table constructor does not opt in implicitly.
+This does not yet install a cold root pointer, enable translation, or
+prove device-data coherency.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

@@ -31,6 +31,7 @@ pub enum VtdTableError {
     InvalidAperture,
     InsufficientPermissions,
     OccupiedLeaf,
+    WritebackUnavailable,
     Storage,
 }
 
@@ -256,6 +257,72 @@ pub struct VtdDmaAperture {
 }
 
 pub const SINGLE_REQUESTER_VTD_TABLE_PAGES: usize = 6;
+
+const MAX_VTD_WRITEBACK_BYTES: usize = SINGLE_REQUESTER_VTD_TABLE_PAGES * PAGE_SIZE as usize;
+
+fn clflush_line_bytes(ebx: u32, edx: u32) -> Option<usize> {
+    let bytes = ((ebx >> 8) & 0xff) as usize * 8;
+    (edx & (1 << 19) != 0 && bytes.is_power_of_two() && bytes <= PAGE_SIZE as usize)
+        .then_some(bytes)
+}
+
+fn local_clflush_line_bytes() -> Option<usize> {
+    if core::arch::x86_64::__cpuid(0).eax < 1 {
+        return None;
+    }
+    let info = core::arch::x86_64::__cpuid(1);
+    clflush_line_bytes(info.ebx, info.edx)
+}
+
+fn visit_writeback_offsets(
+    start: usize,
+    bytes: usize,
+    line: usize,
+    mut visit: impl FnMut(usize),
+) -> Result<(), VtdTableError> {
+    if bytes == 0
+        || bytes > MAX_VTD_WRITEBACK_BYTES
+        || !line.is_power_of_two()
+        || !(8..=PAGE_SIZE as usize).contains(&line)
+        || start.checked_add(bytes - 1).is_none()
+    {
+        return Err(VtdTableError::WritebackUnavailable);
+    }
+    visit(0);
+    let first_boundary = line - (start & (line - 1));
+    for offset in (first_boundary..bytes).step_by(line) {
+        visit(offset);
+    }
+    Ok(())
+}
+
+/// Publishes stored VT-d entries from exclusive WB RAM to a non-snooping
+/// table walker. This does not invalidate IOMMU caches, publish a root pointer,
+/// or establish the coherency of device DMA data.
+///
+/// # Safety
+///
+/// The caller owns the exact pinned table backing and has independently
+/// verified WB mappings with no conflicting aliases. The caller serializes
+/// all table writers and ensures the CPU cannot migrate between CPUID and
+/// CLFLUSH (or that all eligible CPUs have identical support and geometry).
+pub unsafe fn write_back_vtd_table_words(words: &[u64]) -> Result<(), VtdTableError> {
+    let line = local_clflush_line_bytes().ok_or(VtdTableError::WritebackUnavailable)?;
+    let address = words.as_ptr().cast::<u8>();
+    let bytes = core::mem::size_of_val(words);
+    // SAFETY: x86-64 guarantees SSE2 and the caller has pinned WB backing.
+    // Order the preceding table stores before invalidating cache lines.
+    unsafe { core::arch::x86_64::_mm_mfence() };
+    visit_writeback_offsets(address.addr(), bytes, line, |offset| {
+        // SAFETY: CPUID established CLFLUSH; every operand points inside the
+        // provided mapped slice, not an aligned address before the slice.
+        unsafe { core::arch::x86_64::_mm_clflush(address.wrapping_add(offset)) };
+    })?;
+    // SAFETY: x86-64 provides MFENCE; do not publish or invalidate IOMMU
+    // caches until all cache-line writebacks have completed.
+    unsafe { core::arch::x86_64::_mm_mfence() };
+    Ok(())
+}
 
 /// Constructs an inactive four-level legacy root/context hierarchy for one
 /// exact requester. No DMA leaves are present on return, including in the
@@ -484,8 +551,9 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
             }
             slots[i] = Some((table, index));
         }
-        self.invalidator
-            .ready_for_dma_drain()
+        let needs_writeback = self
+            .invalidator
+            .ready_for_dma_drain(memory.supports_explicit_writeback())
             .map_err(|e| Rejected(VtdBindingError::Unit(e)))?;
         let mut written = 0;
         let result = (|| {
@@ -494,6 +562,11 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
                 let address = aperture.physical_base.get() + i as u64 * 4096;
                 super::vtd::write_dma_leaf(leaf, address | 3);
                 written += 1;
+                if needs_writeback {
+                    memory
+                        .write_back_leaf(table, index)
+                        .map_err(VtdBindingError::Table)?;
+                }
             }
             self.invalidator
                 .invalidate_global()
@@ -503,18 +576,23 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
             let mut rollback_uncertain = false;
             for (table, index) in slots[..written].iter().copied().flatten() {
                 match exclusive_leaf(memory, table, index) {
-                    Ok(leaf) => super::vtd::write_dma_leaf(leaf, 0),
+                    Ok(leaf) => {
+                        super::vtd::write_dma_leaf(leaf, 0);
+                        if needs_writeback && memory.write_back_leaf(table, index).is_err() {
+                            rollback_uncertain = true;
+                        }
+                    }
                     Err(_) => rollback_uncertain = true,
                 }
             }
             // In particular, do not issue another command over a pending
             // command that timed out during the first invalidation attempt.
-            if self
-                .invalidator
-                .ready()
-                .and_then(|()| self.invalidator.invalidate_global())
-                .is_err()
-                || rollback_uncertain
+            if rollback_uncertain
+                || self
+                    .invalidator
+                    .ready()
+                    .and_then(|()| self.invalidator.invalidate_global())
+                    .is_err()
             {
                 return Err(Uncertain(error));
             }
@@ -569,14 +647,20 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
             .map_err(|error| Rejected(VtdBindingError::Table(error)))?;
             slots[index] = Some((table, entry));
         }
-        self.invalidator
-            .ready_for_dma_drain()
+        let needs_writeback = self
+            .invalidator
+            .ready_for_dma_drain(memory.supports_explicit_writeback())
             .map_err(|error| Rejected(VtdBindingError::Unit(error)))?;
 
         for (table, index) in slots.into_iter().flatten() {
             let leaf = exclusive_leaf(memory, table, index)
                 .map_err(|error| Uncertain(VtdBindingError::Table(error)))?;
             super::vtd::clear_dma_leaf_permissions(leaf);
+            if needs_writeback {
+                memory
+                    .write_back_leaf(table, index)
+                    .map_err(|error| Uncertain(VtdBindingError::Table(error)))?;
+            }
         }
         self.invalidator
             .invalidate_global()
@@ -617,6 +701,19 @@ fn verified_unit_matches_route(verified: &VerifiedPlatformMmio, route: VtdReques
 pub unsafe trait VtdTableMemory {
     /// Immutable unit/root identity for this exclusive table view.
     fn provenance(&self) -> VtdTableProvenance;
+
+    /// True only if this backend can publish changes from all reachable WB
+    /// table frames to noncoherent walkers, in order, during this assignment.
+    fn supports_explicit_writeback(&self) -> bool {
+        false
+    }
+
+    /// Finish the writeback of the exact modified leaf, with ordering before
+    /// device invalidation. The trait's exclusive ownership contract still
+    /// holds during this call. Err leaves the update unconfirmed.
+    fn write_back_leaf(&mut self, _table: PhysAddr, _index: usize) -> Result<(), VtdTableError> {
+        Err(VtdTableError::WritebackUnavailable)
+    }
     fn read128(&self, table: PhysAddr, index: usize) -> Result<[u64; 2], VtdTableError>;
     fn read64(&self, table: PhysAddr, index: usize) -> Result<u64, VtdTableError>;
     /// # Safety
@@ -630,6 +727,7 @@ pub unsafe trait VtdTableMemory {
 /// Identity-mapped physical table access for the bare-metal monitor.
 pub struct DirectVtdTables {
     provenance: VtdTableProvenance,
+    explicit_writeback: bool,
 }
 
 impl DirectVtdTables {
@@ -648,13 +746,40 @@ impl DirectVtdTables {
                 register_base,
                 root_table,
             },
+            explicit_writeback: false,
         }
+    }
+
+    /// # Safety
+    ///
+    /// All reachable table frames are pinned write-back RAM and the exclusive
+    /// mapping has no conflicting cache alias. The initial hierarchy must
+    /// already have been synchronized before its root was activated. The
+    /// modifying CPU must meet the writeback helper's migration contract.
+    pub unsafe fn enable_explicit_writeback(&mut self) -> Result<(), VtdTableError> {
+        local_clflush_line_bytes().ok_or(VtdTableError::WritebackUnavailable)?;
+        self.explicit_writeback = true;
+        Ok(())
     }
 }
 
 unsafe impl VtdTableMemory for DirectVtdTables {
     fn provenance(&self) -> VtdTableProvenance {
         self.provenance
+    }
+
+    fn supports_explicit_writeback(&self) -> bool {
+        self.explicit_writeback
+    }
+
+    fn write_back_leaf(&mut self, table: PhysAddr, index: usize) -> Result<(), VtdTableError> {
+        if !self.explicit_writeback {
+            return Err(VtdTableError::WritebackUnavailable);
+        }
+        let leaf = exclusive_leaf(self, table, index)?;
+        // SAFETY: this table view was explicitly opted in under the pinned
+        // WB/no-alias contract and owns the exact leaf.
+        unsafe { write_back_vtd_table_words(core::slice::from_ref(leaf)) }
     }
 
     fn read128(&self, table: PhysAddr, index: usize) -> Result<[u64; 2], VtdTableError> {
@@ -934,6 +1059,11 @@ where
     if requirement.pages() < invalidator.register_pages() {
         return Err(VtdBindingError::InsufficientRegisterMapping);
     }
+    if !invalidator.table_walks_coherent() {
+        return Err(VtdBindingError::Unit(
+            VtdError::ApertureInvalidationUnsupported,
+        ));
+    }
     let root = invalidator
         .active_legacy_root()
         .map_err(VtdBindingError::Unit)?;
@@ -1125,6 +1255,35 @@ mod tests {
         assert_eq!(image, original);
     }
 
+    #[test]
+    fn writeback_geometry_validates_cpuid_and_touches_only_slice_lines() {
+        assert_eq!(clflush_line_bytes(8 << 8, 1 << 19), Some(64));
+        assert_eq!(clflush_line_bytes(8 << 8, 0), None);
+        assert_eq!(clflush_line_bytes(3 << 8, 1 << 19), None);
+        assert_eq!(clflush_line_bytes(0, 1 << 19), None);
+        let mut touched = [usize::MAX; 4];
+        let mut count = 0;
+        visit_writeback_offsets(0x1038, 80, 64, |offset| {
+            touched[count] = offset;
+            count += 1;
+        })
+        .unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(touched, [0, 8, 72, usize::MAX]);
+        for (start, bytes, line) in [
+            (0, 0, 64),
+            (0, MAX_VTD_WRITEBACK_BYTES + 1, 64),
+            (usize::MAX, 2, 64),
+            (0, 8, 0),
+            (0, 8, 48),
+        ] {
+            assert_eq!(
+                visit_writeback_offsets(start, bytes, line, |_| panic!("unexpected writeback")),
+                Err(VtdTableError::WritebackUnavailable)
+            );
+        }
+    }
+
     struct Tables {
         provenance: VtdTableProvenance,
         root: [u64; 512],
@@ -1134,6 +1293,9 @@ mod tests {
         level2: [u64; 512],
         level1: [u64; 512],
         denied_write: Option<usize>,
+        explicit_writeback: bool,
+        failed_writeback: Option<usize>,
+        published: [u64; 2],
     }
 
     impl Tables {
@@ -1150,6 +1312,9 @@ mod tests {
                 level2: [0; 512],
                 level1: [0; 512],
                 denied_write: None,
+                explicit_writeback: false,
+                failed_writeback: None,
+                published: [0; 2],
             };
             tables.root[2 * 2] = CONTEXT | 1;
             let context_index = 3 * 8;
@@ -1188,6 +1353,24 @@ mod tests {
     unsafe impl VtdTableMemory for Tables {
         fn provenance(&self) -> VtdTableProvenance {
             self.provenance
+        }
+
+        fn supports_explicit_writeback(&self) -> bool {
+            self.explicit_writeback
+        }
+
+        fn write_back_leaf(&mut self, table: PhysAddr, index: usize) -> Result<(), VtdTableError> {
+            if !self.explicit_writeback
+                || self.failed_writeback == Some(index)
+                || table.get() != LEVEL1
+            {
+                return Err(VtdTableError::WritebackUnavailable);
+            }
+            *self
+                .published
+                .get_mut(index)
+                .ok_or(VtdTableError::WritebackUnavailable)? = self.level1[index];
+            Ok(())
         }
 
         fn read128(&self, table: PhysAddr, index: usize) -> Result<[u64; 2], VtdTableError> {
@@ -1232,6 +1415,7 @@ mod tests {
         context: u64,
         iotlb: u64,
         drain: bool,
+        coherent: bool,
         bad_completion_once: bool,
         stuck_iotlb: bool,
     }
@@ -1244,6 +1428,7 @@ mod tests {
                 context: 0,
                 iotlb: 0,
                 drain: true,
+                coherent: true,
                 bad_completion_once: false,
                 stuck_iotlb: false,
             }
@@ -1268,7 +1453,7 @@ mod tests {
         fn read64(&mut self, offset: usize) -> u64 {
             match offset {
                 0x08 => (0x40 << 24) | if self.drain { 3 << 54 } else { 0 },
-                0x10 => (0x20 << 8) | 1,
+                0x10 => (0x20 << 8) | u64::from(self.coherent),
                 0x20 => self.root,
                 0x28 => self.context,
                 0x208 => self.iotlb,
@@ -1376,6 +1561,71 @@ mod tests {
             )))
         );
         assert_eq!(&tables.level1[..3], &[0, 0, 0x90_0003]);
+    }
+
+    #[test]
+    fn noncoherent_aperture_requires_real_writeback_and_quarantines_failed_updates() {
+        let device = PhysAddr::new(0x20_0000).unwrap();
+        let backing = PhysAddr::new(0x80_0000).unwrap();
+        let register = PhysAddr::new(0xfed9_0000).unwrap();
+        let aperture = VtdDmaAperture {
+            route: VtdRequesterRoute::for_test(requester(), register),
+            hardware_domain: 9,
+            device_base: device.get(),
+            physical_base: backing,
+            pages: 2,
+        };
+        let mut registers = UnitRegisters::active(ROOT);
+        registers.coherent = false;
+        let mut unit = verified_unit(register, registers);
+        let mut tables = Tables::identity(device, 9);
+        tables.level1[..2].fill(0);
+        assert_eq!(
+            unit.install_routed_dma_aperture(&mut tables, aperture),
+            Err(VtdApertureInstallError::Rejected(VtdBindingError::Unit(
+                VtdError::ApertureInvalidationUnsupported
+            )))
+        );
+        assert_eq!(&tables.level1[..2], &[0, 0]);
+
+        tables.explicit_writeback = true;
+        tables.failed_writeback = Some(1);
+        assert_eq!(
+            unit.install_routed_dma_aperture(&mut tables, aperture),
+            Err(VtdApertureInstallError::Uncertain(VtdBindingError::Table(
+                VtdTableError::WritebackUnavailable
+            )))
+        );
+        assert_eq!(&tables.level1[..2], &[0, 0]);
+        assert_eq!(tables.published, [0, 0]); // first leaf's rollback made it back
+        let (_, invalidator) = unit.into_parts();
+        let registers = invalidator.into_registers();
+        assert_eq!(registers.context, 0); // no invalidation after uncertain rollback
+
+        let mut unit = verified_unit(register, registers);
+        tables.failed_writeback = None;
+        unit.install_routed_dma_aperture(&mut tables, aperture)
+            .unwrap();
+        assert_eq!(
+            tables.published,
+            [backing.get() | 3, (backing.get() + 4096) | 3]
+        );
+
+        tables.failed_writeback = Some(1);
+        assert_eq!(
+            unit.revoke_routed_dma_aperture(&mut tables, aperture),
+            Err(VtdApertureRevokeError::Uncertain(VtdBindingError::Table(
+                VtdTableError::WritebackUnavailable
+            )))
+        );
+        assert_eq!(
+            tables.published,
+            [backing.get(), (backing.get() + 4096) | 3]
+        );
+        tables.failed_writeback = None;
+        unit.revoke_routed_dma_aperture(&mut tables, aperture)
+            .unwrap();
+        assert_eq!(tables.published, [backing.get(), backing.get() + 4096]);
     }
 
     #[test]

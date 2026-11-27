@@ -1125,7 +1125,11 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
         Ok(())
     }
 
-    pub(super) fn ready_for_dma_drain(&mut self) -> Result<(), VtdError> {
+    pub(super) fn table_walks_coherent(&mut self) -> bool {
+        self.registers.read64(ECAP_OFFSET) & 1 != 0
+    }
+
+    pub(super) fn ready_for_dma_drain(&mut self, explicit_writeback: bool) -> Result<bool, VtdError> {
         // The bounded aperture backend requires explicit read/write drain
         // support; other capability profiles are not admitted here.
         let required = (1u64 << 55) | (1u64 << 54);
@@ -1133,15 +1137,17 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
             return Err(VtdError::DrainUnsupported);
         }
 
-        // This path has no cache-line writeback or queued invalidation
-        // backend. Require coherent table walks and register-based commands.
+        // Without snooping page walks, every edited line must be written
+        // back by the trusted table-memory backend before invalidation.
+        let needs_writeback = !self.table_walks_coherent();
         if (self.registers.read32(0) >> 4) & 0xf >= 6
-            || self.registers.read64(ECAP_OFFSET) & 1 == 0
+            || (needs_writeback && !explicit_writeback)
             || self.registers.read32(GSTS_OFFSET) & (1 << 26) != 0
         {
             return Err(VtdError::ApertureInvalidationUnsupported);
         }
-        self.ready()
+        self.ready()?;
+        Ok(needs_writeback)
     }
 
     pub fn invalidate_global(&mut self) -> Result<(), VtdError> {
@@ -1278,7 +1284,8 @@ impl<'a, R: VtdRegisterIo> VtdDmaIsolation<'a, R> {
     ///
     /// `leaf` must uniquely reference the live 4 KiB VT-d second-level leaf
     /// mapping `physical`, and `invalidator` must control every remapping unit
-    /// through which a device can reach that granule.
+    /// through which a device can reach that granule. Table walks must be
+    /// coherent; this single-granule adapter has no explicit writeback.
     pub unsafe fn new(
         physical: PhysAddr,
         leaf: &'a mut u64,
