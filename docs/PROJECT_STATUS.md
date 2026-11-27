@@ -15,7 +15,7 @@ and the [Engineering Constitution](ENGINEERING_CONSTITUTION.md).
   experimental compiler, local ML, media libraries, and the Git client have
   native Windows/Linux host targets. WHP is Windows-specific and KVM is
   Linux-specific. macOS host support and ARM64 support are **PLANNED**.
-  Portable macOS CI checks are not a host release or VMM port.
+  macOS is not currently covered by CI.
 - **USB:** signed KVM diagnostics at `40554703` wrote, flushed, and reread
   the exact `PROBE.TXT` marker through emulated xHCI on USB 2 and USB 3.
   Independent whole-image checks found only the expected three bytes changed.

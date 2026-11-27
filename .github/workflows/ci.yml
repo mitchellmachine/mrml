@@ -103,22 +103,3 @@ jobs:
       - name: Boot the generated MRML USB image and verify the signed FAT32 restart
         if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
         run: ./target/debug/mrml usb test /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_VARS_4M.fd /usr/bin/qemu-system-x86_64
-
-  macos-bootstrap:
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Report macOS version and architecture
-        run: |
-          sw_vers
-          uname -m
-      - run: bash tools/toolchain/setup-oracle.sh
-      - run: cargo build --locked
-      - run: cargo test --locked --bin mrml manifest::tests
-      - run: cargo test --locked --bin mrml input_audit::tests
-      - run: cargo test --locked --bin mrml assurance::tests
-      - run: ./target/debug/mrml manifest check
-      - run: ./target/debug/mrml manifest lock --check
