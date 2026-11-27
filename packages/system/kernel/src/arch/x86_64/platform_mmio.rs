@@ -13,6 +13,7 @@ pub enum PlatformMmioError {
     OutsideFirmwareMmio,
     MappingMismatch,
     PageTable,
+    CpuProtection,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -199,6 +200,65 @@ pub(crate) fn verified_vtd_mapping_for_test(
     }
 }
 
+/// Observes CPU settings required for the BSP-only read-only MMIO probe.
+/// It neither configures the CPU nor proves ownership, lack of aliases across
+/// multiple roots, or that stale translations have been invalidated.
+///
+/// # Safety
+/// Run at CPL0 on the boot CPU with interrupts disabled; the calling probe
+/// must exclude other users of the hierarchy and prevent CPU reconfiguration.
+pub unsafe fn check_boot_mmio_cpu_policy() -> Result<(), PlatformMmioError> {
+    use core::arch::{asm, x86_64::__cpuid};
+
+    let basic = __cpuid(0);
+    let extended = __cpuid(0x8000_0000);
+    if basic.eax < 1
+        || extended.eax < 0x8000_0001
+        || __cpuid(1).edx & ((1 << 16) | (1 << 5)) != (1 << 16) | (1 << 5)
+        || __cpuid(0x8000_0001).edx & (1 << 20) == 0
+    {
+        return Err(PlatformMmioError::CpuProtection);
+    }
+    let cr0: u64;
+    let cr4: u64;
+    let pat_low: u32;
+    let efer_low: u32;
+    // SAFETY: the caller runs at CPL0 on the boot CPU. CPUID above
+    // established architectural MSR, PAT and NX support. Reads change no state.
+    unsafe {
+        asm!(
+            "mov {cr0}, cr0",
+            "mov {cr4}, cr4",
+            cr0 = out(reg) cr0,
+            cr4 = out(reg) cr4,
+            options(nostack, preserves_flags)
+        );
+        asm!("rdmsr", in("ecx") 0x277u32, out("eax") pat_low, out("edx") _,
+            options(nostack, preserves_flags));
+        asm!("rdmsr", in("ecx") 0xc000_0080u32, out("eax") efer_low, out("edx") _,
+            options(nostack, preserves_flags));
+    }
+    validate_boot_mmio_cpu(cr0, cr4, pat_low, efer_low)
+}
+
+fn validate_boot_mmio_cpu(
+    cr0: u64,
+    cr4: u64,
+    pat_low: u32,
+    efer_low: u32,
+) -> Result<(), PlatformMmioError> {
+    // Supervisor reads must use the exact RO/NX 4 KiB translations. Require
+    // WP, NXE and four-level paging, and architectural UC (not UC-minus).
+    if cr0 & (1 << 16) == 0
+        || cr4 & (1 << 12) != 0
+        || efer_low & (1 << 11) == 0
+        || pat_low >> 24 != 0
+    {
+        return Err(PlatformMmioError::CpuProtection);
+    }
+    Ok(())
+}
+
 /// Verifies an already installed active mapping page by page before issuing a
 /// token usable by native MMIO adapters.
 pub fn verify_active_platform_mmio(
@@ -279,6 +339,25 @@ pub fn extend_vtd_mmio_requirement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boot_mmio_cpu_requires_wp_nxe_four_level_and_exact_uc() {
+        let wp = 1 << 16;
+        let nxe = 1 << 11;
+        assert_eq!(validate_boot_mmio_cpu(wp, 0, 0x0007_0406, nxe), Ok(()));
+        for (cr0, cr4, pat, efer) in [
+            (0, 0, 0, nxe),
+            (wp, 1 << 12, 0, nxe),
+            (wp, 0, 0, 0),
+            (wp, 0, 0x0700_0000, nxe),
+            (wp, 0, 0x0600_0000, nxe),
+        ] {
+            assert_eq!(
+                validate_boot_mmio_cpu(cr0, cr4, pat, efer),
+                Err(PlatformMmioError::CpuProtection)
+            );
+        }
+    }
 
     fn finalize(table: &mut [u8]) {
         table[9] = 0;

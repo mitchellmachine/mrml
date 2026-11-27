@@ -4012,6 +4012,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         }
         .unwrap_or_else(|_| halt());
         native_fat32_probe::dma_handoff_verified();
+        // SAFETY: this probe is still on the BSP with interrupts disabled,
+        // on the loader's dedicated root and before secondary CPUs start.
+        let cpu_mmio_policy = unsafe { mrml_kernel::arch::x86_64::check_boot_mmio_cpu_policy() };
+        native_fat32_probe::dma_cpu_policy(cpu_mmio_policy.is_ok());
         initialized
     });
     #[cfg(feature = "uefi-fat32-restart-probe")]

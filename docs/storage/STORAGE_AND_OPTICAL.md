@@ -3085,6 +3085,17 @@ for either window (one DRHD, one ECAM; trace `e1f1`). This is observational
 only: it does not change the firmware resource map, issue mapping authority,
 prove CPU cache attributes, confer ownership or read device registers.
 
+Before secondary CPUs start, the DMA probe also reads the live CPU
+protection controls. The requirement is four-level paging, supervisor
+write protection, NX enabled and an architectural UC entry at PAT index 3
+(not UC-minus). A separate tested page-table verifier checks exact read-only
+supervisor NX device leaves and rejects another mapping of the same physical
+frame anywhere in the four-level hierarchy. It rejects table frames in the
+aperture, unsupported large leaves and excessive walks; it does not examine
+other roots or stale TLB entries. CPU policy and leaf checks do not establish
+that a claimed device resource exists. The signed boot only observes CPU
+policy; it does not install the device leaves or read the registers.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

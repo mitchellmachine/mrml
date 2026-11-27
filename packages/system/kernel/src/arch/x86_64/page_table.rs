@@ -22,6 +22,8 @@ pub enum PageTableBuildError {
     AlreadyMapped,
     NotMapped,
     MappingMismatch,
+    PhysicalAlias,
+    AliasWalkLimit,
     AddressOverflow,
     Page(PageError),
 }
@@ -1341,6 +1343,16 @@ impl ActivePageTables {
         )
     }
 
+    /// Verifies a supervisor RO/NX device mapping has no second physical
+    /// mapping in this four-level hierarchy. Does not inspect CPU PAT, old
+    /// translations in the TLB, or any other root. It does not access MMIO.
+    pub fn verify_read_only_mmio_leaves(
+        &self,
+        mapping: Mapping,
+    ) -> Result<(), PageTableBuildError> {
+        verify_read_only_mmio_from_store(&IdentityMappedPageTables, self.root, mapping)
+    }
+
     /// Checks the exact preinstalled supervisor RW/NX mapping and clears all
     /// of the reserved RAM before returning it as initialized.
     ///
@@ -1559,6 +1571,89 @@ fn verify_active_mapping_from_store<S: PageTableStore>(
         }
     }
     Ok(())
+}
+
+const BOOT_MMIO_ALIAS_MAX_TABLES: usize = 1024;
+
+fn verify_read_only_mmio_from_store<S: PageTableStore>(
+    store: &S,
+    root: PhysAddr,
+    mapping: Mapping,
+) -> Result<(), PageTableBuildError> {
+    if mapping.permissions() != PagePermissions::KERNEL_MMIO_READ {
+        return Err(PageTableBuildError::MappingMismatch);
+    }
+    let physical_start = mapping.physical_start().get();
+    let physical_end = mapping
+        .pages()
+        .checked_mul(PAGE_SIZE)
+        .and_then(|bytes| physical_start.checked_add(bytes))
+        .ok_or(PageTableBuildError::AddressOverflow)?;
+    let mut budget = BOOT_MMIO_ALIAS_MAX_TABLES;
+    fn scan(
+        store: &impl PageTableStore,
+        table: PhysAddr,
+        level: u32,
+        virtual_prefix: u64,
+        mapping: Mapping,
+        physical: core::ops::Range<u64>,
+        budget: &mut usize,
+    ) -> Result<(), PageTableBuildError> {
+        if physical.contains(&table.get()) {
+            return Err(PageTableBuildError::PhysicalAlias);
+        }
+        *budget = budget
+            .checked_sub(1)
+            .ok_or(PageTableBuildError::AliasWalkLimit)?;
+        let shift = 12 + (level - 1) * 9;
+        for index in 0..512 {
+            let entry = store.read(table, index)?;
+            if entry & 1 == 0 {
+                continue;
+            }
+            let va = virtual_prefix | ((index as u64) << shift);
+            let frame = entry & ADDRESS_MASK;
+            if level > 1 {
+                // Boot hierarchies contain only 4 KiB leaves. Fail closed
+                // instead of accidentally skipping a large-page alias.
+                if entry & (1 << 7) != 0 || entry & !((1 << 63) | 0xfff | ADDRESS_MASK) != 0 {
+                    return Err(PageTableBuildError::InvalidIntermediate);
+                }
+                let child =
+                    PhysAddr::new(frame).map_err(|_| PageTableBuildError::InvalidIntermediate)?;
+                scan(
+                    store,
+                    child,
+                    level - 1,
+                    va,
+                    mapping,
+                    physical.clone(),
+                    budget,
+                )?;
+            } else if physical.contains(&frame) {
+                let canonical = (((va << 16) as i64) >> 16) as u64;
+                let expected = mapping
+                    .virtual_start()
+                    .get()
+                    .checked_add(frame - physical.start)
+                    .ok_or(PageTableBuildError::AddressOverflow)?;
+                if canonical != expected {
+                    return Err(PageTableBuildError::PhysicalAlias);
+                }
+            }
+        }
+        Ok(())
+    }
+    scan(
+        store,
+        root,
+        4,
+        0,
+        mapping,
+        physical_start..physical_end,
+        &mut budget,
+    )?;
+    verify_active_mapping_from_store(store, root, root, mapping)
 }
 
 fn invalidate_mapping(mapping: Mapping) -> Result<(), PageTableBuildError> {
@@ -2199,6 +2294,72 @@ mod tests {
         assert!(memory[1..1025].iter().all(|&word| word == 0));
         assert_eq!(memory[0], u64::MAX);
         assert_eq!(memory[1025], u64::MAX);
+    }
+
+    #[test]
+    fn boot_read_only_mmio_rejects_aliases_and_permission_mismatch() {
+        let mut builder = PageTableBuilder::new(Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        })
+        .unwrap();
+        let virt = VirtAddr::new(0xffff_d900_0000_0000).unwrap();
+        let phys = PhysAddr::new(0xfed9_0000).unwrap();
+        let mapping = Mapping::new(virt, phys, 1, PagePermissions::KERNEL_MMIO_READ).unwrap();
+        let verify = |builder: &PageTableBuilder<Tables>| {
+            verify_read_only_mmio_from_store(builder.store(), builder.root(), mapping)
+        };
+        assert_eq!(verify(&builder), Err(PageTableBuildError::MappingMismatch));
+        builder.map(mapping).unwrap();
+        assert_eq!(verify(&builder), Ok(()));
+        let root = builder.root();
+        let (table, index) = builder.leaf_location(virt).unwrap();
+        let mut store = builder.into_store();
+        let bits = store.read(table, index).unwrap();
+        store.write(table, index, bits | (1 << 1)).unwrap();
+        assert_eq!(
+            verify_read_only_mmio_from_store(&store, root, mapping),
+            Err(PageTableBuildError::MappingMismatch)
+        );
+        store.write(table, index, bits).unwrap();
+        let mut builder = PageTableBuilder::from_existing_root(store, root);
+        builder
+            .map_page(
+                VirtAddr::new(virt.get() + PAGE_SIZE).unwrap(),
+                phys,
+                PagePermissions::KERNEL_READ_WRITE,
+            )
+            .unwrap();
+        assert_eq!(verify(&builder), Err(PageTableBuildError::PhysicalAlias));
+    }
+
+    #[test]
+    fn boot_read_only_mmio_rejects_table_frames_and_unknown_large_leaves() {
+        let mut store = Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        };
+        let root = store.allocate_zeroed().unwrap();
+        let pdpt = store.allocate_zeroed().unwrap();
+        let virt = VirtAddr::new(0xffff_d900_0000_0000).unwrap();
+        let aliased = Mapping::new(virt, pdpt, 1, PagePermissions::KERNEL_MMIO_READ).unwrap();
+        store.write(root, 0, pdpt.get() | 0b11).unwrap();
+        assert_eq!(
+            verify_read_only_mmio_from_store(&store, root, aliased),
+            Err(PageTableBuildError::PhysicalAlias)
+        );
+        store.write(pdpt, 0, 0x4000_0000 | 0x83).unwrap();
+        let mapping = Mapping::new(
+            virt,
+            PhysAddr::new(0xfed9_0000).unwrap(),
+            1,
+            PagePermissions::KERNEL_MMIO_READ,
+        )
+        .unwrap();
+        assert_eq!(
+            verify_read_only_mmio_from_store(&store, root, mapping),
+            Err(PageTableBuildError::InvalidIntermediate)
+        );
     }
 
     fn boot_dma_test_reservation() -> BootDmaReservation {

@@ -37,9 +37,9 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             let image = scratch.path("bringup.img");
             create(&load_workspace()?, &image, dma_probe)?;
             let expected_trace = if acpi_probe {
-                "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8e1f1b1b2b3d4d5d7d0d1d2d3"
+                "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8e1f1b1b2b3d4d8d5d7d0d1d2d3"
             } else if dma_probe {
-                "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d4d0d1d2d3"
+                "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d4d8d0d1d2d3"
             } else {
                 "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3"
             };

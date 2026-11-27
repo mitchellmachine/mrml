@@ -186,6 +186,10 @@ pub(super) fn dma_handoff_verified() {
     trace(0xd4);
 }
 
+pub(super) fn dma_cpu_policy(verified: bool) {
+    trace(if verified { 0xd8 } else { 0xd9 });
+}
+
 pub(super) fn dma_topology_verified() {
     trace(0xd5);
 }
