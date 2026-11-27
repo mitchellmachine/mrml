@@ -270,6 +270,9 @@ fn run() -> Result<(), String> {
         print_help();
         return Ok(());
     }
+    if args[0] == "usb" {
+        return usb_media::command(&args[1..]);
+    }
     let workspace = load_workspace()?;
     match args[0].as_str() {
         "list" => list(&workspace, &args[1..]),
@@ -297,6 +300,8 @@ fn print_help() {
     );
     println!("       mrml manifest <check|fmt|lock> [--check]");
     println!("       mrml assurance <check|generate|inspect>");
+    println!("       mrml usb image OUTPUT.img | mrml usb list | mrml usb burn IMAGE.img");
+    println!("       mrml usb test OVMF_CODE OVMF_VARS QEMU");
     println!("       mrml cert caa <recommend|verify> ...");
     println!(
         "       mrml cert status (--snapshot FILE | --endpoint 127.0.0.1:PORT --session-capability FILE --identity HEX) [--output human|structured]"
@@ -1657,6 +1662,8 @@ fn write_new(path: &str, bytes: &[u8], role: &str) -> Result<(), String> {
 }
 
 mod qemu_boot;
+mod usb_image;
+mod usb_media;
 
 fn manifest_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {

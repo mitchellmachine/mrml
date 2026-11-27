@@ -10,13 +10,12 @@ dbx update, dual boot, or physical-firmware behavior.
 
 The bring-up test uses a dedicated, expendable USB flash drive, not the
 installer. First reproduce the signed FAT32 restart in QEMU/OVMF with
-`tools/ci/test-native-boot.sh OVMF_CODE OVMF_VARS --fat32-restart`. Both paths
+`mrml usb test OVMF_CODE OVMF_VARS QEMU`. Both paths
 use the signed UEFI loader, kernel and FAT32 service, with one-use diagnostic
 keys and the same read-only fixture embedded in the kernel.
 
-1. Prepare the removable-media image for the diagnostic profile. The firmware
-   loads its x86-64 entry at `\EFI\BOOT\BOOTX64.EFI`. Confirm the exact USB
-   target before imaging it; imaging erases that stick's existing contents.
+1. [Create and write the diagnostic USB image](#create-and-write-the-diagnostic-usb-image).
+   Firmware loads its x86-64 entry at `\EFI\BOOT\BOOTX64.EFI`.
 2. Use the machine's one-time UEFI boot menu. Do not install MRML, change
    permanent boot order, enroll test keys, or weaken Secure Boot to make the
    diagnostic run. If the firmware refuses the test loader under the
@@ -32,6 +31,44 @@ service without rebooting, rejects stale handles, and compares all 28 bytes
 again. This tests firmware handoff, framebuffer and the service on one machine,
 not MRML USB drive access, installation, or a physical storage driver. The
 internal system disk is not a target. No bare-metal pass has been recorded.
+
+### Create and write the diagnostic USB image
+
+In a trusted checkout with the [MRML toolchain](../human/GETTING_STARTED.md)
+prepared, run `cargo build --locked`. The examples use `mrml` from your
+path; you can use `./target/debug/mrml` on Linux or
+`.\target\debug\mrml.exe` on Windows instead.
+
+```text
+mrml usb image mrml-bringup.img
+mrml usb list
+mrml usb burn mrml-bringup.img
+```
+
+Image creation builds and signs the diagnostic with disposable keys and
+creates a new 65 MiB MBR/FAT32 image without elevating or requiring external
+formatters. It never overwrites an existing file. Keep the image on the host,
+not the USB stick. `list` is read-only; Windows may require an Administrator
+terminal for its drive queries. For a USB stick plugged into Windows, use the
+Windows executable rather than WSL.
+
+**Writing replaces the selected USB stick's partition layout and data.**
+Connect only expendable media and unmount its volumes on Linux. The writer
+requests Windows UAC or Linux `sudo` if needed. It offers only recognizable,
+writable, removable USB disks with 512-byte logical sectors and excludes
+system, busy or ambiguous targets. On Windows, unknown EFI, active or service
+partitions are refused; the exact existing MRML diagnostic layout is allowed.
+A single candidate is selected
+automatically; otherwise choose a number. Check the exact drive shown and
+type `ERASE <number>`. The writer rechecks and claims the device, writes
+and flushes the image, then compares every written byte. Safely eject
+afterward. This is imaging, not secure wiping of the rest of the disk.
+
+**Native MRML USB writing is planned.** Keep the same image and workflow,
+but use the deployment service for typed removable-device enumeration,
+explicit owner authorization bound to the exact device generation and image
+digest, an exclusive write claim, and read-back. A shell or GUI must not
+receive blanket device-write authority.
 
 ## Typed firmware objects and authority
 

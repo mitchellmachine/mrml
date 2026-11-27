@@ -100,9 +100,9 @@ jobs:
       - name: Execute authenticated native kernel boot under QEMU/OVMF
         if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
         run: bash tools/ci/test-native-boot.sh /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_VARS_4M.fd
-      - name: Verify signed FAT32 service restart under QEMU/OVMF
+      - name: Boot the generated MRML USB image and verify the signed FAT32 restart
         if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
-        run: bash tools/ci/test-native-boot.sh /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_VARS_4M.fd --fat32-restart
+        run: ./target/debug/mrml usb test /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_VARS_4M.fd /usr/bin/qemu-system-x86_64
 
   macos-bootstrap:
     runs-on: macos-latest

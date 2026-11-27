@@ -33,9 +33,9 @@ the selected output's checksummed EDID base-block preferred timing if GOP
 offers a supported linear mode of that size. It otherwise tries 1024x768,
 retains a usable live mode, or tries another supported linear mode. The kernel
 draws its own `MRML KERNEL READY` marker after firmware exit in the default
-boot profile. The opt-in `--fat32-restart` mode of
-`tools/ci/test-native-boot.sh` builds two disjoint signed-service instances
-through the UEFI loader. It shows `FAT32 RESTART: PASS - 28 BYTES` only after
+boot profile. The opt-in `mrml usb test` path exercises two disjoint instances
+of the signed service through the UEFI loader. It shows
+`FAT32 RESTART: PASS - 28 BYTES` only after
 cleanup, stale-handle denial and exact reread. QEMU/OVMF verified the full
 trace and framebuffer with the embedded image. This does not qualify any
 physical device, native USB I/O, compositor or display driver.

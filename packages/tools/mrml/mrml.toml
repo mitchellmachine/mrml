@@ -158,3 +158,35 @@ kind = "external-command"
 line = 274
 path = "packages/tools/mrml/src/qemu_boot.rs"
 reason = "invoke sfdisk with a fixed partition description through the bounded media action"
+
+[[build_input]]
+fingerprint = "fnv1a64:cac2fc2cfe686ffd"
+id = "external-command.usb-sudo"
+kind = "external-command"
+line = 40
+path = "packages/tools/mrml/src/usb_linux.rs"
+reason = "Request native Linux authorization through an absolute system sudo path; only the same MRML executable can perform the approved write."
+
+[[build_input]]
+fingerprint = "fnv1a64:92c691f240b00f44"
+id = "external-command.usb-diagnostic-signer"
+kind = "external-command"
+line = 457
+path = "packages/tools/mrml/src/usb_media.rs"
+reason = "Invoke only the graph-built MRML signer to create and consume disposable diagnostic keys and bind signed boot artifacts."
+
+[[build_input]]
+fingerprint = "fnv1a64:75d8d5a0ba5e6f33"
+id = "native-link.usb-kernel32"
+kind = "native-link"
+line = 20
+path = "packages/tools/mrml/src/usb_windows.rs"
+reason = "Use Win32 kernel32 for native disk and volume enumeration, exact device validation and exclusive volume claims."
+
+[[build_input]]
+fingerprint = "fnv1a64:677c25e6b5187e56"
+id = "native-link.usb-shell32"
+kind = "native-link"
+line = 39
+path = "packages/tools/mrml/src/usb_windows.rs"
+reason = "Use Windows UAC to relaunch the same MRML executable in an interactive elevated console; there is no shell-script implementation."

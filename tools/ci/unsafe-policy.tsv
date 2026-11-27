@@ -169,5 +169,7 @@ packages/tools/git/src/protected_signer_main.rs	5	0	0	1	0	5	Linux protected sign
 packages/tools/host/src/executor.rs	1	2	0	0	0	1	Baseline-admitted host tooling or process ABI boundary; count growth is blocked pending focused file-level invariant review.
 packages/tools/host/src/registry.rs	1	0	0	0	0	1	Baseline-admitted host tooling or process ABI boundary; count growth is blocked pending focused file-level invariant review.
 packages/tools/mrml/src/main.rs	1	0	0	1	0	0	Baseline-admitted stage-zero host execution boundary; count growth is blocked pending focused file-level invariant review.
+packages/tools/mrml/src/usb_linux.rs	3	0	0	1	0	0	Bounded Linux disk-generation, capacity and sector queries and cache flush on a File-owned exclusive device, plus effective-UID query.
+packages/tools/mrml/src/usb_windows.rs	9	0	0	2	0	0	Bounded Win32 storage discovery and query buffers, volume lock and dismount on verified handles, and OS elevation.
 packages/tools/vmm/kvm-run/src/main.rs	11	0	3	0	0	9	Baseline-admitted KVM runner host ABI boundary; count growth is blocked pending focused file-level invariant review.
 packages/tools/vmm/whp-run/src/main.rs	11	0	3	0	0	10	Baseline-admitted WHP runner host ABI boundary; count growth is blocked pending focused file-level invariant review.
