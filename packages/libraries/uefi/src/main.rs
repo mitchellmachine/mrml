@@ -8,17 +8,18 @@ use core::fmt::{self, Write as _};
 use mrml_crypto::Sha3_512;
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
-    ArtifactKind, BOOTSTRAP_STATE_BYTES, BootIsolationOverride, BuildReceipt, Color,
-    FramebufferInfo, FramebufferSurface, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
-    MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES,
-    MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES,
-    MemoryKind, MemoryRegion, MonotonicStateStore, PeImage, PendingBootRelease, PhysAddr,
-    PixelFormat, RELEASE_MANIFEST_BYTES, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES,
-    ServiceLaunch, SignedArtifact, TrustRoot,
+    ArtifactKind, BOOTSTRAP_STATE_BYTES, BootDmaReservation, BootIsolationOverride, BuildReceipt,
+    Color, FramebufferInfo, FramebufferSurface, InstalledRecoveryBootIdentity,
+    InstalledRecoverySataRoute, MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_HANDOFF_BYTES,
+    MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
+    MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MemoryKind, MemoryRegion, MonotonicStateStore,
+    PeImage, PendingBootRelease, PhysAddr, PixelFormat, RELEASE_MANIFEST_BYTES,
+    RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact,
+    TrustRoot,
     arch::x86_64::{
-        AcpiMemory, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions,
-        PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
-        copy_madt,
+        AcpiMemory, BOOT_DMA_VIRTUAL_START, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES,
+        PagePermissions, PageTableBuildError, PageTableBuilder, PageTableStore,
+        PerCpuPrivilegeStacks, VirtAddr, copy_madt,
     },
     encode_handoff_with_smp_service_recovery_isolation_installed_and_sata_route,
 };
@@ -54,6 +55,8 @@ unsafe impl Sync for FileInfoBuffer {}
 static FILE_INFO: FileInfoBuffer = FileInfoBuffer(UnsafeCell::new([0; FILE_INFO_BYTES]));
 const HANDOFF_BYTES: usize = MAX_HANDOFF_BYTES;
 const PAGE_BYTES: usize = 4096;
+const BOOT_DMA_PROBE_PAGES: u16 = 16;
+const BOOT_DMA_PROBE_PHYSICAL_BITS: u8 = 32;
 const HANDOFF_PAGES: usize = HANDOFF_BYTES.div_ceil(PAGE_BYTES);
 const HANDOFF_ALLOCATION_BYTES: usize = HANDOFF_PAGES * PAGE_BYTES;
 #[repr(C, align(4096))]
@@ -166,6 +169,7 @@ struct Framebuffer {
 #[derive(Clone, Copy)]
 struct Transition {
     root: u64,
+    boot_dma: Option<u64>,
     stack_top: u64,
     entry_stack_top: u64,
     double_fault_stack_top: u64,
@@ -1179,8 +1183,22 @@ unsafe fn launch_after_exit(
     isolation_selection: BootIsolationSelection,
 ) -> ! {
     let map_bytes = unsafe { core::slice::from_raw_parts(MEMORY_MAP.0.get().cast(), map_size) };
+    if let Some(base) = transition.boot_dma {
+        if verify_boot_dma_backing(
+            map_bytes,
+            descriptor_size,
+            base,
+            BOOT_DMA_PROBE_PAGES,
+            BOOT_DMA_PROBE_PHYSICAL_BITS,
+        )
+        .is_err()
+        {
+            paint_boot_stage(framebuffer, b"MRML BOOT DMA MAP FAIL");
+            halt();
+        }
+    }
     let regions = unsafe { &mut *REGIONS.0.get() };
-    let region_count = match normalize_memory_map(
+    let mut region_count = match normalize_memory_map(
         map_bytes,
         descriptor_size,
         framebuffer.base,
@@ -1191,6 +1209,13 @@ unsafe fn launch_after_exit(
         Ok(_) => map_failure(framebuffer, NormalizeError::Empty),
         Err(error) => map_failure(framebuffer, error),
     };
+    if let Some(base) = transition.boot_dma {
+        region_count = mark_boot_dma_backing(regions, region_count, base, BOOT_DMA_PROBE_PAGES)
+            .unwrap_or_else(|_| {
+                paint_boot_stage(framebuffer, b"MRML BOOT DMA REGION FAIL");
+                halt();
+            });
+    }
     loader_trace(0xb1);
     paint_boot_stage(framebuffer, b"MRML MAP PASS");
     let mut acpi_memory = FirmwareAcpiMemory {
@@ -2083,6 +2108,7 @@ fn enter_kernel(
             NormalizedMemoryKind::Mmio => MemoryKind::Mmio,
             NormalizedMemoryKind::Acpi => MemoryKind::Acpi,
             NormalizedMemoryKind::Reserved => MemoryKind::Reserved,
+            NormalizedMemoryKind::BootDma => MemoryKind::BootDma,
         };
         *destination = MemoryRegion::new(
             PhysAddr::new(source.start).map_err(|_| LOAD_ERROR)?,
@@ -2314,6 +2340,36 @@ fn prepare_transition(
         service.launch.table_pages(),
         PagePermissions::KERNEL_READ_WRITE,
     )?;
+    let boot_dma = if cfg!(feature = "boot-dma-probe") {
+        let limit = 1u64 << BOOT_DMA_PROBE_PHYSICAL_BITS;
+        let mut base = limit - 1;
+        // SAFETY: firmware services are live; the output is a stack u64 and
+        // the call requests a bounded contiguous EfiLoaderData allocation
+        // using AllocateMaxAddress. The returned address is checked below.
+        check(unsafe {
+            (services.allocate_pages)(1, 2, usize::from(BOOT_DMA_PROBE_PAGES), &mut base)
+        })?;
+        let region = MemoryRegion::new(
+            PhysAddr::new(base).map_err(|_| LOAD_ERROR)?,
+            u64::from(BOOT_DMA_PROBE_PAGES),
+            MemoryKind::BootDma,
+        )
+        .map_err(|_| LOAD_ERROR)?;
+        if region.end() > limit {
+            return Err(LOAD_ERROR);
+        }
+        let reservation =
+            BootDmaReservation::from_handoff_region(region).map_err(|_| LOAD_ERROR)?;
+        let _installed = tables
+            .install_boot_dma(
+                reservation,
+                VirtAddr::new(BOOT_DMA_VIRTUAL_START).map_err(|_| LOAD_ERROR)?,
+            )
+            .map_err(|_| LOAD_ERROR)?;
+        Some(base)
+    } else {
+        None
+    };
     let mut frame_index = 0usize;
     while frame_index < tables.store().count {
         let frame = tables.store().frames[frame_index];
@@ -2327,6 +2383,7 @@ fn prepare_transition(
     }
     Ok(Transition {
         root: tables.root().get(),
+        boot_dma,
         stack_top,
         entry_stack_top: stack_layout.entry_top().map_err(|_| LOAD_ERROR)?,
         double_fault_stack_top: stack_layout.double_fault_top().map_err(|_| LOAD_ERROR)?,

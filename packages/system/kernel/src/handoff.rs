@@ -402,6 +402,7 @@ pub struct BootHandoff {
     acpi_root: u64,
     framebuffer: FramebufferInfo,
     region_count: usize,
+    boot_dma: Option<MemoryRegion>,
     madt_offset: usize,
     madt_length: usize,
     ap_trampoline: Option<u64>,
@@ -425,6 +426,10 @@ impl BootHandoff {
 
     pub const fn region_count(&self) -> usize {
         self.region_count
+    }
+
+    pub const fn boot_dma(&self) -> Option<MemoryRegion> {
+        self.boot_dma
     }
 
     pub const fn framebuffer(&self) -> FramebufferInfo {
@@ -654,8 +659,10 @@ impl BootHandoff {
         let mut previous_start = 0u64;
         let mut previous_end = 0u64;
         let mut framebuffer_is_mmio = false;
+        let mut boot_dma = None;
         for index in 0..region_count {
             let region = decode_region(input, index)?;
+            record_boot_dma(&mut boot_dma, region)?;
             let start = region.start().get();
             if index != 0 && start < previous_start {
                 return Err(HandoffError::InvalidMemoryMap(MemoryError::Unsorted));
@@ -740,6 +747,7 @@ impl BootHandoff {
             acpi_root,
             framebuffer,
             region_count,
+            boot_dma,
             madt_offset,
             madt_length,
             ap_trampoline,
@@ -1724,6 +1732,10 @@ fn encode_handoff_inner(
         return Err(HandoffError::NonCanonical);
     }
     MemoryMap::new(regions).map_err(HandoffError::InvalidMemoryMap)?;
+    let mut boot_dma = None;
+    for &region in regions {
+        record_boot_dma(&mut boot_dma, region)?;
+    }
     if !regions.iter().any(|region| {
         region.kind() == MemoryKind::Mmio
             && region.start().get() <= framebuffer.base().get()
@@ -1994,6 +2006,19 @@ fn decode_region(input: &[u8], index: usize) -> Result<MemoryRegion, HandoffErro
     .map_err(HandoffError::InvalidMemoryMap)
 }
 
+fn record_boot_dma(
+    slot: &mut Option<MemoryRegion>,
+    region: MemoryRegion,
+) -> Result<(), HandoffError> {
+    if region.kind() == MemoryKind::BootDma {
+        if slot.is_some() || crate::BootDmaReservation::from_handoff_region(region).is_err() {
+            return Err(HandoffError::NonCanonical);
+        }
+        *slot = Some(region);
+    }
+    Ok(())
+}
+
 fn decode_kind(value: u8) -> Result<MemoryKind, HandoffError> {
     match value {
         0 => Ok(MemoryKind::Free),
@@ -2002,6 +2027,7 @@ fn decode_kind(value: u8) -> Result<MemoryKind, HandoffError> {
         3 => Ok(MemoryKind::Mmio),
         4 => Ok(MemoryKind::Acpi),
         5 => Ok(MemoryKind::Reserved),
+        6 => Ok(MemoryKind::BootDma),
         _ => Err(HandoffError::NonCanonical),
     }
 }
@@ -2102,6 +2128,50 @@ mod tests {
                 .unwrap()
                 .acpi_root(),
             0x9008
+        );
+    }
+
+    #[test]
+    fn boot_dma_tag_round_trips_and_rejects_duplicates() {
+        let template = valid_handoff();
+        let mut regions = core::array::from_fn::<_, 3, _>(|i| decode_region(&template, i).unwrap());
+        let framebuffer = BootHandoff::decode(&template, |_| {})
+            .unwrap()
+            .framebuffer();
+        regions[1] = MemoryRegion::new(regions[1].start(), 2, MemoryKind::BootDma).unwrap();
+        let mut encoded = [0; THREE_REGION_BYTES];
+        let encode = |regions: &[MemoryRegion], output: &mut [u8]| {
+            encode_handoff(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                true,
+                0x9008,
+                framebuffer,
+                regions,
+                output,
+            )
+        };
+        assert_eq!(encode(&regions, &mut encoded), Ok(THREE_REGION_BYTES));
+        assert_eq!(
+            BootHandoff::decode(&encoded, |_| {}).unwrap().boot_dma(),
+            Some(regions[1])
+        );
+        let mut allocator = crate::FrameAllocator::new(MemoryMap::new(&regions).unwrap());
+        assert_eq!(allocator.allocate().unwrap().get(), 0x1000);
+        assert_eq!(allocator.allocate().unwrap().get(), 0x2000);
+        assert_eq!(allocator.allocate(), Err(MemoryError::OutOfMemory));
+        regions[0] = MemoryRegion::new(regions[0].start(), 1, MemoryKind::BootDma).unwrap();
+        assert_eq!(
+            encode(&regions, &mut encoded),
+            Err(HandoffError::NonCanonical)
+        );
+        encoded[HANDOFF_HEADER_BYTES + 16] = MemoryKind::BootDma as u8;
+        assert_eq!(
+            BootHandoff::decode(&encoded, |_| {}).err(),
+            Some(HandoffError::NonCanonical)
         );
     }
 

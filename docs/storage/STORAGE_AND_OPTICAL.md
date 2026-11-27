@@ -3032,14 +3032,17 @@ failure; an uncertain rollback requires discarding that inactive hierarchy.
 After activation, the initializer consumes the handle, rechecks the root and
 every 4 KiB leaf, then clears the exact reservation. These checks do not
 establish alias exclusion, cache type or DMA coherency. The live boot path
-still needs to use these primitives. The UEFI library can now check the
-exact allocation in the raw final memory map before normalization merges
-LoaderData with other reserved types. This check requires a bounded
-non-runtime LoaderData descriptor that covers the full range without a
-second overlapping descriptor. It does not allocate pages, transfer
-ownership, or authorize DMA. The loader still needs to allocate the range,
-preserve it across handoff, and have the kernel issue scoped capabilities
-before connecting it to xHCI startup and teardown.
+cannot yet activate native xHCI. The opt-in `boot_dma_probe` UEFI loader
+profile requests 16 contiguous LoaderData pages below 4 GiB, maps them
+supervisor RW/NX at a dedicated virtual address, and validates the exact
+allocation in the raw final firmware map. It then tags that range after
+framebuffer overlay; neighboring ranges keep their original classification.
+The kernel handoff accepts one bounded DMA tag, and the allocator does not
+treat that range as free. Use a matching signed kernel with this profile;
+normal loader profiles do not emit the tag. The kernel entry path still
+needs to consume the tag and check and clear the live mapping before
+issuing scoped capabilities. The profile does not grant DMA authority,
+write PCI configuration, or touch external media.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

@@ -24,6 +24,7 @@ pub enum MemoryKind {
     Mmio,
     Acpi,
     Reserved,
+    BootDma,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -106,6 +107,23 @@ pub struct BootDmaReservation {
 }
 
 impl BootDmaReservation {
+    /// Interprets one dedicated loader-owned region. The tag keeps it out
+    /// of free RAM and is metadata, not proof of exclusive ownership or DMA
+    /// authority. Only the trusted boot owner may publish or initialize it.
+    pub fn from_handoff_region(region: MemoryRegion) -> Result<Self, MemoryError> {
+        if region.kind() != MemoryKind::BootDma
+            || region.start().get() == 0
+            || !(1..=256).contains(&region.pages())
+            || region.end() > (1u64 << 52)
+        {
+            return Err(MemoryError::InvalidLength);
+        }
+        Ok(Self {
+            physical_base: region.start(),
+            pages: region.pages() as u16,
+        })
+    }
+
     pub const fn physical_base(&self) -> PhysAddr {
         self.physical_base
     }

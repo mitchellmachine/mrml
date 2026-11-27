@@ -94,6 +94,9 @@ pub use vtd_tables::{
     bind_routed_legacy_identity_leaf, prepare_direct_vtd_tables,
 };
 
+/// Dedicated high-half CPU mapping used by the UEFI boot DMA handoff.
+pub const BOOT_DMA_VIRTUAL_START: u64 = 0xffff_d800_0000_0000;
+
 const MAX_PHYSICAL_ADDRESS: u64 = (1u64 << 52) - PAGE_SIZE;
 const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
 

@@ -1805,6 +1805,7 @@ pub enum NormalizedMemoryKind {
     Mmio = 3,
     Acpi = 4,
     Reserved = 5,
+    BootDma = 6,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1845,6 +1846,76 @@ pub enum BootDmaBackingError {
     MalformedMap,
     MissingLoaderData,
     ConflictingDescriptor,
+    OutsideReserved,
+    TooManyRegions,
+}
+
+/// Tags only the validated loader allocation in a normalized memory map.
+/// This must run after framebuffer overlay, so an overlapping MMIO range
+/// cannot silently become DMA backing.
+pub fn mark_boot_dma_backing(
+    output: &mut [NormalizedRegion; MAX_NORMALIZED_REGIONS],
+    count: usize,
+    start: u64,
+    pages: u16,
+) -> Result<usize, BootDmaBackingError> {
+    if start == 0 || !start.is_multiple_of(PAGE_SIZE) || !(1..=256).contains(&pages) {
+        return Err(BootDmaBackingError::InvalidExtent);
+    }
+    let end = start
+        .checked_add(u64::from(pages) * PAGE_SIZE)
+        .ok_or(BootDmaBackingError::InvalidExtent)?;
+    let regions = output
+        .get(..count)
+        .ok_or(BootDmaBackingError::TooManyRegions)?;
+    let mut previous_end = 0;
+    for region in regions {
+        if region.kind == NormalizedMemoryKind::BootDma {
+            return Err(BootDmaBackingError::ConflictingDescriptor);
+        }
+        if region.pages == 0
+            || region.start < previous_end
+            || !region.start.is_multiple_of(PAGE_SIZE)
+        {
+            return Err(BootDmaBackingError::MalformedMap);
+        }
+        previous_end = region
+            .pages
+            .checked_mul(PAGE_SIZE)
+            .and_then(|length| region.start.checked_add(length))
+            .ok_or(BootDmaBackingError::MalformedMap)?;
+    }
+    let (index, original) = regions
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, r)| {
+            r.kind == NormalizedMemoryKind::Reserved && r.start <= start && r.end() >= end
+        })
+        .ok_or(BootDmaBackingError::OutsideReserved)?;
+    let left = usize::from(original.start < start);
+    let right = usize::from(end < original.end());
+    let new_count = count + left + right;
+    if new_count > output.len() {
+        return Err(BootDmaBackingError::TooManyRegions);
+    }
+    output.copy_within(index + 1..count, index + 1 + left + right);
+    if left != 0 {
+        output[index].pages = (start - original.start) / PAGE_SIZE;
+    }
+    output[index + left] = NormalizedRegion {
+        start,
+        pages: u64::from(pages),
+        kind: NormalizedMemoryKind::BootDma,
+    };
+    if right != 0 {
+        output[index + left + 1] = NormalizedRegion {
+            start: end,
+            pages: (original.end() - end) / PAGE_SIZE,
+            kind: NormalizedMemoryKind::Reserved,
+        };
+    }
+    Ok(new_count)
 }
 
 /// Checks the raw final map before normalization can merge LoaderData with
@@ -4006,6 +4077,39 @@ mod tests {
         bytes[8..16].copy_from_slice(&start.to_le_bytes());
         bytes[24..32].copy_from_slice(&pages.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn boot_dma_tag_carves_only_reserved_ram_and_preserves_neighbors() {
+        let mut regions = [NormalizedRegion::EMPTY; MAX_NORMALIZED_REGIONS];
+        regions[0] = NormalizedRegion {
+            start: 0x1000,
+            pages: 8,
+            kind: NormalizedMemoryKind::Reserved,
+        };
+        regions[1] = NormalizedRegion {
+            start: 0x9000,
+            pages: 2,
+            kind: NormalizedMemoryKind::Mmio,
+        };
+        assert_eq!(
+            mark_boot_dma_backing(&mut regions, 2, 0x8000, 2),
+            Err(BootDmaBackingError::OutsideReserved)
+        );
+        assert_eq!(mark_boot_dma_backing(&mut regions, 2, 0x4000, 2), Ok(4));
+        assert_eq!(
+            core::array::from_fn(|i| (regions[i].start, regions[i].pages, regions[i].kind)),
+            [
+                (0x1000, 3, NormalizedMemoryKind::Reserved),
+                (0x4000, 2, NormalizedMemoryKind::BootDma),
+                (0x6000, 3, NormalizedMemoryKind::Reserved),
+                (0x9000, 2, NormalizedMemoryKind::Mmio)
+            ]
+        );
+        assert_eq!(
+            mark_boot_dma_backing(&mut regions, 4, 0x1000, 1),
+            Err(BootDmaBackingError::ConflictingDescriptor)
+        );
     }
 
     #[test]

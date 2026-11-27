@@ -38,6 +38,9 @@ name = "package-boot"
 [[feature]]
 name = "fat32-restart-probe"
 
+[[feature]]
+name = "boot-dma-probe"
+
 [[artifact]]
 kind = "lib"
 name = "mrml_uefi"
@@ -96,6 +99,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["uefi-image", "package-boot", "fat32-restart-probe"]
 name = "fat32_restart_boot"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["uefi-image", "package-boot", "boot-dma-probe"]
+name = "boot_dma_probe"
 targets = ["UEFI"]
 
 [[feature_set]]
