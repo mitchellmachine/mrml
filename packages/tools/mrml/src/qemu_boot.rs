@@ -97,6 +97,9 @@ pub(super) enum Q35FixtureCase {
     IsolatedValidRelease,
     ShutdownWrongRelease,
     ShutdownValidRelease,
+    ColdWrongRelease,
+    ColdDenyActivation,
+    ColdActivate,
 }
 
 impl Q35FixtureCase {
@@ -107,13 +110,25 @@ impl Q35FixtureCase {
                 | Self::IsolatedValidRelease
                 | Self::ShutdownWrongRelease
                 | Self::ShutdownValidRelease
+                | Self::ColdWrongRelease
+                | Self::ColdDenyActivation
+                | Self::ColdActivate
         )
     }
-    fn shutdown(self) -> bool {
-        matches!(
-            self,
-            Self::ShutdownWrongRelease | Self::ShutdownValidRelease
-        )
+    fn profile(self) -> u8 {
+        match self {
+            Self::ColdWrongRelease | Self::ColdDenyActivation | Self::ColdActivate => 3,
+            Self::ShutdownWrongRelease | Self::ShutdownValidRelease => 2,
+            _ => 1,
+        }
+    }
+
+    fn cold(self) -> Option<bool> {
+        match self {
+            Self::ColdDenyActivation => Some(false),
+            Self::ColdActivate => Some(true),
+            _ => None,
+        }
     }
 }
 
@@ -186,12 +201,15 @@ fn run_qemu_config(
         Some(
             Q35FixtureCase::WrongRelease
             | Q35FixtureCase::IsolatedWrongRelease
-            | Q35FixtureCase::ShutdownWrongRelease,
+            | Q35FixtureCase::ShutdownWrongRelease
+            | Q35FixtureCase::ColdWrongRelease,
         ) => Some([0xdc, 0xdd]),
         Some(
             Q35FixtureCase::ValidRelease
             | Q35FixtureCase::IsolatedValidRelease
-            | Q35FixtureCase::ShutdownValidRelease,
+            | Q35FixtureCase::ShutdownValidRelease
+            | Q35FixtureCase::ColdDenyActivation
+            | Q35FixtureCase::ColdActivate,
         ) => Some([0xdc, 0xde]),
         _ => None,
     };
@@ -313,7 +331,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 .open(scratch.join("q35-mmio.acpi"))
                 .map_err(|error| format!("create q35 marker: {error}"))?;
             marker
-                .write_all(&crate::qemu_mmio::fixture_acpi_table(case.shutdown()))
+                .write_all(&crate::qemu_mmio::fixture_acpi_table(case.profile()))
                 .map_err(|error| format!("write q35 marker: {error}"))?;
             command.args(["-acpitable", "file=q35-mmio.acpi"]);
         }
@@ -373,10 +391,13 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::NoMarker => None,
         Q35FixtureCase::WrongRelease
         | Q35FixtureCase::IsolatedWrongRelease
-        | Q35FixtureCase::ShutdownWrongRelease => Some(0x5a),
+        | Q35FixtureCase::ShutdownWrongRelease
+        | Q35FixtureCase::ColdWrongRelease => Some(0x5a),
         Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease => Some(0xa6),
         Q35FixtureCase::ShutdownValidRelease => Some(0xa7),
+        Q35FixtureCase::ColdDenyActivation | Q35FixtureCase::ColdActivate => Some(0xa8),
     });
+    let cold = map_only_marker.and_then(Q35FixtureCase::cold);
     let mut released = false;
     let mut fixture_bar = None;
     loop {
@@ -388,7 +409,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         &mut child,
                         valid,
                         isolated,
-                        (valid == 0xa7).then_some((trace, expected)),
+                        matches!(valid, 0xa7 | 0xa8).then_some((trace, expected)),
+                        cold,
                     ) {
                         Ok(bar) => bar,
                         Err(error) => {
@@ -418,6 +440,13 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                     encode_hex(&bytes),
                     bytes.len()
                 );
+                return Ok(());
+            }
+            if released && cold.is_some() {
+                // The QMP worker already checked the full signed trace and
+                // independently sampled the paused device after the verdict.
+                child.kill().map_err(|e| format!("stop cold QEMU: {e}"))?;
+                let _ = child.wait();
                 return Ok(());
             }
             let report = if let Some(bar) = fixture_bar {

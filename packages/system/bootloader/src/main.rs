@@ -4048,36 +4048,46 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         // SAFETY: this is the signed fixture's BSP and no secondary CPU has
         // started. Loader tables are identity-mapped and not mutated here.
         let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
-        let topology = handoff.dma_acpi(encoded)
-            .and_then(|(dmar, _)| mrml_kernel::arch::x86_64::Q35FixtureTopology::from_dmar(dmar))
-            .unwrap_or_else(|| halt());
+        let (dmar, _) = handoff.dma_acpi(encoded).unwrap_or_else(|| halt());
+        use mrml_kernel::arch::x86_64::Q35FixtureTopology;
+        let topology = Q35FixtureTopology::from_dmar(dmar).unwrap_or_else(|| halt());
         let mappings = mrml_kernel::arch::x86_64::q35_fixture_probe_mappings(topology)
             .unwrap_or_else(|_| halt());
-        let shutdown = if mappings.into_iter().flatten().all(|mapping|
+        let (mappings, release) = if mappings.into_iter().flatten().all(|mapping|
             active.verify_read_only_mmio_leaves(mapping).is_ok()
         ) {
-            false
-        } else if topology == mrml_kernel::arch::x86_64::Q35FixtureTopology::Isolated
+            (mappings, 0xa6)
+        } else if topology == Q35FixtureTopology::Isolated
             && active.verify_q35_shutdown_leaves().is_ok()
         {
-            true
+            (mappings, 0xa7)
+        } else if topology == Q35FixtureTopology::Isolated
+            && active.verify_q35_activation_leaves().is_ok()
+        {
+            (mrml_kernel::arch::x86_64::q35_fixture_activation_mappings()
+                .unwrap_or_else(|_| halt()), 0xa8)
         } else {
             halt();
         };
-        if shutdown {
-            let dma = _boot_dma.as_ref().unwrap_or_else(|| halt());
+        let dma = _boot_dma.as_ref().unwrap_or_else(|| halt());
+        if release != 0xa6 {
             // SAFETY: the signed fixture runs with this dedicated root on
             // the BSP only, before enabling interrupts or configuring DMA.
             if unsafe { active.verify_boot_dma_write_back(dma) }.is_err() {
                 halt();
             }
         }
-        if native_fat32_probe::dma_fixture_rendezvous(shutdown) {
-            // SAFETY: exact alias-free RO/NX UC pages were verified in the
-            // active BSP root. The sealed shutdown case additionally has RW
-            // only for its two ECAM functions and requires its distinct host
-            // release. The fixture branch has no other requesters.
-            unsafe { native_fat32_probe::dma_fixture_register_snapshot(mappings, shutdown) };
+        if native_fat32_probe::dma_fixture_rendezvous(release) {
+            // SAFETY: the exact UC/NX leaves, signed model and release all
+            // matched. Only shutdown/cold modes permit PCI command writes.
+            // Cold further requires an independent paused-host approval before
+            // any remapper write. No mode can enable bus mastering.
+            unsafe {
+                native_fat32_probe::dma_fixture_register_snapshot(
+                    mappings, release != 0xa6,
+                    (release == 0xa8).then_some((&active, dma, dmar)),
+                )
+            };
         }
         halt();
     }

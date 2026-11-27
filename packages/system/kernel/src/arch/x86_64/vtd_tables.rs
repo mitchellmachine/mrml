@@ -444,7 +444,7 @@ impl VerifiedVtdUnit<NativeVtdMmio> {
         ) {
             return Err(VtdBindingError::UnitSubstitution);
         }
-        let bytes = usize::try_from(verified.requirement().bytes())
+        let bytes = usize::try_from(verified.register_bytes())
             .map_err(|_| VtdBindingError::Unit(VtdError::InvalidRegisterLayout))?;
         // SAFETY: inherited from this function's unique, uncached verified
         // mapping contract. The checked byte count is the verified extent.

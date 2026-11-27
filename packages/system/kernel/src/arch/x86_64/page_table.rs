@@ -1366,6 +1366,18 @@ impl ActivePageTables {
         Ok(())
     }
 
+    /// Rechecks every leaf of the distinct, exact cold-activation model.
+    pub fn verify_q35_activation_leaves(&self) -> Result<(), PageTableBuildError> {
+        for mapping in super::q35_fixture_activation_mappings()
+            .map_err(|_| PageTableBuildError::MappingMismatch)?
+            .into_iter()
+            .flatten()
+        {
+            verify_exclusive_mapping_from_store(&IdentityMappedPageTables, self.root, mapping)?;
+        }
+        Ok(())
+    }
+
     /// Verify the entire initialized DMA range is uniquely mapped and WB
     /// on the current BSP. This check neither pins frames nor grants DMA.
     ///

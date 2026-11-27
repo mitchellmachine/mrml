@@ -12,19 +12,19 @@ const ECAM: (u64, u64) = (0xe000_0000, 0xefff_ffff);
 const DRHD: (u64, u64) = (0xfed9_0000, 0xfed9_022f);
 const DRHD_PAGE: (u64, u64) = (DRHD.0, DRHD.0 + 4095);
 
-pub(super) fn fixture_acpi_table(shutdown: bool) -> [u8; 36] {
+pub(super) fn fixture_acpi_table(profile: u8) -> [u8; 36] {
     let mut table = [0u8; 36];
     table[..4].copy_from_slice(b"MQ35");
     table[4..8].copy_from_slice(&36u32.to_le_bytes());
     table[8] = 1;
     table[10..].copy_from_slice(b"MRMLQ3MMIOTEST\x01\x00\x00\x00MRML\x01\x00\x00\x00");
-    table[32] = if shutdown { 2 } else { 1 };
+    table[32] = profile;
     table[9] = 0u8.wrapping_sub(table.iter().copied().fold(0u8, u8::wrapping_add));
     table
 }
 
 pub(super) fn verify_paused_q35_resources(child: &mut Child) -> Result<(), String> {
-    inspect_q35(child, None, false, None).map(|_| ())
+    inspect_q35(child, None, false, None, None).map(|_| ())
 }
 
 pub(super) fn release_q35_fixture(
@@ -32,8 +32,9 @@ pub(super) fn release_q35_fixture(
     release: u8,
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
+    cold: Option<bool>,
 ) -> Result<Option<FixtureState>, String> {
-    inspect_q35(child, Some(release), isolated, post)
+    inspect_q35(child, Some(release), isolated, post, cold)
 }
 
 fn inspect_q35(
@@ -41,6 +42,7 @@ fn inspect_q35(
     release: Option<u8>,
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
+    cold: Option<bool>,
 ) -> Result<Option<FixtureState>, String> {
     let mut stdin = child.stdin.take().ok_or("missing QMP input")?;
     let stdout = child.stdout.take().ok_or("missing QMP output")?;
@@ -56,6 +58,7 @@ fn inspect_q35(
                 isolated,
                 post.as_ref()
                     .map(|(path, prefix)| (path.as_path(), prefix.as_slice())),
+                cold,
             );
             let _ = send.send(result);
         })
@@ -77,6 +80,7 @@ fn inspect_qmp(
     release: Option<u8>,
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
+    cold: Option<bool>,
 ) -> Result<Option<FixtureState>, String> {
     qmp_write(stdin, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 71}")?;
@@ -88,7 +92,7 @@ fn inspect_qmp(
     )?;
     let map = read_monitor(&mut *reader, 73)?;
     validate(&map)?;
-    let bar = if matches!(release, Some(0xa6 | 0xa7)) {
+    let bar = if matches!(release, Some(0xa6 | 0xa7 | 0xa8)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
         }
@@ -106,7 +110,7 @@ fn inspect_qmp(
     } else {
         None
     };
-    let shutdown = release == Some(0xa7);
+    let shutdown = matches!(release, Some(0xa7 | 0xa8));
     let before = if shutdown {
         let state = bar
             .filter(|_| isolated)
@@ -127,7 +131,7 @@ fn inspect_qmp(
     }
     if let Some(byte) = release {
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6 | 0xa7 | 0x5a) {
+        if !matches!(byte, 0xa6 | 0xa7 | 0xa8 | 0x5a) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -141,6 +145,10 @@ fn inspect_qmp(
         ack(reader, "{\"return\": {}, \"id\": 75}")?;
     }
     if let (Some(before), Some((path, prefix)), Some(state)) = (before, post, bar) {
+        if let Some(allow) = cold {
+            inspect_cold_activation(stdin, reader, &map, path, prefix, state, before, allow)?;
+            return Ok(bar);
+        }
         await_shutdown_report(path, prefix, state)?;
         qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
         ack(reader, "{\"return\": {}, \"id\": 94}")?;
@@ -180,6 +188,179 @@ fn sample_shutdown(
         boot: read_model_dword(stdin, reader, 0xe002_8004, id + 2)?,
         gsts: read_model_dword(stdin, reader, 0xfed9_001c, id + 3)?,
     })
+}
+
+fn wait_cold_trace(
+    path: &std::path::Path,
+    prefix: &[u8],
+    state: FixtureState,
+    stage: Option<u8>,
+) -> Result<(u64, String), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let report_end = prefix.len() + 66;
+    let ready = report_end + 10;
+    let target = ready + usize::from(stage.is_some());
+    while std::time::Instant::now() < deadline {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(512).read_to_end(&mut bytes))
+            .map_err(|e| format!("read cold trace: {e}"))?;
+        if bytes.len() < target {
+            if bytes.get(report_end) == Some(&0xdb) {
+                return Err("signed guest refused the cold root".into());
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            continue;
+        }
+        if bytes.len() != target
+            || bytes[report_end] != 0xc1
+            || bytes[ready - 1] != 0xc2
+            || stage.is_some_and(|value| bytes[ready] != value)
+        {
+            return Err("unexpected signed cold activation trace".into());
+        }
+        let sample = register_snapshot(prefix, &bytes[..report_end], state, true, true)?
+            .ok_or("missing cold shutdown sample")?;
+        let root = u64::from_le_bytes(bytes[report_end + 1..ready - 1].try_into().unwrap());
+        return Ok((root, sample));
+    }
+    Err("missing signed cold activation trace".into())
+}
+
+fn verify_root_ram(map: &str, root: u64) -> Result<(), String> {
+    let last = root
+        .checked_add(16 * 4096 - 1)
+        .filter(|&last| root >= 0x10_0000 && root % 4096 == 0 && last < 1 << 32)
+        .ok_or("invalid signed fixture boot RAM extent")?;
+    let mut matched = false;
+    for line in cpu_ranges(map)? {
+        let (start, end, kind, name) = flat_range(line)?;
+        if start <= last && root <= end {
+            if matched
+                || start > root
+                || end < last
+                || kind != "0, ram"
+                || (name != "pc.ram" && name != format!("pc.ram @{start:016x}"))
+            {
+                return Err(format!("unexpected overlapping root RAM resource: {line}"));
+            }
+            matched = true;
+        }
+    }
+    if !matched {
+        return Err("signed table frames are not backed by PC RAM".into());
+    }
+    Ok(())
+}
+
+fn verify_root_page(text: &str, root: u64, page: u64) -> Result<(), String> {
+    let address = root + page * 4096;
+    let mut index = 0u64;
+    for line in text.lines() {
+        let (start, words) = line.split_once(':').ok_or("bad cold table dump row")?;
+        if start != format!("{:08x}", address + index * 8) || words.trim().is_empty() {
+            return Err("noncontiguous cold root readout".into());
+        }
+        for value in words.split_whitespace() {
+            if index >= 512 || value.len() != 18 {
+                return Err("bad cold table word width or count".into());
+            }
+            let actual = u64::from_str_radix(value.strip_prefix("0x").ok_or("bad cold word")?, 16)
+                .map_err(|_| "invalid cold table word")?;
+            let expected = match (page, index) {
+                (0, 130) | (1, 0) => (address + 4096) | 1,
+                (1, 1) => 0x102,
+                (2 | 3, 0) | (4, 1) => (address + 4096) | 3,
+                _ => 0,
+            };
+            if actual != expected {
+                return Err(format!(
+                    "wrong cold table value at page {page} word {index}"
+                ));
+            }
+            index += 1;
+        }
+    }
+    (index == 512)
+        .then_some(())
+        .ok_or("short cold table dump".into())
+}
+
+fn read_root_pointer(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+) -> Result<u64, String> {
+    let low = read_model_dword(stdin, reader, 0xfed9_0020, 102)?;
+    let high = read_model_dword(stdin, reader, 0xfed9_0024, 103)?;
+    Ok(u64::from(high) << 32 | u64::from(low))
+}
+
+fn inspect_cold_activation(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    map: &str,
+    path: &std::path::Path,
+    prefix: &[u8],
+    state: FixtureState,
+    firmware: ShutdownSample,
+    allow: bool,
+) -> Result<(), String> {
+    let (root, _) = wait_cold_trace(path, prefix, state, None)?;
+    qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 94}")?;
+    let shutdown = ShutdownSample {
+        endpoint: firmware.endpoint & !4,
+        bridge: firmware.bridge & !4,
+        ..firmware
+    };
+    if sample_shutdown(stdin, reader, 95)? != shutdown
+        || sample_xhci_state(stdin, reader, state.bar)? != state
+        || read_root_pointer(stdin, reader)? != 0
+        || read_model_dword(stdin, reader, 0xfed9_0034, 104)? != 0
+    {
+        return Err("cold fixture was not quiesced with pristine remapper".into());
+    }
+    verify_root_ram(map, root)?;
+    for page in 0..6 {
+        qmp_write(
+            stdin,
+            &format!(
+                "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"xp /512gx {:#x}\"}},\"id\":105}}\n",
+                root + page * 4096,
+            ),
+        )?;
+        verify_root_page(&read_monitor(&mut *reader, 105)?, root, page)?;
+    }
+    let byte = if allow { 0xb8 } else { 0x5b };
+    qmp_write(
+        stdin,
+        &format!(
+            "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"o /b 0x2ff {byte:#x}\"}},\"id\":106}}\n"
+        ),
+    )?;
+    ack(reader, "{\"return\": \"\", \"id\": 106}")?;
+    qmp_write(stdin, "{\"execute\":\"cont\",\"id\":107}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 107}")?;
+    let (after_root, _) =
+        wait_cold_trace(path, prefix, state, Some(if allow { 0xc3 } else { 0xc4 }))?;
+    qmp_write(stdin, "{\"execute\":\"stop\",\"id\":108}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 108}")?;
+    let expected = ShutdownSample {
+        gsts: if allow { 0xc000_0000 } else { 0 },
+        ..shutdown
+    };
+    if after_root != root
+        || sample_shutdown(stdin, reader, 95)? != expected
+        || sample_xhci_state(stdin, reader, state.bar)? != state
+        || read_root_pointer(stdin, reader)? != if allow { root } else { 0 }
+        || read_model_dword(stdin, reader, 0xfed9_0034, 104)? != 0
+    {
+        return Err("paused QEMU did not confirm the exact cold remapper state".into());
+    }
+    println!(
+        "q35-vtd-cold|status=PASS|activated={allow}|root={root:#x}|no_dma_leaves=true|bme=false"
+    );
+    Ok(())
 }
 
 fn await_shutdown_report(
@@ -716,6 +897,35 @@ mod tests {
     );
 
     #[test]
+    fn cold_fixture_rejects_non_ram_overlap_and_unexpected_dma_leaf() {
+        use std::fmt::Write as _;
+        let ram = "  0000000000100000-0000000007ffffff (prio 0, ram): pc.ram\n";
+        let map = format!("{VIEW}{ram}");
+        assert!(verify_root_ram(&map, 0x400000).is_ok());
+        for root in [0xfffff, 0x400001, 0x07ff_f000, 0xffff_f000, u64::MAX] {
+            assert!(verify_root_ram(&map, root).is_err());
+        }
+        assert!(verify_root_ram(VIEW, 0x400000).is_err());
+        assert!(verify_root_ram(&format!("{map}{ram}"), 0x400000).is_err());
+
+        let mut dump = String::new();
+        for word in 0..512 {
+            writeln!(dump, "{:08x}: 0x0000000000000000", 0x405000 + word * 8).unwrap();
+        }
+        assert!(verify_root_page(&dump, 0x400000, 5).is_ok());
+        assert!(
+            verify_root_page(
+                &dump.replacen("0000000000000000", "0000000000406003", 1),
+                0x400000,
+                5
+            )
+            .is_err()
+        );
+        assert!(verify_root_page(&dump[1..], 0x400000, 5).is_err());
+        assert!(verify_root_page(&dump[..dump.len() - 4], 0x400000, 5).is_err());
+    }
+
+    #[test]
     fn exact_system_view_excludes_padding_conflicts_and_ignores_dma_views() {
         assert!(validate(VIEW).is_ok());
         assert!(
@@ -768,7 +978,15 @@ mod tests {
             );
             let mut sent = Vec::new();
             assert_eq!(
-                inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(0x5a), false, None).is_ok(),
+                inspect_qmp(
+                    &mut sent,
+                    &mut replies.as_bytes(),
+                    Some(0x5a),
+                    false,
+                    None,
+                    None
+                )
+                .is_ok(),
                 allowed
             );
             let sent = String::from_utf8(sent).unwrap();
@@ -844,7 +1062,14 @@ mod tests {
                 "{{\"return\": {{}}, \"id\": 71}}\n{{\"return\": {{}}, \"id\": 72}}\n{{\"return\": \"{base}\", \"id\": 73}}\n{{\"return\": \"{pci}\", \"id\": 76}}\n{{\"return\": \"{mapped}\", \"id\": 77}}\n{{\"return\": \"c000004000: 0x01000040\\r\\n\", \"id\": 78}}\n{{\"return\": \"c000004040: 0x00000000\\r\\n\", \"id\": 79}}\n{{\"return\": \"c000004044: 0x00000001\\r\\n\", \"id\": 80}}\n{{\"return\": \"\", \"id\": 74}}\n{{\"return\": {{}}, \"id\": 75}}\n"
             );
             let mut sent = Vec::new();
-            let result = inspect_qmp(&mut sent, &mut replies.as_bytes(), Some(0xa6), false, None);
+            let result = inspect_qmp(
+                &mut sent,
+                &mut replies.as_bytes(),
+                Some(0xa6),
+                false,
+                None,
+                None,
+            );
             assert_eq!(
                 result.as_ref().is_ok_and(Option::is_some),
                 allowed,

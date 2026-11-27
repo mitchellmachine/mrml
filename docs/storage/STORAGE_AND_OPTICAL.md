@@ -3188,7 +3188,19 @@ waits for root-pointer acknowledgment, globally invalidates the context
 cache and IOTLB while translation is off, then enables and reads back
 translation. Failing after the first register write retains every page
 and keeps all requesters quiesced. Hosted register-model tests cover
-ordering and timeouts; a live QEMU activation test is still pending.
+ordering and timeouts. The separately sealed QEMU profile (marker revision 3)
+also tests that startup on the live emulated remapper. Its first host release
+allows only the existing PCI shutdown sequence and preparation of six pinned
+write-back frames. With the same VM paused, the monitor independently checks
+both PCI commands, controller halt, zero RTADDR/GSTS/FSTS, the entire
+allocation's CPU-visible RAM backing, and every word of the six frames.
+The tables cover exactly requester 41:00.0, with no present DMA leaves.
+Only the second release permits access through the exact 0x230-byte register
+adapter. The success case requires RTADDR to match the checked root, GSTS to
+acknowledge it with translation on, no faults and no change to BME or the
+controller. A wrong first release skips guest register access entirely; a
+wrong second release leaves RTADDR/GSTS/FSTS zero with BME off. No controller
+reset, bus-master re-enable, DMA transfer or physical-hardware test occurs.
 
 Before the isolated shutdown case reaches its host rendezvous, the signed
 guest now verifies the entire boot-DMA allocation against the active root,

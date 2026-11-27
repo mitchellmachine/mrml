@@ -83,6 +83,22 @@ pub fn q35_fixture_shutdown_mappings() -> Result<[Option<Mapping>; 4], PlatformM
     q35_fixture_mappings(Q35FixtureTopology::Isolated, true)
 }
 
+/// Writable DRHD page only for the separately released, isolated model.
+pub fn q35_fixture_activation_mappings() -> Result<[Option<Mapping>; 4], PlatformMmioError> {
+    let mut mappings = q35_fixture_shutdown_mappings()?;
+    let drhd = mappings[0].ok_or(PlatformMmioError::InvalidRange)?;
+    mappings[0] = Some(
+        Mapping::new(
+            drhd.virtual_start(),
+            drhd.physical_start(),
+            1,
+            PagePermissions::KERNEL_HIGH_MMIO_READ_WRITE,
+        )
+        .map_err(|_| PlatformMmioError::MappingMismatch)?,
+    );
+    Ok(mappings)
+}
+
 fn q35_fixture_mappings(
     topology: Q35FixtureTopology,
     shutdown: bool,
@@ -134,6 +150,21 @@ mod q35_fixture_tests {
         table[72..80].copy_from_slice(&[2, 8, 0, 0, 0, 0x40, 0, 0]);
         checksum(&mut table);
         table
+    }
+
+    #[test]
+    fn cold_profile_extends_only_drhd_write_permission() {
+        let cold = q35_fixture_activation_mappings().unwrap();
+        let shutdown = q35_fixture_shutdown_mappings().unwrap();
+        assert_eq!(cold[1..], shutdown[1..]);
+        let drhd = cold[0].unwrap();
+        assert_eq!(drhd.physical_start(), shutdown[0].unwrap().physical_start());
+        assert_eq!(drhd.virtual_start(), shutdown[0].unwrap().virtual_start());
+        assert_eq!(drhd.pages(), 1);
+        assert_eq!(
+            drhd.permissions(),
+            PagePermissions::KERNEL_HIGH_MMIO_READ_WRITE
+        );
     }
 
     #[test]
@@ -340,9 +371,17 @@ impl<const RANGES: usize> PlatformMmioManifest<RANGES> {
 pub struct VerifiedPlatformMmio {
     requirement: PlatformMmioRequirement,
     virtual_start: VirtAddr,
+    register_extent: Option<u64>,
 }
 
 impl VerifiedPlatformMmio {
+    pub(super) const fn register_bytes(&self) -> u64 {
+        match self.register_extent {
+            Some(exact) => exact,
+            None => self.requirement.bytes(),
+        }
+    }
+
     pub const fn requirement(&self) -> PlatformMmioRequirement {
         self.requirement
     }
@@ -369,6 +408,7 @@ pub(crate) fn verified_vtd_for_test(
             purpose: PlatformMmioPurpose::VtdBootstrap { segment },
         },
         virtual_start: VirtAddr::new(0xffff_9000_0000_0000).unwrap(),
+        register_extent: None,
     }
 }
 
@@ -386,6 +426,7 @@ pub(crate) fn verified_vtd_mapping_for_test(
             purpose: PlatformMmioPurpose::VtdBootstrap { segment },
         },
         virtual_start,
+        register_extent: None,
     }
 }
 
@@ -604,6 +645,35 @@ pub fn verify_active_platform_mmio(
     Ok(VerifiedPlatformMmio {
         requirement,
         virtual_start: mapping.virtual_start(),
+        register_extent: None,
+    })
+}
+
+/// Consume the fixture's verified mapping to bound the native adapter.
+///
+/// # Safety
+/// The caller must hold the current BSP root and exclusive ownership of
+/// the exact isolated QEMU subtree and DRHD. Both independent host releases
+/// are required, after model inspection and after all scoped BME is off.
+pub unsafe fn verify_q35_activation_mmio(
+    active: &ActivePageTables,
+    dmar: &[u8],
+) -> Result<VerifiedPlatformMmio, PlatformMmioError> {
+    if Q35FixtureTopology::from_dmar(dmar) != Some(Q35FixtureTopology::Isolated) {
+        return Err(PlatformMmioError::MappingMismatch);
+    }
+    active
+        .verify_q35_activation_leaves()
+        .map_err(|_| PlatformMmioError::PageTable)?;
+    let page = q35_fixture_activation_mappings()?[0].ok_or(PlatformMmioError::InvalidRange)?;
+    Ok(VerifiedPlatformMmio {
+        requirement: PlatformMmioRequirement {
+            physical: page.physical_start(),
+            pages: 1,
+            purpose: PlatformMmioPurpose::VtdBootstrap { segment: 0 },
+        },
+        virtual_start: page.virtual_start(),
+        register_extent: Some(0x230),
     })
 }
 
@@ -712,7 +782,6 @@ mod tests {
             ));
         }
     }
-
 
     #[test]
     fn boot_mmio_cpu_requires_wp_nxe_four_level_and_exact_uc() {

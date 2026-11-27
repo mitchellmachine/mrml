@@ -199,22 +199,23 @@ pub(super) fn dma_mmio_coverage(covered: bool) {
 }
 
 #[cfg(feature = "q35-mmio-probe")]
-pub(super) fn dma_fixture_rendezvous(shutdown: bool) -> bool {
-    let expected = if shutdown { 0xa7 } else { 0xa6 };
-    let scratch = || {
-        let byte: u8;
-        // SAFETY: this signed QEMU-only BSP fixture reads only the dedicated
-        // emulated ISA serial scratch register. No interrupt or UART setup.
-        unsafe { asm!("in al, dx", in("dx") 0x2ffu16, out("al") byte, options(nomem, nostack)) };
-        byte
-    };
-    if scratch() != 0 {
+fn fixture_scratch() -> u8 {
+    let byte: u8;
+    // SAFETY: this signed QEMU-only BSP fixture reads only the dedicated
+    // emulated ISA serial scratch register. No interrupt or UART setup.
+    unsafe { asm!("in al, dx", in("dx") 0x2ffu16, out("al") byte, options(nomem, nostack)) };
+    byte
+}
+
+#[cfg(feature = "q35-mmio-probe")]
+pub(super) fn dma_fixture_rendezvous(expected: u8) -> bool {
+    if fixture_scratch() != 0 {
         trace(0xdf);
         return false;
     }
     trace(0xdc);
     for _ in 0..100_000_000 {
-        match scratch() {
+        match fixture_scratch() {
             0 => core::hint::spin_loop(),
             byte if byte == expected => {
                 trace(0xde);
@@ -236,6 +237,11 @@ pub(super) fn dma_fixture_rendezvous(shutdown: bool) -> bool {
 pub(super) unsafe fn dma_fixture_register_snapshot(
     mappings: [Option<mrml_kernel::arch::x86_64::Mapping>; 4],
     shutdown: bool,
+    cold: Option<(
+        &ActivePageTables,
+        &mrml_kernel::arch::x86_64::InitializedBootDma,
+        &[u8],
+    )>,
 ) {
     use mrml_kernel::arch::x86_64::VtdRegisterLayout;
     let [Some(drhd), Some(ecam), bridge, xhci] =
@@ -394,6 +400,117 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         }
     }
     trace(0xda);
+    if let Some((active, dma, dmar)) = cold
+        && !fixture_activate(active, dma, dmar, pci_id, bridge_buses)
+    {
+        trace(0xdb);
+    }
+}
+
+#[cfg(feature = "q35-mmio-probe")]
+fn fixture_activate(
+    active: &ActivePageTables,
+    dma: &mrml_kernel::arch::x86_64::InitializedBootDma,
+    dmar: &[u8],
+    endpoint_id: u32,
+    bridge_buses: u32,
+) -> bool {
+    use mrml_kernel::arch::x86_64::{
+        DmarTopology, PciConfigSpace, SINGLE_REQUESTER_VTD_TABLE_PAGES, VerifiedVtdUnit,
+        VtdDmaAperture, prepare_cold_legacy_vtd_root, verify_q35_activation_mmio,
+    };
+    use mrml_kernel::{DeviceAddress, PhysAddr};
+
+    // The signed snapshot verified the live endpoint and root-port identity,
+    // header kind, bus numbers, controller halt and both BME readbacks.
+    struct ObservedConfig {
+        endpoint_id: u32,
+        buses: u32,
+    }
+    impl PciConfigSpace for ObservedConfig {
+        fn read_u32(&mut self, address: DeviceAddress, offset: u16) -> Option<u32> {
+            match (
+                address.segment(),
+                address.bus(),
+                address.device(),
+                address.function(),
+                offset,
+            ) {
+                (0, 0x41, 0, 0, 0) => Some(self.endpoint_id),
+                (0, 0x40, 0, 0, 0) => Some(0x000c_1b36),
+                (0, 0x40, 0, 0, 0x0c) => Some(1 << 16),
+                (0, 0x40, 0, 0, 0x18) => Some(self.buses),
+                _ => None,
+            }
+        }
+    }
+
+    let result = (|| {
+        let topology = DmarTopology::<1, 64>::parse(dmar).ok()?;
+        let requester = DeviceAddress::new(0, 0x41, 0, 0).ok()?;
+        let route = topology
+            .route_for_requester(
+                requester,
+                &mut ObservedConfig {
+                    endpoint_id,
+                    buses: bridge_buses,
+                },
+            )
+            .ok()?;
+        let root = dma.mapping().physical_start();
+        let table_bytes = PAGE_SIZE * SINGLE_REQUESTER_VTD_TABLE_PAGES as u64;
+        let payload = PhysAddr::new(root.get().checked_add(table_bytes)?).ok()?;
+        if dma.reservation().bytes() != 16 * PAGE_SIZE || route.register_base().get() != 0xfed9_0000
+        {
+            return None;
+        }
+        let aperture = VtdDmaAperture {
+            route,
+            hardware_domain: 1,
+            device_base: 0x20_0000,
+            physical_base: payload,
+            pages: 1,
+        };
+        // SAFETY: the sole BSP just checked the exact exclusive WB mapping
+        // and owns the dedicated 16-page boot-lifetime allocation. Both
+        // requesters are quiesced and the remapper is still off. No reference
+        // to these six table pages survives preparation, nor are they freed.
+        let prepared = unsafe {
+            let tables = &mut *(dma.mapping().virtual_start().get()
+                as *mut [[u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES]);
+            prepare_cold_legacy_vtd_root(tables, root, aperture)
+        }
+        .ok()?;
+        trace(0xc1);
+        for byte in root.get().to_le_bytes() {
+            trace(byte);
+        }
+        trace(0xc2);
+        for _ in 0..100_000_000 {
+            match fixture_scratch() {
+                0xa8 => core::hint::spin_loop(),
+                0xb8 => {
+                    // SAFETY: signed cold mode, checked exact live branch
+                    // and cleared PCI BME bits, then independently verified
+                    // paused host table/readback evidence. Device state and
+                    // pinned RAM remain exclusively owned by this fixture.
+                    unsafe {
+                        let token = verify_q35_activation_mmio(active, dmar).ok()?;
+                        let mut unit = VerifiedVtdUnit::from_native(token, 1024).ok()?;
+                        unit.activate_cold_legacy_root(prepared).ok()?;
+                    }
+                    trace(0xc3);
+                    return Some(());
+                }
+                _ => {
+                    trace(0xc4);
+                    return Some(());
+                }
+            }
+        }
+        None
+    })();
+    result.is_some()
 }
 
 fn trace(stage: u8) {
