@@ -2952,6 +2952,15 @@ ACPI namespace scopes rather than guessing. This is read-only routing evidence
 and does not establish device isolation, requester-alias safety, or DMA
 authority.
 
+The verified VT-d unit can now check a contiguous DMA aperture against its
+active legacy root, exact requester and expected hardware domain. It checks
+every 4 KiB page in the bounded aperture against the expected physical backing,
+including non-identity mappings, and intersects read/write permissions along
+the walk. A stale root, wrong unit, missing page, unexpected backing, or
+read-only ancestor cannot pass. This is a read-only check over existing
+mappings; it does not install or lock them, invalidate caches, or prove
+requester-alias isolation, and is not yet wired into xHCI activation.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

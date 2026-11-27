@@ -27,6 +27,8 @@ pub enum VtdTableError {
     LargePage,
     MissingLeaf,
     AliasedLeaf,
+    InvalidAperture,
+    InsufficientPermissions,
     Storage,
 }
 
@@ -306,6 +308,67 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
         })
     }
 
+    /// Checks a bounded, contiguous device-to-physical read/write window in
+    /// the exact active legacy domain. This does not install mappings or
+    /// establish that the pages, domain, or requester aliases are exclusive.
+    /// The provider must hold the assignment lock and keep the checked
+    /// translations pinned and synchronized through activation.
+    pub fn verify_routed_dma_aperture<M: VtdTableMemory>(
+        &mut self,
+        memory: &M,
+        route: VtdRequesterRoute,
+        expected_domain: u16,
+        device_base: u64,
+        physical_base: PhysAddr,
+        pages: u16,
+    ) -> Result<(), VtdBindingError> {
+        if !verified_unit_matches_route(&self.verified, route) {
+            return Err(VtdBindingError::UnitSubstitution);
+        }
+        let root = self
+            .invalidator
+            .active_legacy_root()
+            .map_err(VtdBindingError::Unit)?;
+        let provenance = memory.provenance();
+        if provenance.register_base() != route.register_base()
+            || provenance.root_table().get() != root
+        {
+            return Err(VtdBindingError::TableSubstitution);
+        }
+        let bytes = u64::from(pages) * 4096;
+        if !(1..=256).contains(&pages)
+            || device_base == 0
+            || !device_base.is_multiple_of(4096)
+            || device_base
+                .checked_add(bytes)
+                .is_none_or(|end| end > 1 << 48)
+            || physical_base.get() == 0
+            || physical_base
+                .get()
+                .checked_add(bytes)
+                .is_none_or(|end| end > 1 << 52)
+        {
+            return Err(VtdBindingError::Table(VtdTableError::InvalidAperture));
+        }
+        for offset in (0..bytes).step_by(4096) {
+            let (_, _, permissions) = find_legacy_leaf(
+                memory,
+                root,
+                route.requester(),
+                device_base + offset,
+                physical_base.get() + offset,
+                expected_domain,
+            )
+            .map_err(VtdBindingError::Table)?;
+            if permissions != 3 {
+                return Err(VtdBindingError::Table(
+                    VtdTableError::InsufficientPermissions,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     fn for_test(verified: VerifiedPlatformMmio, invalidator: VtdInvalidator<R>) -> Self {
         Self {
@@ -490,6 +553,32 @@ pub fn bind_legacy_identity_leaf<'a, M: VtdTableMemory>(
     physical: PhysAddr,
     expected_domain: u16,
 ) -> Result<VtdIdentityLeaf<'a>, VtdTableError> {
+    let (table, index, _) = find_legacy_leaf(
+        memory,
+        root_table_address,
+        requester,
+        physical.get(),
+        physical.get(),
+        expected_domain,
+    )?;
+    // SAFETY: the unsafe trait contract requires the returned reference to be
+    // unique and tied to `memory`'s exclusive borrow.
+    let entry = unsafe { memory.leaf_mut(table, index)? };
+    Ok(VtdIdentityLeaf {
+        physical,
+        domain_id: expected_domain,
+        entry,
+    })
+}
+
+fn find_legacy_leaf<M: VtdTableMemory>(
+    memory: &M,
+    root_table_address: u64,
+    requester: DeviceAddress,
+    device_address: u64,
+    backing_address: u64,
+    expected_domain: u16,
+) -> Result<(PhysAddr, usize, u64), VtdTableError> {
     if root_table_address & 0xc00 != 0 {
         return Err(VtdTableError::UnsupportedRootMode);
     }
@@ -532,9 +621,10 @@ pub fn bind_legacy_identity_leaf<'a, M: VtdTableMemory>(
     }
     let mut table =
         checked_table(context[0] & ADDRESS_MASK).map_err(|_| VtdTableError::InvalidContextEntry)?;
+    let mut permissions = 3;
     let shifts = [39u32, 30, 21];
     for shift in shifts {
-        let index = ((physical.get() >> shift) & 0x1ff) as usize;
+        let index = ((device_address >> shift) & 0x1ff) as usize;
         let entry = memory.read64(table, index)?;
         if entry & (1 << 7) != 0 {
             return Err(VtdTableError::LargePage);
@@ -542,10 +632,11 @@ pub fn bind_legacy_identity_leaf<'a, M: VtdTableMemory>(
         if entry & 0x3 == 0 || entry & !(ADDRESS_MASK | ENTRY_FLAGS) != 0 {
             return Err(VtdTableError::InvalidIntermediate);
         }
+        permissions &= entry & 3;
         table =
             checked_table(entry & ADDRESS_MASK).map_err(|_| VtdTableError::InvalidIntermediate)?;
     }
-    let index = ((physical.get() >> 12) & 0x1ff) as usize;
+    let index = ((device_address >> 12) & 0x1ff) as usize;
     let leaf = memory.read64(table, index)?;
     if leaf & 0x3 == 0 {
         return Err(VtdTableError::MissingLeaf);
@@ -556,17 +647,10 @@ pub fn bind_legacy_identity_leaf<'a, M: VtdTableMemory>(
     if leaf & !(ADDRESS_MASK | ENTRY_FLAGS) != 0 {
         return Err(VtdTableError::InvalidIntermediate);
     }
-    if leaf & ADDRESS_MASK != physical.get() {
+    if leaf & ADDRESS_MASK != backing_address {
         return Err(VtdTableError::AliasedLeaf);
     }
-    // SAFETY: the unsafe trait contract requires the returned reference to be
-    // unique and tied to `memory`'s exclusive borrow.
-    let entry = unsafe { memory.leaf_mut(table, index)? };
-    Ok(VtdIdentityLeaf {
-        physical,
-        domain_id,
-        entry,
-    })
+    Ok((table, index, permissions & leaf & 3))
 }
 
 /// Binds a leaf using a requester route produced by checked DMAR and live PCI
@@ -876,6 +960,58 @@ mod tests {
 
     #[repr(align(4096))]
     struct RegisterPage([u64; 512]);
+
+    #[test]
+    fn routed_aperture_checks_every_page_and_effective_permissions() {
+        let iova = PhysAddr::new(0x20_0000).unwrap();
+        let backing = PhysAddr::new(0x80_0000).unwrap();
+        let registers = PhysAddr::new(0xfed9_0000).unwrap();
+        let route = VtdRequesterRoute::for_test(requester(), registers);
+        let mut unit = verified_unit(registers, UnitRegisters::active(ROOT));
+        let mut tables = Tables::identity(iova, 9);
+
+        tables.level1[0] = backing.get() | 3;
+        assert_eq!(
+            unit.verify_routed_dma_aperture(&tables, route, 9, iova.get(), backing, 2),
+            Err(VtdBindingError::Table(VtdTableError::MissingLeaf))
+        );
+        tables.level1[1] = backing.get() | 3;
+        assert_eq!(
+            unit.verify_routed_dma_aperture(&tables, route, 9, iova.get(), backing, 2),
+            Err(VtdBindingError::Table(VtdTableError::AliasedLeaf))
+        );
+        tables.level1[1] = (backing.get() + 4096) | 3;
+        assert_eq!(
+            unit.verify_routed_dma_aperture(&tables, route, 9, iova.get(), backing, 2),
+            Ok(())
+        );
+        tables.level2[1] &= !2;
+        assert_eq!(
+            unit.verify_routed_dma_aperture(&tables, route, 9, iova.get(), backing, 2),
+            Err(VtdBindingError::Table(
+                VtdTableError::InsufficientPermissions
+            ))
+        );
+        assert_eq!(
+            unit.verify_routed_dma_aperture(&tables, route, 10, iova.get(), backing, 2),
+            Err(VtdBindingError::Table(VtdTableError::WrongDomain))
+        );
+        assert_eq!(
+            unit.verify_routed_dma_aperture(&tables, route, 9, (1 << 48) - 4096, backing, 2),
+            Err(VtdBindingError::Table(VtdTableError::InvalidAperture))
+        );
+        let wrong_unit =
+            VtdRequesterRoute::for_test(requester(), PhysAddr::new(0xfeda_0000).unwrap());
+        assert_eq!(
+            unit.verify_routed_dma_aperture(&tables, wrong_unit, 9, iova.get(), backing, 2),
+            Err(VtdBindingError::UnitSubstitution)
+        );
+        let stale_tables = tables.for_root(PhysAddr::new(ROOT + 4096).unwrap());
+        assert_eq!(
+            unit.verify_routed_dma_aperture(&stale_tables, route, 9, iova.get(), backing, 2),
+            Err(VtdBindingError::TableSubstitution)
+        );
+    }
 
     #[test]
     fn binds_exact_requester_domain_and_identity_leaf() {
