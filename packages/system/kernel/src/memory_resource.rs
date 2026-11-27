@@ -522,6 +522,10 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
         })
     }
 
+    pub(crate) const fn namespace(&self) -> u16 {
+        self.namespace
+    }
+
     pub fn create_root<const C: usize>(
         &mut self,
         limit_pages: u64,

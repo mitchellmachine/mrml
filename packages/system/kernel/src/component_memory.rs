@@ -125,6 +125,7 @@ impl MicrovmPageProjection {
 /// non-executable; interface policy must separately authorize what may be sent.
 #[derive(Debug, Eq, PartialEq)]
 pub struct MicrovmPeerPageProjection {
+    namespace: u16,
     object: MemoryObjectId,
     first_mapping: MemoryMappingId,
     second_mapping: MemoryMappingId,
@@ -134,6 +135,39 @@ pub struct MicrovmPeerPageProjection {
     second_target_capability: Capability,
     first_virtual_page: u64,
     second_virtual_page: u64,
+}
+
+/// Trusted-ledger identity of one shared object and its exact mapping pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MicrovmPeerPageIdentity {
+    namespace: u16,
+    object: MemoryObjectId,
+    first_mapping: MemoryMappingId,
+    second_mapping: MemoryMappingId,
+}
+
+impl MicrovmPeerPageIdentity {
+    pub const fn same_ledger(self, other: Self) -> bool {
+        self.namespace == other.namespace
+    }
+}
+
+/// Issued only after an exact, successful shared-page ledger retirement.
+/// This receipt is not a capability and cannot authorize another mapping.
+#[derive(Debug, Eq, PartialEq)]
+pub struct MicrovmPeerPageRetirement {
+    identity: MicrovmPeerPageIdentity,
+    released_pages: u64,
+}
+
+impl MicrovmPeerPageRetirement {
+    pub const fn identity(&self) -> MicrovmPeerPageIdentity {
+        self.identity
+    }
+
+    pub const fn released_pages(&self) -> u64 {
+        self.released_pages
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -154,6 +188,15 @@ impl MicrovmPeerProjectionReleaseFailure {
 }
 
 impl MicrovmPeerPageProjection {
+    pub const fn identity(&self) -> MicrovmPeerPageIdentity {
+        MicrovmPeerPageIdentity {
+            namespace: self.namespace,
+            object: self.object,
+            first_mapping: self.first_mapping,
+            second_mapping: self.second_mapping,
+        }
+    }
+
     pub const fn object(&self) -> MemoryObjectId {
         self.object
     }
@@ -236,6 +279,9 @@ impl MicrovmPeerPageProjection {
         second: Capability,
         capabilities: &CapabilitySpace<C>,
     ) -> Result<(), MemoryResourceError> {
+        if table.namespace() != self.namespace {
+            return Err(MemoryResourceError::InvalidMapping);
+        }
         for (mapping, target, page) in [
             (self.first_mapping, first, self.first_virtual_page),
             (self.second_mapping, second, self.second_virtual_page),
@@ -612,6 +658,7 @@ pub fn reserve_microvm_peer_page_projection<
     };
     Ok((
         MicrovmPeerPageProjection {
+            namespace: table.namespace(),
             object,
             first_mapping,
             second_mapping,
@@ -645,7 +692,7 @@ pub unsafe fn release_microvm_peer_page_projection<
     first_target_capability: Capability,
     second_target_capability: Capability,
     capabilities: &mut CapabilitySpace<C>,
-) -> Result<u64, MicrovmPeerProjectionReleaseFailure> {
+) -> Result<MicrovmPeerPageRetirement, MicrovmPeerProjectionReleaseFailure> {
     let release = (|| {
         projection.validate_targets(
             first_target_capability,
@@ -672,11 +719,17 @@ pub unsafe fn release_microvm_peer_page_projection<
             )
         }
     })();
-    release.map_err(|error| MicrovmPeerProjectionReleaseFailure {
-        error,
-        projection,
-        object_capability,
-    })
+    match release {
+        Ok(released_pages) => Ok(MicrovmPeerPageRetirement {
+            identity: projection.identity(),
+            released_pages,
+        }),
+        Err(error) => Err(MicrovmPeerProjectionReleaseFailure {
+            error,
+            projection,
+            object_capability,
+        }),
+    }
 }
 
 fn add_component_image_region(
@@ -1758,6 +1811,7 @@ mod tests {
         }
         // SAFETY: this focused test has no native backend or translations; all
         // represented reservations are known unused.
+        let identity = projection.identity();
         assert_eq!(
             unsafe {
                 release_microvm_peer_page_projection(
@@ -1768,8 +1822,8 @@ mod tests {
                     second,
                     &mut capabilities,
                 )
-            },
-            Ok(1)
+            }.map(|retired| (retired.identity(), retired.released_pages())),
+            Ok((identity, 1))
         );
         let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
         assert_eq!(usage.object_pages(), 0);

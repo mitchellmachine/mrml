@@ -10,7 +10,8 @@ use mrml_interface_storage_block_provider_v1::{
     decode_read_request, decode_read_response, encode_read_request, encode_read_response,
 };
 use mrml_kernel::{
-    Capability, CapabilitySpace, MemoryObjectId, MemoryPoolTable, MemoryResourceError,
+    Capability, CapabilitySpace, MemoryPoolTable, MicrovmPeerPageIdentity,
+    MicrovmPeerPageRetirement,
     MicrovmInterfaceQueueConsumer, MicrovmInterfaceQueueError,
     MicrovmInterfaceQueueIdentity, MicrovmInterfaceQueuePair, MicrovmInterfaceQueueProvider,
     MicrovmInterfaceRequestNotification, MicrovmInterfaceResponseNotification,
@@ -25,7 +26,7 @@ pub enum MicrovmBlockReadError {
     Queue(MicrovmInterfaceQueueError),
     Wire(ProtocolError),
     Provider(ReadError),
-    PreviousBindingLive,
+    WrongRetirement,
     NonAdvancingReplacement,
     ReplacementAlreadyIssued,
 }
@@ -45,7 +46,7 @@ impl From<ProtocolError> for MicrovmBlockReadError {
 pub struct MicrovmBlockReadConsumer {
     queue: MicrovmInterfaceQueueConsumer,
     session: OpaqueHandle,
-    object: MemoryObjectId,
+    projection: MicrovmPeerPageIdentity,
     provider_generation: u64,
     system_generation: u64,
     policy_generation: u64,
@@ -95,7 +96,7 @@ pub fn bind_microvm_block_read<const C: usize>(
         MicrovmBlockReadConsumer {
             queue: consumer,
             session,
-            object: projection.object(),
+            projection: projection.identity(),
             provider_generation,
             system_generation,
             policy_generation,
@@ -110,9 +111,9 @@ pub fn bind_microvm_block_read<const C: usize>(
 }
 
 impl MicrovmBlockReadConsumer {
-    /// Builds fresh READ endpoints only after the old page is gone and a new
-    /// one is reserved. Pass the same authoritative ledger used to provision
-    /// this binding. Never substitute a snapshot or unrelated ledger.
+    /// Builds fresh READ endpoints only against a receipt for the retired
+    /// page and exact mapping pair. The replacement must come from the same
+    /// authoritative ledger namespace and carry live authorized reservations.
     ///
     /// This does not start a worker, retire host mappings, authorize a new
     /// provider, or retry any I/O. The supervisor supplies the newly admitted
@@ -128,6 +129,7 @@ impl MicrovmBlockReadConsumer {
         provider_generation: u64,
         binding_generation: u64,
         session: OpaqueHandle,
+        retirement: &MicrovmPeerPageRetirement,
         table: &MemoryPoolTable<P, O, M>,
         projection: &MicrovmPeerPageProjection,
         object: Capability,
@@ -147,8 +149,10 @@ impl MicrovmBlockReadConsumer {
         {
             return Err(MicrovmBlockReadError::NonAdvancingReplacement);
         }
-        if table.object_backing(self.object) != Err(MemoryResourceError::InvalidObject) {
-            return Err(MicrovmBlockReadError::PreviousBindingLive);
+        if retirement.identity() != self.projection
+            || !projection.identity().same_ledger(self.projection)
+        {
+            return Err(MicrovmBlockReadError::WrongRetirement);
         }
         projection
             .validate_live_reservations(table, consumer, provider, object, capabilities)
@@ -357,15 +361,9 @@ mod tests {
             .unwrap();
         assert_eq!(original.accesses, 1);
         let new_session = OpaqueHandle::new(1, 8).unwrap();
-        assert!(matches!(
-            old_client.replace_after_retirement(
-                8, 2, new_session, &memory, &old, old_cap, client, server, &caps,
-            ),
-            Err(MicrovmBlockReadError::PreviousBindingLive)
-        ));
         // Retire the old queue's authority before binding any replacement.
         // SAFETY: the test uses stack arrays, not native guest mappings.
-        unsafe {
+        let retirement = unsafe {
             mrml_kernel::release_microvm_peer_page_projection(
                 &mut memory, old, old_cap, client, server, &mut caps,
             )
@@ -390,7 +388,7 @@ mod tests {
         ] {
             assert!(matches!(
                 old_client.replace_after_retirement(
-                    provider_generation, binding_generation, session, &memory, &new,
+                    provider_generation, binding_generation, session, &retirement, &memory, &new,
                     new_cap, client, server, &caps,
                 ),
                 Err(MicrovmBlockReadError::NonAdvancingReplacement)
@@ -398,18 +396,25 @@ mod tests {
         }
         assert!(matches!(
             old_client.replace_after_retirement(
-                8, 2, new_session, &memory, &new, old_cap, client, server, &caps,
+                8, 2, new_session, &retirement, &memory, &new, old_cap, client, server, &caps,
             ),
             Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::Authority(_)))
         ));
         let (identity, mut new_client, mut new_server) = old_client.replace_after_retirement(
-            8, 2, new_session, &memory, &new, new_cap, client, server, &caps,
+            8, 2, new_session, &retirement, &memory, &new, new_cap, client, server, &caps,
         ).unwrap();
         assert!(matches!(
             old_client.replace_after_retirement(
-                8, 2, new_session, &memory, &new, new_cap, client, server, &caps,
+                8, 2, new_session, &retirement, &memory, &new, new_cap, client, server, &caps,
             ),
             Err(MicrovmBlockReadError::ReplacementAlreadyIssued)
+        ));
+        assert!(matches!(
+            new_client.replace_after_retirement(
+                9, 3, OpaqueHandle::new(1, 9).unwrap(), &retirement, &memory,
+                &new, new_cap, client, server, &caps,
+            ),
+            Err(MicrovmBlockReadError::WrongRetirement)
         ));
         let mut page = [0; PAGE_SIZE as usize];
         let new_bytes = [0x82; 512];

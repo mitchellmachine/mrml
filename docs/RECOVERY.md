@@ -2005,8 +2005,9 @@ withdrawn, and reclaims the reservation. Without resetting the parent's
 ledger, the fixture starts a new worker and guest with fresh page and binding
 generations at the same guest addresses. The old endpoint cannot submit on the
 replacement; the fresh pair completes the 512-byte retry. The reusable READ
-adapter accepts one replacement per retired binding only with live page
-reservations and advancing provider, binding, and session generations. It
+adapter accepts one replacement per retired binding only with an exact typed
+retirement receipt, live page reservations in the same ledger namespace, and
+advancing provider, binding, and session generations. It
 launches no workers and does not auto-replay I/O. No durable writes are
 involved. This is test-only evidence, not worker
 attestation, an installed storage service, or recovered Total placement.

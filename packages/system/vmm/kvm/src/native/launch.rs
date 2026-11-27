@@ -3397,7 +3397,7 @@ mod tests {
                     second_target,
                     &mut capabilities,
                 )
-            },
+            }.map(|retired| retired.released_pages()),
             Ok(1)
         );
         let usage = memory.usage(pool, pool_capability, &capabilities).unwrap();

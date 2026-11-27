@@ -4252,6 +4252,8 @@ mod tests {
         }
     }
 
+    type RetiredWorkerRead = (mrml_storage::MicrovmBlockReadConsumer, mrml_kernel::MicrovmPeerPageRetirement);
+
     struct PeerWorkerLedger {
         caps: CapabilitySpace<8>,
         memory: MemoryPoolTable<1, 1, 2>,
@@ -4285,8 +4287,8 @@ mod tests {
         provider_digest: &[u8; 64],
         exit_pending: bool,
         ledger: &mut PeerWorkerLedger,
-        mut stale: Option<&mut mrml_storage::MicrovmBlockReadConsumer>,
-    ) -> Option<mrml_storage::MicrovmBlockReadConsumer> {
+        mut stale: Option<&mut RetiredWorkerRead>,
+    ) -> Option<RetiredWorkerRead> {
         use mrml_interface_storage_block_provider_v1::OpaqueHandle;
         use mrml_kernel::{CapabilityError, MicrovmInterfaceQueueError, VmDeadlineOutcome};
         use mrml_storage::{MicrovmBlockReadError, ReadOnlyBlockImage, bind_microvm_block_read};
@@ -4313,9 +4315,9 @@ mod tests {
         ).unwrap();
         let generation = if stale.is_some() { 15 } else { 14 };
         let session = OpaqueHandle::new(1, generation).unwrap();
-        let (_, mut client, mut server) = if let Some(stale_endpoint) = stale.as_deref_mut() {
+        let (_, mut client, mut server) = if let Some((stale_endpoint, retirement)) = stale.as_deref_mut() {
             stale_endpoint.replace_after_retirement(
-                u64::from(generation), binding, session, memory, &projection,
+                u64::from(generation), binding, session, retirement, memory, &projection,
                 object_capability, consumer, provider, caps,
             )
         } else {
@@ -4336,7 +4338,7 @@ mod tests {
         }.unwrap();
         let mut page = [0; PAGE_SIZE as usize];
         client.initialize(&mut page, &projection, caps).unwrap();
-        if let Some(stale_endpoint) = stale {
+        if let Some((stale_endpoint, _)) = stale {
             let before = page;
             assert_eq!(
                 stale_endpoint.submit(1, &mut page, &projection, caps),
@@ -4412,18 +4414,16 @@ mod tests {
         assert_eq!(first.read(&mut [0; PAGE_SIZE as usize]), Err(WhpError::UnmappedMemory));
         first.retire().unwrap();
 
-        assert_eq!(
-            // SAFETY: the parent waited for the exact child to exit. In the
-            // failure fixture the only other view and partition were private
-            // to that terminated process, with no inheritable duplicates or
-            // grandchildren. The parent verified and retired its own aliases.
-            unsafe {
-                release_microvm_peer_page_projection(
-                    memory, projection, object_capability, consumer, provider, caps,
-                )
-            },
-            Ok(1)
-        );
+        // SAFETY: the parent waited for the exact child to exit. In the
+        // failure fixture the only other view and partition were private to
+        // that terminated process, with no inheritable duplicates or
+        // grandchildren. The parent verified and retired its own aliases.
+        let retirement = unsafe {
+            release_microvm_peer_page_projection(
+                memory, projection, object_capability, consumer, provider, caps,
+            )
+        }.unwrap();
+        assert_eq!(retirement.released_pages(), 1);
         let usage = memory.usage(pool, quota, caps).unwrap();
         assert_eq!((usage.object_pages(), usage.active_mappings()), (0, 0));
         assert_eq!(
@@ -4432,7 +4432,7 @@ mod tests {
         );
 
         if exit_pending {
-            return Some(client);
+            return Some((client, retirement));
         }
 
         // Reuse both guest addresses with the same live target capabilities.
@@ -4473,7 +4473,7 @@ mod tests {
                 release_microvm_peer_page_projection(
                     memory, replacement, replacement_cap, consumer, provider, caps,
                 )
-            },
+            }.map(|retired| retired.released_pages()),
             Ok(1)
         );
         mrml_runtime::mrml_println!(
@@ -4553,8 +4553,8 @@ mod tests {
         virtual_page: u64,
         provider_digest: &[u8; 64],
         ledger: &mut PeerWorkerLedger,
-        stale: Option<&mut mrml_storage::MicrovmBlockReadConsumer>,
-    ) -> Option<mrml_storage::MicrovmBlockReadConsumer> {
+        stale: Option<&mut RetiredWorkerRead>,
+    ) -> Option<RetiredWorkerRead> {
         let first = system.prepare_boot_kernel(executable, &valid_handoff(), layout).unwrap();
         run_peer_block_in_worker(first, virtual_page, provider_digest, stale.is_none(), ledger, stale)
     }
@@ -4862,7 +4862,7 @@ mod tests {
                     second_target,
                     &mut capabilities,
                 )
-            },
+            }.map(|retired| retired.released_pages()),
             Ok(1)
         );
         let usage = memory.usage(pool, pool_capability, &capabilities).unwrap();
