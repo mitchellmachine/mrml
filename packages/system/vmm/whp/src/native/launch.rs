@@ -4146,43 +4146,50 @@ mod tests {
 
     const FIXTURE_SECTION_ACCESS: u32 = 0x0006; // SECTION_MAP_READ | SECTION_MAP_WRITE
     const FIXTURE_BOOTSTRAP_MAGIC: &[u8; 8] = b"MRMLWP01";
-    const FIXTURE_BOOTSTRAP_BYTES: usize = 80;
+    const FIXTURE_BOOTSTRAP_BYTES: usize = 81;
+    const FIXTURE_WORKER_EXIT_WITH_PENDING_READ: i32 = 86;
 
-    fn fixture_bootstrap(handle: usize, digest: &[u8; 64]) -> [u8; FIXTURE_BOOTSTRAP_BYTES] {
+    fn fixture_bootstrap(handle: usize, digest: &[u8; 64], exit_pending: bool) -> [u8; FIXTURE_BOOTSTRAP_BYTES] {
         let mut bytes = [0; FIXTURE_BOOTSTRAP_BYTES];
         bytes[..8].copy_from_slice(FIXTURE_BOOTSTRAP_MAGIC);
         bytes[8..16].copy_from_slice(&(handle as u64).to_le_bytes());
-        bytes[16..].copy_from_slice(digest);
+        bytes[16..80].copy_from_slice(digest);
+        bytes[80] = u8::from(exit_pending);
         bytes
     }
 
-    fn decode_fixture_bootstrap(bytes: &[u8], digest: &[u8; 64]) -> Option<usize> {
+    fn decode_fixture_bootstrap(bytes: &[u8], digest: &[u8; 64]) -> Option<(usize, bool)> {
         let bytes: &[u8; FIXTURE_BOOTSTRAP_BYTES] = bytes.try_into().ok()?;
-        if &bytes[..8] != FIXTURE_BOOTSTRAP_MAGIC || &bytes[16..] != digest {
+        if &bytes[..8] != FIXTURE_BOOTSTRAP_MAGIC || &bytes[16..80] != digest || bytes[80] > 1 {
             return None;
         }
         let handle = usize::try_from(u64::from_le_bytes(bytes[8..16].try_into().ok()?)).ok()?;
-        (handle != 0 && handle != usize::MAX).then_some(handle)
+        (handle != 0 && handle != usize::MAX).then_some((handle, bytes[80] != 0))
     }
 
     #[test]
     fn worker_bootstrap_rejects_noncanonical_or_mismatched_frames() {
         let digest = [0x5a; 64];
-        let bytes = fixture_bootstrap(56, &digest);
-        assert_eq!(decode_fixture_bootstrap(&bytes, &digest), Some(56));
+        let bytes = fixture_bootstrap(56, &digest, false);
+        assert_eq!(decode_fixture_bootstrap(&bytes, &digest), Some((56, false)));
+        let failure = fixture_bootstrap(56, &digest, true);
+        assert_eq!(decode_fixture_bootstrap(&failure, &digest), Some((56, true)));
         for len in 0..bytes.len() {
             assert_eq!(decode_fixture_bootstrap(&bytes[..len], &digest), None);
         }
         let mut long = [0; FIXTURE_BOOTSTRAP_BYTES + 1];
         long[..bytes.len()].copy_from_slice(&bytes);
         assert_eq!(decode_fixture_bootstrap(&long, &digest), None);
-        for index in (0..8).chain(16..bytes.len()) {
+        for index in (0..8).chain(16..80) {
             let mut changed = bytes;
             changed[index] ^= 1;
             assert_eq!(decode_fixture_bootstrap(&changed, &digest), None);
         }
+        let mut invalid_mode = bytes;
+        invalid_mode[80] = 2;
+        assert_eq!(decode_fixture_bootstrap(&invalid_mode, &digest), None);
         for handle in [0, usize::MAX] {
-            assert_eq!(decode_fixture_bootstrap(&fixture_bootstrap(handle, &digest), &digest), None);
+            assert_eq!(decode_fixture_bootstrap(&fixture_bootstrap(handle, &digest, false), &digest), None);
         }
     }
 
@@ -4252,6 +4259,7 @@ mod tests {
         first: PreparedWhpGuest<'_>,
         virtual_page: u64,
         provider_digest: &[u8; 64],
+        exit_pending: bool,
     ) {
         use mrml_interface_storage_block_provider_v1::OpaqueHandle;
         use mrml_kernel::{CapabilityError, MicrovmInterfaceQueueError, VmDeadlineOutcome};
@@ -4322,7 +4330,7 @@ mod tests {
         let handle = first.backing.as_ref().unwrap().duplicate_into(&worker.0);
         // The parent writes only one fixed-size frame and closes the pipe.
         let mut input = worker.0.stdin.take().unwrap();
-        input.write_all(&fixture_bootstrap(handle, provider_digest)).unwrap();
+        input.write_all(&fixture_bootstrap(handle, provider_digest, exit_pending)).unwrap();
         drop(input);
         let status = loop {
             if let Some(status) = worker.0.try_wait().unwrap() {
@@ -4331,31 +4339,47 @@ mod tests {
             assert!(Instant::now() < deadline, "WHP fixture worker timed out");
             std::thread::sleep(Duration::from_millis(5));
         };
-        assert!(status.success(), "WHP fixture worker failed: {status}");
+        if exit_pending {
+            assert_eq!(status.code(), Some(FIXTURE_WORKER_EXIT_WITH_PENDING_READ));
+        } else {
+            assert!(status.success(), "WHP fixture worker failed: {status}");
+        }
         let mut expected = page;
         expected[1024..1536].fill(0xa6);
         let mut worker_page = [0u8; PAGE_SIZE as usize];
         first.read(&mut worker_page).unwrap();
         assert_eq!(worker_page, expected);
-        let mut image = [0; 1024];
-        image[512..].copy_from_slice(&worker_page[1024..1536]);
-        let mut storage = ReadOnlyBlockImage::new(&image, 512, session).unwrap();
-        let response = server.serve(&mut page, &projection, &caps, notification, &mut storage).unwrap();
-        first.write(&page).unwrap();
-        assert_eq!(first.run_with_deadline(1_000_000).unwrap(),
-            VmDeadlineOutcome::Exit(VmExit::Halted));
-        let mut sector = [0; 512];
-        client.complete(&mut page, &projection, &caps, response, &mut sector).unwrap();
-        assert_eq!(sector, [0xa6; 512]);
+        let response = if exit_pending {
+            // The provider wrote scratch data, but its exit is not a
+            // completion. Never publish those bytes as a successful read.
+            assert_eq!(
+                client.submit(1, &mut page, &projection, &caps),
+                Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidState))
+            );
+            None
+        } else {
+            let mut image = [0; 1024];
+            image[512..].copy_from_slice(&worker_page[1024..1536]);
+            let mut storage = ReadOnlyBlockImage::new(&image, 512, session).unwrap();
+            let response = server.serve(&mut page, &projection, &caps, notification, &mut storage).unwrap();
+            first.write(&page).unwrap();
+            assert_eq!(first.run_with_deadline(1_000_000).unwrap(),
+                VmDeadlineOutcome::Exit(VmExit::Halted));
+            let mut sector = [0; 512];
+            client.complete(&mut page, &projection, &caps, response, &mut sector).unwrap();
+            assert_eq!(sector, [0xa6; 512]);
+            Some(response)
+        };
         first.detach().unwrap();
         assert_eq!(first.guest.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
         assert_eq!(first.read(&mut [0; PAGE_SIZE as usize]), Err(WhpError::UnmappedMemory));
         first.retire().unwrap();
 
         assert_eq!(
-            // SAFETY: the exact child exited after verifying removal of its
-            // leaf and GPA. The parent also verified and retired both aliases
-            // in its own partition before this ledger release.
+            // SAFETY: the parent waited for the exact child to exit. In the
+            // failure fixture the only other view and partition were private
+            // to that terminated process, with no inheritable duplicates or
+            // grandchildren. The parent verified and retired its own aliases.
             unsafe {
                 release_microvm_peer_page_projection(
                     &mut memory, projection, object_capability, consumer, provider, &mut caps,
@@ -4387,12 +4411,19 @@ mod tests {
             client.initialize(&mut successor_page, &replacement, &caps),
             Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
         );
-        let mut untouched = [0x5a; 512];
-        assert_eq!(
-            client.complete(&mut successor_page, &replacement, &caps, response, &mut untouched),
-            Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
-        );
-        assert_eq!(untouched, [0x5a; 512]);
+        if let Some(response) = response {
+            let mut untouched = [0x5a; 512];
+            assert_eq!(
+                client.complete(&mut successor_page, &replacement, &caps, response, &mut untouched),
+                Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
+            );
+            assert_eq!(untouched, [0x5a; 512]);
+        } else {
+            assert_eq!(
+                client.submit(1, &mut successor_page, &replacement, &caps),
+                Err(MicrovmBlockReadError::Queue(MicrovmInterfaceQueueError::InvalidIdentity))
+            );
+        }
         assert_eq!(successor_page, before);
         assert_eq!(
             // SAFETY: the successor existed only in the ledger. Neither guest
@@ -4404,9 +4435,15 @@ mod tests {
             },
             Ok(1)
         );
-        mrml_runtime::mrml_println!(
-            "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-duplicated-section|ledger=retired|stale_endpoint=rejected"
-        );
+        if exit_pending {
+            mrml_runtime::mrml_println!(
+                "peer-block-worker-loss|status=PASS|backend=whp|read=not-published|ledger=retired|stale_endpoint=rejected"
+            );
+        } else {
+            mrml_runtime::mrml_println!(
+                "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-duplicated-section|ledger=retired|stale_endpoint=rejected"
+            );
+        }
     }
 
     #[test]
@@ -4433,7 +4470,7 @@ mod tests {
             0x10_0000, 16, 0x20_0000, 0x20_0000, 0x30_0000, 0x30_0000,
             0x40_0000, 0xffff_8000_0040_0000, PRIVILEGE_STACK_ARENA_PAGES, true,
         ).unwrap();
-        let handle = decode_fixture_bootstrap(&frame, executable.artifact().digest())
+        let (handle, exit_pending) = decode_fixture_bootstrap(&frame, executable.artifact().digest())
             .expect("WHP fixture worker image or bootstrap mismatch");
         let backing = FixtureSection::from_fixture_handle(core::ptr::without_provenance_mut(handle));
         let system = WhpSystem::open().unwrap();
@@ -4461,10 +4498,41 @@ mod tests {
             )
         }.unwrap();
         assert_eq!(guest.run_with_deadline(1_000_000).unwrap(), VmDeadlineOutcome::Exit(VmExit::Halted));
+        if exit_pending {
+            // Exit the worker without running its Rust alias destructors,
+            // after the signed guest touched the page but before completion.
+            std::process::exit(FIXTURE_WORKER_EXIT_WITH_PENDING_READ);
+        }
         guest.detach().unwrap();
         assert_eq!(guest.guest.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
         assert_eq!(guest.read(&mut [0; PAGE_SIZE as usize]), Err(WhpError::UnmappedMemory));
         guest.retire().unwrap();
+    }
+
+    #[test]
+    fn live_worker_loss_discards_pending_read_and_reclaims_peer_page() {
+        let system = WhpSystem::open().unwrap();
+        if !system.hypervisor_present().unwrap() {
+            mrml_runtime::mrml_println!("peer-block-worker-loss|status=SKIP|backend=whp|reason=no-hypervisor");
+            return;
+        }
+        let virtual_page = 0xffff_8000_004f_0000;
+        let encoded = signed_payload(peer_block_probe_pe(false, virtual_page));
+        let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
+        let root = TrustRoot::new(
+            ArtifactKind::VmImage,
+            Sha3_512::digest(&encoded[public_at..public_at + LAMPORT_PUBLIC_KEY_BYTES]),
+            1,
+        );
+        let signed = SignedArtifact::decode(&encoded).unwrap();
+        let executable = signed.verify_executable(&root, ArtifactKind::VmImage).unwrap();
+        let layout = WhpLaunchLayout::new(
+            0x10_0000, 16, 0x20_0000, 0x20_0000, 0x30_0000, 0x30_0000,
+            0x40_0000, 0xffff_8000_0040_0000, PRIVILEGE_STACK_ARENA_PAGES, true,
+        ).unwrap();
+        let first = system.prepare_boot_kernel(&executable, &valid_handoff(), layout).unwrap();
+        let provider_digest = Sha3_512::digest(&peer_block_probe_pe(true, virtual_page));
+        run_peer_block_in_worker(first, virtual_page, &provider_digest, true);
     }
 
     #[test]
@@ -4528,7 +4596,7 @@ mod tests {
             // A second partition object can be created on this host, but
             // its first GPA mapping collides with the live in-process owner.
             Err(WhpError::PartitionAlreadyExists) => {
-                run_peer_block_in_worker(first, peer_virtual, provider_executable.artifact().digest());
+                run_peer_block_in_worker(first, peer_virtual, provider_executable.artifact().digest(), false);
                 return;
             }
             Err(error) => panic!("second WHP partition failed: {error:?}"),

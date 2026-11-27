@@ -1997,9 +1997,13 @@ fixed-size private-pipe frame binds the child-local handle
 to the expected signed provider payload digest before mapping. Both guest and
 native mappings are withdrawn before the parent atomically retires both
 ledger reservations and reclaims the page charge. An endpoint for the old
-page cannot initialize a replacement at the same guest addresses. This is
-test-only evidence, not worker attestation, an installed storage service,
-or recovered Total placement.
+page cannot initialize a replacement at the same guest addresses. The worker
+loss fixture exits without Rust teardown after the signed provider writes
+scratch data, while the read is still pending. The parent observes exact
+process exit, does not publish a read response, checks its local alias is
+withdrawn, and reclaims the reservation. The separate success fixture
+still completes a read. No durable writes are involved. This is test-only evidence, not worker
+attestation, an installed storage service, or recovered Total placement.
 
 Recovery's retained peer owner now also installs and verifies the two exact
 supervisor RW/NX guest leaves before use. It removes and verifies both leaves
