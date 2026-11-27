@@ -2153,7 +2153,10 @@ fn application_main() -> Result<()> {
     let component_service_mode = component_release_input_mode
         || component_smp_mode
         || (arguments.len() == 14 && arguments[5] == "component-service-probe");
-    let total_service_mode = service_mode || component_service_mode;
+    let scanout_denied_mode = arguments.len() == 9 && arguments[5] == "scanout-service-denied-probe";
+    let scanout_mode = scanout_denied_mode
+        || (arguments.len() == 9 && arguments[5] == "scanout-service-probe");
+    let total_service_mode = service_mode || component_service_mode || scanout_mode;
     let block_service_mode = arguments.len() == 9 && arguments[5] == "block-service-probe";
     let service_restart_request_mode =
         arguments.len() == 9 && arguments[5] == "service-restart-request-probe";
@@ -2169,6 +2172,7 @@ fn application_main() -> Result<()> {
         || component_service_mode
         || block_service_mode
         || service_restart_request_mode
+        || scanout_mode
         || fat32_mode
         || service_preemption_mode
         || smp_service_migration_mode;
@@ -2863,7 +2867,7 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
-    let configured_total_policy = if service_mode || component_service_mode {
+    let configured_total_policy = if total_service_mode {
         let (domain, interface, interface_generation, provider_generation) =
             if component_service_mode {
                 (
@@ -2875,6 +2879,15 @@ fn application_main() -> Result<()> {
                         .ok_or_else(|| anyhow!("missing verified Zstd provider"))?
                         .artifact()
                         .version(),
+                )
+            } else if scanout_mode {
+                (
+                    ObjectId(0x5343_414e_4f55_54),
+                    ObjectId(0x5343_414e_0000_0001),
+                    1,
+                    service_executable.as_ref()
+                        .ok_or_else(|| anyhow!("missing verified scanout provider"))?
+                        .artifact().version(),
                 )
             } else {
                 (
@@ -2943,7 +2956,7 @@ fn application_main() -> Result<()> {
             total.policy().configuration_revision(),
         );
         Some(WhpTotalAdmission::Recovered(total))
-    } else if service_mode {
+    } else if total_service_mode {
         let configured = configured_total_policy
             .as_ref()
             .ok_or_else(|| anyhow!("missing configured WHP service policy"))?;
@@ -3114,6 +3127,7 @@ fn application_main() -> Result<()> {
         || component_service_mode
         || block_service_mode
         || service_restart_request_mode
+        || scanout_mode
         || fat32_mode
     {
         system.prepare_isolated_service_kernel(&executable, handoff.as_slice(), layout)
@@ -3337,30 +3351,32 @@ fn application_main() -> Result<()> {
                     anyhow!("third isolated WHP service preparation failed: {:?}", error)
                 })?;
         }
-        let shared = Mapping::new(
-            VirtAddr::new(SERVICE_SHARED_VIRTUAL)
-                .map_err(|_| anyhow!("invalid WHP service shared virtual address"))?,
-            PhysAddr::new(SERVICE_SHARED_PHYSICAL)
-                .map_err(|_| anyhow!("invalid WHP service shared physical address"))?,
-            1,
-            PagePermissions::USER_READ_WRITE,
-        )
-        .map_err(|_| anyhow!("invalid WHP service shared-page mapping"))?;
-        guest = guest
-            .attach_service_shared_page(shared)
-            .map_err(|error| anyhow!("WHP service shared-page attachment failed: {:?}", error))?;
-        let resource = Mapping::new(
-            VirtAddr::new(SERVICE_RESOURCE_VIRTUAL)
-                .map_err(|_| anyhow!("invalid WHP service resource virtual address"))?,
-            PhysAddr::new(SERVICE_RESOURCE_PHYSICAL)
-                .map_err(|_| anyhow!("invalid WHP service resource physical address"))?,
-            1,
-            PagePermissions::USER_READ_WRITE,
-        )
-        .map_err(|_| anyhow!("invalid WHP service resource-page mapping"))?;
-        guest = guest
-            .attach_service_resource_page(0, resource)
-            .map_err(|error| anyhow!("WHP service resource-page attachment failed: {:?}", error))?;
+        if !scanout_mode {
+            let shared = Mapping::new(
+                VirtAddr::new(SERVICE_SHARED_VIRTUAL)
+                    .map_err(|_| anyhow!("invalid WHP service shared virtual address"))?,
+                PhysAddr::new(SERVICE_SHARED_PHYSICAL)
+                    .map_err(|_| anyhow!("invalid WHP service shared physical address"))?,
+                1,
+                PagePermissions::USER_READ_WRITE,
+            )
+            .map_err(|_| anyhow!("invalid WHP service shared-page mapping"))?;
+            guest = guest
+                .attach_service_shared_page(shared)
+                .map_err(|error| anyhow!("WHP service shared-page attachment failed: {:?}", error))?;
+            let resource = Mapping::new(
+                VirtAddr::new(SERVICE_RESOURCE_VIRTUAL)
+                    .map_err(|_| anyhow!("invalid WHP service resource virtual address"))?,
+                PhysAddr::new(SERVICE_RESOURCE_PHYSICAL)
+                    .map_err(|_| anyhow!("invalid WHP service resource physical address"))?,
+                1,
+                PagePermissions::USER_READ_WRITE,
+            )
+            .map_err(|_| anyhow!("invalid WHP service resource-page mapping"))?;
+            guest = guest
+                .attach_service_resource_page(0, resource)
+                .map_err(|error| anyhow!("WHP service resource-page attachment failed: {:?}", error))?;
+        }
         if component_service_mode {
             let (
                 memory,
@@ -3421,12 +3437,14 @@ fn application_main() -> Result<()> {
         {
             return Err(anyhow!("isolated WHP service layout mismatch"));
         }
-        VmBackend::write_guest(
-            &mut guest,
-            SERVICE_SHARED_PHYSICAL + 8,
-            &service_entry.to_le_bytes(),
-        )
-        .map_err(|_| anyhow!("failed to publish WHP service entry"))?;
+        if scanout_mode {
+            let mode = if scanout_denied_mode { 2 } else { 1 };
+            guest = guest.attach_scanout_bootstrap(mode)
+                .map_err(|error| anyhow!("failed to prepare supervisor-only WHP scanout bootstrap: {:?}", error))?;
+        } else {
+            VmBackend::write_guest(&mut guest, SERVICE_SHARED_PHYSICAL + 8, &service_entry.to_le_bytes())
+                .map_err(|_| anyhow!("failed to publish WHP service entry"))?;
+        }
         if component_service_mode {
             VmBackend::write_guest(
                 &mut guest,
@@ -3612,6 +3630,9 @@ fn application_main() -> Result<()> {
     } else {
         WhpGuestOwner::Direct(guest)
     };
+    if scanout_mode && !matches!(&guest, WhpGuestOwner::Configuration { .. }) {
+        return Err(anyhow!("WHP scanout requires a committed microVM before execution"));
+    }
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
     if pci_configuration_mode {
@@ -4408,6 +4429,48 @@ fn application_main() -> Result<()> {
             total_started.elapsed().as_micros()
         );
         guest.finish()?;
+        return Ok(());
+    }
+    if scanout_mode {
+        let probe = |value| VmExit::Io { port: SERVICE_PROBE_PORT, size: 4, write: true, value };
+        let report = isolation_admission.as_ref().ok_or_else(|| anyhow!("missing WHP scanout admission"))?
+            .total_microvm_report();
+        if !report.satisfied() || report.running_in_microvm != 1 || report.native_fallback != 0 {
+            return Err(anyhow!("WHP scanout fixture did not retain its one Total microVM"));
+        }
+        if scanout_denied_mode {
+            if exit != probe(0x5c02) {
+                return Err(anyhow!("WHP scanout denial mismatch: {:?}", exit));
+            }
+            guest.finish()?;
+            println!("scanout-probe|status=PASS|backend=whp|scope=single-service-fixture|write_grant=denied|bytes=0|native_fallback=0");
+        } else {
+            if exit != probe(0x5c01) {
+                return Err(anyhow!("WHP scanout completion mismatch: {:?}", exit));
+            }
+            let mut hash = 0xcbf2_9ce4_8422_2325u64;
+            let mut white = 0;
+            for _ in 0..4096 {
+                let word = match VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("WHP scanout capture failed: {:?}", error))?
+                {
+                    VmExit::Io { port: SERVICE_FRAME_PORT, size: 4, write: true, value } if matches!(value, 0x000b_3b5a | 0x00ff_ffff) => value,
+                    other => return Err(anyhow!("unexpected WHP scanout pixel exit: {:?}", other)),
+                };
+                white += usize::from(word == 0x00ff_ffff);
+                for byte in word.to_le_bytes() {
+                    hash = (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3);
+                }
+            }
+            if hash != 0xbc3e_34ff_2bb4_77d0 || white != 243
+                || VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("missing WHP scanout terminal: {:?}", error))? != probe(0x5c03)
+            {
+                return Err(anyhow!("WHP scanout pixels or terminal proof mismatch: pixels={white} hash={hash:#x}"));
+            }
+            guest.finish()?;
+            println!("scanout-probe|status=PASS|backend=whp|scope=single-service-fixture|write_grant=released|bytes=16384|white_pixels={white}|native_fallback=0");
+        }
         return Ok(());
     }
     if fat32_mode {

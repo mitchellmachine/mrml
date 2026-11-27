@@ -49,10 +49,14 @@ fixture now verifies the whole 16,384-byte raster (4,096 ordered BGRX words,
 user-copy boundary and only after the write grant is revoked and the exact
 sender’s completion is received. Its supervisor-only bootstrap page has no
 service alias. The same signed images with a read-only grant publish no frame.
-Both focused KVM runs used one admitted microVM and zero native fallback. This
-is hosted evidence for a single service, not WHP, physical display or full
-Total operation. Use release builds for the fixture; an initial debug kernel
-exhausted its fixed boot stack.
+The corresponding WHP fixture passed both cases on Windows with a separately
+signed build of the same diagnostic kernel and service source. Both backends
+used one admitted microVM and zero native fallback in each case. This is
+hosted evidence for a single service, not physical display or full Total
+operation. Use release builds for the `scanout_service_probe` kernel profile;
+an initial debug kernel exhausted its fixed boot stack. The hosted runners
+accept `scanout-service-probe` or `scanout-service-denied-probe` with the
+signed compositor image and its explicit public root.
 Total placement does not promote an explicitly non-eligible class
 just because its supported placement list contains microVM. Existing admission
 and readiness evidence gates still determine whether Total is satisfied.

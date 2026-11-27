@@ -986,6 +986,24 @@ impl<'system> PreparedWhpGuest<'system> {
         Ok((entry, root))
     }
 
+    /// Back the fixed supervisor-only mailbox without creating a user alias.
+    pub fn attach_scanout_bootstrap(mut self, mode: u8) -> Result<Self, WhpError> {
+        const MAILBOX: u64 = 0x00f0_0000;
+        if !matches!(mode, 1 | 2)
+            || self.service_shared.is_some()
+            || self.service_instance[..2].iter().any(Option::is_none)
+        {
+            return Err(WhpError::InvalidMapping);
+        }
+        let entry = self.service_entry().ok_or(WhpError::InvalidMapping)?;
+        self.partition.map_zeroed(range(MAILBOX, PAGE_SIZE, MapPermissions::read_write())?)?;
+        let mut bootstrap = [0; 25];
+        bootstrap[8..16].copy_from_slice(&entry.to_le_bytes());
+        bootstrap[24] = mode;
+        self.partition.write_guest(MAILBOX, &bootstrap)?;
+        Ok(self)
+    }
+
     pub fn attach_service_shared_page(mut self, mapping: Mapping) -> Result<Self, WhpError> {
         if self.service_shared.is_some()
             || mapping.pages() != 1
