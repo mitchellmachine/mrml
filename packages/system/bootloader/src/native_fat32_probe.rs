@@ -199,7 +199,7 @@ pub(super) fn dma_mmio_coverage(covered: bool) {
 }
 
 #[cfg(feature = "q35-mmio-probe")]
-fn fixture_scratch() -> u8 {
+pub(super) fn fixture_scratch() -> u8 {
     let byte: u8;
     // SAFETY: this signed QEMU-only BSP fixture reads only the dedicated
     // emulated ISA serial scratch register. No interrupt or UART setup.
@@ -243,6 +243,7 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         &mrml_kernel::arch::x86_64::InitializedBootDma,
         &[u8],
     )>,
+    command: bool,
 ) {
     use mrml_kernel::arch::x86_64::VtdRegisterLayout;
     let [Some(drhd), Some(ecam), bridge, xhci] =
@@ -425,7 +426,14 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
     }
     trace(0xda);
     if let Some((active, dma, dmar)) = cold
-        && !fixture_activate(active, dma, dmar, pci_id, bridge_buses)
+        && !fixture_activate(
+            active,
+            dma,
+            dmar,
+            pci_id,
+            bridge_buses,
+            if command { mappings[3] } else { None },
+        )
     {
         trace(0xdb);
     }
@@ -438,6 +446,7 @@ fn fixture_activate(
     dmar: &[u8],
     endpoint_id: u32,
     bridge_buses: u32,
+    command_bar: Option<mrml_kernel::arch::x86_64::Mapping>,
 ) -> bool {
     use mrml_kernel::arch::x86_64::{
         DmarTopology, PciConfigSpace, SINGLE_REQUESTER_VTD_TABLE_PAGES, VerifiedVtdUnit,
@@ -512,7 +521,7 @@ fn fixture_activate(
         trace(0xc2);
         for _ in 0..100_000_000 {
             match fixture_scratch() {
-                0xa8 => core::hint::spin_loop(),
+                0xa8 | 0xaa => core::hint::spin_loop(),
                 0xb8 => {
                     // SAFETY: signed cold mode, checked exact live branch
                     // and cleared PCI BME bits, then independently verified
@@ -525,6 +534,31 @@ fn fixture_activate(
                         let backing = &mut *(dma.mapping().virtual_start().get()
                             as *mut [[u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES]);
                         let mut tables = unit.borrow_boot_tables(route, root, backing).ok()?;
+                        if let Some(bar) = command_bar {
+                            use mrml_kernel::arch::x86_64::{Mapping, PagePermissions, VirtAddr};
+                            let cpu = VirtAddr::new(
+                                dma.mapping()
+                                    .virtual_start()
+                                    .get()
+                                    .checked_add(table_bytes)?,
+                            )
+                            .ok()?;
+                            let payload = Mapping::new(
+                                cpu,
+                                aperture.physical_base,
+                                1,
+                                PagePermissions::KERNEL_READ_WRITE,
+                            )
+                            .ok()?;
+                            return super::q35_xhci_command::run(
+                                &mut tables,
+                                &mut unit,
+                                aperture,
+                                payload,
+                                bar,
+                            )
+                            .then_some(());
+                        }
                         unit.install_routed_dma_aperture(&mut tables, aperture)
                             .ok()?;
                         unit.verify_routed_dma_aperture(
@@ -565,7 +599,7 @@ fn fixture_activate(
     result.is_some()
 }
 
-fn trace(stage: u8) {
+pub(super) fn trace(stage: u8) {
     // SAFETY: this diagnostic runs at CPL0 on x86 and port 0xe9 is the opt-in trace.
     unsafe { asm!("out dx, al", in("dx") 0xe9u16, in("al") stage, options(nomem, nostack)) };
 }

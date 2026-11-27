@@ -3233,6 +3233,19 @@ RTSOFF, halted controller state, IMAN reserved bits, and doorbell readback.
 A distinct release is required. This preflight adds no xHCI or PCI writes,
 does not program queues, and does not start a transfer.
 
+The separately sealed command diagnostic uses the existing xHCI driver,
+not a second implementation. After the exact endpoint and bridge stop with
+bus mastering off, it prepares and activates the same scoped legacy root.
+The driver publishes its rings in the one allowed DMA page and gates bus
+mastering on a fresh translation check. A paused host checks the exact
+DMA-written successful no-op completion in that page, with no IOMMU fault,
+before releasing teardown. The driver then halts, clears both BME bits,
+withdraws and drains the aperture, scrubs the page and removes its CPU
+payload and BAR mappings. The host independently checks the halted state,
+non-present leaf and zeroed payload. The boot allocation stays reserved for
+the life of the diagnostic VM. A denied release does not start the driver.
+This exercises controller DMA, not USB media, on the emulator only.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

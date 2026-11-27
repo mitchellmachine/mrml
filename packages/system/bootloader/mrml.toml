@@ -178,6 +178,12 @@ compile_name = "mrml-storage-ahci"
 package = "org.mrml.library.storage.ahci"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_storage_usb"
+compile_name = "mrml-storage-usb"
+package = "org.mrml.library.storage.usb"
+scope = "compile"
+
 [[binary]]
 crate_name = "mrml_kernel_pe"
 output = "mrml-kernel-pe"

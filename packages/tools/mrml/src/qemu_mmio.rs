@@ -92,7 +92,7 @@ fn inspect_qmp(
     )?;
     let map = read_monitor(&mut *reader, 73)?;
     validate(&map)?;
-    let bar = if matches!(release, Some(0xa6..=0xa9)) {
+    let bar = if matches!(release, Some(0xa6..=0xaa)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
         }
@@ -105,7 +105,7 @@ fn inspect_qmp(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":77}\n",
         )?;
-        let preflight = release == Some(0xa9);
+        let preflight = matches!(release, Some(0xa9 | 0xaa));
         validate_fixture_bar(&read_monitor(&mut *reader, 77)?, bar, isolated, preflight)?;
         if preflight {
             for (id, offset, mask, expected) in [
@@ -130,7 +130,7 @@ fn inspect_qmp(
     } else {
         None
     };
-    let shutdown = matches!(release, Some(0xa7 | 0xa8));
+    let shutdown = matches!(release, Some(0xa7 | 0xa8 | 0xaa));
     let before = if shutdown {
         let state = bar
             .filter(|_| isolated)
@@ -151,7 +151,7 @@ fn inspect_qmp(
     }
     if let Some(byte) = release {
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xa9 | 0x5a) {
+        if !matches!(byte, 0xa6..=0xaa | 0x5a) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -166,7 +166,15 @@ fn inspect_qmp(
     }
     if let (Some(before), Some((path, prefix)), Some(state)) = (before, post, bar) {
         if let Some(allow) = cold {
-            inspect_cold_activation(stdin, reader, &map, (path, prefix), state, before, allow)?;
+            inspect_cold_activation(
+                stdin,
+                reader,
+                &map,
+                (path, prefix),
+                state,
+                before,
+                (allow, release == Some(0xaa)),
+            )?;
             return Ok(bar);
         }
         await_shutdown_report(path, prefix, state)?;
@@ -339,8 +347,9 @@ fn inspect_cold_activation(
     trace: (&std::path::Path, &[u8]),
     state: FixtureState,
     firmware: ShutdownSample,
-    allow: bool,
+    mode: (bool, bool),
 ) -> Result<(), String> {
+    let (allow, command) = mode;
     let (path, prefix) = trace;
     let (root, _) = wait_cold_trace(path, prefix, state, &[])?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
@@ -378,10 +387,26 @@ fn inspect_cold_activation(
     ack(reader, "{\"return\": \"\", \"id\": 106}")?;
     qmp_write(stdin, "{\"execute\":\"cont\",\"id\":107}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 107}")?;
-    let (after_root, _) =
-        wait_cold_trace(path, prefix, state, if allow { &[0xc3] } else { &[0xc4] })?;
+    let (after_root, _) = wait_cold_trace(
+        path,
+        prefix,
+        state,
+        if !allow {
+            &[0xc4]
+        } else if command {
+            &[0xc6]
+        } else {
+            &[0xc3]
+        },
+    )?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":108}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 108}")?;
+    if command && allow {
+        if after_root != root {
+            return Err("xHCI root changed during the command".into());
+        }
+        return inspect_command_completion(stdin, reader, trace, root, state, firmware);
+    }
     let expected = ShutdownSample {
         gsts: if allow { 0xc000_0000 } else { 0 },
         ..shutdown
@@ -423,6 +448,76 @@ fn inspect_cold_activation(
     Ok(())
 }
 
+fn inspect_command_completion(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    trace: (&std::path::Path, &[u8]),
+    root: u64,
+    initial: FixtureState,
+    firmware: ShutdownSample,
+) -> Result<(), String> {
+    let (path, prefix) = trace;
+    let command = sample_xhci_state(stdin, reader, initial.bar)?;
+    let active = ShutdownSample {
+        gsts: 0xc000_0000,
+        ..firmware
+    };
+    let payload = root + 6 * 4096;
+    if command.command != 1
+        || command.status & 0x1805 != 0
+        || sample_shutdown(stdin, reader, 95)? != active
+        || read_root_pointer(stdin, reader)? != root
+        || read_model_dword(stdin, reader, 0xfed9_0034, 104)? != 0
+    {
+        return Err("command fixture lacks live authority or has an xHCI/VT-d fault".into());
+    }
+    check_live_leaf(stdin, reader, root, payload | 3)?;
+    for (index, expected) in [0x20_0100, 0, 1 << 24, (33 << 10) | 1]
+        .into_iter()
+        .enumerate()
+    {
+        if read_model_dword(stdin, reader, payload + 0x300 + 4 * index as u64, 117)? != expected {
+            return Err("no matching DMA-written xHCI command completion event".into());
+        }
+    }
+    qmp_write(
+        stdin,
+        "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"o /b 0x2ff 0xba\"},\"id\":118}\n",
+    )?;
+    ack(reader, "{\"return\": \"\", \"id\": 118}")?;
+    qmp_write(stdin, "{\"execute\":\"cont\",\"id\":119}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 119}")?;
+    let (after_root, _) = wait_cold_trace(path, prefix, initial, &[0xc6, 0xc7])?;
+    qmp_write(stdin, "{\"execute\":\"stop\",\"id\":120}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 120}")?;
+    let stopped = sample_xhci_state(stdin, reader, initial.bar)?;
+    if after_root != root
+        || stopped.command != 0
+        || stopped.status & 0x1805 != 1
+        || sample_shutdown(stdin, reader, 95)?
+            != (ShutdownSample {
+                endpoint: active.endpoint & !4,
+                bridge: active.bridge & !4,
+                ..active
+            })
+        || read_root_pointer(stdin, reader)? != root
+        || read_model_dword(stdin, reader, 0xfed9_0034, 104)? != 0
+    {
+        return Err("xHCI shutdown did not leave the exact halted BME-off state".into());
+    }
+    check_live_leaf(stdin, reader, root, payload)?;
+    qmp_write(
+        stdin,
+        &format!(
+            "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"xp /512gx {payload:#x}\"}},\"id\":121}}\n",
+        ),
+    )?;
+    verify_root_page(&read_monitor(reader, 121)?, root, 6, 0)?;
+    println!(
+        "q35-xhci-command|status=PASS|completion=success|payload={payload:#x}|halted=true|bme=false|aperture_revoked=true|payload_zero=true"
+    );
+    Ok(())
+}
 fn await_shutdown_report(
     path: &std::path::Path,
     prefix: &[u8],

@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 220
+compile_edges = 221
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 198
+package_edges = 199
 system_release_edges = 3
 
 [[package]]
@@ -732,10 +732,10 @@ isolation_default = "platform"
 isolation_minimum = "platform"
 isolation_maximum = "platform"
 isolation_supported = ["platform"]
-compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.interface.storage.filesystem", "org.mrml.library.storage.ahci", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.interface.storage.filesystem", "org.mrml.library.storage.ahci", "org.mrml.library.storage.usb", "org.mrml.system.kernel"]
 
 static_runtime = []
-boot_bound = ["org.mrml.library.storage.ahci", "org.mrml.system.kernel"]
+boot_bound = ["org.mrml.library.storage.ahci", "org.mrml.library.storage.usb", "org.mrml.system.kernel"]
 system_release_bound = []
 
 [[package]]

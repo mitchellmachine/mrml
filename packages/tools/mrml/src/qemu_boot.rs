@@ -102,6 +102,9 @@ pub(super) enum Q35FixtureCase {
     ColdActivate,
     BarWrongRelease,
     BarValidRelease,
+    CommandWrongRelease,
+    CommandDenied,
+    CommandCompleted,
 }
 
 impl Q35FixtureCase {
@@ -117,6 +120,9 @@ impl Q35FixtureCase {
                 | Self::ColdActivate
                 | Self::BarWrongRelease
                 | Self::BarValidRelease
+                | Self::CommandWrongRelease
+                | Self::CommandDenied
+                | Self::CommandCompleted
         )
     }
     fn profile(self) -> u8 {
@@ -124,14 +130,15 @@ impl Q35FixtureCase {
             Self::ColdWrongRelease | Self::ColdDenyActivation | Self::ColdActivate => 3,
             Self::ShutdownWrongRelease | Self::ShutdownValidRelease => 2,
             Self::BarWrongRelease | Self::BarValidRelease => 4,
+            Self::CommandWrongRelease | Self::CommandDenied | Self::CommandCompleted => 5,
             _ => 1,
         }
     }
 
     fn cold(self) -> Option<bool> {
         match self {
-            Self::ColdDenyActivation => Some(false),
-            Self::ColdActivate => Some(true),
+            Self::ColdDenyActivation | Self::CommandDenied => Some(false),
+            Self::ColdActivate | Self::CommandCompleted => Some(true),
             _ => None,
         }
     }
@@ -208,7 +215,8 @@ fn run_qemu_config(
             | Q35FixtureCase::IsolatedWrongRelease
             | Q35FixtureCase::ShutdownWrongRelease
             | Q35FixtureCase::ColdWrongRelease
-            | Q35FixtureCase::BarWrongRelease,
+            | Q35FixtureCase::BarWrongRelease
+            | Q35FixtureCase::CommandWrongRelease,
         ) => Some([0xdc, 0xdd]),
         Some(
             Q35FixtureCase::ValidRelease
@@ -216,7 +224,9 @@ fn run_qemu_config(
             | Q35FixtureCase::ShutdownValidRelease
             | Q35FixtureCase::ColdDenyActivation
             | Q35FixtureCase::ColdActivate
-            | Q35FixtureCase::BarValidRelease,
+            | Q35FixtureCase::BarValidRelease
+            | Q35FixtureCase::CommandDenied
+            | Q35FixtureCase::CommandCompleted,
         ) => Some([0xdc, 0xde]),
         _ => None,
     };
@@ -400,11 +410,13 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         | Q35FixtureCase::IsolatedWrongRelease
         | Q35FixtureCase::ShutdownWrongRelease
         | Q35FixtureCase::ColdWrongRelease
-        | Q35FixtureCase::BarWrongRelease => Some(0x5a),
+        | Q35FixtureCase::BarWrongRelease
+        | Q35FixtureCase::CommandWrongRelease => Some(0x5a),
         Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease => Some(0xa6),
         Q35FixtureCase::ShutdownValidRelease => Some(0xa7),
         Q35FixtureCase::ColdDenyActivation | Q35FixtureCase::ColdActivate => Some(0xa8),
         Q35FixtureCase::BarValidRelease => Some(0xa9),
+        Q35FixtureCase::CommandDenied | Q35FixtureCase::CommandCompleted => Some(0xaa),
     });
     let cold = map_only_marker.and_then(Q35FixtureCase::cold);
     let mut released = false;
@@ -418,7 +430,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         &mut child,
                         valid,
                         isolated,
-                        matches!(valid, 0xa7 | 0xa8).then_some((trace, expected)),
+                        matches!(valid, 0xa7 | 0xa8 | 0xaa).then_some((trace, expected)),
                         cold,
                     ) {
                         Ok(bar) => bar,
