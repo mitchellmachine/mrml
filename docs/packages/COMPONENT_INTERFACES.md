@@ -167,8 +167,7 @@ dynamic-component/interface delta to those architectures.
 
 **PARTIALLY IMPLEMENTED transport prerequisite:** the canonical Zstd ABI-3
 provider and ZIM requirement now declare `isolated-service`; the provider
-manifest permits native-service or microVM placement with a native-service
-floor. A service-side adapter composes the unchanged 104-byte ABI request with
+manifest requires microVM placement. A service-side adapter composes the unchanged 104-byte ABI request with
 the kernel's existing authenticated inline IPC and exactly one attenuated
 read/write shared-buffer capability. It copies only the declared input into
 private scratch, writes only the exact successful output, and erases scratch on

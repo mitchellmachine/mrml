@@ -150,6 +150,7 @@ impl<Factory: ApplicationMicrovmFactory> IsolationApplicationBackend
     type Endpoint = ApplicationMicrovmEndpoint;
     type Error = ApplicationMicrovmError<Factory::Error>;
 
+    #[cfg(not(target_os = "uefi"))]
     fn launch_native_process(
         &mut self,
         _spec: IsolationApplicationSpec,

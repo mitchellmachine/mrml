@@ -27,9 +27,12 @@ pub use service_loop::{
     ReceivedZstdEnvelope, ZstdServiceLoop, ZstdServiceLoopError, ZstdServiceSyscalls,
 };
 pub use task_runtime_adapter::{
-    ZstdAdmittedTaskRuntimeEndpoint, ZstdNativeServiceBackend, ZstdNativeServiceEndpoint,
-    ZstdNativeServiceError, ZstdResolvedServiceBinding, ZstdServiceBindingError,
+    ZstdAdmittedTaskRuntimeEndpoint, ZstdResolvedServiceBinding, ZstdServiceBindingError,
     ZstdTaskRuntimeAdapter, ZstdTaskRuntimeAdapterError, ZstdTaskRuntimeEndpoint,
+};
+#[cfg(not(target_os = "uefi"))]
+pub use task_runtime_adapter::{
+    ZstdNativeServiceBackend, ZstdNativeServiceEndpoint, ZstdNativeServiceError,
 };
 pub use userspace_syscall_adapter::{
     ZstdRawSyscall, ZstdSyscallFrame, ZstdUserspaceSyscallError, ZstdUserspaceSyscalls,

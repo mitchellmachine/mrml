@@ -30,14 +30,16 @@ The existing signed configuration-service probes on both hosted VMM runners now
 prepare that exact Total-mode record before guest construction, commit it only
 after the backend has produced the requested microVM container, and emit a
 structured zero-fallback report only after the complete service probe succeeds.
-This is launch-admission integration, not completion of a dual-placement runtime
-or proof that the required system satisfies Total mode.
+This is launch-admission integration, not proof that the required system
+satisfies Total mode.
 
 Every checked-in service package now declares a runtime classification. The
 compositor and deployment service are required microVM-eligible services when
 included in an active release; placement eligibility does not attest that
 an executable has launched. The storage coordinator is explicitly a required
-blocker until its supervised guest and transport exist. The standalone native
+blocker until its supervised guest and transport exist. The former direct FAT32 provider
+launcher is available only for hosted regression and is not an OS launch path.
+The standalone
 service-image package is an optional diagnostic blocker, not a production
 exception. The compositor’s fixed one-shot service probe builds as a PE service
 payload and renders a private 128×32 frame. It uses the existing bounded
@@ -61,46 +63,20 @@ Total placement does not promote an explicitly non-eligible class
 just because its supported placement list contains microVM. Existing admission
 and readiness evidence gates still determine whether Total is satisfied.
 
-The kernel also has a bounded caller-selected routing prerequisite for service
-placements. One typed service specification binds the domain, interface and
-exact interface/provider/policy generations to either `NATIVE_SERVICE` or
-`MICROVM`; the router invokes only that backend entry and commits only matching
-readiness evidence. Total mode rejects a native-service request before backend
-launch, and microVM failure is retained as unavailable without native fallback.
-The configuration service now supplies the first concrete adapter over those
-two backend entries, and its manifest admits both forms while retaining native
-service as the default and floor. Focused tests prove that either form preserves
-one interface/provider binding and that microVM failure never invokes its native
-launcher. This routing composition still does not automatically select a
-provider or placement, carry a general interface invocation, persist policy, or
-provide transparent cross-placement transport. A fully resolved representative
-dual-placement service remains **PLANNED**.
+The kernel binds the exact domain, interface and immutable generations to a
+microVM service route. The freestanding build rejects any other service placement
+at specification construction and compiles only the microVM dispatch entry.
+MicroVM failure is retained as unavailable without fallback. Configuration
+launch has been demonstrated in signed hosted probes; general resolver-to-guest
+construction and runtime transport are not yet complete.
 
-Applications now have a separate bounded kernel routing prerequisite rather
-than being represented as services. One typed specification binds the runtime
-domain, application object, immutable application generation and artifact
-digest, active `SystemGeneration`, applied policy generation, and exactly one
-of `NATIVE_PROCESS` or `MICROVM`. The prepared transaction invokes only the
-selected backend and publishes the domain only after matching readiness
-evidence. Stale system or policy generations reach neither backend. Strict
-Total mode rejects native-process placement before construction; failed
-microVM construction records typed unavailability and never tries the native
-backend. Focused hosted kernel tests cover both placements, immutable identity,
-stale generations, backend exclusivity, and zero fallback. This is
-**PARTIALLY IMPLEMENTED** application-launch control-plane groundwork. A
-concrete native-process adapter now creates one ordinary task in a dedicated
-caller-owned `TaskRuntime`, without a service identity or metadata-derived
-capability. It retains exact route identity, refuses microVM dispatch, revokes
-the complete task domain before address-space erasure, and retains an uncertain
-erase for exact retry. Focused Windows/Linux unit tests use an unaccounted test
-runtime; production quantitative runtime allocation remains the caller's
-separate obligation. This is not the representative dual-placement GUI
-application: no GUI package, compositor or Semantic Scene Graph integration
-exists yet. A distinct syscall-only `org.mrml.app.isolation-probe` package now
-declares native-process and microVM support and cross-builds to identical PE
-bytes on Windows and Arch Linux. It has not been loaded or executed, so no
-WHP/KVM application probe exists yet. The
-kernel artifact boundary now recognizes a bounded executable
+Applications have their own admission route. It binds the domain, application
+object, immutable artifact digest, application generation, active
+`SystemGeneration`, and applied policy generation to microVM execution.
+Stale generations cannot reach the backend, and failed construction is recorded
+as unavailable. The freestanding build has no direct process dispatch entry.
+Hosted tests of the former direct lifecycle are regression evidence only.
+The kernel artifact boundary recognizes a bounded executable
 `ApplicationImage` kind and can authenticate it against an independently
 selected application root. It is intentionally outside the fixed five-root
 early-boot `SystemRelease`: asking that release to supply an application root
@@ -191,8 +167,7 @@ Complete Manifest V2 catalog delivery and hardware-backed generation selection
 and recovery remain **PLANNED**.
 
 The canonical `org.mrml.zstd`/`org.mrml.zim` manifests now select the
-`isolated-service` interface form, and Zstd permits native-service or microVM
-placement with a native-service floor. Its first bounded data-plane adapter
+`isolated-service` interface form, with Zstd restricted to microVM placement. Its first bounded data-plane adapter
 uses the unchanged ABI-3 request over authenticated kernel IPC plus exactly one
 attenuated read/write shared-buffer capability. Hosted Windows and Arch Linux
 tests deliver the request through `TaskRuntime`, revalidate the exact VM/task
@@ -243,11 +218,10 @@ committed prepared guest into this owner, use the retained guest through its
 exact endpoint, and explicitly retire the lifecycle on the successful terminal
 path. Unrelated launch modes cannot consume a configuration-owned guest. Both
 runner builds and focused unit suites pass with this identical ownership shape.
-The dual-placement milestone remains **PARTIALLY IMPLEMENTED** rather than
-complete. The focused WHP/KVM component path now resolves its exact microVM
-provider from canonical bytes matching the recovered active generation, but
-manifest-driven declaration delivery, resolver-driven native-service dispatch,
-and general cross-placement transport remain planned.
+The direct configuration launcher is compiled only on hosted targets for
+regression coverage and is not an OS execution path. The WHP/KVM component probe resolves its exact
+microVM provider from canonical bytes matching the recovered active generation.
+General resolver-to-guest construction and transport remain planned.
 An admitted-guest transfer factory now accepts one backend-constructed guest
 only when the complete `IsolationServiceSpec` matches, consumes it once, and
 permits trusted mutable guest access only through the matching generational
@@ -330,20 +304,18 @@ publication failure returns the complete prepared launch and opaque endpoint
 for backend teardown, while existing entries remain unchanged. This is host
 control-plane ordering, not a kernel runtime handoff: it does not grant
 capabilities, invoke a backend, create
-either runtime, or carry interface traffic, so the fully resolved and launched
-dual-placement service remains **PLANNED**.
+a guest, or carry interface traffic. General microVM service runtime delivery
+remains **PLANNED**.
 
 > Control planes establish authority; data planes should take the shortest safe
 > path.
 
-For adaptive placement, the configuration service, resolver, capability policy,
-and VMM admission form the control plane. They select and authorize an exact
-provider generation, placement, projected capabilities, queues, resource
-budgets, and revocation path. Once admitted, ordinary interface traffic uses
-the shortest safe transport supported by that binding—an in-process call,
-native IPC, or a bounded shared microVM queue—without repeating policy lookup
-for every message. Data-plane bytes cannot grant capabilities, change placement,
-substitute providers, or widen the admitted binding.
+The configuration service, resolver, capability policy, and VMM admission form
+the control plane. They authorize the exact provider generation, guest,
+projected capabilities, queues, resource budgets, and revocation path. Once
+admitted, ordinary interface traffic uses the bounded microVM transport without
+repeating policy lookup for each message. Data-plane bytes cannot grant
+capabilities, substitute providers, or widen the admitted binding.
 
 ```text
 CONTROL PLANE
@@ -628,16 +600,11 @@ plan now repeats both exact setting READ checks immediately before translating
 the records into the kernel `IsolationMode`, component placement request, and
 admission-table policy generation. Capability revocation or any intervening
 configuration commit invalidates the plan. A service-specific admission step
-then checks an authenticated package projection of preferred, minimum, maximum,
-and supported native-service/microVM forms. It produces an exact generational
-`IsolationServiceSpec`; unsupported strict Total requests and owner requests
-below the mandatory floor fail without alternate placement. This is **PARTIALLY
-IMPLEMENTED** control-plane application. The configuration service now composes
-that sequence into one route which revalidates policy, bounds, kernel mode and
-policy generation, and exact interface/provider generations before calling only
-the selected native-service or microVM backend. Stale policy and mismatched
-admission tables reach neither launcher. This is not a general package-policy
-resolver, broad interface transport, or Total-mode completion.
+then checks the authenticated package bounds and class before constructing an
+exact generational microVM specification. A stale policy, mismatched admission
+table, unsupported class, or unavailable VMM prevents launch without falling
+back. This is **PARTIALLY IMPLEMENTED** control-plane application, not a general
+package resolver or proof of full-session readiness.
 
 Settings and the object shell now have a shared **PARTIALLY IMPLEMENTED**
 frontend contract rather than separate policy paths. One canonical 32-byte
@@ -1093,15 +1060,11 @@ Documentation is not implementation evidence. Implement bounded milestones:
 
 1. policy/object schema, validation, workspace retention, lock output, and
    bounded kernel launch admission/reporting (**PARTIALLY IMPLEMENTED**);
-2. one representative dual-placement service (**PARTIALLY IMPLEMENTED** for
-   manifest policy, a hosted supervised native-service ABI-3 call, and the
-   separately hosted WHP/KVM microVM call; general resolver dispatch remains);
-3. one representative dual-placement GUI application (**PARTIALLY IMPLEMENTED**
-   for the generation-bound kernel route, dedicated native-process lifecycle
-   adapter, backend-neutral microVM guest owner, `org.mrml.app.gui-probe` client
-   state machine and exact application identity, and fresh signed WHP/KVM
-   Total-mode CPL3 lifecycle parity; in-guest surface transport, compositor and
-   Semantic Scene Graph integration, rendering, and presentation remain
+2. one representative microVM service (**PARTIALLY IMPLEMENTED** for signed
+   hosted WHP/KVM probes; general runtime delivery remains open);
+3. one representative microVM GUI application (**PARTIALLY IMPLEMENTED** for
+   signed WHP/KVM CPL3 lifecycle and one-service compositor capture; end-to-end
+   surface transport, Semantic Scene Graph integration, and presentation remain
    **PLANNED**);
 4. monitor placement visibility (**PARTIALLY IMPLEMENTED** for the
    capability-scoped aggregate kernel snapshot; per-domain/service/UI projections

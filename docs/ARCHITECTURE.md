@@ -51,8 +51,9 @@ capability. MRML is not currently a production operating system.
 Policy, capability derivation, exact-generation resolution, admission, resource
 accounting, queue creation, mapping, and revocation setup belong to control
 planes. After that control plane has established an immutable bounded binding,
-steady-state data should use the most direct safe transport for that binding,
-such as an in-process call, native IPC, or a capability-bound shared queue. A
+steady-state data should use the most direct safe transport for that binding.
+Ordinary cross-domain traffic uses the admitted microVM transport, such as a
+capability-bound shared queue. A
 short data path never means ambient authority: data-plane bytes cannot mint
 capabilities, select or substitute objects or providers, change placement or
 policy, exceed admitted budgets, or bypass validation, accounting, lifecycle,

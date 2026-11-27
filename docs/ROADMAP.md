@@ -2049,8 +2049,8 @@ Three new persistent deltas are documented before implementation:
   is **PARTIALLY IMPLEMENTED** hosted controlled-probe evidence, not a GUI app,
   general resolver/resource projection, required-system Total readiness,
   host-resistant isolation, bare metal, or physical evidence.
-  The configuration package now admits both forms and supplies a concrete
-  configuration-specific adapter with focused fail-closed tests. The native
+  The configuration package admits only microVM placement. Hosted regression
+  tests preserve evidence for the former direct lifecycle. The native
   form now uses a real accounted `TaskRuntime`/`ServiceSupervisor` launch and
   exact retryable address-space cleanup. The VMM form now has a backend-neutral
   owner that retains one prepared guest behind an exact generational endpoint
@@ -2068,7 +2068,7 @@ Three new persistent deltas are documented before implementation:
   service form, and a bounded hosted adapter carries the exact ABI-3 request
   through `TaskRuntime` plus one attenuated shared-buffer capability under
   distinct VM/task bindings on Windows and Arch Linux. This is not a launched
-  service or VMM invocation. A complete representative dual-placement service,
+  service or VMM invocation. A complete representative microVM service,
   Settings/shell projection of owner policy, VM construction, resource
   projection, resolver-to-launch binding, concrete service syscalls, and WHP/KVM
   runtime transport remain **PLANNED**. A bounded userspace receive/reply loop
@@ -2121,8 +2121,8 @@ With the small package-extension/tooling gate complete, keep adaptive isolation
 and storage/optical as separate sequential foundational OS tasks under
 the work-in-progress limit; do not combine them into one functional commit.
 
-Adaptive-isolation milestones remain separate: policy/object schema; one
-dual-placement service; one dual-placement GUI app; monitor visibility
+Total MicroVM milestones remain separate: policy/object schema; one
+microVM service; one microVM GUI app; monitor visibility
 (**PARTIALLY IMPLEMENTED** as a capability-scoped aggregate kernel snapshot);
 resource/device projection; Settings/shell policy; strict Total runtime;
 bootloader selector; EFI Shell selector; required-system Total readiness;
@@ -2988,8 +2988,7 @@ reference accounting, and process integration remain **PLANNED**.
 The canonical `org.mrml.zstd` provider and `org.mrml.zim` consumer migration are
 **PARTIALLY IMPLEMENTED** as hosted code and focused tests. ZIM depends on the
 separate ABI-3 binding package, declares the isolated-service form, and no
-longer names a provider crate or path. Zstd declares native-service or microVM
-placement and supplies a bounded service-side kernel IPC/shared-buffer adapter.
+longer names a provider crate or path. Zstd requires microVM placement and supplies a bounded service-side kernel IPC/shared-buffer adapter.
 The existing Wikipedia composition root still directly supplies the provider
 in its host build. A standalone `org.mrml.zstd` x86-64 UEFI service artifact now
 builds through `mrml` on Windows and Arch Linux with exact launch-register and
@@ -4997,7 +4996,7 @@ cannot select a different surface, output, generation, or authority. The
 binding retains exact handles and fails revalidation after revocation or slot
 reuse without replaying placement policy. This is a
 host unit-tested kernel contract, not a complete application wire path,
-trusted registry/compositor, dual-placement GUI application, GOP presentation,
+trusted registry/compositor, microVM GUI application, GOP presentation,
 fence path, Semantic Scene Graph, WHP/KVM GUI parity, or physical display
 evidence. Those steps remain in the listed dependency order.
 
@@ -5012,7 +5011,7 @@ and 535 kernel tests. Native IPC and a backend-neutral microVM queue are now
 **PARTIALLY IMPLEMENTED** with the identical fixed surface frame and common
 registry/kernel admission; eight focused compositor tests pass on Windows and
 Arch Linux/WSL. The queue is not guest-mapped or exercised through WHP/KVM;
-registry lifecycle in a running compositor and the representative dual-placement
+registry lifecycle in a running compositor and the representative microVM
 GUI application's live surface connection remain next. The new
 `org.mrml.app.gui-probe` already supplies a placement-independent client state
 machine over the interface-owned canonical frame and an independently signed

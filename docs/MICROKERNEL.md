@@ -29,7 +29,7 @@ placement and active unsupported blockers, and a typed resource or transport
 failure cancels preparation without creating a native fallback. Six focused
 tests are included in the Windows and Arch Linux hosted kernel suites.
 This mechanism does not create VMs, select providers, allocate resources, or
-provide the first dual-placement service, so Total MicroVM remains **PLANNED**.
+run a full system, so full-session Total MicroVM remains **PLANNED**.
 
 Unavailable isolation attempts now remain in a same-capacity ordered ledger
 instead of disappearing when their prepared slot is released. Each record binds
@@ -41,22 +41,12 @@ failure. The Total report exposes the number of unavailable eligible domains but
 does not miscount them as running native fallback. Focused tests cover this in
 both hosted suites.
 
-A bounded service-routing prerequisite now composes that admission table with
-distinct native-service and microVM backend entry points. Its typed specification
-preserves exact interface, interface-generation, provider-generation, and policy-
-generation identity across either placement. It rejects Total-mode native service
-before invoking a backend, records microVM launch failure as unavailable, and
-never retries through the native entry. This is **PARTIALLY IMPLEMENTED** kernel
-mechanism and focused simulation evidence only. The configuration package now
-implements a concrete adapter with separately typed native-service and microVM
-launchers, and its manifest admits both forms. Two focused configuration tests on
-Windows and Arch Linux preserve the exact interface/provider generations across
-both routes and prove microVM unavailability cannot call the native launcher.
-The native launcher is wired to supervision and the microVM launcher now owns a
-transaction-committed KVM/WHP guest through exact endpoint retirement. This does
-not yet automatically choose a provider or placement, provide general cross-
-placement transport, or complete the representative dual-placement-service
-milestone.
+The freestanding service router accepts only microVM launch specifications and
+exposes only microVM backend dispatch; direct application dispatch is likewise
+excluded. A failed guest launch records typed unavailability without fallback.
+The configuration launcher owns its admitted guest through exact endpoint
+retirement, demonstrated in signed hosted WHP and KVM probes. Existing hosted
+direct-lifecycle tests do not define an OS mode or an installation option.
 
 The first component data-plane prerequisite now composes the canonical Zstd
 ABI-3 request with the existing kernel IPC/shared-memory mechanisms outside the
@@ -65,8 +55,8 @@ bounded `TaskRuntime` inbox and exactly one attenuated read/write shared-buffer
 capability, revalidates its VM/task binding, copies only the declared compressed
 input into private scratch, invokes the existing provider, writes only the exact
 successful output range, and erases scratch on every return path. The Zstd and
-ZIM manifests now select `isolated-service`; Zstd permits native-service or
-microVM placement with a native-service floor. Twenty-two focused Zstd tests pass
+ZIM manifests select `isolated-service`; Zstd is restricted to microVM
+placement. Twenty-two focused Zstd tests pass
 on Windows and Arch Linux, including actual inbox delivery, revocation, wrong-
 task rejection, distinct VM/task projections, invalid-frame no-write, and
 scratch exhaustion. The provider now also has a bounded userspace receive/reply
@@ -109,8 +99,8 @@ subsystem 10, and nonzero entry RVA `0x0000ae90`. The allocation-free target
 floor supports raw/RLE blocks and rejects entropy-coded blocks pending bounded
 table migration. No service process or guest executed, the actual generation
 resolver is not connected to launch, and supervision/resource-pool and WHP/KVM
-parity remain absent, so the representative dual-placement service remains
-**PARTIALLY IMPLEMENTED**.
+parity were absent at this checkpoint. Later signed microVM probes are
+recorded below.
 
 The native half is now wired to actual kernel supervision. `ServiceSupervisor`
 preflights object and slot capacity before task creation, then publishes the new
@@ -2976,9 +2966,8 @@ and malformed bounds are rejected. No alternate form is selected after failure.
 This bounded check neither classifies workloads nor selects providers, VM
 templates, or resources. A composed route now repeats the policy reads, package
 checks, kernel mode/generation match, and exact interface/provider binding in
-one call before dispatching only to the selected native-service or microVM
-launcher. Revision drift and admission mismatch invoke neither backend; backend
-failure is not retried through the other form. Windows and Arch Linux each pass
+one call before dispatching to the microVM launcher. Revision drift and
+admission mismatch prevent launch; backend failure has no fallback. Windows and Arch Linux each pass
 all 40 focused configuration tests. This remains unit/simulation evidence and
 not the complete general package resolver or broad cross-placement runtime.
 
@@ -9701,10 +9690,10 @@ the post-run native state with the captured state. Stronger/different classes,
 nice values, real-time policies, admission mapping, and general scheduler
 integration remain planned.
 
-### Hosted supervised native Zstd service lifecycle
+### Hosted Zstd lifecycle regression
 
-The exact-generation Zstd ABI-3 path now has a concrete native-service control
-plane in addition to the separately hosted WHP/KVM microVM probe. A
+The direct Zstd lifecycle exists only for hosted regressions and does not
+compile into the freestanding OS. The signed WHP/KVM microVM probe is separate. A
 `ZstdNativeServiceBackend` requires a nonzero reply object and creates the
 provider as a distinct-address-space `TaskRuntime` task through the existing
 `ServiceSupervisor`, then returns an immutable endpoint

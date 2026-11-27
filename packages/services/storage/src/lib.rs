@@ -21,6 +21,7 @@ mod extent;
 mod file;
 mod filesystem_mount;
 mod filesystem_open;
+#[cfg(not(target_os = "uefi"))]
 mod filesystem_provider_launch;
 mod format;
 mod identity;
@@ -123,6 +124,7 @@ pub use filesystem_open::{
     AuthenticatedFilesystemLookup, FilesystemOpenBroker, FilesystemOpenError, FilesystemOpenKind,
     FilesystemOpenReservation,
 };
+#[cfg(not(target_os = "uefi"))]
 pub use filesystem_provider_launch::{
     ActiveNativeFilesystemProvider, CleanedFaultedNativeFilesystemProvider,
     CleanedNativeFilesystemProviderFaultDispatchFailure,

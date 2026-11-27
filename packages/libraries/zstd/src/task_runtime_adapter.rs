@@ -2,14 +2,19 @@ use crate::{ReceivedZstdEnvelope, ZstdServiceSyscalls};
 use mrml_interface_zstd_v3::{
     DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES, INTERFACE_GENERATION,
 };
+#[cfg(not(target_os = "uefi"))]
 use mrml_kernel::arch::x86_64::UserContext;
+#[cfg(not(target_os = "uefi"))]
 use mrml_kernel::{
-    Capability, CapabilityError, ControlEvent, Endpoint, GuestMemory, IpcSharedBufferBackend,
-    IpcSharedBufferIoError, IsolationBackendFailure, IsolationPlacement, IsolationServiceBackend,
-    IsolationServiceSpec, IsolationUnavailableReason, ObjectId, Priority, ReceivedMessage, Rights,
-    RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
-    ServiceId, ServiceState, ServiceSupervisor, SharedMemoryBindings, TaskId, TaskRuntime,
-    TaskRuntimeError, TaskTerminationDispatch, TotalMicrovmClass, VmId,
+    CapabilityError, IsolationBackendFailure, IsolationServiceBackend, IsolationServiceSpec,
+    IsolationUnavailableReason, Priority, ServiceAddressSpaceEraser, ServiceCleanupError,
+    ServiceError, ServiceId, ServiceState, ServiceSupervisor, TaskTerminationDispatch,
+};
+use mrml_kernel::{
+    Capability, ControlEvent, Endpoint, GuestMemory, IpcSharedBufferBackend,
+    IpcSharedBufferIoError, IsolationPlacement, ObjectId, ReceivedMessage, Rights,
+    RoutedIsolationService, SharedMemoryBindings, TaskId, TaskRuntime, TaskRuntimeError,
+    TotalMicrovmClass, VmId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +64,7 @@ pub struct ZstdTaskRuntimeEndpoint {
     reply_capability: Capability,
 }
 
+#[cfg(not(target_os = "uefi"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ZstdNativeServiceEndpoint {
     service: ServiceId,
@@ -70,6 +76,7 @@ pub struct ZstdNativeServiceEndpoint {
     policy_generation: u64,
 }
 
+#[cfg(not(target_os = "uefi"))]
 impl ZstdNativeServiceEndpoint {
     pub const fn service(self) -> ServiceId {
         self.service
@@ -100,6 +107,7 @@ impl ZstdNativeServiceEndpoint {
     }
 }
 
+#[cfg(not(target_os = "uefi"))]
 #[derive(Debug, Eq, PartialEq)]
 pub enum ZstdNativeServiceError<E> {
     Binding(ZstdServiceBindingError),
@@ -112,7 +120,8 @@ pub enum ZstdNativeServiceError<E> {
     Cleanup(ServiceCleanupError<E>),
 }
 
-/// Placement backend for one exact supervised native Zstd provider. Launch
+#[cfg(not(target_os = "uefi"))]
+/// Hosted regression backend for one supervised Zstd provider. Launch
 /// creates a real task/service lifecycle domain; opening the stable ABI data
 /// plane is a separate, capability-creating step. A failed data-plane open
 /// therefore leaves an exact endpoint that can still be revoked and cleaned.
@@ -136,6 +145,7 @@ pub struct ZstdNativeServiceBackend<
     retirement_dispatch: Option<TaskTerminationDispatch>,
 }
 
+#[cfg(not(target_os = "uefi"))]
 impl<'a, E, const TASKS: usize, const CAPS: usize, const SERVICES: usize>
     ZstdNativeServiceBackend<'a, E, TASKS, CAPS, SERVICES>
 {
@@ -235,6 +245,7 @@ impl<'a, E, const TASKS: usize, const CAPS: usize, const SERVICES: usize>
     }
 }
 
+#[cfg(not(target_os = "uefi"))]
 impl<
         E: ServiceAddressSpaceEraser,
         const TASKS: usize,

@@ -103,10 +103,13 @@ impl IsolationApplicationSpec {
         if application_artifact == [0; 64] {
             return Err(IsolationApplicationSpecError::InvalidArtifactDigest);
         }
-        if !matches!(
-            placement,
-            IsolationPlacement::NativeProcess | IsolationPlacement::Microvm
-        ) {
+        let supported = match placement {
+            IsolationPlacement::Microvm => true,
+            #[cfg(not(target_os = "uefi"))]
+            IsolationPlacement::NativeProcess => true,
+            _ => false,
+        };
+        if !supported {
             return Err(IsolationApplicationSpecError::UnsupportedPlacement);
         }
         Ok(Self {
@@ -234,10 +237,13 @@ impl IsolationServiceSpec {
         {
             return Err(IsolationServiceSpecError::InvalidGeneration);
         }
-        if !matches!(
-            placement,
-            IsolationPlacement::NativeService | IsolationPlacement::Microvm
-        ) {
+        let supported = match placement {
+            IsolationPlacement::Microvm => true,
+            #[cfg(not(target_os = "uefi"))]
+            IsolationPlacement::NativeService => true,
+            _ => false,
+        };
+        if !supported {
             return Err(IsolationServiceSpecError::UnsupportedPlacement);
         }
         Ok(Self {
@@ -300,6 +306,7 @@ pub trait IsolationServiceBackend {
     type Endpoint;
     type Error;
 
+    #[cfg(not(target_os = "uefi"))]
     fn launch_native_service(
         &mut self,
         spec: IsolationServiceSpec,
@@ -2828,6 +2835,7 @@ pub unsafe trait IsolationAttachedServiceBackend {
     type Endpoint;
     type Error;
 
+    #[cfg(not(target_os = "uefi"))]
     fn launch_native_service_attached(
         &mut self,
         spec: IsolationServiceSpec,
@@ -2959,6 +2967,7 @@ impl PreparedIsolationServiceRoute {
         endpoint: E,
     ) -> Result<RoutedIsolationService<E>, (Self, IsolationLaunchError, E)> {
         let evidence = match self.spec.placement {
+            #[cfg(not(target_os = "uefi"))]
             IsolationPlacement::NativeService => IsolationLaunchEvidence::NativeReady,
             IsolationPlacement::Microvm => IsolationLaunchEvidence::MicrovmReady,
             _ => unreachable!("IsolationServiceSpec rejected non-service placement"),
@@ -3391,6 +3400,7 @@ pub fn launch_prepared_isolation_service_route<B: IsolationServiceBackend, const
 {
     let spec = prepared.spec();
     let launched = match spec.placement {
+        #[cfg(not(target_os = "uefi"))]
         IsolationPlacement::NativeService => backend.launch_native_service(spec),
         IsolationPlacement::Microvm => backend.launch_microvm_service(spec),
         _ => unreachable!("IsolationServiceSpec rejected non-service placement"),
@@ -3528,6 +3538,7 @@ pub fn launch_prepared_component_service_with_attachment<
     }
     let prepared = launch.into_route();
     let launched = match spec.placement() {
+        #[cfg(not(target_os = "uefi"))]
         IsolationPlacement::NativeService => {
             backend.launch_native_service_attached(spec, attachment)
         }
@@ -3571,6 +3582,7 @@ pub trait IsolationApplicationBackend {
     type Endpoint;
     type Error;
 
+    #[cfg(not(target_os = "uefi"))]
     fn launch_native_process(
         &mut self,
         spec: IsolationApplicationSpec,
@@ -3631,6 +3643,7 @@ impl PreparedIsolationApplicationRoute {
         endpoint: E,
     ) -> Result<RoutedIsolationApplication<E>, (Self, IsolationLaunchError, E)> {
         let evidence = match self.spec.placement {
+            #[cfg(not(target_os = "uefi"))]
             IsolationPlacement::NativeProcess => IsolationLaunchEvidence::NativeReady,
             IsolationPlacement::Microvm => IsolationLaunchEvidence::MicrovmReady,
             _ => unreachable!("IsolationApplicationSpec rejected non-application placement"),
@@ -3711,6 +3724,7 @@ pub fn launch_prepared_isolation_application_route<
 > {
     let spec = prepared.spec();
     let launched = match spec.placement {
+        #[cfg(not(target_os = "uefi"))]
         IsolationPlacement::NativeProcess => backend.launch_native_process(spec),
         IsolationPlacement::Microvm => backend.launch_microvm_application(spec),
         _ => unreachable!("IsolationApplicationSpec rejected non-application placement"),
