@@ -2664,12 +2664,14 @@ fn q35_mmio_snapshot(
         loader_trace(0xe6);
         return None;
     }
-    let mappings = if matches!(marker[32], 2..=6) {
+    let mappings = if matches!(marker[32], 2..=7) {
         if topology != Q35FixtureTopology::Isolated {
             loader_trace(0xe6);
             return None;
         }
-        if marker[32] == 6 {
+        if marker[32] == 7 {
+            mrml_kernel::arch::x86_64::q35_fixture_write_mappings().ok()?
+        } else if marker[32] == 6 {
             mrml_kernel::arch::x86_64::q35_fixture_storage_mappings().ok()?
         } else if marker[32] == 5 {
             mrml_kernel::arch::x86_64::q35_fixture_command_mappings().ok()?

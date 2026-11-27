@@ -432,12 +432,12 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
             dmar,
             pci_id,
             bridge_buses,
-            if matches!(release, 0xaa | 0xab) {
+            if matches!(release, 0xaa..=0xac) {
                 mappings[3]
             } else {
                 None
             },
-            release == 0xab,
+            matches!(release, 0xab | 0xac),
         )
     {
         trace(0xdb);
@@ -527,7 +527,7 @@ fn fixture_activate(
         trace(0xc2);
         for _ in 0..100_000_000 {
             match fixture_scratch() {
-                0xa8 | 0xaa | 0xab => core::hint::spin_loop(),
+                0xa8 | 0xaa..=0xac => core::hint::spin_loop(),
                 0xb8 => {
                     // SAFETY: signed cold mode, checked exact live branch
                     // and cleared PCI BME bits, then independently verified

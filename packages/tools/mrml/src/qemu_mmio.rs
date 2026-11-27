@@ -92,7 +92,7 @@ fn inspect_qmp(
     )?;
     let map = read_monitor(&mut *reader, 73)?;
     validate(&map)?;
-    let bar = if matches!(release, Some(0xa6..=0xab)) {
+    let bar = if matches!(release, Some(0xa6..=0xac)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
         }
@@ -105,7 +105,7 @@ fn inspect_qmp(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":77}\n",
         )?;
-        let preflight = matches!(release, Some(0xa9..=0xab));
+        let preflight = matches!(release, Some(0xa9..=0xac));
         validate_fixture_bar(&read_monitor(&mut *reader, 77)?, bar, isolated, preflight)?;
         if preflight {
             for (id, offset, mask, expected) in [
@@ -130,7 +130,7 @@ fn inspect_qmp(
     } else {
         None
     };
-    let shutdown = matches!(release, Some(0xa7 | 0xa8 | 0xaa | 0xab));
+    let shutdown = matches!(release, Some(0xa7 | 0xa8 | 0xaa..=0xac));
     let before = if shutdown {
         let state = bar
             .filter(|_| isolated)
@@ -151,7 +151,7 @@ fn inspect_qmp(
     }
     if let Some(byte) = release {
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xab | 0x5a) {
+        if !matches!(byte, 0xa6..=0xac | 0x5a) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -354,8 +354,8 @@ fn inspect_cold_activation(
     mode: (bool, u8),
 ) -> Result<(), String> {
     let (allow, release) = mode;
-    let command = matches!(release, 0xaa | 0xab);
-    let media = release == 0xab;
+    let command = matches!(release, 0xaa..=0xac);
+    let media = matches!(release, 0xab | 0xac);
     let (path, prefix) = trace;
     let (root, _) = wait_cold_trace(path, prefix, state, &[])?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
@@ -384,7 +384,7 @@ fn inspect_cold_activation(
         verify_root_page(&read_monitor(&mut *reader, 105)?, root, page, 0, 1)?;
     }
     if media {
-        verify_scratch_read(stdin, reader, path, false)?;
+        verify_scratch_state(stdin, reader, path, false, false)?;
         if allow {
             qmp_write(
                 stdin,
@@ -393,6 +393,15 @@ fn inspect_cold_activation(
             ack(reader, "{\"return\": {}, \"id\": 122}")?;
         }
     }
+    let trace_offset = if release == 0xac {
+        Some(
+            std::fs::metadata(path.with_file_name("mrml-vtd.log"))
+                .map_err(|e| e.to_string())?
+                .len(),
+        )
+    } else {
+        None
+    };
     let byte = if allow { 0xb8 } else { 0x5b };
     qmp_write(
         stdin,
@@ -423,7 +432,15 @@ fn inspect_cold_activation(
         if after_root != root {
             return Err("xHCI root changed during the command".into());
         }
-        return inspect_command_completion(stdin, reader, trace, root, state, firmware, media);
+        inspect_command_completion(stdin, reader, trace, root, state, firmware, release)?;
+        if let Some(offset) = trace_offset {
+            check_vtd_trace(path, offset, root + 6 * 4096, true)?;
+            println!("q35-vtd-requester|status=PASS|requester=41:00.0|pages=4");
+        }
+        return Ok(());
+    }
+    if let Some(offset) = trace_offset {
+        check_vtd_trace(path, offset, root + 6 * 4096, false)?;
     }
     let expected = ShutdownSample {
         gsts: if allow { 0xc000_0000 } else { 0 },
@@ -438,7 +455,7 @@ fn inspect_cold_activation(
         return Err("paused QEMU did not confirm the exact cold remapper state".into());
     }
     if media {
-        verify_scratch_read(stdin, reader, path, false)?;
+        verify_scratch_state(stdin, reader, path, false, false)?;
     }
     if allow {
         let payload = root + 6 * 4096;
@@ -469,6 +486,68 @@ fn inspect_cold_activation(
     Ok(())
 }
 
+fn validate_vtd_trace(log: &str, payload: u64, required: bool) -> Result<(), String> {
+    let mut matched = false;
+    for line in log.lines() {
+        let Some(entry) = line
+            .split_once("vtd_dmar_translate dev 41:00.00 iova ")
+            .map(|(_, entry)| entry)
+        else {
+            continue;
+        };
+        if !required {
+            return Err("denied fixture performed a scoped DMA translation".into());
+        }
+        let (iova, rest) = entry
+            .split_once(" -> gpa ")
+            .ok_or("bad VT-d translation trace")?;
+        let (gpa, mask) = rest.split_once(" mask ").ok_or("missing VT-d trace mask")?;
+        let address = |value: &str| {
+            value
+                .strip_prefix("0x")
+                .and_then(|value| u64::from_str_radix(value, 16).ok())
+        };
+        let input = address(iova).ok_or("bad VT-d IOVA")?;
+        let output = address(gpa).ok_or("bad VT-d GPA")?;
+        let delta = input
+            .checked_sub(0x20_0000)
+            .filter(|offset| *offset < 4 * 4096)
+            .ok_or("VT-d translated outside the fixture IOVA")?;
+        if !delta.is_multiple_of(4096) || output != payload + delta || address(mask) != Some(4095) {
+            return Err("unexpected scoped VT-d physical translation or mask".into());
+        }
+        matched = true;
+    }
+    if required && !matched {
+        return Err("no fresh VT-d translation for requester 41:00.0".into());
+    }
+    Ok(())
+}
+
+fn check_vtd_trace(
+    path: &std::path::Path,
+    offset: u64,
+    payload: u64,
+    required: bool,
+) -> Result<(), String> {
+    use std::io::Seek as _;
+    let mut file =
+        std::fs::File::open(path.with_file_name("mrml-vtd.log")).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.len() < offset {
+        return Err("VT-d trace truncated".into());
+    }
+    file.seek(std::io::SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
+    let mut log = String::new();
+    file.take(131_073)
+        .read_to_string(&mut log)
+        .map_err(|e| e.to_string())?;
+    if log.len() > 131_072 {
+        return Err("VT-d log exceeded its fixture budget".into());
+    }
+    validate_vtd_trace(&log, payload, required)
+}
+
 fn inspect_command_completion(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
@@ -476,9 +555,11 @@ fn inspect_command_completion(
     root: u64,
     initial: FixtureState,
     firmware: ShutdownSample,
-    media: bool,
+    release: u8,
 ) -> Result<(), String> {
     let (path, prefix) = trace;
+    let media = matches!(release, 0xab | 0xac);
+    let write = release == 0xac;
     let command = sample_xhci_state(stdin, reader, initial.bar)?;
     let active = ShutdownSample {
         gsts: 0xc000_0000,
@@ -505,7 +586,29 @@ fn inspect_command_completion(
             }
         }
     } else {
-        verify_scratch_read(stdin, reader, path, true)?;
+        verify_scratch_state(stdin, reader, path, true, false)?;
+    }
+    if write {
+        qmp_write(
+            stdin,
+            "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"o /b 0x2ff 0xbb\"},\"id\":124}\n",
+        )?;
+        ack(reader, "{\"return\": \"\", \"id\": 124}")?;
+        qmp_write(stdin, "{\"execute\":\"cont\",\"id\":125}\n")?;
+        ack(reader, "{\"return\": {}, \"id\": 125}")?;
+        let (write_root, _) =
+            wait_cold_trace(path, prefix, initial, &[0x91, 0x92, 0x93, 0xc8, 0xc9])?;
+        qmp_write(stdin, "{\"execute\":\"stop\",\"id\":126}\n")?;
+        ack(reader, "{\"return\": {}, \"id\": 126}")?;
+        if write_root != root
+            || sample_shutdown(stdin, reader, 95)? != active
+            || read_root_pointer(stdin, reader)? != root
+            || read_model_dword(stdin, reader, 0xfed9_0034, 104)? != 0
+        {
+            return Err("USB scratch write changed active PCI or remapper authority".into());
+        }
+        check_live_leaf(stdin, reader, root, payload | 3, 4)?;
+        verify_scratch_state(stdin, reader, path, true, true)?;
     }
     qmp_write(
         stdin,
@@ -514,7 +617,9 @@ fn inspect_command_completion(
     ack(reader, "{\"return\": \"\", \"id\": 118}")?;
     qmp_write(stdin, "{\"execute\":\"cont\",\"id\":119}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 119}")?;
-    let stages: &[u8] = if media {
+    let stages: &[u8] = if write {
+        &[0x91, 0x92, 0x93, 0xc8, 0xc9, 0xc7]
+    } else if media {
         &[0x91, 0x92, 0x93, 0xc8, 0xc7]
     } else {
         &[0xc6, 0xc7]
@@ -549,8 +654,14 @@ fn inspect_command_completion(
         verify_root_page(&read_monitor(&mut *reader, 121)?, root, page, 0, 1)?;
     }
     if media {
-        verify_scratch_read(stdin, reader, path, true)?;
-        println!("q35-xhci-storage|status=PASS|read=512|write_operations=0|unchanged=true");
+        verify_scratch_state(stdin, reader, path, true, write)?;
+        if write {
+            println!(
+                "q35-xhci-storage|status=PASS|written=512|sector=17|outside_sector_unchanged=true"
+            );
+        } else {
+            println!("q35-xhci-storage|status=PASS|read=512|write_operations=0|unchanged=true");
+        }
     }
     println!(
         "q35-xhci-command|status=PASS|completion=success|payload={payload:#x}|halted=true|bme=false|aperture_revoked=true|payload_zero=true"
@@ -618,11 +729,12 @@ fn scratch_stats(stats: &str) -> Result<[u64; 4], String> {
     Ok(counters)
 }
 
-fn verify_scratch_read(
+fn verify_scratch_state(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
     path: &std::path::Path,
     read: bool,
+    written: bool,
 ) -> Result<(), String> {
     qmp_write(
         stdin,
@@ -631,9 +743,10 @@ fn verify_scratch_read(
     let stats = read_monitor(reader, 123)?;
     let [read_bytes, reads, write_bytes, writes] =
         scratch_stats(&stats).map_err(|e| format!("{e}: {stats}"))?;
-    if write_bytes != 0
-        || writes != 0
-        || (read && (read_bytes < 512 || reads == 0))
+    let expected_writes = u64::from(written);
+    if write_bytes != expected_writes * 512
+        || writes != expected_writes
+        || (read && (read_bytes < (1 + expected_writes) * 512 || reads < 1 + expected_writes))
         || (!read && (read_bytes != 0 || reads != 0))
     {
         return Err(format!(
@@ -647,8 +760,14 @@ fn verify_scratch_read(
             Ok(bytes)
         })
         .map_err(|e| format!("scratch readback: {e}"))?;
-    if bytes != crate::qemu_boot::scratch_read_seed() {
-        return Err("scratch image bytes changed".into());
+    let mut expected = crate::qemu_boot::scratch_read_seed();
+    if written {
+        for byte in &mut expected[17 * 512..18 * 512] {
+            *byte ^= 0x5a;
+        }
+    }
+    if bytes != expected {
+        return Err("scratch image differs from the exact allowed image".into());
     }
     Ok(())
 }
@@ -1191,6 +1310,22 @@ fn validate(map: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn vtd_trace_requires_fresh_exact_requester_and_nonidentity_pages() {
+        let log = "vtd_dmar_translate dev 41:00.00 iova 0x203000 -> gpa 0x1d203000 mask 0xfff\n";
+        assert!(validate_vtd_trace(log, 0x1d200000, true).is_ok());
+        assert!(validate_vtd_trace(log, 0x1d200000, false).is_err());
+        assert!(validate_vtd_trace("", 0x1d200000, false).is_ok());
+        assert!(
+            validate_vtd_trace(&log.replace("41:00.00", "41:00.01"), 0x1d200000, true).is_err()
+        );
+        assert!(
+            validate_vtd_trace(&log.replace("0x203000", "0x204000"), 0x1d200000, true).is_err()
+        );
+        assert!(
+            validate_vtd_trace(&log.replace("0x1d203000", "0x203000"), 0x1d200000, true).is_err()
+        );
+    }
     #[test]
     fn scratch_counters_are_tied_to_exact_backend_and_do_not_hide_writes() {
         let old = "esp: rd_bytes=99 rd_operations=1 wr_bytes=1 wr_operations=1\nmrml_read: rd_bytes=512 rd_operations=1 wr_bytes=512 wr_operations=1\n";

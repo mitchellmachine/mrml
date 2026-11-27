@@ -203,7 +203,11 @@ impl VtdPciPlatform for Owner {
     }
 }
 
-fn read_scratch<P: Platform>(controller: &mut Controller<P>, base: u64) -> Option<()> {
+fn read_scratch<P: Platform>(
+    controller: &mut Controller<P>,
+    base: u64,
+    writable: bool,
+) -> Option<()> {
     use mrml_storage_usb::xhci::{BulkDma, DeviceDma};
     use mrml_storage_usb::{UsbDisk, find_bulk_interface};
     let mut found = None;
@@ -254,11 +258,38 @@ fn read_scratch<P: Platform>(controller: &mut Controller<P>, base: u64) -> Optio
     }
     let mut sector = [0; 512];
     disk.read_sector(17, &mut sector).ok()?;
-    sector
+    if !sector
         .iter()
         .enumerate()
         .all(|(i, &byte)| byte == ((i ^ (i >> 3)) as u8).wrapping_mul(29) ^ 0xa7)
-        .then_some(())
+    {
+        return None;
+    }
+    if writable {
+        super::native_fat32_probe::trace(0xc8);
+        if !wait_release(0xb8, 0xbb) {
+            return None;
+        }
+        for byte in &mut sector {
+            *byte ^= 0x5a;
+        }
+        disk.write_sector_verified(17, &sector).ok()?;
+    }
+    Some(())
+}
+
+fn wait_release(previous: u8, expected: u8) -> bool {
+    for _ in 0..100_000_000 {
+        let byte = super::native_fat32_probe::fixture_scratch();
+        if byte == expected {
+            return true;
+        }
+        if byte != previous {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+    false
 }
 
 /// # Safety
@@ -273,7 +304,13 @@ pub(super) unsafe fn run<M: VtdTableMemory, R: VtdRegisterIo>(
 ) -> bool {
     let attempt = (|| {
         let media = aperture.pages == 4;
-        if bar.virtual_start().get() != BAR + if media { 0x4000 } else { 0 } || bar.pages() != 3 {
+        let writable = bar.virtual_start().get() == BAR + 0x8000;
+        if bar.pages() != 3
+            || match (media, bar.virtual_start().get().wrapping_sub(BAR)) {
+                (false, 0) | (true, 0x4000 | 0x8000) => false,
+                _ => true,
+            }
+        {
             return None;
         }
         let owner = Owner {
@@ -314,23 +351,20 @@ pub(super) unsafe fn run<M: VtdTableMemory, R: VtdRegisterIo>(
             }
         };
         let completed = if media {
-            read_scratch(&mut controller, base).is_some()
+            read_scratch(&mut controller, base, writable).is_some()
         } else {
             controller.no_op(TICKS).is_ok()
         };
         let mut approved = false;
         if completed {
-            super::native_fat32_probe::trace(if media { 0xc8 } else { 0xc6 });
-            for _ in 0..100_000_000 {
-                match super::native_fat32_probe::fixture_scratch() {
-                    0xb8 => core::hint::spin_loop(),
-                    0xba => {
-                        approved = true;
-                        break;
-                    }
-                    _ => break,
-                }
-            }
+            super::native_fat32_probe::trace(if writable {
+                0xc9
+            } else if media {
+                0xc8
+            } else {
+                0xc6
+            });
+            approved = wait_release(if writable { 0xbb } else { 0xb8 }, 0xba);
         }
         controller.stop(TICKS).ok()?.revoke().ok()?;
         if completed && approved {

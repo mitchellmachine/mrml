@@ -3260,6 +3260,19 @@ and its counters at zero. The four payload pages are scrubbed and unmapped
 after halt and revocation. This is not physical USB, filesystem or write
 support evidence.
 
+The seventh profile gives the same isolated transport a distinct disposable
+writable scratch image. It verifies the seed read and zero backend writes
+while the guest is paused, then sends a separate release that permits only
+a single WRITE(10) to sector 17. The existing BOT implementation sends
+SYNCHRONIZE CACHE and reads back the sector. The host requires exactly one
+512-byte backend write and independently compares the whole image against
+the expected one-sector change. It also verifies fresh, page-granular VT-d
+translations for requester 41:00.0 against the non-identity payload range.
+A denied activation leaves the writable image unattached and unchanged,
+with zero writes and no new translation. The fixture then verifies halt,
+revocation, and scrubbing as in the read-only case. This is a QEMU-only
+storage-transport result, not physical or filesystem write evidence.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The
