@@ -2931,6 +2931,18 @@ checks do not grant rights or establish an exclusive assignment. Native
 activation must hold the same assignment lock from revalidation through
 mapping and bus-master enable, with IOMMU isolation installed first.
 
+The PCI startup path now verifies the exact backend-reported DMA mapping
+generation and bounds before touching the controller. It retains those bounds
+for the initial queues, device contexts, control transfers, and bulk buffers.
+The controller resets with bus mastering off, publishes isolated queue memory,
+revalidates the assignment, and requires exact PCI command readback before
+programming DMA pointers or starting the controller. Failure after programming
+begins returns the existing shutdown-only owner. Scripted tests reject a
+mapping change during startup or an unchanged PCI command after enabling.
+QEMU checks the halted/reset state at bus-master enable, rejects out-of-range
+DMA, and runs the existing FAT32 test using its synthetic guest aperture.
+This is ordering and bounds evidence, not physical IOMMU enforcement.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

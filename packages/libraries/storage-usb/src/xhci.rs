@@ -1,7 +1,9 @@
 //! Bounded, polled xHCI bring-up over an exclusively assigned MMIO/DMA backend.
 //! This controller session does not grant PCI or DMA access to its caller.
 
+mod activation;
 mod bulk;
+pub use activation::{DmaAssignment, PciActivation};
 mod lifecycle;
 pub mod pci;
 pub use bulk::{BulkDma, BulkPipe};
@@ -51,6 +53,7 @@ pub enum Error<E> {
     Unsupported,
     FirmwareOwned,
     InvalidDma,
+    Pci(pci::PciError),
     Timeout,
     ControllerFault,
     UnexpectedEvent,
@@ -115,17 +118,31 @@ pub struct Controller<P: Platform> {
     control: Option<(DeviceDma, u8, u8)>,
     faulted: bool,
     bulk_configured: bool,
+    assignment: Option<DmaAssignment>,
 }
 
 impl<P: Platform> Controller<P> {
+    /// For non-PCI or externally activated backends with DMA already isolated.
+    /// For native PCI startup use start_pci to gate bus mastering.
     pub fn start(
-        mut platform: P,
+        platform: P,
         bar_bytes: u32,
         dma: DmaLayout,
         ticks: u32,
     ) -> Result<Self, StartFailure<P>> {
+        Self::start_inner(platform, bar_bytes, None, dma, ticks, |_| Ok(()))
+    }
+
+    fn start_inner(
+        mut platform: P,
+        bar_bytes: u32,
+        assignment: Option<DmaAssignment>,
+        dma: DmaLayout,
+        ticks: u32,
+        activate: impl FnOnce(&mut P) -> Result<(), Error<P::Error>>,
+    ) -> Result<Self, StartFailure<P>> {
         let registers = match discover(&mut platform, bar_bytes).and_then(|registers| {
-            validate_dma::<P::Error>(dma, registers.address64).map(|()| registers)
+            validate_dma::<P::Error>(dma, registers.address64, assignment).map(|()| registers)
         }) {
             Ok(registers) => registers,
             Err(error) => return Err(StartFailure::Untouched { error, platform }),
@@ -140,14 +157,19 @@ impl<P: Platform> Controller<P> {
             control: None,
             faulted: false,
             bulk_configured: false,
+            assignment,
         };
-        match this.initialize(ticks) {
+        match this.initialize(ticks, activate) {
             Ok(()) => Ok(this),
             Err(error) => Err(StartFailure::Programming(StopFailure::new(error, this))),
         }
     }
 
-    fn initialize(&mut self, ticks: u32) -> Result<(), Error<P::Error>> {
+    fn initialize(
+        &mut self,
+        ticks: u32,
+        activate: impl FnOnce(&mut P) -> Result<(), Error<P::Error>>,
+    ) -> Result<(), Error<P::Error>> {
         let op = self.registers.operational;
         let rt = self.registers.runtime + 0x20;
         self.wait(op + 4, NOT_READY, 0, ticks)?;
@@ -176,6 +198,11 @@ impl<P: Platform> Controller<P> {
             .dma_write(self.dma.event_segments, &segment)
             .map_err(Error::Platform)?;
         self.platform.publish_dma().map_err(Error::Platform)?;
+        self.wait(op + 4, HALTED, HALTED, ticks)?;
+        // Some controllers fetch the event ring segment table when its
+        // registers are programmed. Enable only after reset and isolated
+        // queue memory publication, but before installing those pointers.
+        activate(&mut self.platform)?;
         self.write64(op + 0x30, self.dma.device_contexts)?;
         self.write64(op + 0x18, self.dma.command_ring | 1)?;
         self.write(op + 0x38, 1)?;
@@ -236,6 +263,7 @@ impl<P: Platform> Controller<P> {
                 (dma.control_buffer, 256),
             ],
             self.registers.address64,
+            self.assignment,
         )?;
         self.faulted = true;
         let result = self.address_device_inner(port, status.speed_id, dma, ticks);
@@ -638,23 +666,32 @@ fn discover<P: Platform>(platform: &mut P, bar_bytes: u32) -> Result<Registers, 
     Err(Error::InvalidBar)
 }
 
-fn validate_dma<E>(dma: DmaLayout, address64: bool) -> Result<(), Error<E>> {
+fn validate_dma<E>(
+    dma: DmaLayout,
+    address64: bool,
+    assignment: Option<DmaAssignment>,
+) -> Result<(), Error<E>> {
     let ranges = [
         (dma.device_contexts, 16),
         (dma.command_ring, RING_BYTES),
         (dma.event_segments, 16),
         (dma.event_ring, RING_BYTES),
     ];
-    validate_ranges(&ranges, address64)
+    validate_ranges(&ranges, address64, assignment)
 }
 
-fn validate_ranges<E>(ranges: &[(u64, u64)], address64: bool) -> Result<(), Error<E>> {
+fn validate_ranges<E>(
+    ranges: &[(u64, u64)],
+    address64: bool,
+    assignment: Option<DmaAssignment>,
+) -> Result<(), Error<E>> {
     for (i, &(base, size)) in ranges.iter().enumerate() {
         let end = base.checked_add(size).ok_or(Error::InvalidDma)?;
         if base == 0
             || base & 63 != 0
             || (base >> 16 != (end - 1) >> 16)
             || (!address64 && end > 1u64 << 32)
+            || assignment.is_some_and(|mapping| !mapping.contains(base, size))
             || ranges[..i]
                 .iter()
                 .any(|&(other, len)| base < other + len && end > other)

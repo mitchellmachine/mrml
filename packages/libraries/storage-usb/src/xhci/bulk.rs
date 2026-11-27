@@ -94,6 +94,7 @@ impl<P: Platform> Controller<P> {
                 (dma.buffer, SECTOR_BYTES as u64),
             ],
             self.registers.address64,
+            self.assignment,
         )?;
         self.faulted = true;
         self.require_same_connection(port)?;

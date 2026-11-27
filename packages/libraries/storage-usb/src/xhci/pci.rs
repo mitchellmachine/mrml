@@ -44,6 +44,7 @@ pub enum PciError {
     BarGeometry,
     AssignmentChanged,
     BusMasterEnabled,
+    CommandMismatch,
 }
 
 impl PciController {
@@ -88,6 +89,14 @@ impl PciController {
         })
     }
 
+    pub(super) fn verify_identity(&self, observed: PciSnapshot) -> Result<(), PciError> {
+        if Self::discover(observed)? == *self {
+            Ok(())
+        } else {
+            Err(PciError::AssignmentChanged)
+        }
+    }
+
     pub const fn bar0(&self) -> (u64, u32) {
         (self.bar0_base, self.bar0_bytes)
     }
@@ -95,9 +104,7 @@ impl PciController {
     /// Check again under the lock that will protect assignment and activation.
     /// A stale snapshot cannot establish ownership or supply that lock.
     pub fn verify_unarmed(&self, observed: PciSnapshot) -> Result<(), PciError> {
-        if Self::discover(observed)? != *self {
-            return Err(PciError::AssignmentChanged);
-        }
+        self.verify_identity(observed)?;
         if observed.command & (1 << 2) != 0 {
             return Err(PciError::BusMasterEnabled);
         }

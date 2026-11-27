@@ -16,6 +16,7 @@ use std::{
 };
 
 use mrml_storage_usb::xhci::pci::{PciController, PciError, PciLocation, PciSnapshot};
+use mrml_storage_usb::xhci::{DmaAssignment, PciActivation, StartFailure};
 
 const DMA: DmaLayout = DmaLayout {
     device_contexts: 0x10_0000,
@@ -29,6 +30,7 @@ const BAR: u32 = 0xfeb0_0000;
 struct Qtest {
     socket: BufReader<UnixStream>,
     child: Child,
+    assigned: Option<DmaAssignment>,
 }
 
 impl Drop for Qtest {
@@ -171,6 +173,29 @@ impl Platform for Qtest {
     }
 }
 
+impl PciActivation for Qtest {
+    fn activation_state(&mut self) -> io::Result<(PciSnapshot, DmaAssignment)> {
+        let mapping = self.assigned.expect("fixture aperture assigned");
+        Ok((
+            self.pci_snapshot(u64::from(mapping.controller.bar0().1))?,
+            mapping,
+        ))
+    }
+
+    fn enable_bus_master(&mut self, expected: DmaAssignment, before: u16) -> io::Result<()> {
+        let (live, mapping) = self.activation_state()?;
+        assert_eq!(mapping, expected);
+        assert_eq!(live.command, before);
+        let op = self.read32(0)? & 0xff;
+        assert_eq!(self.read32(op)? & 3, 0, "still stopped and out of reset");
+        assert_ne!(self.read32(op + 4)? & 1, 0, "halted before enabling");
+        assert_eq!(self.read32(op + 0x30)?, 0, "reset cleared old pointers");
+        self.call("outl 0xcf8 0x80001804")?;
+        self.call(&format!("outw 0xcfc {:#x}", before | 4))?;
+        Ok(())
+    }
+}
+
 impl RevocablePlatform for Qtest {
     fn revoke_after_halt(&mut self) -> io::Result<()> {
         // Synthetic PCI device only: turn off memory decoding and bus
@@ -256,6 +281,7 @@ fn exercise_qemu(super_speed: bool) {
     let mut qtest = Qtest {
         socket: BufReader::new(socket),
         child,
+        assigned: None,
     };
     qtest
         .socket
@@ -282,8 +308,40 @@ fn exercise_qemu(super_speed: bool) {
     );
     assert_eq!(qtest.config_read(4).unwrap() & 4, 0);
     pci.verify_unarmed(observed).unwrap();
-    qtest.config(4, 6).unwrap();
-    let mut controller = Controller::start(qtest, pci.bar0().1, DMA, 100).unwrap();
+    qtest.config(4, 2).unwrap();
+    // Synthetic guest RAM only. This is not an IOMMU mapping.
+    let assignment = DmaAssignment {
+        controller: pci,
+        mapping_generation: 1,
+        device_base: 0x10_0000,
+        bytes: 0x8000,
+    };
+    qtest.assigned = Some(assignment);
+    let wrong = DmaAssignment {
+        mapping_generation: 2,
+        ..assignment
+    };
+    let Err(StartFailure::Untouched {
+        error: Error::InvalidDma,
+        platform: mut qtest,
+    }) = Controller::start_pci(qtest, wrong, DMA, 100)
+    else {
+        panic!("stale mapping generation must be rejected before xHCI startup");
+    };
+    assert_eq!(qtest.config_read(4).unwrap() & 4, 0);
+    let invalid_layout = DmaLayout {
+        event_ring: 0x10_8000,
+        ..DMA
+    };
+    let Err(StartFailure::Untouched {
+        error: Error::InvalidDma,
+        platform: mut qtest,
+    }) = Controller::start_pci(qtest, assignment, invalid_layout, 100)
+    else {
+        panic!("DMA outside the aperture must be rejected before startup");
+    };
+    assert_eq!(qtest.config_read(4).unwrap() & 4, 0);
+    let mut controller = Controller::start_pci(qtest, assignment, DMA, 100).unwrap();
     let port = (1..=u8::MAX)
         .find(|&port| {
             controller
@@ -307,6 +365,17 @@ fn exercise_qemu(super_speed: bool) {
             port,
             DeviceDma {
                 input_context: DMA.command_ring,
+                ..dma
+            },
+            100
+        ),
+        Err(Error::InvalidDma)
+    ));
+    assert!(matches!(
+        controller.address_device(
+            port,
+            DeviceDma {
+                control_buffer: 0x10_8000,
                 ..dma
             },
             100
@@ -341,6 +410,17 @@ fn exercise_qemu(super_speed: bool) {
         output_ring: 0x10_6000,
         buffer: 0x10_7000,
     };
+    assert!(matches!(
+        controller.configure_bulk(
+            &configuration[..length],
+            BulkDma {
+                buffer: 0x10_8000,
+                ..bulk_dma
+            },
+            1000
+        ),
+        Err(Error::InvalidDma)
+    ));
     {
         let pipe = controller
             .configure_bulk(&configuration[..length], bulk_dma, 1000)

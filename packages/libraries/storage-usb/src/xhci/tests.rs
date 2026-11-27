@@ -19,6 +19,8 @@ struct Fake {
     fail_run: bool,
     ignore_stop_once: bool,
     fail_revoke_once: bool,
+    activation_fault: u8,
+    activation_reads: u8,
 }
 
 impl Fake {
@@ -32,6 +34,8 @@ impl Fake {
             fail_run: false,
             ignore_stop_once: false,
             fail_revoke_once: false,
+            activation_fault: 0,
+            activation_reads: 0,
         };
         fake.regs[0] = 0x0110_0040;
         fake.regs[1] = 0x0200_0108;
@@ -216,4 +220,76 @@ fn halt_timeout_and_revocation_failure_allow_only_their_own_retry() {
     let failed = halted.revoke().unwrap_err();
     assert_eq!(failed.error(), &());
     failed.retry().unwrap();
+}
+
+fn activation_snapshot() -> pci::PciSnapshot {
+    pci::PciSnapshot {
+        location: pci::PciLocation {
+            segment: 0,
+            bus: 0,
+            device: 3,
+            function: 0,
+        },
+        configuration_generation: 1,
+        vendor_device: 0x000d_1b36,
+        class_revision: 0x0c03_3000,
+        header_type: 0,
+        command: 2,
+        bar0: 0xfeb0_0004,
+        bar1: 0,
+        bar0_bytes: 0x4000,
+    }
+}
+
+fn activation_assignment() -> DmaAssignment {
+    DmaAssignment {
+        controller: pci::PciController::discover(activation_snapshot()).unwrap(),
+        mapping_generation: 1,
+        device_base: DMA.device_contexts,
+        bytes: 4096,
+    }
+}
+
+impl PciActivation for Fake {
+    fn activation_state(&mut self) -> Result<(pci::PciSnapshot, DmaAssignment), ()> {
+        self.activation_reads += 1;
+        let mut mapping = activation_assignment();
+        if self.activation_fault == 1 && self.activation_reads == 2 {
+            mapping.mapping_generation += 1;
+        }
+        // Neither activation error may reach the actual run write. This
+        // emulates the command remaining unchanged after a reported success.
+        Ok((activation_snapshot(), mapping))
+    }
+
+    fn enable_bus_master(&mut self, expected: DmaAssignment, before: u16) -> Result<(), ()> {
+        assert_eq!(
+            self.activation_fault, 2,
+            "must not arm a changed assignment"
+        );
+        assert_eq!(expected, activation_assignment());
+        assert_eq!(before, 2);
+        assert_eq!(self.regs[OP as usize / 4], 0);
+        assert_eq!(self.regs[(OP as usize + 0x30) / 4], 0);
+        Ok(())
+    }
+}
+
+#[test]
+fn mapping_drift_or_missing_pci_readback_prevents_run_and_retains_cleanup() {
+    for (fault, expected) in [
+        (1, Error::InvalidDma),
+        (2, Error::Pci(pci::PciError::CommandMismatch)),
+    ] {
+        let mut fake = Fake::new();
+        fake.activation_fault = fault;
+        fake.fail_run = true;
+        let Err(StartFailure::Programming(pending)) =
+            Controller::start_pci(fake, activation_assignment(), DMA, 5)
+        else {
+            panic!("activation must not start the controller");
+        };
+        assert_eq!(pending.error(), &expected);
+        pending.retry(5).unwrap().revoke().unwrap();
+    }
 }
