@@ -19,7 +19,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
 
 #[path = "usb_xhci_inventory.rs"]
 mod xhci_inventory;
@@ -279,8 +279,10 @@ fn device_command(args: &[String]) -> io::Result<()> {
             Ok(())
         }
         [mode, file] if mode == "burn" => burn(Path::new(file), false),
-        [mode] if mode == "autoburn" => autoburn(false),
-        [mode, flag] if mode == "autoburn" && erase_flag(flag) => autoburn(true),
+        [mode, options @ ..] if mode == "autoburn" => {
+            let (source, erase) = autoburn_options(options)?;
+            autoburn(source, erase)
+        }
         #[cfg(windows)]
         [mode, path, token, digest, flag] if mode == "--elevated-autoburn" => {
             elevated_autoburn(Path::new(path), token, digest, flag)
@@ -422,10 +424,43 @@ fn discover_autoburn(erase: bool) -> io::Result<Disk> {
 }
 
 #[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
-fn autoburn(erase: bool) -> io::Result<()> {
+fn autoburn_options(args: &[String]) -> io::Result<(Option<&Path>, bool)> {
+    let mut source = None;
+    let mut erase = false;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if erase_flag(arg) && !erase {
+            erase = true;
+        } else if arg == "--image" && source.is_none() {
+            let path = args
+                .next()
+                .filter(|path| !path.is_empty() && !path.starts_with('-'))
+                .ok_or_else(|| io::Error::other(USAGE))?;
+            source = Some(Path::new(path));
+        } else {
+            return Err(io::Error::other(USAGE));
+        }
+    }
+    Ok((source, erase))
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn autoburn_image(source: Option<&Path>) -> io::Result<Vec<u8>> {
+    let image = if let Some(path) = source {
+        usb_image::read_regular(path, BYTES)?
+    } else {
+        let workspace = load_workspace().map_err(io::Error::other)?;
+        build_image(&workspace, DiagnosticImage::Fat32).map_err(io::Error::other)?
+    };
+    usb_image::check_image(&image)?;
+    Ok(image)
+}
+
+#[cfg(all(any(windows, target_os = "linux"), target_arch = "x86_64"))]
+fn autoburn(source: Option<&Path>, erase: bool) -> io::Result<()> {
     #[cfg(windows)]
     if !host::privileged() {
-        return request_autoburn(erase);
+        return request_autoburn(source, erase);
     }
     #[cfg(windows)]
     host::check_write_policy()?;
@@ -438,10 +473,7 @@ fn autoburn(erase: bool) -> io::Result<()> {
     run_autoburn(
         || discover_autoburn(erase),
         || {
-            let workspace = load_workspace().map_err(io::Error::other)?;
-            let image =
-                build_image(&workspace, DiagnosticImage::Fat32).map_err(io::Error::other)?;
-            usb_image::check_image(&image)?;
+            let image = autoburn_image(source)?;
             println!("Image SHA3-512: {}", sha3(&image));
             Ok(image)
         },
@@ -456,7 +488,7 @@ fn autoburn(erase: bool) -> io::Result<()> {
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
-fn request_autoburn(erase: bool) -> io::Result<()> {
+fn request_autoburn(source: Option<&Path>, erase: bool) -> io::Result<()> {
     let (token, label) = host::autoburn_token()?;
     println!(
         "Autoburn will erase {} after Windows authorization.",
@@ -464,17 +496,14 @@ fn request_autoburn(erase: bool) -> io::Result<()> {
     );
     let scratch = Scratch::new()?;
     let file = scratch.path("autoburn.img");
-    create(
-        &load_workspace().map_err(io::Error::other)?,
-        &file,
-        DiagnosticImage::Fat32,
-    )
-    .map_err(io::Error::other)?;
+    let image = autoburn_image(source)?;
+    publish(&file, &image)?;
     if host::autoburn_token()?.0 != token {
         return Err(io::Error::other("USB identity changed; no bytes written"));
     }
-    let image = usb_image::read_regular(&file, BYTES)?;
-    let status = host::elevate_autoburn(&file, &token, &sha3(&image), erase)?;
+    let digest = sha3(&image);
+    println!("Image SHA3-512: {digest}");
+    let status = host::elevate_autoburn(&file, &token, &digest, erase)?;
     let receipt = usb_image::read_regular(&file.with_extension("result"), 4096).map_err(|_| {
         io::Error::other(format!(
             "Windows writer exited with status {status} without a receipt"
@@ -937,6 +966,39 @@ mod tests {
             for option in ["erase", "e", "--force", "--erase=yes"] {
                 assert!(!erase_flag(option));
             }
+        }
+
+        #[test]
+        fn explicit_image_and_erase_are_independent_and_unambiguous() {
+            for (args, expected) in [
+                (&[][..], (None, false)),
+                (&["-e"][..], (None, true)),
+                (
+                    &["--image", "test image.img"][..],
+                    (Some(Path::new("test image.img")), false),
+                ),
+                (
+                    &["--erase", "--image", "test.img"][..],
+                    (Some(Path::new("test.img")), true),
+                ),
+                (
+                    &["--image", "test.img", "-e"][..],
+                    (Some(Path::new("test.img")), true),
+                ),
+            ] {
+                assert_eq!(autoburn_options(&words(args)).unwrap(), expected);
+            }
+            for args in [
+                &["--image"][..],
+                &["--image", "--erase"][..],
+                &["--image", "a.img", "--image", "b.img"][..],
+                &["-e", "--erase"][..],
+                &["a.img"][..],
+            ] {
+                assert!(autoburn_options(&words(args)).is_err());
+            }
+            let scratch = Scratch::new().unwrap();
+            assert!(autoburn_image(Some(&scratch.path("missing.img"))).is_err());
         }
 
         fn disk(path: &str) -> Disk {

@@ -68,8 +68,10 @@ The host test uses a private copy for each boot, verifies an explicit non-pass
 on TCG without VMX, and verifies the VMX lifecycle and framebuffer completion
 under nested KVM. It does not change the supplied file. Only after both runs
 pass, use `mrml usb burn mrml-dragonair-vmx.img` with a dedicated expendable
-USB stick and the interactive erase confirmation. Ordinary `autoburn` creates
-the FAT32 probe instead; it does not select the VMX image.
+USB stick and the interactive erase confirmation, or use
+`mrml usb autoburn --image mrml-dragonair-vmx.img` to erase and verify the
+sole eligible USB stick without a selection or erase prompt. Without
+`--image`, autoburn still creates the FAT32 probe.
 
 The reference QEMU preflight reached `d0 e0 e6` without VMX (including the
 non-pass label) and `d0 d1 d2 d3 d4 df d6` with nested KVM (including the
@@ -274,6 +276,7 @@ For unattended use on a trusted host, run:
 
 ```text
 mrml usb autoburn
+mrml usb autoburn --image PATH_TO_TESTED_MRML_IMAGE.img
 ```
 
 **This command erases the sole eligible USB storage drive without asking.**
@@ -281,20 +284,22 @@ Connect only the spare USB stick you intend to erase. The command does not
 prompt for selection or confirmation. It refuses to build or
 write if there is no USB storage drive, more than one (even if another is
 ineligible), or if the only drive fails the normal safety checks. It builds
-the diagnostic in memory, rechecks the original drive and USB inventory
+the FAT32 diagnostic by default or loads the exact supplied MRML image with
+`--image`. An unreadable or invalid image stops the write without falling back
+to the default. It rechecks the original drive and USB inventory
 before claiming and writing, and verifies every written byte. If the
 inventory cannot be determined or changes during the checks, it stops
 instead of picking another drive. Use interactive `burn` when you need
 to select a drive.
 
-From a normal Windows session, autoburn builds the image before requesting
+From a normal Windows session, autoburn prepares the image before requesting
 native Windows UAC for the writer. The elevated process rechecks the
 selected USB identity, image hash, and write policy, then returns the result.
 An already elevated session does not show a second UAC prompt. If Windows
 requires BitLocker for removable writes, MRML refuses to overwrite the raw
 image; it does not weaken or override the policy.
 
-On Linux, running autoburn as a normal user builds the image without
+On Linux, running autoburn as a normal user prepares the image without
 privilege and asks the system polkit agent to authorize only the USB writer.
 The installed helper receives the device fingerprint and exact image bytes
 over a pipe, verifies both, and never builds or opens a caller-supplied file.
