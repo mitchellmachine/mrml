@@ -25,11 +25,12 @@ remains the only MRML OS mode.
 
 The current USB gate is native controller qualification. Signed KVM guests
 have already written, flushed, and independently verified the exact fixture
-change on both emulated USB speeds at `40554703`. Next, qualify the controller's
-scratchpad/page-size requirements, firmware handoff, and VMX/VT-d assignment
-and teardown. Keep the planned physical write target separate and expendable.
-The Chromebook inventory identifies a shared USB boot controller; it does not
-establish an isolated handoff or a physical write. See the
+change on both emulated USB speeds at `40554703`. The [Chromebook EFI inventory](platform/UEFI_BOOT_MANAGEMENT.md#read-only-xhci-inventory-before-native-bring-up)
+measured 34 scratchpad buffers at 4 KiB each and confirmed firmware ownership
+of the controller shared with the boot stick. Scratchpad startup, cleanup, and
+handoff refusal have software-model coverage. Next, verify firmware handoff,
+isolated VMX/VT-d assignment, and teardown on hardware. Keep the physical
+write target separate and expendable. See the
 [storage design and evidence](storage/STORAGE_AND_OPTICAL.md).
 
 ## Earlier storage and supervisor gates
