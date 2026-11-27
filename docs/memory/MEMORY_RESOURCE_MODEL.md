@@ -183,9 +183,11 @@ both mappings are removed and leaks rather than frees it if unmapping is
 uncertain. Nested KVM exercised two distinct live VMs and observed the same
 bytes. This nested WHP host rejects a second simultaneous partition with a typed
 VID collision when registering the second partition's first GPA range. The
-separate-process WHP storage diagnostic now verifies two signed guests using a
-bounded copy, not an alias of the same host backing. WHP same-process shared
-backing remains unverified on this host.
+separate-process WHP storage diagnostic now verifies two signed guests with
+one pagefile-backed section, exact removal of both mappings, and a 512-byte
+RAM-backed result. The parent and worker open separate views of the same
+section; no payload is written to a scratch file. WHP same-process shared
+backing and a production worker transport remain unverified on this host.
 Guest page-table projection, peer queues, and execution remain **PLANNED**.
 
 Exact guest translation is now **PARTIALLY IMPLEMENTED** by the same retained

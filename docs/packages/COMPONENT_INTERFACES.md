@@ -780,10 +780,12 @@ Nested KVM reached both guest payloads and verified native mapping retirement.
 On the local WHP host, the second partition object and setup succeeded but
 its first `WHvMapGpaRange` returned `0xC0370008` (`ERROR_VID_PARTITION_ALREADY_EXISTS`).
 The diagnostic now runs the provider in a separate test process while the
-consumer partition remains live. It copies one bounded fixture page per
-handoff; the signed provider and consumer both executed and verified the
-512-byte result. This verifies distinct WHP guests, not shared physical
-backing or a production worker transport. The host coordinates the canonical queue
+consumer partition remains live. Both map one pagefile-backed Windows section
+at independent GPAs. The parent observes the worker guest's sector writes
+through its existing mapping without a file-copy handoff. The signed consumer
+checks all 512 bytes, and both processes verify that their exact virtual and
+GPA mappings are absent after retirement. This verifies the diagnostic, not a
+production worker transport or a same-process fix. The host coordinates the canonical queue
 and its interrupt routing separately; the guest payloads do not consume
 injected interrupts. This reuses the
 existing slot and adds no mapping or service authority. Release fences precede request, response, and idle publication;

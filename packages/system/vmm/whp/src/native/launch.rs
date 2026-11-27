@@ -3998,21 +3998,82 @@ mod tests {
         pe
     }
 
-    fn read_peer_fixture_page(path: &std::path::Path) -> [u8; PAGE_SIZE as usize] {
-        use std::io::Read as _;
+    // Test-only owner of one pagefile-backed Windows section. Each worker
+    // maps the same section independently; neither receives a process handle.
+    struct FixtureSection {
+        handle: core::ptr::NonNull<core::ffi::c_void>,
+        view: core::ptr::NonNull<core::ffi::c_void>,
+    }
 
-        let mut file = std::fs::File::open(path).unwrap();
-        let mut page = [0; PAGE_SIZE as usize];
-        file.read_exact(&mut page).unwrap();
-        assert_eq!(file.read(&mut [0u8; 1]).unwrap(), 0);
-        page
+    // These are kernel32 exports, already linked by the parent WHP module.
+    unsafe extern "system" {
+        fn CreateFileMappingW(file: *mut core::ffi::c_void, attributes: *const core::ffi::c_void,
+            protection: u32, high: u32, low: u32, name: *const u16) -> *mut core::ffi::c_void;
+        fn OpenFileMappingW(access: u32, inherit: i32, name: *const u16) -> *mut core::ffi::c_void;
+        fn MapViewOfFile(section: *mut core::ffi::c_void, access: u32,
+            high: u32, low: u32, size: usize) -> *mut core::ffi::c_void;
+        fn UnmapViewOfFile(base: *const core::ffi::c_void) -> i32;
+        fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
+    }
+
+    impl FixtureSection {
+        fn open(directory: &std::path::Path, create: bool) -> Self {
+            const ACCESS: u32 = 0x0006; // FILE_MAP_READ | FILE_MAP_WRITE
+            let suffix = directory.file_name().unwrap().to_str().unwrap();
+            assert!(suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'));
+            let name: std::vec::Vec<u16> = suffix.encode_utf16()
+                .chain(std::iter::once(0)).collect();
+            // SAFETY: the name is NUL-terminated and the section is a single
+            // non-executable, pagefile-backed page using the caller's default ACL.
+            let handle = unsafe {
+                let handle = if create {
+                    let value = CreateFileMappingW(
+                        core::ptr::without_provenance_mut(usize::MAX),
+                        core::ptr::null(), 4, 0, PAGE_SIZE as u32, name.as_ptr(),
+                    );
+                    if !value.is_null()
+                        && std::io::Error::last_os_error().raw_os_error() == Some(183)
+                    {
+                        CloseHandle(value);
+                        panic!("unexpected existing test section");
+                    }
+                    value
+                } else {
+                    OpenFileMappingW(ACCESS, 0, name.as_ptr())
+                };
+                core::ptr::NonNull::new(handle).unwrap_or_else(|| {
+                    panic!("open WHP test section: {}", std::io::Error::last_os_error())
+                })
+            };
+            // SAFETY: handle owns a section; this maps exactly one page at zero.
+            let view = unsafe {
+                let address = MapViewOfFile(handle.as_ptr(), ACCESS, 0, 0, PAGE_SIZE as usize);
+                core::ptr::NonNull::new(address).unwrap_or_else(|| {
+                    let error = std::io::Error::last_os_error();
+                    CloseHandle(handle.as_ptr());
+                    panic!("map WHP test section: {error}");
+                })
+            };
+            Self { handle, view }
+        }
+    }
+
+    impl Drop for FixtureSection {
+        fn drop(&mut self) {
+            // SAFETY: both are exclusively owned, and each guest must be
+            // dropped or have revoked its GPA mapping before this owner drops.
+            unsafe {
+                UnmapViewOfFile(self.view.as_ptr());
+                CloseHandle(self.handle.as_ptr());
+            }
+        }
     }
 
     // Test-only transport for WHP hosts that reject the second GPA owner
-    // in one process. It carries exactly one synthetic request page each
-    // way; the parent retains its own live partition while the worker runs.
+    // in one process. The parent retains its live partition while the worker
+    // maps the same pagefile-backed section in a separate process.
     fn run_peer_block_in_worker(
-        first: &mut PreparedWhpGuest<'_>,
+        first: PreparedWhpGuest<'_>,
         virtual_page: u64,
     ) {
         use mrml_interface_storage_block_provider_v1::OpaqueHandle;
@@ -4028,12 +4089,13 @@ mod tests {
         struct Scratch(std::path::PathBuf);
         impl Drop for Scratch {
             fn drop(&mut self) {
-                let _ = std::fs::remove_file(self.0.join("request.page"));
-                let _ = std::fs::remove_file(self.0.join("response.page"));
                 let _ = std::fs::remove_dir(&self.0);
             }
         }
         let directory = Scratch(directory);
+        let backing = FixtureSection::open(&directory.0, true);
+        // Reverse declaration order keeps the section mapped through guest drop.
+        let mut first = first;
         let mut caps = CapabilitySpace::<8>::new();
         let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x771).unwrap();
         let (pool, quota) = memory.create_root(
@@ -4052,13 +4114,14 @@ mod tests {
         ).unwrap();
 
         let physical = 0x70_0000;
-        first.partition.map_zeroed(range(physical, PAGE_SIZE, MapPermissions::read_write()).unwrap())
-            .unwrap();
+        first.partition.map_external_peer_page(
+            range(physical, PAGE_SIZE, MapPermissions::read_write()).unwrap(), backing.view,
+        ).unwrap();
         first.install_peer_page(virtual_page, physical).unwrap();
         let mut page = [0; PAGE_SIZE as usize];
         client.initialize(&mut page, &projection, &caps).unwrap();
         let notification = client.submit(1, &mut page, &projection, &caps).unwrap();
-        std::fs::write(directory.0.join("request.page"), page).unwrap();
+        VmBackend::write_guest(&mut first, physical, &page).unwrap();
         let executable = std::env::current_exe().unwrap();
         let completed = mrml_runtime::Command::new(executable.to_str().unwrap())
             .args(["--ignored", "--exact", "native::launch::tests::peer_block_partition_worker"])
@@ -4070,24 +4133,26 @@ mod tests {
             core::str::from_utf8(&completed.stderr).unwrap_or(""));
         let mut expected = page;
         expected[1024..1536].fill(0xa6);
-        let worker_page = read_peer_fixture_page(&directory.0.join("response.page"));
+        let mut worker_page = [0u8; PAGE_SIZE as usize];
+        VmBackend::read_guest(&first, physical, &mut worker_page).unwrap();
         assert_eq!(worker_page, expected);
         let mut image = [0; 1024];
         image[512..].copy_from_slice(&worker_page[1024..1536]);
         let mut storage = ReadOnlyBlockImage::new(&image, 512, session).unwrap();
         let response = server.serve(&mut page, &projection, &caps, notification, &mut storage).unwrap();
-        VmBackend::write_guest(first, physical, &page).unwrap();
-        assert_eq!(DeadlineVmBackend::run_with_deadline(first, 0, 1_000_000).unwrap(),
+        VmBackend::write_guest(&mut first, physical, &page).unwrap();
+        assert_eq!(DeadlineVmBackend::run_with_deadline(&mut first, 0, 1_000_000).unwrap(),
             VmDeadlineOutcome::Exit(VmExit::Halted));
         let mut sector = [0; 512];
         client.complete(&mut page, &projection, &caps, response, &mut sector).unwrap();
         assert_eq!(sector, [0xa6; 512]);
         first.withdraw_peer_page(virtual_page, physical).unwrap();
         assert_eq!(first.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
-        first.revoke_guest_mapping(physical, PAGE_SIZE).unwrap();
+        first.partition.unmap_external_peer_page(physical, backing.view).unwrap();
+        assert_eq!(VmBackend::read_guest(&first, physical, &mut [0; 1]), Err(WhpError::UnmappedMemory));
         caps.revoke(provider).unwrap();
         mrml_runtime::mrml_println!(
-            "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-copy"
+            "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-shared-section"
         );
     }
 
@@ -4095,14 +4160,12 @@ mod tests {
     #[ignore = "run only by the WHP two-partition test in its private scratch directory"]
     fn peer_block_partition_worker() {
         use mrml_kernel::VmDeadlineOutcome;
-        use std::io::Write as _;
-
         let directory = std::env::current_dir().unwrap();
         if !directory.file_name().and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with("mrml-whp-peer-")) {
             return;
         }
-        let mut page = read_peer_fixture_page(&directory.join("request.page"));
+        let backing = FixtureSection::open(&directory, false);
 
         let system = WhpSystem::open().unwrap();
         let virtual_page = 0xffff_8000_004f_0000;
@@ -4120,16 +4183,16 @@ mod tests {
         ).unwrap();
         let mut guest = system.prepare_boot_kernel(&executable, &valid_handoff(), layout).unwrap();
         let physical = 0x80_0000;
-        guest.partition.map_initialized(range(physical, PAGE_SIZE, MapPermissions::read_write()).unwrap(), &page).unwrap();
+        guest.partition.map_external_peer_page(
+            range(physical, PAGE_SIZE, MapPermissions::read_write()).unwrap(), backing.view,
+        ).unwrap();
         guest.install_peer_page(virtual_page, physical).unwrap();
         assert_eq!(DeadlineVmBackend::run_with_deadline(&mut guest, 0, 1_000_000).unwrap(),
             VmDeadlineOutcome::Exit(VmExit::Halted));
-        VmBackend::read_guest(&guest, physical, &mut page).unwrap();
         guest.withdraw_peer_page(virtual_page, physical).unwrap();
-        guest.revoke_guest_mapping(physical, PAGE_SIZE).unwrap();
-        drop(guest);
-        std::fs::OpenOptions::new().write(true).create_new(true)
-            .open(directory.join("response.page")).unwrap().write_all(&page).unwrap();
+        guest.partition.unmap_external_peer_page(physical, backing.view).unwrap();
+        assert_eq!(guest.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
+        assert_eq!(VmBackend::read_guest(&guest, physical, &mut [0; 1]), Err(WhpError::UnmappedMemory));
     }
 
     #[test]
@@ -4193,7 +4256,7 @@ mod tests {
             // A second partition object can be created on this host, but
             // its first GPA mapping collides with the live in-process owner.
             Err(WhpError::PartitionAlreadyExists) => {
-                run_peer_block_in_worker(&mut first, peer_virtual);
+                run_peer_block_in_worker(first, peer_virtual);
                 return;
             }
             Err(error) => panic!("second WHP partition failed: {error:?}"),
