@@ -1218,6 +1218,12 @@ impl<'source, const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>
 pub enum ParseErrorKind {
     Lexical(LexError),
     ExpectedItem,
+    ExpectedStructName,
+    ExpectedEnumName,
+    ExpectedStructBody,
+    ExpectedEnumBody,
+    UnsupportedStructDeclaration,
+    UnsupportedEnumDeclaration,
     UnsupportedAttribute,
     UnsupportedAbi,
     ExpectedAttributeDelimiter,
@@ -1262,6 +1268,24 @@ pub enum ParseErrorKind {
     TooManyConditionalAssignmentBranches,
     TooManyConditionalBranchActions,
     ExpectedTailExpression,
+}
+
+impl ParseErrorKind {
+    pub(crate) const fn aggregate_declaration_message(self) -> Option<&'static str> {
+        match self {
+            Self::ExpectedStructName => Some("expected a name after `struct`"),
+            Self::ExpectedEnumName => Some("expected a name after `enum`"),
+            Self::ExpectedStructBody => Some("expected `{`, `(`, or `;` after the struct name"),
+            Self::ExpectedEnumBody => Some("expected `{` after the enum name"),
+            Self::UnsupportedStructDeclaration => Some(
+                "struct declarations are unsupported by the experimental MRML compiler. Use the upstream Rust compiler for this source",
+            ),
+            Self::UnsupportedEnumDeclaration => Some(
+                "enum declarations are unsupported by the experimental MRML compiler. Use the upstream Rust compiler for this source",
+            ),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4332,6 +4356,59 @@ impl<'source> Parser<'source> {
         })
     }
 
+    fn unsupported_aggregate_declaration(
+        &mut self,
+        keyword: Token<'source>,
+    ) -> Result<ParseError, ParseError> {
+        let is_struct = keyword.text == "struct";
+        let name = self.take()?;
+        let Some(name) = name.filter(|token| {
+            token.kind == TokenKind::Identifier
+                && !matches!(token.text, "_" | "fn" | "struct" | "enum" | "pub" | "where")
+        }) else {
+            let kind = if is_struct {
+                ParseErrorKind::ExpectedStructName
+            } else {
+                ParseErrorKind::ExpectedEnumName
+            };
+            return Ok(self.error(kind, name));
+        };
+
+        let next = self.peek()?;
+        let has_body_start = next.is_some_and(|token| {
+            matches!(token.text, "{" | "<" | "where")
+                || (is_struct && matches!(token.kind, TokenKind::OpenParen | TokenKind::Semicolon))
+        });
+        if !has_body_start {
+            let kind = if is_struct {
+                ParseErrorKind::ExpectedStructBody
+            } else {
+                ParseErrorKind::ExpectedEnumBody
+            };
+            let span = next.map_or(
+                Span {
+                    start: name.span.end,
+                    end: name.span.end,
+                },
+                |token| token.span,
+            );
+            return Ok(ParseError { kind, span });
+        }
+
+        let kind = if is_struct {
+            ParseErrorKind::UnsupportedStructDeclaration
+        } else {
+            ParseErrorKind::UnsupportedEnumDeclaration
+        };
+        Ok(ParseError {
+            kind,
+            span: Span {
+                start: keyword.span.start,
+                end: name.span.end,
+            },
+        })
+    }
+
     pub fn parse_module<const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>(
         mut self,
     ) -> Result<Module<'source, MAX_ITEMS, MAX_PARAMETERS>, ParseError> {
@@ -4347,6 +4424,14 @@ impl<'source> Parser<'source> {
             let (no_mangle, naked, export_abi) = self.function_attributes()?;
             let public = self.take_text("pub")?.is_some();
             let keyword = self.take()?;
+            if let Some(keyword) = keyword
+                && matches!(keyword.text, "struct" | "enum")
+                && !no_mangle
+                && !naked
+                && export_abi.is_none()
+            {
+                return Err(self.unsupported_aggregate_declaration(keyword)?);
+            }
             let item = match keyword.map(|token| token.text) {
                 Some("fn") => Item::Function(self.function(
                     public,

@@ -182,7 +182,10 @@ pub struct CompileError {
 impl CompileError {
     pub const fn message(&self) -> &'static str {
         match self.kind {
-            CompileErrorKind::Parse(_) => "source parsing failed",
+            CompileErrorKind::Parse(kind) => match kind.aggregate_declaration_message() {
+                Some(message) => message,
+                None => "source parsing failed",
+            },
             CompileErrorKind::Semantic(_) => "semantic analysis failed",
             CompileErrorKind::TraitDeclaration(_) => "trait declaration admission failed",
             CompileErrorKind::TraitImplementation(_) => "trait implementation admission failed",

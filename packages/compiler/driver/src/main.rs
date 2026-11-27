@@ -12,14 +12,14 @@ use mrml_runtime::{
 use mrml_rustc::PeImportTarget;
 use mrml_rustc::{
     CodegenOptions, CoffObjectSymbolKind, CoffSectionIdentity, CoffShortImportKind,
-    CoffTextComdatSelection, ElfSelectedDefinitions, ElfSelectedObject, ElfSelectedRelocations,
-    ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation,
-    LinkRelocationTarget, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS,
-    MAX_LINK_FRAGMENTS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS,
-    MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeDataKind, PeImageRelativeTarget,
-    PeReadonlyAbsoluteRelocation, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
-    PeWritableRelocationTarget, TargetLayout, compile_source_function_with_options,
-    decode_unix_archive,
+    CoffTextComdatSelection, CompileError, CompileErrorKind, ElfSelectedDefinitions,
+    ElfSelectedObject, ElfSelectedRelocations, ElfSelectedSections, LinkDefinition,
+    LinkDefinitionTarget, LinkInput, LinkRelocation, LinkRelocationTarget, MAX_ARCHIVE_MEMBERS,
+    MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS, MAX_LINK_INPUTS,
+    MAX_LINK_RELOCATIONS, MAX_PE_READONLY_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat,
+    PeDataKind, PeImageRelativeTarget, PeReadonlyAbsoluteRelocation, PeRuntimeFunction,
+    PeWritableData, PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
+    compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory,
     decode_x86_64_coff_runtime_functions_with_section_identities,
     decode_x86_64_coff_section_identity_readonly_fragment,
@@ -386,7 +386,7 @@ fn application_main() -> Result<()> {
         TargetLayout::X86_64,
         options,
     )
-    .map_err(mrml_error::message)?;
+    .map_err(|error| format_compile_error(input, &source, error))?;
     match emit {
         EmitKind::Object(_) => {
             mrml_runtime::write_file(output, object.bytes())?;
@@ -412,6 +412,18 @@ fn application_main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn format_compile_error(input: &str, source: &str, error: CompileError) -> mrml_error::Error {
+    if let CompileErrorKind::Parse(_) = error.kind
+        && let Some(prefix) = error.span.and_then(|span| source.get(..span.start))
+    {
+        let line = prefix.bytes().filter(|&byte| byte == b'\n').count() + 1;
+        let line_start = prefix.rsplit_once('\n').map_or(prefix, |(_, line)| line);
+        let column = line_start.chars().count() + 1;
+        return mrml_error::formatted(format_args!("{input}:{line}:{column}: {error}"));
+    }
+    mrml_error::message(error)
 }
 
 fn read_link_objects(
@@ -3272,6 +3284,29 @@ mod tests {
         object[18..20].copy_from_slice(&4u16.to_le_bytes());
         object[20..].copy_from_slice(payload);
         object
+    }
+
+    #[test]
+    fn formats_aggregate_errors_with_file_line_column_and_action() {
+        let source = "// Café\r\n/* é */ pub enum Color { Red }";
+        let span = mrml_rustc::Parser::new(source)
+            .parse_module::<2, 2>()
+            .unwrap_err();
+        let error = format_compile_error(
+            "colors.rs",
+            source,
+            CompileError {
+                kind: CompileErrorKind::Parse(span.kind),
+                span: Some(span.span),
+            },
+        );
+        assert!(
+            error
+                .as_str()
+                .starts_with("colors.rs:2:13: enum declarations are unsupported")
+        );
+        assert!(error.as_str().contains("Use the upstream Rust compiler"));
+        assert!(error.as_str().ends_with("at bytes 23..33"));
     }
 
     #[test]

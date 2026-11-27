@@ -2262,8 +2262,61 @@ mod tests {
     }
 
     #[test]
+    fn locates_unsupported_struct_and_enum_headers() {
+        for (source, kind, header) in [
+            (
+                "struct Point;",
+                ParseErrorKind::UnsupportedStructDeclaration,
+                "struct Point",
+            ),
+            (
+                "pub struct Pair(u8, u8);",
+                ParseErrorKind::UnsupportedStructDeclaration,
+                "struct Pair",
+            ),
+            (
+                "struct Point { x: u8 }",
+                ParseErrorKind::UnsupportedStructDeclaration,
+                "struct Point",
+            ),
+            (
+                "fn start() {}\r\npub enum Color { Red, Green }",
+                ParseErrorKind::UnsupportedEnumDeclaration,
+                "enum Color",
+            ),
+            (
+                "enum Shape<T> where T: Copy { Circle(T) }",
+                ParseErrorKind::UnsupportedEnumDeclaration,
+                "enum Shape",
+            ),
+        ] {
+            let error = Parser::new(source).parse_module::<2, 2>().unwrap_err();
+            assert_eq!(error.kind, kind);
+            assert_eq!(&source[error.span.start..error.span.end], header);
+        }
+    }
+
+    #[test]
+    fn locates_missing_struct_and_enum_names_or_bodies() {
+        for (source, kind, offending_token) in [
+            ("struct { x: u8 }", ParseErrorKind::ExpectedStructName, "{"),
+            ("enum 42 { Red }", ParseErrorKind::ExpectedEnumName, "42"),
+            ("struct Point = 1;", ParseErrorKind::ExpectedStructBody, "="),
+            ("enum Color;", ParseErrorKind::ExpectedEnumBody, ";"),
+        ] {
+            let error = Parser::new(source).parse_module::<2, 2>().unwrap_err();
+            assert_eq!(error.kind, kind);
+            assert_eq!(&source[error.span.start..error.span.end], offending_token);
+        }
+        let source = "struct Point\n";
+        let error = Parser::new(source).parse_module::<2, 2>().unwrap_err();
+        assert_eq!(error.kind, ParseErrorKind::ExpectedStructBody);
+        assert_eq!(error.span, Span { start: 12, end: 12 });
+    }
+
+    #[test]
     fn rejects_non_items_and_missing_types() {
-        let item = Parser::new("struct Value;")
+        let item = Parser::new("use module::Value;")
             .parse_module::<2, 2>()
             .unwrap_err();
         assert_eq!(item.kind, ParseErrorKind::ExpectedItem);
