@@ -27,6 +27,16 @@ structured zero-fallback report only after the complete service probe succeeds.
 This is launch-admission integration, not completion of a dual-placement runtime
 or proof that the required system satisfies Total mode.
 
+Every checked-in service package now declares a runtime classification. The
+compositor and deployment service are required microVM-eligible services when
+included in an active release; placement eligibility does not attest that
+an executable has launched. The storage coordinator is explicitly a required
+blocker until its supervised guest and transport exist. The standalone native
+service-image package is an optional diagnostic blocker, not a production
+exception. Total placement does not promote an explicitly non-eligible class
+just because its supported placement list contains microVM. Existing admission
+and readiness evidence gates still determine whether Total is satisfied.
+
 The kernel also has a bounded caller-selected routing prerequisite for service
 placements. One typed service specification binds the domain, interface and
 exact interface/provider/policy generations to either `NATIVE_SERVICE` or

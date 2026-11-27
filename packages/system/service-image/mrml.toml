@@ -12,6 +12,9 @@ profile = "system-service"
 [isolation]
 default = "native-service"
 minimum = "native-service"
+must_run = false
+reason = "Native diagnostic images are not a production service placement"
+runtime_class = "unsupported-blocker"
 supported = ["native-service"]
 
 [[target]]

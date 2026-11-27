@@ -24,12 +24,7 @@ pub fn paint_boot_ready<const N: usize>(
     layout: FramebufferLayout,
     pixels: &mut [u8],
 ) -> Result<(), BootScanoutError> {
-    if binding != current {
-        return Err(BootScanoutError::StaleOutput);
-    }
-    if capabilities.authorize_exact(control, Rights::CONTROL) != Ok(current.object()) {
-        return Err(BootScanoutError::WrongAuthority);
-    }
+    validate_output(capabilities, control, binding, current)?;
     let mut surface =
         FramebufferSurface::from_layout(layout, pixels).map_err(BootScanoutError::Framebuffer)?;
     surface
@@ -52,6 +47,56 @@ pub fn paint_boot_ready<const N: usize>(
             blue: 0xff,
         })
         .map_err(BootScanoutError::Framebuffer)
+}
+
+/// Publish a compositor-rendered microVM frame into a host-owned scanout.
+///
+/// The projection owner supplies the captured guest image and lends the
+/// exact output slice and geometry. No physical address or scanout slice is
+/// passed into the guest. Copy only visible pixels, leaving scanout padding
+/// and allocation tail private. This is a copy primitive, not guest launch.
+pub fn publish_guest_scanout<const N: usize>(
+    capabilities: &CapabilitySpace<N>,
+    control: Capability,
+    binding: DisplayOutputIdentity,
+    current: DisplayOutputIdentity,
+    layout: FramebufferLayout,
+    guest_frame: &[u8],
+    scanout: &mut [u8],
+) -> Result<(), BootScanoutError> {
+    validate_output(capabilities, control, binding, current)?;
+    let declared = layout.byte_length() as usize;
+    if guest_frame.len() != declared || scanout.len() < declared {
+        return Err(BootScanoutError::Framebuffer(
+            FramebufferError::InvalidLength,
+        ));
+    }
+    // FramebufferLayout validates these products and the full stride extent.
+    let stride = layout.stride() as usize * 4;
+    let row_pixels = layout.width() as usize * 4;
+    let frame_bytes = stride * layout.height() as usize;
+    for (guest, hardware) in guest_frame[..frame_bytes]
+        .chunks_exact(stride)
+        .zip(scanout[..frame_bytes].chunks_exact_mut(stride))
+    {
+        hardware[..row_pixels].copy_from_slice(&guest[..row_pixels]);
+    }
+    Ok(())
+}
+
+fn validate_output<const N: usize>(
+    capabilities: &CapabilitySpace<N>,
+    control: Capability,
+    binding: DisplayOutputIdentity,
+    current: DisplayOutputIdentity,
+) -> Result<(), BootScanoutError> {
+    if binding != current {
+        return Err(BootScanoutError::StaleOutput);
+    }
+    if capabilities.authorize_exact(control, Rights::CONTROL) != Ok(current.object()) {
+        return Err(BootScanoutError::WrongAuthority);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -80,6 +125,57 @@ mod tests {
             assert_eq!(&row[352 * 4..], &[0xa7; 32]);
         }
         assert_eq!(&pixels[1440 * 48..], &[0xa7; 16]);
+    }
+
+    #[test]
+    fn microvm_frame_copy_never_exposes_scanout_padding_and_fails_closed() {
+        let mut caps = CapabilitySpace::<2>::new();
+        let output = DisplayOutputIdentity::new(ObjectId(5), 1).unwrap();
+        let replacement = DisplayOutputIdentity::new(ObjectId(5), 2).unwrap();
+        let control = caps.insert(output.object(), Rights::CONTROL).unwrap();
+        let layout =
+            FramebufferLayout::new(26, 2, 2, 3, PixelFormat::RedGreenBlueReserved).unwrap();
+        let mut guest = [0x55; 26];
+        let mut scanout = [0xa7; 28];
+        paint_boot_ready(&caps, control, output, output, layout, &mut guest).unwrap();
+        assert_eq!(
+            publish_guest_scanout(
+                &caps,
+                control,
+                output,
+                replacement,
+                layout,
+                &guest,
+                &mut scanout
+            ),
+            Err(BootScanoutError::StaleOutput)
+        );
+        assert_eq!(
+            publish_guest_scanout(
+                &caps,
+                control,
+                output,
+                output,
+                layout,
+                &guest[..25],
+                &mut scanout
+            ),
+            Err(BootScanoutError::Framebuffer(
+                FramebufferError::InvalidLength
+            ))
+        );
+        assert_eq!(scanout, [0xa7; 28]);
+        publish_guest_scanout(&caps, control, output, output, layout, &guest, &mut scanout)
+            .unwrap();
+        assert_eq!(&scanout[0..8], &guest[0..8]);
+        assert_eq!(&scanout[12..20], &guest[12..20]);
+        assert_eq!(&scanout[8..12], &[0xa7; 4]);
+        assert_eq!(&scanout[20..28], &[0xa7; 8]);
+        caps.revoke(control).unwrap();
+        assert_eq!(
+            publish_guest_scanout(&caps, control, output, output, layout, &guest, &mut scanout),
+            Err(BootScanoutError::WrongAuthority)
+        );
     }
 
     #[test]

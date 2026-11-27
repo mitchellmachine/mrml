@@ -289,7 +289,10 @@ impl IsolationPolicy {
             PlacementRequest::PackageDefault => (self.preferred, PlacementSource::PackageDefault),
             PlacementRequest::Owner(placement) => (placement, PlacementSource::Owner),
             PlacementRequest::TotalMicrovm
-                if self.supported.contains(&IsolationPlacement::Microvm) =>
+                if self.supported.contains(&IsolationPlacement::Microvm)
+                    && self.runtime.as_ref().is_none_or(|runtime| {
+                        runtime.class() == RuntimeClass::MicrovmEligible
+                    }) =>
             {
                 (IsolationPlacement::Microvm, PlacementSource::TotalMicrovm)
             }
@@ -422,6 +425,18 @@ mod tests {
                 .resolve(PlacementRequest::Owner(IsolationPlacement::Microvm))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn explicitly_blocked_service_is_not_promoted_even_with_microvm_listed() {
+        let document = manifest(
+            "\n[isolation]\ndefault = \"native-service\"\nminimum = \"native-service\"\nsupported = [\"native-service\", \"microvm\"]\nruntime_class = \"unsupported-blocker\"\nmust_run = true\nreason = \"missing supervised guest\"\n",
+        );
+        let policy = IsolationPolicy::parse(&document, "service", "org.mrml.service.test")
+            .unwrap();
+        let resolved = policy.resolve(PlacementRequest::TotalMicrovm).unwrap();
+        assert_eq!(resolved.source(), PlacementSource::TotalMicrovmException);
+        assert_eq!(resolved.placement(), IsolationPlacement::NativeService);
     }
 
     #[test]

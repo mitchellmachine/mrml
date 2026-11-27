@@ -6170,6 +6170,48 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_services_are_classified_in_total_release_inventory() {
+        let workspace = load_workspace().unwrap();
+        let mut services: Vec<_> = workspace
+            .components
+            .iter()
+            .filter(|component| {
+                component.path.starts_with("packages/services/")
+                    || component.id == "org.mrml.system.service-image"
+            })
+            .collect();
+        services.sort_unstable_by_key(|component| component.id.as_str());
+        assert!(services.len() >= 9);
+        let digest = [0x5a; 64];
+        let records: Vec<_> = services
+            .iter()
+            .map(|component| SystemGenerationDigestRecord {
+                package_id: component.id.as_str(),
+                version: 1,
+                artifact_digest: &digest,
+            })
+            .collect();
+        let mut generation = [0; 8192];
+        let bytes = encode_system_generation(7, &records, &mut generation).unwrap();
+        let inventory = derive_runtime_inventory(&workspace, &generation[..bytes]).unwrap();
+        let view = RuntimeInventoryView::decode(&inventory).unwrap();
+        assert_eq!(view.records().count(), services.len());
+        let storage = view
+            .records()
+            .find(|record| record.package_id == "org.mrml.service.storage")
+            .unwrap();
+        assert_eq!(storage.class, RuntimeIsolationClass::UnsupportedBlocker);
+        assert!(storage.must_run);
+        assert_ne!(storage.reason, "");
+        let display = view
+            .records()
+            .find(|record| record.package_id == "org.mrml.service.compositor")
+            .unwrap();
+        assert_eq!(display.class, RuntimeIsolationClass::MicrovmEligible);
+        assert!(display.must_run);
+    }
+
+    #[test]
     fn runtime_inventory_rejects_unclassified_generation_members() {
         let application = component("app.unclassified", &[]);
         let digest = [0x63; 64];

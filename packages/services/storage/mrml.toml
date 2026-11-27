@@ -12,6 +12,9 @@ profile = "system-service"
 [isolation]
 default = "native-service"
 minimum = "native-service"
+must_run = true
+reason = "Native storage coordinator lacks a supervised microVM entry and runtime transport"
+runtime_class = "unsupported-blocker"
 supported = ["native-service"]
 
 [[requires]]
