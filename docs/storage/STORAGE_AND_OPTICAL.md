@@ -3190,6 +3190,16 @@ translation. Failing after the first register write retains every page
 and keeps all requesters quiesced. Hosted register-model tests cover
 ordering and timeouts; a live QEMU activation test is still pending.
 
+Before the isolated shutdown case reaches its host rendezvous, the signed
+guest now verifies the entire boot-DMA allocation against the active root,
+rejects any second mapping or page-table frame overlap, and reads the BSP's
+cache controls. It requires PAT index 0 to select write-back and proves
+write-back coverage for each page above 1 MiB and below 4 GiB through either
+the default MTRR type or the union of matching write-back variable ranges.
+A conflicting type, malformed mask, disabled cache or uncovered page stops
+the probe. This read-only check validates a prerequisite of table writeback;
+it does not activate translation or authorize DMA.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

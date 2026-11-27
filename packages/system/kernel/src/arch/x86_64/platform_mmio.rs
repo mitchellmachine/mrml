@@ -450,6 +450,114 @@ fn validate_boot_mmio_cpu(
     Ok(())
 }
 
+const CACHE_WB: u8 = 6;
+const MAX_BOOT_VARIABLE_MTRRS: u8 = 16;
+const MTRR_ENABLE: u64 = 1 << 11;
+
+/// Checks the architectural WB subset needed by the boot DMA fixture. This
+/// is not a general MTRR interpreter: fixed ranges and mixed-type overlaps
+/// are not accepted. It does not establish RAM ownership or device authority.
+fn boot_dma_write_back(
+    physical: core::ops::Range<u64>,
+    physical_bits: u8,
+    cr0: u64,
+    pat: u64,
+    default_type: u64,
+    count: u8,
+    mut range: impl FnMut(u8) -> (u64, u64),
+) -> bool {
+    if !(32..=52).contains(&physical_bits)
+        || count > MAX_BOOT_VARIABLE_MTRRS
+        || cr0 & ((1 << 30) | (1 << 29)) != 0
+        || pat as u8 != CACHE_WB
+        || default_type & MTRR_ENABLE == 0
+        || default_type & !(0xff | (1 << 10) | MTRR_ENABLE) != 0
+        || !matches!(default_type as u8, 0 | 1 | 4 | 5 | CACHE_WB)
+        || physical.start < 0x10_0000
+        || physical.start >= physical.end
+        || physical.end > 1 << 32
+        || physical.end - physical.start > 16 * PAGE_SIZE
+        || (physical.start | physical.end) & (PAGE_SIZE - 1) != 0
+    {
+        return false;
+    }
+
+    let address_mask = ((1u64 << physical_bits) - 1) & !(PAGE_SIZE - 1);
+    let mut covered = 0u32;
+    for index in 0..count {
+        let (base, mask) = range(index);
+        if mask & MTRR_ENABLE == 0 {
+            continue;
+        }
+        let address = base & address_mask;
+        let size = ((!mask & address_mask) | (PAGE_SIZE - 1)) + 1;
+        if base & !(address_mask | 0xff) != 0
+            || mask & !(address_mask | MTRR_ENABLE) != 0
+            || !size.is_power_of_two()
+            || address & (size - 1) != 0
+        {
+            return false;
+        }
+        let start = physical.start.max(address);
+        let end = physical.end.min(address + size);
+        if start >= end {
+            continue;
+        }
+        if base as u8 != CACHE_WB {
+            return false;
+        }
+        for page in (start - physical.start) / PAGE_SIZE..(end - physical.start) / PAGE_SIZE {
+            covered |= 1 << page;
+        }
+    }
+    default_type as u8 == CACHE_WB
+        || covered == (1 << ((physical.end - physical.start) / PAGE_SIZE)) - 1
+}
+
+/// Reads only BSP cache policy for the exact boot allocation.
+///
+/// # Safety
+/// The caller holds the BSP at CPL0 with interrupts disabled, before APs
+/// start. It excludes cache-policy changes through subsequent use.
+pub(super) unsafe fn check_boot_dma_write_back(physical: core::ops::Range<u64>) -> bool {
+    use core::arch::{asm, x86_64::__cpuid};
+
+    const REQUIRED: u32 = (1 << 5) | (1 << 12) | (1 << 16);
+    if __cpuid(0).eax < 1
+        || __cpuid(1).edx & REQUIRED != REQUIRED
+        || __cpuid(0x8000_0000).eax < 0x8000_0008
+    {
+        return false;
+    }
+    let width = __cpuid(0x8000_0008).eax as u8;
+    let read_msr = |index: u32| {
+        let low: u32;
+        let high: u32;
+        // SAFETY: the caller owns CPL0 and CPUID established MSR/MTRR/PAT
+        // support; variable pairs are bounded by IA32_MTRRCAP below.
+        unsafe {
+            asm!("rdmsr", in("ecx") index, out("eax") low, out("edx") high,
+                options(nostack, preserves_flags));
+        }
+        (u64::from(high) << 32) | u64::from(low)
+    };
+    let cr0: u64;
+    // SAFETY: CPL0 read only; this changes neither the CPU nor table state.
+    unsafe { asm!("mov {}, cr0", out(reg) cr0, options(nostack, preserves_flags)) };
+    boot_dma_write_back(
+        physical,
+        width,
+        cr0,
+        read_msr(0x277),
+        read_msr(0x2ff),
+        read_msr(0xfe) as u8,
+        |index| {
+            let base = 0x200 + u32::from(index) * 2;
+            (read_msr(base), read_msr(base + 1))
+        },
+    )
+}
+
 /// Verifies an already installed active mapping page by page before issuing a
 /// token usable by native MMIO adapters.
 pub fn verify_active_platform_mmio(
@@ -530,6 +638,81 @@ pub fn extend_vtd_mmio_requirement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dma_cache_policy_requires_complete_wb_coverage_and_no_mixed_overlap() {
+        const ADDRESS_MASK: u64 = 0xf_ffff_f000;
+        let pair = |base: u64, bytes: u64, ty: u64| {
+            (base | ty, (ADDRESS_MASK & !(bytes - 1u64)) | MTRR_ENABLE)
+        };
+        let pages = 0x201000..0x205000;
+        let check = |default_type, pairs: &[(u64, u64)]| {
+            boot_dma_write_back(
+                pages.clone(),
+                36,
+                0,
+                6,
+                MTRR_ENABLE | default_type,
+                pairs.len() as u8,
+                |i| pairs[usize::from(i)],
+            )
+        };
+        assert!(check(6, &[]));
+        assert!(check(0, &[pair(0x200000, 0x200000, 6)]));
+        assert!(check(
+            0,
+            &[pair(0x200000, 0x4000, 6), pair(0x204000, 0x1000, 6)]
+        ));
+        assert!(!check(0, &[pair(0x200000, 0x4000, 6)]));
+        assert!(!check(6, &[pair(0x204000, 0x1000, 0)]));
+        assert!(check(6, &[pair(0x205000, 0x1000, 0)]));
+        assert!(!check(6, &[(0, ADDRESS_MASK ^ 0x2000 | MTRR_ENABLE)]));
+        assert!(!check(6, &[pair(0x201000, 0x2000, 6)]));
+        assert!(!check(6, &[(1 << 36, ADDRESS_MASK | MTRR_ENABLE)]));
+        assert!(check(6, &[(u64::MAX, 0)]));
+    }
+
+    #[test]
+    fn dma_cache_policy_rejects_disabled_caching_and_out_of_scope_inputs() {
+        let range = 0x100000..0x110000;
+        for (cr0, pat, mtrr, width, count) in [
+            (1 << 30, 6, MTRR_ENABLE | 6, 36, 0),
+            (1 << 29, 6, MTRR_ENABLE | 6, 36, 0),
+            (0, 0, MTRR_ENABLE | 6, 36, 0),
+            (0, 6, 6, 36, 0),
+            (0, 6, MTRR_ENABLE | 2, 36, 0),
+            (0, 6, MTRR_ENABLE | 6, 53, 0),
+            (0, 6, MTRR_ENABLE | 6, 36, 17),
+        ] {
+            assert!(!boot_dma_write_back(
+                range.clone(),
+                width,
+                cr0,
+                pat,
+                mtrr,
+                count,
+                |_| panic!("invalid policy must not read variable MTRRs")
+            ));
+        }
+        for range in [
+            0xff000..0x100000,
+            0x100000..0x111000,
+            0x100001..0x110000,
+            0x100000..0x100000,
+            0x1_0000_0000..0x1_0000_1000,
+        ] {
+            assert!(!boot_dma_write_back(
+                range,
+                36,
+                0,
+                6,
+                MTRR_ENABLE | 6,
+                0,
+                |_| unreachable!()
+            ));
+        }
+    }
+
 
     #[test]
     fn boot_mmio_cpu_requires_wp_nxe_four_level_and_exact_uc() {

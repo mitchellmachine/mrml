@@ -1361,7 +1361,38 @@ impl ActivePageTables {
             .into_iter()
             .flatten()
         {
-            verify_exclusive_mmio_from_store(&IdentityMappedPageTables, self.root, mapping)?;
+            verify_exclusive_mapping_from_store(&IdentityMappedPageTables, self.root, mapping)?;
+        }
+        Ok(())
+    }
+
+    /// Verify the entire initialized DMA range is uniquely mapped and WB
+    /// on the current BSP. This check neither pins frames nor grants DMA.
+    ///
+    /// # Safety
+    /// The caller must hold this root current at CPL0, with interrupts and
+    /// APs off, and exclude CPU cache policy and page-table changes. The
+    /// loader must have retired stale firmware translations before entry.
+    pub unsafe fn verify_boot_dma_write_back(
+        &self,
+        dma: &InitializedBootDma,
+    ) -> Result<(), super::PlatformMmioError> {
+        use super::PlatformMmioError;
+
+        let mapping = dma.mapping();
+        if dma.root() != self.root || mapping.permissions() != PagePermissions::KERNEL_READ_WRITE {
+            return Err(PlatformMmioError::MappingMismatch);
+        }
+        verify_exclusive_mapping_from_store(&IdentityMappedPageTables, self.root, mapping)
+            .map_err(|_| PlatformMmioError::PageTable)?;
+        let start = mapping.physical_start().get();
+        let end = start
+            .checked_add(dma.reservation().bytes())
+            .ok_or(PlatformMmioError::InvalidRange)?;
+        // SAFETY: caller holds the current BSP root and excludes cache
+        // policy changes. The cache check reads registers, not DMA memory.
+        if !unsafe { super::platform_mmio::check_boot_dma_write_back(start..end) } {
+            return Err(PlatformMmioError::CpuProtection);
         }
         Ok(())
     }
@@ -1586,7 +1617,7 @@ fn verify_active_mapping_from_store<S: PageTableStore>(
     Ok(())
 }
 
-const BOOT_MMIO_ALIAS_MAX_TABLES: usize = 1024;
+const BOOT_ALIAS_MAX_TABLES: usize = 1024;
 
 fn verify_read_only_mmio_from_store<S: PageTableStore>(
     store: &S,
@@ -1596,10 +1627,10 @@ fn verify_read_only_mmio_from_store<S: PageTableStore>(
     if mapping.permissions() != PagePermissions::KERNEL_MMIO_READ {
         return Err(PageTableBuildError::MappingMismatch);
     }
-    verify_exclusive_mmio_from_store(store, root, mapping)
+    verify_exclusive_mapping_from_store(store, root, mapping)
 }
 
-fn verify_exclusive_mmio_from_store<S: PageTableStore>(
+fn verify_exclusive_mapping_from_store<S: PageTableStore>(
     store: &S,
     root: PhysAddr,
     mapping: Mapping,
@@ -1610,7 +1641,7 @@ fn verify_exclusive_mmio_from_store<S: PageTableStore>(
         .checked_mul(PAGE_SIZE)
         .and_then(|bytes| physical_start.checked_add(bytes))
         .ok_or(PageTableBuildError::AddressOverflow)?;
-    let mut budget = BOOT_MMIO_ALIAS_MAX_TABLES;
+    let mut budget = BOOT_ALIAS_MAX_TABLES;
     fn scan(
         store: &impl PageTableStore,
         table: PhysAddr,

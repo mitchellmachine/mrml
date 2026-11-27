@@ -4064,6 +4064,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         } else {
             halt();
         };
+        if shutdown {
+            let dma = _boot_dma.as_ref().unwrap_or_else(|| halt());
+            // SAFETY: the signed fixture runs with this dedicated root on
+            // the BSP only, before enabling interrupts or configuring DMA.
+            if unsafe { active.verify_boot_dma_write_back(dma) }.is_err() {
+                halt();
+            }
+        }
         if native_fat32_probe::dma_fixture_rendezvous(shutdown) {
             // SAFETY: exact alias-free RO/NX UC pages were verified in the
             // active BSP root. The sealed shutdown case additionally has RW
