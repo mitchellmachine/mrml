@@ -16525,6 +16525,41 @@ fn runtime_expression_type_with_locals<
     let expression = tree
         .expression(id)
         .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+    if let ExprKind::Binary {
+        operator,
+        left,
+        right,
+    } = expression.kind
+    {
+        return runtime_binary_expression_type(operator, left, right, |operand| {
+            runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                operand,
+                depth + 1,
+            )
+        });
+    }
+    runtime_non_binary_expression_type(function, resolver, locals, tree, id, expression, depth)
+}
+
+// Keep the large match frame off the stack while typing nested binary expressions.
+#[inline(never)]
+fn runtime_non_binary_expression_type<
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_NODES: usize,
+>(
+    function: &Function<'_, MAX_PARAMETERS>,
+    resolver: &R,
+    locals: &[Option<RuntimeLocal<'_>>],
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+    expression: &crate::Expr<'_>,
+    depth: usize,
+) -> Result<RuntimeExpressionType, CodegenErrorKind> {
     let unsafe_context = function.unsafe_function || tree.is_within_unsafe_block(id);
     match expression.kind {
         ExprKind::UnsafeBlock { operand } => runtime_expression_type_with_locals(
@@ -19616,128 +19651,83 @@ fn runtime_expression_type_with_locals<
                 mutable: operator == crate::UnaryOperator::AddressOfMut,
             })
         }
-        ExprKind::Binary {
-            operator,
-            left,
-            right,
-        } => {
-            if matches!(
-                operator,
-                crate::BinaryOperator::LogicalAnd | crate::BinaryOperator::LogicalOr
-            ) {
-                if runtime_expression_type_with_locals(
-                    function,
-                    resolver,
-                    locals,
-                    tree,
-                    left,
-                    depth + 1,
-                )? == RuntimeExpressionType::Bool
-                    && runtime_expression_type_with_locals(
-                        function,
-                        resolver,
-                        locals,
-                        tree,
-                        right,
-                        depth + 1,
-                    )? == RuntimeExpressionType::Bool
-                {
-                    return Ok(RuntimeExpressionType::Bool);
-                }
-                return Err(CodegenErrorKind::RuntimeTypeMismatch);
-            }
-            let left_type = runtime_expression_type_with_locals(
-                function,
-                resolver,
-                locals,
-                tree,
-                left,
-                depth + 1,
-            )?;
-            let right_type = runtime_expression_type_with_locals(
-                function,
-                resolver,
-                locals,
-                tree,
-                right,
-                depth + 1,
-            )?;
-            if matches!(
-                operator,
-                crate::BinaryOperator::Equal
-                    | crate::BinaryOperator::NotEqual
-                    | crate::BinaryOperator::Less
-                    | crate::BinaryOperator::LessEqual
-                    | crate::BinaryOperator::Greater
-                    | crate::BinaryOperator::GreaterEqual
-            ) && matches!(
-                (left_type, right_type),
-                (RuntimeExpressionType::Bool, RuntimeExpressionType::Bool)
-                    | (RuntimeExpressionType::Unit, RuntimeExpressionType::Unit)
-                    | (RuntimeExpressionType::Char, RuntimeExpressionType::Char)
-            ) {
-                return Ok(RuntimeExpressionType::Bool);
-            }
-            if matches!(
-                operator,
-                crate::BinaryOperator::Equal
-                    | crate::BinaryOperator::NotEqual
-                    | crate::BinaryOperator::Less
-                    | crate::BinaryOperator::LessEqual
-                    | crate::BinaryOperator::Greater
-                    | crate::BinaryOperator::GreaterEqual
-            ) && matches!(left_type, RuntimeExpressionType::RawPointer { .. })
-                && matches!(right_type, RuntimeExpressionType::RawPointer { .. })
-                && (runtime_types_compatible(left_type, right_type)
-                    || runtime_types_compatible(right_type, left_type))
-            {
-                return Ok(RuntimeExpressionType::Bool);
-            }
-            if matches!(
-                operator,
-                crate::BinaryOperator::BitAnd
-                    | crate::BinaryOperator::BitOr
-                    | crate::BinaryOperator::BitXor
-            ) && matches!(
-                (left_type, right_type),
-                (RuntimeExpressionType::Bool, RuntimeExpressionType::Bool)
-            ) {
-                return Ok(RuntimeExpressionType::Bool);
-            }
-            if matches!(
-                operator,
-                crate::BinaryOperator::ShiftLeft | crate::BinaryOperator::ShiftRight
-            ) {
-                if !matches!(right_type, RuntimeExpressionType::Integer(_)) {
-                    return Err(CodegenErrorKind::RuntimeTypeMismatch);
-                }
-                return match left_type {
-                    RuntimeExpressionType::Integer(_) => Ok(left_type),
-                    RuntimeExpressionType::Never
-                    | RuntimeExpressionType::Unit
-                    | RuntimeExpressionType::Default
-                    | RuntimeExpressionType::Array { .. }
-                    | RuntimeExpressionType::Tuple { .. }
-                    | RuntimeExpressionType::Reference { .. }
-                    | RuntimeExpressionType::RawPointer { .. }
-                    | RuntimeExpressionType::Bool
-                    | RuntimeExpressionType::Char => Err(CodegenErrorKind::RuntimeTypeMismatch),
-                };
-            }
-            let integer_type = unify_integer_types(left_type, right_type)?;
-            if matches!(
-                operator,
-                crate::BinaryOperator::Equal
-                    | crate::BinaryOperator::NotEqual
-                    | crate::BinaryOperator::Less
-                    | crate::BinaryOperator::LessEqual
-                    | crate::BinaryOperator::Greater
-                    | crate::BinaryOperator::GreaterEqual
-            ) {
-                Ok(RuntimeExpressionType::Bool)
-            } else {
-                Ok(RuntimeExpressionType::Integer(integer_type))
-            }
+        ExprKind::Binary { .. } => Err(CodegenErrorKind::RuntimeExpressionUnsupported),
+    }
+}
+
+fn runtime_binary_expression_type(
+    operator: crate::BinaryOperator,
+    left: crate::ExprId,
+    right: crate::ExprId,
+    mut infer: impl FnMut(crate::ExprId) -> Result<RuntimeExpressionType, CodegenErrorKind>,
+) -> Result<RuntimeExpressionType, CodegenErrorKind> {
+    use crate::BinaryOperator;
+
+    if matches!(
+        operator,
+        BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr
+    ) {
+        if infer(left)? == RuntimeExpressionType::Bool
+            && infer(right)? == RuntimeExpressionType::Bool
+        {
+            return Ok(RuntimeExpressionType::Bool);
         }
+        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+    }
+
+    let left_type = infer(left)?;
+    let right_type = infer(right)?;
+    let comparison = matches!(
+        operator,
+        BinaryOperator::Equal
+            | BinaryOperator::NotEqual
+            | BinaryOperator::Less
+            | BinaryOperator::LessEqual
+            | BinaryOperator::Greater
+            | BinaryOperator::GreaterEqual
+    );
+    if comparison
+        && matches!(
+            (left_type, right_type),
+            (RuntimeExpressionType::Bool, RuntimeExpressionType::Bool)
+                | (RuntimeExpressionType::Unit, RuntimeExpressionType::Unit)
+                | (RuntimeExpressionType::Char, RuntimeExpressionType::Char)
+        )
+    {
+        return Ok(RuntimeExpressionType::Bool);
+    }
+    if comparison
+        && matches!(left_type, RuntimeExpressionType::RawPointer { .. })
+        && matches!(right_type, RuntimeExpressionType::RawPointer { .. })
+        && (runtime_types_compatible(left_type, right_type)
+            || runtime_types_compatible(right_type, left_type))
+    {
+        return Ok(RuntimeExpressionType::Bool);
+    }
+    if matches!(
+        operator,
+        BinaryOperator::BitAnd | BinaryOperator::BitOr | BinaryOperator::BitXor
+    ) && matches!(
+        (left_type, right_type),
+        (RuntimeExpressionType::Bool, RuntimeExpressionType::Bool)
+    ) {
+        return Ok(RuntimeExpressionType::Bool);
+    }
+    if matches!(
+        operator,
+        BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+    ) {
+        if matches!(left_type, RuntimeExpressionType::Integer(_))
+            && matches!(right_type, RuntimeExpressionType::Integer(_))
+        {
+            return Ok(left_type);
+        }
+        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+    }
+    let integer_type = unify_integer_types(left_type, right_type)?;
+    if comparison {
+        Ok(RuntimeExpressionType::Bool)
+    } else {
+        Ok(RuntimeExpressionType::Integer(integer_type))
     }
 }

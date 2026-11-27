@@ -46,6 +46,30 @@ fn explicit_component_descriptor_has_upstream_and_mrml_object_evidence() {
     }
 }
 
+#[test]
+fn compound_boolean_expression_compiles_with_public_frontend_capacities() {
+    let source = r#"
+        #[unsafe(no_mangle)]
+        pub extern "C" fn probe() -> i32 {
+            if '\t' == '\x09' && '\n' == '\x0A' && '\r' == '\x0D' && ' ' == '\x20' {
+                42
+            } else {
+                0
+            }
+        }
+    "#;
+    for format in [ObjectFormat::Coff, ObjectFormat::Elf64] {
+        let object = compile_source_function::<4096, 4096, 64, 16, 64, 256>(
+            source,
+            "probe",
+            format,
+            TargetLayout::X86_64,
+        )
+        .expect("public frontend capacities accommodate the compound expression");
+        assert!(!object.is_empty());
+    }
+}
+
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
