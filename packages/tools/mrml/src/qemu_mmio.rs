@@ -124,10 +124,10 @@ fn inspect_qmp(
         return Ok(None);
     }
     validate(&map)?;
-    if matches!(release, Some(0xad | 0xae)) {
+    if matches!(release, Some(0xad..=0xaf | 0xb4)) {
         validate_scratch_uart(&map)?;
         verify_shared_boot(stdin, reader)?;
-        if release == Some(0xad) {
+        if matches!(release, Some(0xad | 0xaf | 0xb4)) {
             let before = sample_shared_controller(stdin, reader)?;
             qmp_write(
                 stdin,
@@ -153,6 +153,35 @@ fn inspect_qmp(
                 return Err(
                     "virtual USB removal changed PCI identity, controller control or VT-d state"
                         .into(),
+                );
+            }
+            if matches!(release, Some(0xaf | 0xb4)) {
+                let command = after
+                    .disable_command()
+                    .ok_or("shared BME fixture is not quiescent")?;
+                let allowed = release == Some(0xaf);
+                if allowed {
+                    write_shared_command_word(stdin, reader, after.pci_command, command)?;
+                }
+                let final_state = sample_shared_controller(stdin, reader)?;
+                let expected = if allowed {
+                    SharedController {
+                        pci_command: (after.pci_command & 0xffff_0000) | u32::from(command),
+                        ..after
+                    }
+                } else {
+                    after
+                };
+                if !expected.matches_control(final_state)
+                    || expected.pci_command != final_state.pci_command
+                {
+                    return Err(
+                        "shared BME test changed more than the authorized command bit".into(),
+                    );
+                }
+                println!(
+                    "q35-shared-bme|status=PASS|actor=qemu-host|allowed={allowed}|command_before={:#06x}|command_after={:#06x}|halted=true|vtd_unchanged=true",
+                    after.pci_command as u16, final_state.pci_command as u16,
                 );
             }
             for (phase, state) in [("before-detach", before), ("after-detach", after)] {
@@ -236,7 +265,12 @@ fn inspect_qmp(
     }) {
         return Err("unexpected firmware PCI or remapping state before shutdown".into());
     }
-    if let Some(byte) = release {
+    if let Some(mode) = release {
+        let byte = match mode {
+            0xaf => 0xad,
+            0xb4 => 0xae,
+            byte => byte,
+        };
         validate_scratch_uart(&map)?;
         if !matches!(byte, 0xa6..=0xae | 0x5a) {
             return Err("unknown q35 fixture release value".into());
@@ -765,6 +799,17 @@ struct SharedController {
 }
 
 impl SharedController {
+    fn disable_command(self) -> Option<u16> {
+        let command = self.pci_command as u16;
+        (command & 6 == 6
+            && self.xhci.command == 0
+            && self.xhci.status & 1 != 0
+            && self.gsts == 0
+            && self.root == 0
+            && self.fsts == 0)
+            .then_some(command & !4)
+    }
+
     fn matches_control(self, after: Self) -> bool {
         // Detach may set the port-change bit. It must not move the BAR,
         // alter the controller's Run/Halted state or alter remapping.
@@ -816,6 +861,79 @@ fn sample_shared_controller(
         root,
         fsts,
     })
+}
+
+// This is a host-only action on the paused disposable q35 machine. The CPU
+// ECAM sample and the independent mechanism-1 read must agree before the sole
+// command-word update. Restore the previous selection before guest release.
+fn write_shared_command_word(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    command_status: u32,
+    new_command: u16,
+) -> Result<(), String> {
+    const SELECTOR: u32 = 0x8000_0004 | (27 << 11);
+    let saved = read_config_port(stdin, reader, 0xcf8, 160)?;
+    qmp_port_write(stdin, reader, "w", 0xcf8, SELECTOR, 161)?;
+    let result = (|| {
+        if read_config_port(stdin, reader, 0xcf8, 162)? != SELECTOR
+            || read_config_port(stdin, reader, 0xcfc, 163)? != command_status
+            || command_status as u16 & 4 == 0
+            || new_command != (command_status as u16 & !4)
+        {
+            return Err(
+                "shared xHCI PCI configuration changed before the scoped command write".into(),
+            );
+        }
+        qmp_port_write(stdin, reader, "h", 0xcfc, u32::from(new_command), 164)
+    })();
+    qmp_port_write(stdin, reader, "w", 0xcf8, saved, 165)?;
+    if read_config_port(stdin, reader, 0xcf8, 166)? != saved {
+        return Err("shared xHCI PCI selector was not restored".into());
+    }
+    result
+}
+
+fn read_config_port(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    port: u16,
+    id: u8,
+) -> Result<u32, String> {
+    qmp_write(
+        stdin,
+        &format!(
+            "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"i /w {port:#x}\"}},\"id\":{id}}}\n"
+        ),
+    )?;
+    let output = read_monitor(reader, id)?;
+    let prefix = format!("portl[0x{port:04x}] = 0x");
+    let word = output
+        .trim_end()
+        .strip_prefix(&prefix)
+        .filter(|word| word.len() == 8)
+        .ok_or("unexpected scoped QEMU PCI port read")?;
+    u32::from_str_radix(word, 16).map_err(|_| "invalid scoped QEMU PCI port value".into())
+}
+
+fn qmp_port_write(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    width: &str,
+    port: u16,
+    value: u32,
+    id: u8,
+) -> Result<(), String> {
+    if !matches!((width, port), ("w", 0xcf8) | ("h", 0xcfc)) {
+        return Err("unexpected QEMU PCI config port write scope".into());
+    }
+    qmp_write(
+        stdin,
+        &format!(
+            "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"o /{width} {port:#x} {value:#x}\"}},\"id\":{id}}}\n"
+        ),
+    )?;
+    ack(reader, &format!("{{\"return\": \"\", \"id\": {id}}}"))
 }
 
 fn shared_boot_topology(tree: &str) -> bool {
@@ -1536,6 +1654,42 @@ mod tests {
             root: 0,
             fsts: 0,
         };
+        assert_eq!(initial.disable_command(), Some(3));
+        assert_eq!(
+            SharedController {
+                pci_command: 6,
+                ..initial
+            }
+            .disable_command(),
+            Some(2)
+        );
+        assert_eq!(
+            SharedController {
+                pci_command: 3,
+                ..initial
+            }
+            .disable_command(),
+            None
+        );
+        assert_eq!(
+            SharedController {
+                gsts: 1 << 31,
+                ..initial
+            }
+            .disable_command(),
+            None
+        );
+        assert_eq!(
+            SharedController {
+                xhci: FixtureState {
+                    command: 1,
+                    ..initial.xhci
+                },
+                ..initial
+            }
+            .disable_command(),
+            None
+        );
         let mut after = initial;
         after.xhci.status |= 1 << 4;
         after.pci_command |= 1 << 19; // Separate PCI status half.

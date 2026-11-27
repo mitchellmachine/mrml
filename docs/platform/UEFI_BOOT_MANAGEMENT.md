@@ -114,7 +114,14 @@ firmware-inherited emulated state, not proof of physical ownership or DMA
 isolation. In the QEMU reference run, xHCI was halted both times, but
 PCI Bus Master Enable remained set and VT-d translation remained off.
 Removing the boot stick is therefore not a substitute for an explicit,
-verified DMA-safe controller shutdown.
+verified DMA-safe controller shutdown. The extra allow/deny cases use only
+the paused QEMU host to check this boundary: after exact USB detachment,
+the allow case clears only Bus Master Enable with a 16-bit PCI command
+write, restores the configuration selector, and independently verifies
+the full command and status dword and unchanged xHCI and VT-d state. The
+deny case leaves PCI state unchanged and the guest stops. This is a
+host-side emulator calibration, not a guest-implemented shutdown,
+firmware ownership transfer, or hardware qualification.
 
 ### Diagnose a return to firmware
 

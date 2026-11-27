@@ -95,6 +95,8 @@ pub(super) enum Q35FixtureCase {
     SharedPreloadUnmarked,
     SharedPreloadDenied,
     SharedPreload,
+    SharedDisableBme,
+    SharedDenyBme,
     WrongRelease,
     ValidRelease,
     IsolatedWrongRelease,
@@ -333,6 +335,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 | Q35FixtureCase::SharedPreloadUnmarked
                 | Q35FixtureCase::SharedPreloadDenied
                 | Q35FixtureCase::SharedPreload
+                | Q35FixtureCase::SharedDisableBme
+                | Q35FixtureCase::SharedDenyBme
         )
     );
     let machine = if isolated {
@@ -498,6 +502,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::StorageWriteDenied | Q35FixtureCase::StorageWrite => Some(0xac),
         Q35FixtureCase::SharedPreload => Some(0xad),
         Q35FixtureCase::SharedPreloadDenied => Some(0xae),
+        Q35FixtureCase::SharedDisableBme => Some(0xaf),
+        Q35FixtureCase::SharedDenyBme => Some(0xb4),
     });
     let cold = map_only_marker.and_then(Q35FixtureCase::cold);
     let mut released = false;
@@ -505,7 +511,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     loop {
         if let Ok(bytes) = fs::read(trace) {
             if let Some(valid) = release {
-                let ready = if matches!(valid, 0xad | 0xae) {
+                let ready = if matches!(valid, 0xad..=0xaf | 0xb4) {
                     let index = expected
                         .iter()
                         .position(|&byte| byte == 0xe7)
