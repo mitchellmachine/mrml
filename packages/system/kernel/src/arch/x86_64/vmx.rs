@@ -38,6 +38,8 @@ impl VmcsField {
     const EXIT_INSTRUCTION_LENGTH: Self = Self(0x440c);
     const GUEST_RIP: Self = Self(0x681e);
     const EPT_POINTER: Self = Self(0x201a);
+    const PIN_BASED_CONTROLS: Self = Self(0x4000);
+    const PREEMPTION_TIMER_VALUE: Self = Self(0x482e);
     pub const EXIT_QUALIFICATION: Self = Self(0x6400);
     pub const GUEST_PHYSICAL_ADDRESS: Self = Self(0x2400);
     pub const GUEST_LINEAR_ADDRESS: Self = Self(0x640a);
@@ -1249,6 +1251,45 @@ impl<I: VmxInstructions> VmxController<I> {
         Ok(())
     }
 
+    /// Arm the current boot probe with a nonzero VMX timer value, in the
+    /// timer ticks exposed by the CPU. No generic guest time policy is implied.
+    pub fn arm_boot_probe_timer(
+        &mut self,
+        controls: VmxControlPolicy,
+        ticks: u32,
+    ) -> Result<(), VmxError> {
+        const ACTIVATE_TIMER: u32 = 1 << 6;
+        if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() || self.probe_resume_only
+        {
+            return Err(VmxError::InvalidState);
+        }
+        if ticks == 0
+            || !controls.pin.accepts(
+                VmxControl::constrained(ACTIVATE_TIMER, controls.pin).bits() | ACTIVATE_TIMER,
+            )
+        {
+            return Err(VmxError::InvalidControl);
+        }
+        let result = (|| {
+            let pin = self.instructions.vmread(VmcsField::PIN_BASED_CONTROLS)?;
+            let pin = u32::try_from(pin).map_err(|_| VmxInstructionError::Failed)?;
+            if !controls.pin.accepts(pin | ACTIVATE_TIMER) {
+                return Err(VmxInstructionError::Failed);
+            }
+            self.instructions
+                .vmwrite(VmcsField::PREEMPTION_TIMER_VALUE, u64::from(ticks))?;
+            self.instructions.vmwrite(
+                VmcsField::PIN_BASED_CONTROLS,
+                u64::from(pin | ACTIVATE_TIMER),
+            )
+        })();
+        if result.is_err() {
+            self.state = VmxState::Poisoned;
+            return Err(VmxError::InstructionFailed);
+        }
+        Ok(())
+    }
+
     /// Records a VM exit before exit handling reads guest-controlled state.
     pub fn record_vm_exit(&mut self) -> Result<(), VmxError> {
         if !matches!(self.state, VmxState::GuestRunning | VmxState::VmExitPending) {
@@ -1473,6 +1514,7 @@ mod tests {
             self.step(9)?;
             Ok(match field {
                 VmcsField::EXIT_REASON => self.exit_reason,
+                VmcsField::PIN_BASED_CONTROLS => 0,
                 VmcsField::EXIT_INSTRUCTION_LENGTH => self.probe_instruction_length,
                 VmcsField::GUEST_RIP => self.probe_rip,
                 VmcsField::EPT_POINTER => self.probe_ept,
@@ -1661,6 +1703,32 @@ mod tests {
         ] {
             assert_eq!(build(bad), Err(VmxError::InvalidControl));
         }
+    }
+
+    #[test]
+    fn boot_timer_requires_supported_control_and_nonzero_value() {
+        let vmxon = PhysAddr::new(0x1000).unwrap();
+        let vmcs = PhysAddr::new(0x2000).unwrap();
+        let ept = EptPointer::new(PhysAddr::new(0x3000).unwrap(), true).unwrap();
+        let all = (u32::MAX as u64) << 32;
+        let unsupported =
+            VmxControlPolicy::from_msrs(all & !(1 << (32 + 6)), all, all, all, all).unwrap();
+        let mut controller = VmxController::new(EmulatedVmx::default(), capabilities());
+        controller.enter_root(vmxon).unwrap();
+        controller.clear_vmcs(vmcs).unwrap();
+        controller.load_vmcs(vmcs, ept).unwrap();
+        assert_eq!(
+            controller.arm_boot_probe_timer(unsupported, 1),
+            Err(VmxError::InvalidControl)
+        );
+        assert_eq!(
+            controller.arm_boot_probe_timer(permissive_control_policy(), 0),
+            Err(VmxError::InvalidControl)
+        );
+        controller
+            .arm_boot_probe_timer(permissive_control_policy(), 1)
+            .unwrap();
+        assert_eq!(controller.into_instructions().trace & 0xffffff, 0x090808);
     }
 
     #[test]

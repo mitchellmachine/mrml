@@ -296,6 +296,8 @@ pub(super) enum ProbeFault {
     KernelPrepare = 0x18,
     #[cfg(feature = "vmx-kernel-monitor")]
     KernelExit = 0x19,
+    #[cfg(feature = "vmx-kernel-monitor")]
+    Timer = 0x1A,
 }
 
 pub(super) fn mismatch_labels(masks: [u64; 4]) -> [[u8; 26]; 4] {
@@ -343,7 +345,7 @@ pub(super) unsafe fn run(
     if feature_control & (1 << 2) == 0 {
         return Err(ProbeFault::FirmwareDisabled);
     }
-    let basic = unsafe { rdmsr(0x480) };
+    let (basic, _vmx_misc) = unsafe { (rdmsr(0x480), rdmsr(0x485)) };
     let secondary = unsafe { rdmsr(0x48b) };
     let capabilities = VmxCapabilities::from_msrs(basic, secondary, unsafe { rdmsr(0x48c) })
         .map_err(|_| ProbeFault::Capabilities)?;
@@ -546,7 +548,46 @@ pub(super) unsafe fn run(
         #[cfg(feature = "vmx-kernel-monitor")]
         {
             trace(0xc2);
-            kernel.run(&mut controller).ok_or(ProbeFault::KernelExit)?;
+            let timer_marker = !LONG_MARKER;
+            // SAFETY: the prior guest exited and cannot resume; rewrite only
+            // its own fixture code page before VMCLEAR and INVEPT. Change the
+            // MOV immediate, then replace the OUT with JMP -2.
+            unsafe {
+                let code = page(LONG_RAM + 4);
+                code.add(2)
+                    .copy_from_nonoverlapping(timer_marker.to_le_bytes().as_ptr(), 8);
+                code.add(15)
+                    .copy_from_nonoverlapping([0xeb, 0xfe].as_ptr(), 2);
+            }
+            controller
+                .clear_vmcs(pages[LONG_VMCS])
+                .map_err(|_| ProbeFault::Timer)?;
+            controller
+                .load_vmcs(pages[LONG_VMCS], long_ept)
+                .map_err(|_| ProbeFault::Timer)?;
+            controller
+                .program_minimal_vmcs(&long_launch)
+                .map_err(|_| ProbeFault::Timer)?;
+            // Convert fixed TSC-cycle budgets to the CPU's timer tick units.
+            let shift = (_vmx_misc & 0x1f) as u32;
+            let ticks = |cycles: u64| ((cycles >> shift).min(u64::from(u32::MAX)) as u32).max(1);
+            controller
+                .arm_boot_probe_timer(controls, ticks(1 << 23))
+                .map_err(|_| ProbeFault::Timer)?;
+            controller.launch().map_err(|_| ProbeFault::Timer)?;
+            if controller
+                .record_vm_exit_snapshot()
+                .map_err(|_| ProbeFault::Timer)?
+                .reason()
+                != 52
+                || observed_long_stack_marker() != timer_marker
+            {
+                return Err(ProbeFault::Timer);
+            }
+            trace(0xc4);
+            kernel
+                .run(&mut controller, controls, ticks(1 << 32))
+                .ok_or(ProbeFault::KernelExit)?;
             trace(0xc3);
         }
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;

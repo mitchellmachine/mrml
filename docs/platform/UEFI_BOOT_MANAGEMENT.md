@@ -127,6 +127,7 @@ version, and last visible label:
   | `17` | IA-32e guest did not exit with its expected 64-bit marker |
   | `18` | signed nested kernel admission or preparation failed |
   | `19` | expected signed kernel completion exit not observed |
+  | `1A` | VMX preemption timer rejected or its exact exit was not observed |
 
   Dragonair reported `07` in the first run with stage codes. The updated
   probe reports four hex masks: `CR0 ADD`, `CR0 CLEAR`, `CR4 ADD`, and
@@ -157,8 +158,9 @@ enters the real kernel through the EFI ABI. It reports `VMX KERNEL PASS`
 only after the guest's early handoff validation, two-task scheduler check,
 and capability-checked, scheduler-driven IPC request/reply. The wrong
 endpoint must fail before the authorized request gets sequence 1.
-Nested KVM reaches `c0 c1 c2 c3 df d6`; without VMX the artifact does not
-try to enter the guest. The L2 topology is synthetic and no device is
+Nested KVM reaches `c0 c1 c2 c4 c3 df d6`: the timer forces an exit from
+a guest that only spins, then the signed Gigakernel runs with its own timer
+budget. Without VMX the artifact does not try to enter the guest. The L2 topology is synthetic and no device is
 forwarded. This does not establish installed-service readiness, hardware
 preemption, general guest register sanitization, or bare-metal support.
 

@@ -44,10 +44,16 @@ pub(super) struct KernelLaunch {
 }
 
 impl KernelLaunch {
-    pub(super) fn run(self, controller: &mut VmxController<NativeVmx>) -> Option<()> {
+    pub(super) fn run(
+        self,
+        controller: &mut VmxController<NativeVmx>,
+        controls: VmxControlPolicy,
+        ticks: u32,
+    ) -> Option<()> {
         controller.clear_vmcs(self.vmcs).ok()?;
         controller.load_vmcs(self.vmcs, self.ept).ok()?;
         controller.program_minimal_vmcs(&self.launch).ok()?;
+        controller.arm_boot_probe_timer(controls, ticks).ok()?;
         let mut fx = FxState([0; 512]);
         // SAFETY: aligned host scratch; hosted BSP compiler uses legacy SSE,
         // and the signed L2 probe uses no extended AVX state.
