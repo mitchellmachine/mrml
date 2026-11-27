@@ -21,6 +21,7 @@ const ACTUAL_MASK: u64 = 0b11;
 const IOTLB_DRAIN_READS: u64 = 1 << 49;
 const IOTLB_DRAIN_WRITES: u64 = 1 << 48;
 const IOTLB_OFFSET_DELTA: usize = 8;
+const FIXED_ACCESS_END: usize = FSTS_OFFSET + size_of::<u32>();
 const VTD_PERMISSION_MASK: u64 = 0b11;
 const VTD_LARGE_PAGE: u64 = 1 << 7;
 const VTD_ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
@@ -40,6 +41,7 @@ pub enum VtdError {
     DrainUnsupported,
     ApertureInvalidationUnsupported,
     InvalidRegisterLayout,
+    InsufficientRegisterAperture,
     InvalidLeaf,
     Busy,
     InvalidCompletion,
@@ -70,7 +72,7 @@ pub struct VtdRegisterLayout {
     iotlb_offset: usize,
     fault_offset: usize,
     fault_records: u16,
-    pages: u64,
+    required_bytes: usize,
 }
 
 impl VtdRegisterLayout {
@@ -79,7 +81,7 @@ impl VtdRegisterLayout {
         let iotlb_offset = invalidation_base
             .checked_add(IOTLB_OFFSET_DELTA)
             .ok_or(VtdError::InvalidRegisterLayout)?;
-        if invalidation_base == 0 || !iotlb_offset.is_multiple_of(8) {
+        if invalidation_base < FIXED_ACCESS_END {
             return Err(VtdError::InvalidRegisterLayout);
         }
         let fault_offset = (((capability >> 24) & 0x3ff) as usize)
@@ -89,27 +91,35 @@ impl VtdRegisterLayout {
         let fault_end = fault_offset
             .checked_add(usize::from(fault_records) * 16)
             .ok_or(VtdError::InvalidFaultLayout)?;
-        if fault_offset == 0 || fault_end <= fault_offset {
+        if fault_offset < FIXED_ACCESS_END {
             return Err(VtdError::InvalidFaultLayout);
         }
-        let required = core::cmp::max(core::cmp::max(iotlb_offset + 8, fault_end), 0x38);
-        let pages = u64::try_from(required)
-            .map_err(|_| VtdError::InvalidRegisterLayout)?
-            .div_ceil(PAGE_SIZE);
+        let invalidation_end = iotlb_offset + size_of::<u64>();
+        if invalidation_base < fault_end && fault_offset < invalidation_end {
+            return Err(VtdError::InvalidRegisterLayout);
+        }
         Ok(Self {
             iotlb_offset,
             fault_offset,
             fault_records,
-            pages,
+            required_bytes: core::cmp::max(invalidation_end, fault_end),
         })
     }
 
+    /// Checks the proven register extent, not the rounded-up CPU mapping.
+    pub fn require_aperture(self, register_bytes: usize) -> Result<(), VtdError> {
+        if self.required_bytes > register_bytes {
+            return Err(VtdError::InsufficientRegisterAperture);
+        }
+        Ok(())
+    }
+
     pub const fn pages(self) -> u64 {
-        self.pages
+        (self.required_bytes as u64).div_ceil(PAGE_SIZE)
     }
 
     pub const fn bytes(self) -> u64 {
-        self.pages * PAGE_SIZE
+        self.pages() * PAGE_SIZE
     }
 }
 
@@ -996,6 +1006,8 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, DmarError> {
 
 /// Narrow register boundary for one VT-d remapping hardware unit.
 pub trait VtdRegisterIo {
+    /// Size of the contiguous, authorized register region starting at offset zero.
+    fn register_bytes(&self) -> usize;
     fn read32(&mut self, offset: usize) -> u32;
     fn write32(&mut self, offset: usize, value: u32);
     fn read64(&mut self, offset: usize) -> u64;
@@ -1014,7 +1026,7 @@ impl NativeVtdMmio {
     /// `base..base + bytes` must be a uniquely controlled, uncached kernel
     /// mapping of one enabled VT-d remapping unit for this object's lifetime.
     pub unsafe fn new(base: *mut u8, bytes: usize) -> Result<Self, VtdError> {
-        if base.is_null() || bytes < 0x30 || !(base as usize).is_multiple_of(8) {
+        if base.is_null() || bytes < FIXED_ACCESS_END || !(base as usize).is_multiple_of(8) {
             return Err(VtdError::InvalidRegisterLayout);
         }
         Ok(Self { base, bytes })
@@ -1022,6 +1034,10 @@ impl NativeVtdMmio {
 }
 
 impl VtdRegisterIo for NativeVtdMmio {
+    fn register_bytes(&self) -> usize {
+        self.bytes
+    }
+
     fn read32(&mut self, offset: usize) -> u32 {
         if offset > self.bytes.saturating_sub(4) || !offset.is_multiple_of(4) {
             return u32::MAX;
@@ -1068,18 +1084,23 @@ pub struct VtdInvalidator<R> {
 
 impl<R: VtdRegisterIo> VtdInvalidator<R> {
     pub fn new(mut registers: R, poll_limit: u32) -> Result<Self, VtdError> {
-        let capability = registers.read64(CAP_OFFSET);
-        let ecap = registers.read64(ECAP_OFFSET);
-        let layout = VtdRegisterLayout::from_capabilities(capability, ecap)?;
         if poll_limit == 0 {
             return Err(VtdError::InvalidRegisterLayout);
         }
+        let register_bytes = registers.register_bytes();
+        if register_bytes < FIXED_ACCESS_END {
+            return Err(VtdError::InsufficientRegisterAperture);
+        }
+        let capability = registers.read64(CAP_OFFSET);
+        let ecap = registers.read64(ECAP_OFFSET);
+        let layout = VtdRegisterLayout::from_capabilities(capability, ecap)?;
+        layout.require_aperture(register_bytes)?;
         Ok(Self {
             registers,
             iotlb_offset: layout.iotlb_offset,
             fault_offset: layout.fault_offset,
             fault_records: layout.fault_records,
-            register_pages: layout.pages,
+            register_pages: layout.pages(),
             poll_limit,
         })
     }
@@ -1427,6 +1448,10 @@ mod tests {
     }
 
     impl VtdRegisterIo for Registers {
+        fn register_bytes(&self) -> usize {
+            size_of_val(&self.values)
+        }
+
         fn read32(&mut self, offset: usize) -> u32 {
             if offset == FSTS_OFFSET {
                 self.fault_status
@@ -1622,9 +1647,46 @@ mod tests {
             Err(VtdError::InvalidFaultLayout)
         );
         let maximum =
-            VtdRegisterLayout::from_capabilities((0x3ff << 24) | (0xff << 40), 0x3ff << 8).unwrap();
+            VtdRegisterLayout::from_capabilities((0x3ff << 24) | (0xff << 40), 0x3fe << 8).unwrap();
         assert_eq!(maximum.pages(), 5);
         assert_eq!(maximum.bytes(), 5 * PAGE_SIZE);
+    }
+
+    #[test]
+    fn register_layout_rejects_offsets_aliasing_fixed_or_dynamic_registers() {
+        for (cap, ecap, expected) in [
+            (0x40 << 24, 3 << 8, VtdError::InvalidRegisterLayout),
+            (3 << 24, 0x20 << 8, VtdError::InvalidFaultLayout),
+            (
+                (0x21 << 24) | (1 << 40),
+                0x22 << 8,
+                VtdError::InvalidRegisterLayout,
+            ),
+        ] {
+            assert_eq!(
+                VtdRegisterLayout::from_capabilities(cap, ecap),
+                Err(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn exact_register_aperture_cannot_be_extended_by_page_padding() {
+        for (cap, ecap) in [(0x22 << 24, 0x0f << 8), (0x0f << 24, 0x22 << 8)] {
+            let layout = VtdRegisterLayout::from_capabilities(cap, ecap).unwrap();
+            assert_eq!(layout.pages(), 1);
+            assert_eq!(layout.require_aperture(0x230), Ok(()));
+            assert_eq!(
+                layout.require_aperture(0x22f),
+                Err(VtdError::InsufficientRegisterAperture)
+            );
+        }
+        let mut registers = Registers::new(false);
+        registers.values[CAP_OFFSET / 8] = (0x40 << 24) | (1 << 40);
+        assert!(matches!(
+            VtdInvalidator::new(registers, 4),
+            Err(VtdError::InsufficientRegisterAperture)
+        ));
     }
 
     #[test]

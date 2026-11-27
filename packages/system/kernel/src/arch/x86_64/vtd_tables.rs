@@ -340,10 +340,12 @@ impl VerifiedVtdUnit<NativeVtdMmio> {
         let registers = unsafe { NativeVtdMmio::new(verified.as_mut_ptr(), bytes) }
             .map_err(VtdBindingError::Unit)?;
         let invalidator =
-            VtdInvalidator::new(registers, poll_limit).map_err(VtdBindingError::Unit)?;
-        if verified.requirement().pages() < invalidator.register_pages() {
-            return Err(VtdBindingError::InsufficientRegisterMapping);
-        }
+            VtdInvalidator::new(registers, poll_limit).map_err(|error| match error {
+                VtdError::InsufficientRegisterAperture => {
+                    VtdBindingError::InsufficientRegisterMapping
+                }
+                other => VtdBindingError::Unit(other),
+            })?;
         Ok(Self {
             verified,
             invalidator,
@@ -1249,6 +1251,10 @@ mod tests {
     }
 
     impl VtdRegisterIo for UnitRegisters {
+        fn register_bytes(&self) -> usize {
+            PAGE_SIZE as usize
+        }
+
         fn read32(&mut self, offset: usize) -> u32 {
             match offset {
                 0x1c => self.status,
