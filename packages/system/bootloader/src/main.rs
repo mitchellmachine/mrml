@@ -601,8 +601,11 @@ fn paint_boot_diagnostic_lines(info: mrml_kernel::FramebufferInfo, labels: &[&[u
 #[cfg(feature = "vmx-kernel-monitor")]
 mod vmx_kernel_guest;
 
+#[cfg(any(feature = "vmx-kernel-payload", feature = "vmx-kernel-monitor"))]
+mod vmx_zstd_call;
+
 #[cfg(feature = "vmx-kernel-payload")]
-fn vmx_kernel_payload_ready(_early: &EarlyKernelContext<'_>) -> ! {
+fn vmx_kernel_payload_ready(_early: &EarlyKernelContext<'_>, handoff: &BootHandoff) -> ! {
     use mrml_kernel::{KernelScheduler, Priority, ScheduleOutcome};
     let mut scheduler = KernelScheduler::<2>::new(1000, 1).unwrap_or_else(|_| halt());
     let a = scheduler.create(Priority::NORMAL).unwrap_or_else(|_| halt());
@@ -613,6 +616,20 @@ fn vmx_kernel_payload_ready(_early: &EarlyKernelContext<'_>) -> ! {
         halt();
     }
     if vmx_kernel_ipc_check().is_none() {
+        halt();
+    }
+    let content = handoff.evidence().entropy()[..vmx_zstd_call::CONTENT]
+        .try_into().unwrap_or_else(|_| halt());
+    let request = vmx_zstd_call::encode(content).unwrap_or_else(|| halt());
+    // SAFETY: the opt-in monitor maps exactly one writable, non-executable
+    // mailbox at this address. Only the stopped caller's monitor can alter it.
+    let reply = unsafe {
+        let page = vmx_zstd_call::CALL_VA as *mut u8;
+        page.cast::<[u8; vmx_zstd_call::REQUEST]>().write_volatile(request);
+        asm!("out 0xea, al", in("al") 1u8, options(nostack, preserves_flags));
+        page.cast::<[u8; vmx_zstd_call::REPLY]>().read_volatile()
+    };
+    if !vmx_zstd_call::valid_reply(&reply, content) {
         halt();
     }
     // SAFETY: this opt-in payload's terminal port is intercepted by the monitor
@@ -4212,7 +4229,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     let early = EarlyKernelContext::from_handoff(&handoff, &regions[..region_count])
         .unwrap_or_else(|_| halt());
     #[cfg(feature = "vmx-kernel-payload")]
-    vmx_kernel_payload_ready(&early);
+    vmx_kernel_payload_ready(&early, &handoff);
     #[cfg(feature = "uefi-fat32-restart-probe")]
     let _boot_dma = handoff.boot_dma().map(|region| {
         // SAFETY: the trusted probe loader exclusively allocated LoaderData,

@@ -1475,6 +1475,33 @@ impl<I: VmxInstructions> VmxController<I> {
         })
     }
 
+    /// Park the signed caller at its trapped two-byte OUT imm8, AL.
+    /// Advance within the measured image only; the supervisor never forwards I/O.
+    pub fn park_boot_call_probe(&mut self, image: core::ops::Range<u64>) -> Result<(), VmxError> {
+        self.park_probe_after_exit(|instructions, ept| {
+            let mut read = |field| {
+                instructions
+                    .vmread(field)
+                    .map_err(|_| VmxError::InstructionFailed)
+            };
+            if read(VmcsField::EXIT_REASON)? != 30
+                || read(VmcsField::EXIT_QUALIFICATION)? != (0xea << 16) | (1 << 6)
+                || read(VmcsField::EXIT_INSTRUCTION_LENGTH)? != 2
+                || read(VmcsField::EPT_POINTER)? != ept.bits()
+            {
+                return Err(VmxError::InvalidVmExit);
+            }
+            let rip = read(VmcsField::GUEST_RIP)?;
+            let next = rip.checked_add(2).ok_or(VmxError::InvalidVmExit)?;
+            if !image.contains(&rip) || !image.contains(&next) {
+                return Err(VmxError::InvalidVmExit);
+            }
+            instructions
+                .vmwrite(VmcsField::GUEST_RIP, next)
+                .map_err(|_| VmxError::InstructionFailed)
+        })
+    }
+
     fn park_probe_after_exit(
         &mut self,
         validate: impl FnOnce(&mut I, EptPointer) -> Result<(), VmxError>,
@@ -1809,6 +1836,50 @@ mod tests {
         assert_eq!(&fx[..2], &0x037fu16.to_le_bytes());
         assert_eq!(&fx[24..28], &0x1f80u32.to_le_bytes());
         assert!(fx[32..416].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn call_probe_checks_trapped_port_instruction_length_and_image_bounds() {
+        let base = 0xffff_8000_0020_0000;
+        let qualification = (0xea << 16) | (1 << 6);
+        for (exit_qualification, rip, length, succeeds) in [
+            (qualification, base + 4, 2, true),
+            (qualification, base + 14, 2, false),
+            (qualification, base - 2, 2, false),
+            (qualification, base + 4, 1, false),
+            (qualification | (1 << 3), base + 4, 2, false),
+            ((0xeb << 16) | (1 << 6), base + 4, 2, false),
+        ] {
+            let vmxon = PhysAddr::new(0x1000).unwrap();
+            let vmcs = PhysAddr::new(0x2000).unwrap();
+            let ept = EptPointer::new(PhysAddr::new(0x3000).unwrap(), true).unwrap();
+            let instructions = EmulatedVmx {
+                exit_reason: 30,
+                exit_qualification,
+                exit_on_launch: true,
+                probe_rip: rip,
+                probe_instruction_length: length,
+                probe_ept: ept.bits(),
+                ..EmulatedVmx::default()
+            };
+            let mut controller = VmxController::new(instructions, capabilities());
+            controller.enter_root(vmxon).unwrap();
+            controller.clear_vmcs(vmcs).unwrap();
+            controller.load_vmcs(vmcs, ept).unwrap();
+            controller.launch().unwrap();
+            assert_eq!(
+                controller.park_boot_call_probe(base..base + 16).is_ok(),
+                succeeds
+            );
+            assert_eq!(
+                controller.state(),
+                if succeeds {
+                    VmxState::Root
+                } else {
+                    VmxState::Poisoned
+                }
+            );
+        }
     }
 
     #[test]

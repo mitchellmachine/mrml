@@ -166,7 +166,7 @@ enters the real kernel through the EFI ABI. It reports `VMX KERNEL PASS`
 only after the guest's early handoff validation, two-task scheduler check,
 and capability-checked, scheduler-driven IPC request/reply. The wrong
 endpoint must fail before the authorized request gets sequence 1.
-In the nested KVM trace `c0 c1 c2 c4 c3 c5 c6 df d6`, `c4` is the exact timer
+In the nested KVM trace `c0 c1 c2 c4 c6 c3 c5 df d6`, `c4` is the exact timer
 expiry at the spinning fixture's comparison or branch; `c3` is the separate
 signed Gigakernel's completion. The monitor changes only the stopped timer
 fixture's readiness byte, reloads its own VMCS/EPT pair, re-arms the timer,
@@ -177,12 +177,13 @@ checks reset x87 control and XMM data on first launch and preservation of
 its own x87 control word across the signed L2 run. The diagnostic freezes
 guest CR4 to the validated legacy-state profile; it does not admit AVX or
 other extended CPU-state features. Without VMX the artifact does not try to
-enter a guest. `c6` then verifies the independently signed Zstd provider
-MicroVM: the other signing key is rejected, its host frames are disjoint
-from the Gigakernel, and the actual native provider decodes the boot-selected
-payload and returns a canonical ABI-3 response. The one-shot transport has an
-NX read-only request page and an NX writable reply page, with trapped terminal
-I/O. It is not the installed capability-backed service runtime. The L2
+enter a guest. At `c6`, the monitor has relayed a real request from the
+parked signed Gigakernel to the independently signed Zstd provider MicroVM
+and received the reply. The existing capability queue rejects a wrong
+endpoint, a replay, and a new send after revocation. Then the monitor resumes
+the caller, which checks the exact decoded result before `c3`. Guest
+mailboxes are private; the monitor queues and copies only while the exact
+vCPU is stopped. The test does not use an installed service scheduler. The L2
 topology is synthetic and no device is forwarded. This test does not establish installed
 services, preemptive runtime scheduling, extended CPU-state isolation, or
 bare-metal support.

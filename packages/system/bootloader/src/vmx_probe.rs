@@ -473,7 +473,6 @@ pub(super) unsafe fn run(
         host,
         guest_cr0,
         guest_cr4,
-        _entropy,
     )
     .ok_or_else(|| {
         trace(ProbeFault::Service as u8);
@@ -637,9 +636,14 @@ pub(super) unsafe fn run(
                 return Err(ProbeFault::Timer);
             }
             trace(0xc4);
-            kernel
-                .run(&mut controller, controls, ticks(1 << 32))
-                .ok_or(ProbeFault::KernelExit)?;
+            super::vmx_kernel_guest::run_service_call(
+                kernel,
+                service,
+                &mut controller,
+                controls,
+                ticks(1 << 32),
+            )
+            .ok_or(ProbeFault::KernelExit)?;
             trace(0xc3);
             // SAFETY: the exact timer-exited VMCS is parked, the other guest
             // has stopped, and this byte is in only the timer guest's stack.
@@ -668,10 +672,6 @@ pub(super) unsafe fn run(
                 return Err(ProbeFault::Timer);
             }
             trace(0xc5);
-            service
-                .run(&mut controller, controls, ticks(1 << 32))
-                .ok_or(ProbeFault::Service)?;
-            trace(0xc6);
         }
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;
         Ok(())

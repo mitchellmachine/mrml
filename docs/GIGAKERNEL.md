@@ -2409,8 +2409,13 @@ separately signed Zstd service image now runs in a physically disjoint
 MicroVM and processes a canonical ABI-3 decompress request through the real
 native provider. The monitor supplies an NX read-only request and an NX
 writable reply, validates the exact trapped completion and decoded reply,
-and does not forward I/O. This is a one-shot monitor-to-service transaction;
-it does not exercise the installed service scheduler or capability transport.
+and does not forward I/O. The measured Gigakernel now initiates that
+request itself. The monitor parks it at an exact trapped instruction and
+relays its request and the service's reply through the existing
+capability-checked interface queue, rejecting a foreign endpoint, a replayed
+reply, and a request after revocation. The resumed Gigakernel checks the reply
+itself. The queue is monitor-owned, with bounded stopped-guest copies, not
+a mapped peer queue or an installed service scheduler.
 Bare-metal retesting remains deferred.
 
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`

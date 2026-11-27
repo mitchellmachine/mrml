@@ -7,20 +7,15 @@ use mrml_kernel::arch::x86_64::{
     VmxLongModeGuest,
 };
 use mrml_kernel::{
-    ArtifactKind, FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, SignedArtifact,
-    TrustRoot, encode_handoff,
+    ArtifactKind, CapabilitySpace, FramebufferInfo, MemoryKind, MemoryPoolTable, MemoryRegion,
+    MicrovmInterfaceQueueIdentity, MicrovmInterfaceQueuePair, ObjectId, PhysAddr, PixelFormat,
+    Rights, SignedArtifact, TrustRoot, encode_handoff, reserve_microvm_peer_page_projection,
 };
 
-use mrml_interface_zstd_v3::{
-    BorrowedReadView, BorrowedWriteView, DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES,
-    decode_decompress_response, encode_decompress_request,
-};
+use super::vmx_zstd_call::{CALL_GPA, REPLY, REQUEST};
+use mrml_interface_zstd_v3::{INTERFACE_FINGERPRINT, INTERFACE_GENERATION, OP_DECOMPRESS};
 
 const PAGE: usize = 4096;
-const ZSTD_CONTENT: usize = 3;
-const ZSTD_FRAME: usize = 12;
-const ZSTD_OUTPUT: usize = 32;
-const ZSTD_MEMORY: usize = 64;
 const KERNEL_ROOT: &str = env!("MRML_VMX_KERNEL_ROOT");
 const SERVICE_ROOT: &str = env!("MRML_VMX_SERVICE_ROOT");
 const GROUPS: usize = 5;
@@ -50,7 +45,7 @@ static SERVICE_ARENA: Arena = Arena(UnsafeCell::new([0; ARENA_PAGES * PAGE]));
 #[derive(Clone, Copy)]
 enum Payload {
     Kernel([u8; 32]),
-    Zstd([u8; ZSTD_CONTENT]),
+    Zstd,
 }
 
 struct GuestPlatform {
@@ -65,55 +60,177 @@ pub(super) struct PreparedGuest {
     vmcs: PhysAddr,
     ept: EptPointer,
     launch: MinimalVmcsLaunch,
+    image_end: u64,
+    artifact_version: u64,
 }
 
 pub(super) struct ServiceLaunch {
     guest: PreparedGuest,
-    expected: [u8; ZSTD_CONTENT],
 }
 
 impl ServiceLaunch {
-    pub(super) fn run(
+    fn exchange(
         self,
         controller: &mut VmxController<NativeVmx>,
         controls: VmxControlPolicy,
         ticks: u32,
-    ) -> Option<()> {
-        self.guest.run_to_exit(controller, controls, ticks, 0xe8)?;
-        // SAFETY: the exact service vCPU is stopped and only its own reply
-        // page can be written by the guest at this address. Copy the bounded
-        // reply before interpreting it on the monitor side.
-        let reply: [u8; DECOMPRESS_RESPONSE_BYTES + ZSTD_MEMORY] = unsafe {
-            let ptr = SERVICE_ARENA.0.get().cast::<u8>().add(RAM + FRAMEBUFFER);
-            ptr.cast::<[u8; DECOMPRESS_RESPONSE_BYTES + ZSTD_MEMORY]>()
+        request: [u8; REQUEST],
+    ) -> Option<[u8; REPLY]> {
+        // SAFETY: the new provider VM has not run; this is its exact RO
+        // request page. The monitor is the only writer.
+        unsafe {
+            SERVICE_ARENA
+                .0
+                .get()
+                .cast::<u8>()
+                .add(RAM + HANDOFF)
+                .cast::<[u8; REQUEST]>()
+                .write_volatile(request);
+        }
+        self.guest.start(controller, controls, ticks)?;
+        terminal(controller, 0xe8)?;
+        // SAFETY: the exact service vCPU is stopped. Copy only its fixed,
+        // bounded response, not guest-controlled memory locations or sizes.
+        Some(unsafe {
+            SERVICE_ARENA
+                .0
+                .get()
+                .cast::<u8>()
+                .add(RAM + FRAMEBUFFER)
+                .cast::<[u8; REPLY]>()
                 .read_volatile()
-        };
-        let (wire, output) = reply.split_at(DECOMPRESS_RESPONSE_BYTES);
-        let decoded = decode_decompress_response(wire.try_into().ok()?)
-            .ok()?
-            .ok()?;
-        (decoded == ZSTD_CONTENT as u64
-            && output[ZSTD_OUTPUT..ZSTD_OUTPUT + ZSTD_CONTENT] == self.expected)
-            .then_some(())
+        })
     }
 }
 
-impl PreparedGuest {
-    pub(super) fn run(
-        self,
-        controller: &mut VmxController<NativeVmx>,
-        controls: VmxControlPolicy,
-        ticks: u32,
-    ) -> Option<()> {
-        self.run_to_exit(controller, controls, ticks, 0xe7)
-    }
+fn terminal(controller: &mut VmxController<NativeVmx>, port: u16) -> Option<()> {
+    let exit = controller.record_vm_exit_snapshot().ok()?;
+    (exit.reason() == 30 && exit.qualification() == (u64::from(port) << 16) | (1 << 6))
+        .then_some(())
+}
 
-    fn run_to_exit(
-        self,
+/// Route one call through the existing generation-bound capability queue.
+/// The queue is monitor-local: only bounded copies enter either stopped VM.
+pub(super) fn run_service_call(
+    caller: PreparedGuest,
+    service: ServiceLaunch,
+    controller: &mut VmxController<NativeVmx>,
+    controls: VmxControlPolicy,
+    ticks: u32,
+) -> Option<()> {
+    let mut caps = CapabilitySpace::<8>::new();
+    let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x900).ok()?;
+    let (pool, pool_capability) = memory
+        .create_root(
+            1,
+            2,
+            0,
+            Rights::ALLOCATE
+                .union(Rights::CONTROL)
+                .union(Rights::INSPECT),
+            &mut caps,
+        )
+        .ok()?;
+    let rights = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+    let first = caps.insert(ObjectId(caller.vmcs.get()), rights).ok()?;
+    let second = caps
+        .insert(ObjectId(service.guest.vmcs.get()), rights)
+        .ok()?;
+    let foreign = caps.insert(ObjectId(0x901), rights).ok()?;
+    let (projection, _) = reserve_microvm_peer_page_projection(
+        &mut memory,
+        pool,
+        pool_capability,
+        first,
+        second,
+        0x700,
+        0x800,
+        &mut caps,
+    )
+    .ok()?;
+    // This diagnostic has one policy and one binding. Its provider and
+    // caller generations are the versions of the verified signed artifacts.
+    let identity = MicrovmInterfaceQueueIdentity::new(
+        INTERFACE_FINGERPRINT,
+        INTERFACE_GENERATION,
+        service.guest.artifact_version,
+        caller.artifact_version,
+        1,
+        1,
+    )
+    .ok()?;
+    if MicrovmInterfaceQueuePair::bind(identity, &projection, foreign, second, &caps).is_ok() {
+        return None;
+    }
+    let (mut client, mut provider) =
+        MicrovmInterfaceQueuePair::bind(identity, &projection, first, second, &caps)
+            .ok()?
+            .split();
+    let mut queue = [0; PAGE];
+    client.initialize(&mut queue, &projection, &caps).ok()?;
+
+    caller.start(controller, controls, ticks)?;
+    controller
+        .park_boot_call_probe(HIGH + IMAGE as u64..caller.image_end)
+        .ok()?;
+    let caller_page = ARENA.0.get().cast::<u8>().wrapping_add(RAM + CALL_GPA);
+    // SAFETY: the measured caller is parked and the address is its fixed
+    // RW/NX mailbox, not a pointer selected by the guest.
+    let request = unsafe { caller_page.cast::<[u8; REQUEST]>().read_volatile() };
+    let submitted = client
+        .submit(&mut queue, &projection, &caps, OP_DECOMPRESS, &request)
+        .ok()?;
+    let mut payload = [0; REQUEST];
+    let (sequence, operation, length) = provider
+        .receive_request(&queue, &projection, &caps, submitted, &mut payload)
+        .ok()?;
+    if sequence != 1 || operation != OP_DECOMPRESS || length != REQUEST {
+        return None;
+    }
+    let reply = service.exchange(controller, controls, ticks, payload)?;
+    let notification = provider
+        .respond(&mut queue, &projection, &caps, sequence, operation, &reply)
+        .ok()?;
+    let mut received = [0; REPLY];
+    if client
+        .consume_response(&mut queue, &projection, &caps, notification, &mut received)
+        .ok()?
+        != (OP_DECOMPRESS, REPLY)
+        || client
+            .consume_response(&mut queue, &projection, &caps, notification, &mut received)
+            .is_ok()
+    {
+        return None;
+    }
+    caps.revoke(first).ok()?;
+    if client
+        .submit(&mut queue, &projection, &caps, OP_DECOMPRESS, &request)
+        .is_ok()
+    {
+        return None;
+    }
+    // SAFETY: caller remains parked; this writes only its private mailbox
+    // after authenticated completion, dropping the old request bytes.
+    unsafe {
+        let mut cleared = [0; REQUEST];
+        cleared[..REPLY].copy_from_slice(&received);
+        caller_page.cast::<[u8; REQUEST]>().write_volatile(cleared);
+    }
+    super::vmx_probe::trace(0xc6);
+    controller
+        .reload_boot_probe_guest(caller.vmcs, caller.ept)
+        .ok()?;
+    controller.arm_boot_probe_timer(controls, ticks).ok()?;
+    controller.resume().ok()?;
+    terminal(controller, 0xe7)
+}
+
+impl PreparedGuest {
+    fn start(
+        &self,
         controller: &mut VmxController<NativeVmx>,
         controls: VmxControlPolicy,
         ticks: u32,
-        port: u16,
     ) -> Option<()> {
         controller.clear_vmcs(self.vmcs).ok()?;
         controller.load_vmcs(self.vmcs, self.ept).ok()?;
@@ -138,12 +255,7 @@ impl PreparedGuest {
                 options(nostack, preserves_flags));
         }
         launched.ok()?;
-        if observed_cw != probe_cw {
-            return None;
-        }
-        let exit = controller.record_vm_exit_snapshot().ok()?;
-        (exit.reason() == 30 && exit.qualification() == (u64::from(port) << 16) | (1 << 6))
-            .then_some(())
+        (observed_cw == probe_cw).then_some(())
     }
 }
 
@@ -187,9 +299,7 @@ pub(super) fn prepare_service(
     host: VmxHostState,
     guest_cr0: u64,
     guest_cr4: u64,
-    entropy: [u8; 32],
 ) -> Option<ServiceLaunch> {
-    let expected: [u8; ZSTD_CONTENT] = entropy[..ZSTD_CONTENT].try_into().ok()?;
     let guest = prepare_payload(
         GuestPlatform {
             revision,
@@ -198,12 +308,12 @@ pub(super) fn prepare_service(
             guest_cr0,
             guest_cr4,
         },
-        Payload::Zstd(expected),
+        Payload::Zstd,
         include_bytes!(env!("MRML_VMX_SERVICE_BUNDLE")),
         root_digest(SERVICE_ROOT)?,
         root_digest(KERNEL_ROOT)?,
     )?;
-    Some(ServiceLaunch { guest, expected })
+    Some(ServiceLaunch { guest })
 }
 
 fn prepare_payload(
@@ -225,7 +335,7 @@ fn prepare_payload(
     }
     let kind = match payload {
         Payload::Kernel(_) => ArtifactKind::Kernel,
-        Payload::Zstd(_) => ArtifactKind::ServiceImage,
+        Payload::Zstd => ArtifactKind::ServiceImage,
     };
     let signed = SignedArtifact::decode(bundle).ok()?;
     if signed
@@ -244,7 +354,7 @@ fn prepare_payload(
     }
     let backing = match payload {
         Payload::Kernel(_) => &ARENA,
-        Payload::Zstd(_) => &SERVICE_ARENA,
+        Payload::Zstd => &SERVICE_ARENA,
     };
     // SAFETY: the UEFI loader installed this BSP's validated four-level tables.
     let active = unsafe { ActivePageTables::current() }.ok()?;
@@ -268,7 +378,7 @@ fn prepare_payload(
     if sorted.windows(2).any(|w| w[0] == w[1]) {
         return None;
     }
-    if matches!(payload, Payload::Zstd(_)) {
+    if matches!(payload, Payload::Zstd) {
         let kernel_base = ARENA.0.get() as u64;
         for index in 0..ARENA_PAGES {
             let leaf = active
@@ -335,25 +445,7 @@ fn prepare_payload(
                 stacks.double_fault_top().ok()?,
             )
         }
-        Payload::Zstd(expected) => {
-            let input = BorrowedReadView::within(0, ZSTD_FRAME as u64, ZSTD_MEMORY as u64)?;
-            let output = BorrowedWriteView::within(
-                ZSTD_OUTPUT as u64,
-                ZSTD_CONTENT as u64,
-                ZSTD_MEMORY as u64,
-            )?;
-            let wire = encode_decompress_request(input, output).ok()?;
-            let request = &mut arena[RAM + HANDOFF..RAM + HANDOFF + PAGE];
-            request[..DECOMPRESS_REQUEST_BYTES].copy_from_slice(&wire);
-            // Same single raw block as the tested ABI-3 vector, with the
-            // three output bytes selected from this boot's entropy.
-            let header = [0x28, 0xb5, 0x2f, 0xfd, 0x20, 3, 0x19, 0, 0];
-            request[DECOMPRESS_REQUEST_BYTES..DECOMPRESS_REQUEST_BYTES + header.len()]
-                .copy_from_slice(&header);
-            request[DECOMPRESS_REQUEST_BYTES + header.len()..DECOMPRESS_REQUEST_BYTES + ZSTD_FRAME]
-                .copy_from_slice(&expected);
-            (HIGH + FRAMEBUFFER as u64, 0, 0)
-        }
+        Payload::Zstd => (HIGH + FRAMEBUFFER as u64, 0, 0),
     };
     // Win64 ABI: RCX is the RO request/handoff, RDX is the RW service
     // reply or handoff length, and R8/R9 are kernel-only IST tops.
@@ -411,8 +503,10 @@ fn prepare_payload(
     map(TRAMPOLINE / PAGE, false, true, true);
     map(HANDOFF / PAGE, false, false, true);
     map(GDT / PAGE, true, false, true);
-    if matches!(payload, Payload::Zstd(_)) {
+    if matches!(payload, Payload::Zstd) {
         map(FRAMEBUFFER / PAGE, true, false, true);
+    } else {
+        map(CALL_GPA / PAGE, true, false, true);
     }
     for (start, pages) in [
         (STACK / PAGE, stacks.early_pages()),
@@ -460,5 +554,7 @@ fn prepare_payload(
         vmcs: PhysAddr::new(frames[VMCS]).ok()?,
         ept,
         launch,
+        image_end: HIGH + end as u64,
+        artifact_version: executable.artifact().version(),
     })
 }
