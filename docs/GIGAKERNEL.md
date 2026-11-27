@@ -2433,12 +2433,15 @@ MicroVM, zero native fallback, and the expected halt. The configuration
 suites pass 55 tests on each host; the KVM and WHP runners pass 16 and 12.
 That single-domain probe did not exercise a live two-domain rollback.
 
-The KVM runner now tests late startup rollback with a signed two-domain
-fixture and real KVM VM/vCPU objects. The first provisional guest executes a
-marker before an injected second-service startup refusal. The transaction
-releases the first guest through its owning launcher and publishes neither
-routes nor a Total runtime proof. Retrying with two fresh guests admits both
-domains with zero native fallback. Configuration launch generations are
+The hosted KVM test now recovers a signed two-domain fixture and runs the
+same recovered-owner publication transaction used by the component runners.
+The first real KVM guest executes a marker before an injected second-service
+startup refusal. An injected first stop refusal leaves that exact guest
+owned by the failed transaction for retry, without publishing a route set
+or runtime proof. A successful retry revokes its endpoint and releases the
+guest. Recovering the same release again admits two fresh guests with zero
+native fallback. The KVM and WHP component runners now reject a missing
+complete preparation instead of allowing the generic single-route branch. Configuration launch generations are
 unique across launcher objects in the same runtime; an endpoint retained
 from the failed attempt cannot open or revoke a same-spec replacement. Both
 new guests execute independent markers, including the second after retirement
@@ -2458,9 +2461,10 @@ target/mrml-native/linux/debug/mrml-kvm-run_bin_tests --ignored --exact tests::l
 
 This is hosted KVM evidence using small guest fixtures, not a two-service
 installed-media boot, an independent kernel-resource audit, device/DMA
-teardown evidence, or bare-metal validation. The late startup refusal is
-injected; teardown-error retry remains modeled. Bare-metal retesting remains
-deferred.
+teardown evidence, or bare-metal validation. Startup and initial stop refusal
+are injected at the host adapter; no backend-native stop failure was forced.
+The release-mode component probes still use one domain for the existing ZIM
+and Zstd pair. This change does not alter the Chromebook boot path.
 
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and

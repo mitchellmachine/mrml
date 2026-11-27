@@ -597,6 +597,39 @@ where
 }
 
 #[cfg(target_os = "linux")]
+enum KvmHostedRecoveryFixture {
+    Combined,
+    #[cfg(test)]
+    Distinct,
+}
+
+#[cfg(target_os = "linux")]
+fn recover_hosted_component_owner(
+    fixture: KvmHostedRecoveryFixture,
+    handoff: &BootHandoff,
+    release: &[u8],
+    release_key: &[u8; 64],
+    output: &mut [u8],
+) -> Result<RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>> {
+    // SAFETY: these modes build private, controlled hosted fixtures. Their
+    // synthesized approval is not production recovery or physical evidence.
+    unsafe {
+        match fixture {
+            KvmHostedRecoveryFixture::Combined => {
+                recover_total_control_plane::<2>(handoff, release, release_key, output)
+            }
+            #[cfg(test)]
+            KvmHostedRecoveryFixture::Distinct => {
+                mrml_config::hosted_recovery_probe::recover_distinct_total_control_plane(
+                    handoff, release, release_key, output,
+                )
+            }
+        }
+    }
+    .map_err(|error| anyhow!("KVM recovered boot Total admission failed: {:?}", error))
+}
+
+#[cfg(target_os = "linux")]
 fn configured_total_service_policy(
     domain: ObjectId,
     interface: ObjectId,
@@ -3118,23 +3151,18 @@ fn application_main() -> Result<()> {
         let (release_bytes, expected_release_key) = component_release_authority
             .as_ref()
             .ok_or_else(|| anyhow!("missing authenticated KVM component release"))?;
-        // SAFETY: this executable mode is a hosted controlled probe. The
-        // helper's synthesized owner approval is never production recovery or
-        // physical rollback evidence.
         let mut release_output = Vector::with_capacity(MAX_SYSTEM_RELEASE_BYTES)
             .map_err(|_| anyhow!("KVM release recovery scratch allocation failed"))?;
         release_output
             .try_resize(MAX_SYSTEM_RELEASE_BYTES, 0)
             .map_err(|_| anyhow!("KVM release recovery scratch initialization failed"))?;
-        let total = unsafe {
-            recover_total_control_plane::<2>(
-                &decoded_boot_handoff,
-                release_bytes,
-                expected_release_key,
-                &mut release_output,
-            )
-        }
-        .map_err(|error| anyhow!("KVM recovered boot Total admission failed: {:?}", error))?;
+        let total = recover_hosted_component_owner(
+            KvmHostedRecoveryFixture::Combined,
+            &decoded_boot_handoff,
+            release_bytes,
+            expected_release_key,
+            &mut release_output,
+        )?;
         println!(
             "isolation-recovery|status=PASS|backend=kvm|authority_epoch={}|boot_accepted_epoch={}|recovery_root_generation={}|configuration_revision={}",
             total.policy().authority_epoch(),
@@ -3776,7 +3804,7 @@ fn application_main() -> Result<()> {
                 .take()
                 .ok_or_else(|| anyhow!("missing active KVM application projection"))?,
         }
-    } else if component_service_mode && complete_isolation_preparation.is_some() {
+    } else if component_service_mode {
         let configured = configured_total_policy
             .as_ref()
             .ok_or_else(|| anyhow!("missing KVM recovered component policy"))?;
@@ -3851,25 +3879,6 @@ fn application_main() -> Result<()> {
         let admitted_guest = routed.into_endpoint();
         if !admission.total_microvm_report().satisfied() {
             return Err(anyhow!("KVM Total MicroVM admission was not satisfied"));
-        }
-        if component_service_mode {
-            let runtime = match isolation_admission.take() {
-                Some(KvmTotalAdmission::Recovered(total)) => {
-                    total.authorize_runtime().map_err(|error| {
-                        anyhow!("KVM recovered runtime authorization failed: {:?}", error)
-                    })?
-                }
-                _ => return Err(anyhow!("KVM component route lost installed Total owner")),
-            };
-            let proof = runtime.proof();
-            println!(
-                "component-total-inventory|status=PASS|backend=kvm|classified={}|eligible={}|microvm={}|native_fallback={}",
-                proof.classified_domains(),
-                proof.running_microvm_eligible(),
-                proof.running_in_microvm(),
-                runtime.admission().total_microvm_report().native_fallback
-            );
-            installed_total_runtime = Some(runtime);
         }
         let mut launcher = PreparedMicrovmConfigurationLauncher::new(
             AdmittedConfigurationGuestFactory::new(spec, admitted_guest),
@@ -5895,18 +5904,16 @@ mod tests {
             PreparedMicrovmConfigurationAccessError, PreparedMicrovmConfigurationError,
         };
         use mrml_crypto::{LAMPORT_PRIVATE_KEY_BYTES, lamport_public_key};
-        use mrml_kernel::{
-            IsolationServiceSpec, RuntimeDomainAssignment, RuntimeDomainAssignmentPlan,
-            TotalMicrovmRuntimeError,
-        };
+        use mrml_kernel::IsolationServiceSpec;
         use mrml_kvm::PreparedKvmFirmware;
         use mrml_package_format::{
-            ActivatedSystemGeneration, ActivatedSystemRelease, ComponentInterfaceProvider,
-            ComponentInterfaceRequirement, ComponentProviderForms,
-            encode_system_release_with_runtime_inventory, parse_system_release,
+            ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
+            encode_system_release_with_runtime_inventory,
         };
 
-        const DOMAINS: [ObjectId; 2] = [ObjectId(0x101), ObjectId(0x102)];
+        use mrml_config::hosted_recovery_probe::HOSTED_TOTAL_SECONDARY_DOMAIN;
+        const DOMAINS: [ObjectId; 2] =
+            [HOSTED_TOTAL_COMPONENT_DOMAIN, HOSTED_TOTAL_SECONDARY_DOMAIN];
         const IDS: [&str; 2] = ["org.mrml.test.first", "org.mrml.test.second"];
         const INTERFACES: [&str; 2] = ["org.mrml.interface.first", "org.mrml.interface.second"];
         const DIGESTS: [[u8; 64]; 2] = [[0x61; 64], [0x62; 64]];
@@ -5923,12 +5930,6 @@ mod tests {
         )
         .unwrap();
         let handoff = BootHandoff::decode(handoff.as_slice(), |_| {}).unwrap();
-        let effective =
-            configured_total_service_policy(DOMAINS[0], ObjectId(0x301), 1, 1, &handoff)
-                .unwrap()
-                .effective
-                .unwrap();
-
         let versions = [0, 1].map(|i| SystemGenerationDigestRecord {
             package_id: IDS[i],
             version: 1,
@@ -5981,31 +5982,18 @@ mod tests {
         )
         .unwrap();
         let release = &release[..bytes];
-        let parsed = parse_system_release(release).unwrap();
-        let active = ActivatedSystemGeneration::new(
-            GEN,
-            parsed.generation().digest(),
-            parsed.interface_catalog().digest(),
-            8,
-            0x5156,
-            3,
-        )
-        .unwrap();
-        let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
-            release,
-            &Sha3_512::digest(&public),
-            ActivatedSystemRelease::new(active, parsed.identity()),
-            effective.policy_generation(),
-        )
-        .unwrap();
-        plan.assign_from_policy(|record| {
-            let i = IDS.iter().position(|id| *id == record.package_id).unwrap();
-            RuntimeDomainAssignment::new(record.package_id, DOMAINS[i])
-        })
-        .unwrap();
-        let mut owner = effective
-            .bind_release_inventory(plan.seal().unwrap())
-            .unwrap();
+        let key = Sha3_512::digest(&public);
+        let recover = || {
+            let mut output = std::vec![0; MAX_SYSTEM_RELEASE_BYTES];
+            recover_hosted_component_owner(
+                KvmHostedRecoveryFixture::Distinct,
+                &handoff,
+                release,
+                &key,
+                &mut output,
+            )
+            .expect("recover the exact two-domain test release")
+        };
         let bounds = IsolationServiceBounds::new(
             IsolationPlacement::Microvm,
             IsolationPlacement::Microvm,
@@ -6067,34 +6055,40 @@ mod tests {
             (launcher, endpoint)
         };
         let stale = core::cell::Cell::new(None);
+        let mut owner = recover();
+        assert_eq!(owner.admission().running().count(), 0);
         let prepared = owner.prepare_complete_service_set(&bindings).unwrap();
-        let failed =
-            prepared
-                .start_complete(
-                    owner.admission_mut(),
-                    |spec| {
-                        if spec.domain() == DOMAINS[1] {
-                            return Err("second service intentionally not ready");
-                        }
-                        let launched = launch(spec);
-                        stale.set(Some(launched.1));
-                        Ok(launched)
-                    },
-                    &mut |domain,
-                          (mut launcher, endpoint): (
-                        TestLauncher,
-                        ConfigurationMicrovmEndpoint,
-                    )| {
-                        assert_eq!(domain, DOMAINS[0]);
-                        assert_eq!(Some(endpoint), stale.get());
-                        assert!(launcher.active_guest(endpoint).is_ok());
-                        launcher.revoke_microvm(&endpoint).unwrap();
-                        assert!(launcher.active_guest(endpoint).is_err());
-                        Ok(())
-                    },
-                )
-                .err()
-                .expect("partial startup must not publish");
+        let stops = core::cell::Cell::new(0);
+        let mut stop =
+            |domain, (mut launcher, endpoint): (TestLauncher, ConfigurationMicrovmEndpoint)| {
+                assert_eq!(domain, DOMAINS[0]);
+                assert_eq!(Some(endpoint), stale.get());
+                assert!(launcher.active_guest(endpoint).is_ok());
+                stops.set(stops.get() + 1);
+                if stops.get() == 1 {
+                    // Simulate the owner not yet being able to confirm teardown.
+                    // The exact real VM must remain owned by the failure for retry.
+                    return Err((launcher, endpoint));
+                }
+                launcher.revoke_microvm(&endpoint).unwrap();
+                assert!(launcher.active_guest(endpoint).is_err());
+                Ok(())
+            };
+        let mut failed = owner
+            .start_prepared_services(
+                prepared,
+                |spec| {
+                    if spec.domain() == DOMAINS[1] {
+                        return Err("second service intentionally not ready");
+                    }
+                    let launched = launch(spec);
+                    stale.set(Some(launched.1));
+                    Ok(launched)
+                },
+                &mut stop,
+            )
+            .err()
+            .expect("partial recovered startup must not publish");
         assert_eq!(
             failed.error(),
             &CompleteTotalServiceStartError::Construction(
@@ -6103,29 +6097,32 @@ mod tests {
                 ),
             )
         );
-        assert_eq!(failed.pending_count(), 0);
-        assert_eq!(owner.admission().running().count(), 0);
-        assert!(matches!(
-            owner.finalize(),
-            Err(TotalMicrovmRuntimeError::RequiredDomainMissing)
-        ));
+        assert_eq!(failed.pending_count(), 1);
+        assert_eq!(stops.get(), 1);
+        assert_eq!(failed.retry_teardown(&mut stop), 0);
+        assert_eq!(failed.retry_teardown(&mut stop), 0);
+        assert_eq!(stops.get(), 2);
 
+        let mut owner = recover();
         let prepared = owner.prepare_complete_service_set(&bindings).unwrap();
-        let mut routed = prepared
-            .start_complete(
-                owner.admission_mut(),
+        let (runtime, mut routed) = owner
+            .start_prepared_services(
+                prepared,
                 |spec| Ok::<_, ()>(launch(spec)),
-                &mut |_, mut started: (TestLauncher, ConfigurationMicrovmEndpoint)| {
+                |_, mut started: (TestLauncher, ConfigurationMicrovmEndpoint)| {
                     started.0.revoke_microvm(&started.1).unwrap();
                     Ok(())
                 },
             )
             .ok()
             .expect("both KVM guests are ready");
-        let proof = owner.finalize().unwrap();
+        let proof = runtime.proof();
         assert_eq!(proof.classified_domains(), 2);
         assert_eq!(proof.running_in_microvm(), 2);
-        assert_eq!(owner.admission().total_microvm_report().native_fallback, 0);
+        assert_eq!(
+            runtime.admission().total_microvm_report().native_fallback,
+            0
+        );
 
         let (mut first, live) = routed.take(DOMAINS[0]).unwrap().into_endpoint();
         let (mut second, other) = routed.take(DOMAINS[1]).unwrap().into_endpoint();
@@ -6149,7 +6146,6 @@ mod tests {
             }
         );
         first.revoke_microvm(&live).unwrap();
-        owner.admission_mut().retire(DOMAINS[0]).unwrap();
         // The other real VM continues independently after retirement.
         assert_eq!(
             second.active_guest_mut(other).unwrap().run().unwrap(),
@@ -6161,8 +6157,7 @@ mod tests {
             }
         );
         second.revoke_microvm(&other).unwrap();
-        owner.admission_mut().retire(DOMAINS[1]).unwrap();
-        assert_eq!(owner.admission().running().count(), 0);
+        assert!(second.active_guest(other).is_err());
     }
 
     #[test]

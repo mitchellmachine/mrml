@@ -3531,7 +3531,7 @@ fn application_main() -> Result<()> {
                 .take()
                 .ok_or_else(|| anyhow!("missing active WHP application projection"))?,
         }
-    } else if component_service_mode && complete_isolation_preparation.is_some() {
+    } else if component_service_mode {
         let configured = configured_total_policy
             .as_ref()
             .ok_or_else(|| anyhow!("missing WHP recovered component policy"))?;
@@ -3606,25 +3606,6 @@ fn application_main() -> Result<()> {
         let admitted_guest = routed.into_endpoint();
         if !admission.total_microvm_report().satisfied() {
             return Err(anyhow!("WHP Total MicroVM admission was not satisfied"));
-        }
-        if component_service_mode {
-            let runtime = match isolation_admission.take() {
-                Some(WhpTotalAdmission::Recovered(total)) => {
-                    total.authorize_runtime().map_err(|error| {
-                        anyhow!("WHP recovered runtime authorization failed: {:?}", error)
-                    })?
-                }
-                _ => return Err(anyhow!("WHP component route lost installed Total owner")),
-            };
-            let proof = runtime.proof();
-            println!(
-                "component-total-inventory|status=PASS|backend=whp|classified={}|eligible={}|microvm={}|native_fallback={}",
-                proof.classified_domains(),
-                proof.running_microvm_eligible(),
-                proof.running_in_microvm(),
-                runtime.admission().total_microvm_report().native_fallback
-            );
-            installed_total_runtime = Some(runtime);
         }
         let mut launcher = PreparedMicrovmConfigurationLauncher::new(
             AdmittedConfigurationGuestFactory::new(spec, admitted_guest),
