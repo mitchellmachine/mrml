@@ -2385,8 +2385,12 @@ package, PE relocation followed by supervisor-only section permissions,
 guest-owned page tables and guarded stacks, a read-only canonical boot
 handoff carrying the verified measurement, and entry through the actual
 kernel ABI. The monitor must see a bounded, kernel-generated terminal result;
-merely reaching VM entry does not qualify. Bare-metal retesting is deferred
-until that runtime path is ready.
+merely reaching VM entry does not qualify. The opt-in signed nested image
+now reaches real kernel entry, validates its early boot handoff, and runs a
+two-task scheduler smoke inside L2. The monitor observes the designated
+completion exit only after the guest's scheduler changes tasks. This is
+early runtime evidence, not preemption, installed services, or general
+untrusted-guest CPU-state isolation. Bare-metal retesting remains deferred.
 
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and

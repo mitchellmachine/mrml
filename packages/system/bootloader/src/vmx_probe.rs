@@ -292,6 +292,10 @@ pub(super) enum ProbeFault {
     Resume = 0x15,
     LongState = 0x16,
     LongExecution = 0x17,
+    #[cfg(feature = "vmx-kernel-monitor")]
+    KernelPrepare = 0x18,
+    #[cfg(feature = "vmx-kernel-monitor")]
+    KernelExit = 0x19,
 }
 
 pub(super) fn mismatch_labels(masks: [u64; 4]) -> [[u8; 26]; 4] {
@@ -322,7 +326,10 @@ impl ProbeFault {
 
 /// Runs a controlled boot-time VMX/EPT proof. QEMU execution is evidence of
 /// this state machine only; it is not physical-platform or remote attestation.
-pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), ProbeFault> {
+pub(super) unsafe fn run(
+    host_mismatch: &mut Option<[u64; 4]>,
+    _entropy: [u8; 32],
+) -> Result<(), ProbeFault> {
     trace(0xd0);
     if __cpuid(1).ecx & (1 << 5) == 0 {
         trace(0xe0);
@@ -434,6 +441,16 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
         },
     )
     .map_err(|_| ProbeFault::LongState)?;
+    #[cfg(feature = "vmx-kernel-monitor")]
+    let kernel = super::vmx_kernel_guest::prepare(
+        capabilities.revision_id(),
+        controls,
+        host,
+        guest_cr0,
+        guest_cr4,
+        _entropy,
+    )
+    .ok_or(ProbeFault::KernelPrepare)?;
     if cr0 != original_cr0 {
         // SAFETY: in the BSP diagnostic, the validator allowed only the missing
         // required NE bit; every other CR0 bit retains its original value.
@@ -526,6 +543,12 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
             return Err(ProbeFault::LongExecution);
         }
         trace(0xc1);
+        #[cfg(feature = "vmx-kernel-monitor")]
+        {
+            trace(0xc2);
+            kernel.run(&mut controller).ok_or(ProbeFault::KernelExit)?;
+            trace(0xc3);
+        }
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;
         Ok(())
     })();

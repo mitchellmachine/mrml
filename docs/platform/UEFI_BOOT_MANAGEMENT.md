@@ -125,6 +125,8 @@ version, and last visible label:
   | `15` | VMRESUME failed |
   | `16` | IA-32e launch state could not be prepared |
   | `17` | IA-32e guest did not exit with its expected 64-bit marker |
+  | `18` | signed nested kernel admission or preparation failed |
+  | `19` | expected signed kernel completion exit not observed |
 
   Dragonair reported `07` in the first run with stage codes. The updated
   probe reports four hex masks: `CR0 ADD`, `CR0 CLEAR`, `CR4 ADD`, and
@@ -139,6 +141,24 @@ version, and last visible label:
   the firmware VMX policy.
 - `VMX PROBE START` without a terminal label: record it as a non-pass; the probe
   did not return to its caller with a terminal result.
+
+For the **emulator-only signed nested kernel** checkpoint, use:
+
+```text
+mrml usb image-vmx-kernel NESTED.img
+mrml usb test-vmx-kernel NESTED.img OVMF_CODE OVMF_VARS QEMU
+```
+
+The image embeds a separately signed Gigakernel PE and a pinned guest root
+inside the signed opt-in monitor. It tests wrong-root rejection before PE
+materialization. The monitor sets final PE rights in both EPT and guest
+tables, provides a read-only measured handoff and guard-separated stacks, and
+enters the real kernel through the EFI ABI. It reports `VMX KERNEL PASS`
+only after the guest's early handoff validation and two-task scheduler check.
+Nested KVM reaches `c0 c1 c2 c3 df d6`; without VMX the artifact does not
+try to enter the guest. The L2 topology is synthetic and no device is
+forwarded. This does not establish installed-service readiness, hardware
+preemption, general guest register sanitization, or bare-metal support.
 
 When recording a failure, also collect the reserved boot report described
 below if present. This test is scoped to the physical VMX/EPT mechanism. A pass

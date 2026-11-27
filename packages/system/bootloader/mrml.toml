@@ -128,6 +128,12 @@ name = "uefi-service-preemption-probe"
 name = "user-probe"
 
 [[feature]]
+name = "vmx-kernel-monitor"
+
+[[feature]]
+name = "vmx-kernel-payload"
+
+[[feature]]
 name = "vmx-root-probe"
 
 [[feature]]
@@ -195,6 +201,16 @@ source = "packages/system/bootloader/src/main.rs"
 
 [[feature_set]]
 features = ["kernel-image"]
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["vmx-kernel-monitor", "vmx-root-probe"]
+name = "vmx_kernel_monitor"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["vmx-kernel-payload"]
+name = "vmx_kernel_payload"
 targets = ["UEFI"]
 
 [[feature_profile]]
@@ -340,10 +356,40 @@ name = "MRML_APPLICATION_ROOT_DIGEST_HEX"
 name = "MRML_KERNEL_MIN_VERSION"
 
 [[absent_compile_env]]
+name = "MRML_VMX_KERNEL_BUNDLE"
+
+[[absent_compile_env]]
+name = "MRML_VMX_KERNEL_ROOT"
+
+[[absent_compile_env]]
 name = "MRML_SERVICE_MIN_VERSION"
 
 [[absent_compile_env]]
 name = "MRML_SERVICE_ROOT_DIGEST_HEX"
+
+[[build_input]]
+fingerprint = "fnv1a64:9bbb591dec5a0a3e"
+id = "compile-env.nested-kernel-bundle-path"
+kind = "compile-env"
+line = 86
+path = "packages/system/bootloader/src/vmx_kernel_guest.rs"
+reason = "Select the independently signed diagnostic guest artifact supplied by the image builder."
+
+[[build_input]]
+fingerprint = "fnv1a64:8e6eb7e5399c9190"
+id = "included-file.nested-kernel-bundle"
+kind = "included-file"
+line = 86
+path = "packages/system/bootloader/src/vmx_kernel_guest.rs"
+reason = "Embed the signed guest payload only in the opt-in nested monitor image."
+
+[[build_input]]
+fingerprint = "fnv1a64:86118b133089babe"
+id = "compile-env.nested-kernel-root"
+kind = "compile-env"
+line = 87
+path = "packages/system/bootloader/src/vmx_kernel_guest.rs"
+reason = "Pin the independent guest signer digest in the signed monitor image."
 
 [[build_input]]
 fingerprint = "fnv1a64:7c548c315cc61881"

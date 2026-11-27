@@ -598,16 +598,37 @@ fn paint_boot_diagnostic_lines(info: mrml_kernel::FramebufferInfo, labels: &[&[u
         .is_ok()
 }
 
+#[cfg(feature = "vmx-kernel-monitor")]
+mod vmx_kernel_guest;
+
+#[cfg(feature = "vmx-kernel-payload")]
+fn vmx_kernel_payload_ready(_early: &EarlyKernelContext<'_>) -> ! {
+    use mrml_kernel::{KernelScheduler, Priority, ScheduleOutcome};
+    let mut scheduler = KernelScheduler::<2>::new(1000, 1).unwrap_or_else(|_| halt());
+    let a = scheduler.create(Priority::NORMAL).unwrap_or_else(|_| halt());
+    let b = scheduler.create(Priority::NORMAL).unwrap_or_else(|_| halt());
+    if scheduler.start() != (ScheduleOutcome::Switch { from: None, to: a })
+        || scheduler.timer_tick() != Ok(ScheduleOutcome::Switch { from: Some(a), to: b })
+    {
+        halt();
+    }
+    // SAFETY: this opt-in payload's exact terminal port is intercepted by
+    // the monitor. It reaches this point only after early kernel admission.
+    unsafe { asm!("out 0xe8, al", in("al") 1u8, options(nomem, nostack, preserves_flags)) };
+    halt()
+}
+
 #[cfg(feature = "vmx-root-probe")]
-fn run_vmx_boot_diagnostic(framebuffer: mrml_kernel::FramebufferInfo) {
+fn run_vmx_boot_diagnostic(handoff: &BootHandoff) {
+    let framebuffer = handoff.framebuffer();
     if !paint_boot_diagnostic(framebuffer, b"VMX PROBE START") {
         halt();
     }
     // SAFETY: this opt-in boot probe runs on the BSP with validated early
     // state, before AP startup or publication of any service mappings.
     let mut host_mismatch = None;
-    match unsafe { vmx_probe::run(&mut host_mismatch) } {
-        Ok(()) if paint_boot_diagnostic(framebuffer, b"VMX 64 PASS") => vmx_probe::trace(0xd6),
+    match unsafe { vmx_probe::run(&mut host_mismatch, *handoff.evidence().entropy()) } {
+        Ok(()) if paint_boot_diagnostic(framebuffer, if cfg!(feature = "vmx-kernel-monitor") { b"VMX KERNEL PASS" } else { b"VMX 64 PASS" }) => vmx_probe::trace(0xd6),
         Err(fault) => {
             let label = fault.label();
             let details_painted = host_mismatch.is_some_and(|masks| {
@@ -4128,6 +4149,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     let early = EarlyKernelContext::from_handoff(&handoff, &regions[..region_count])
         .unwrap_or_else(|_| halt());
+    #[cfg(feature = "vmx-kernel-payload")]
+    vmx_kernel_payload_ready(&early);
     #[cfg(feature = "uefi-fat32-restart-probe")]
     let _boot_dma = handoff.boot_dma().map(|region| {
         // SAFETY: the trusted probe loader exclusively allocated LoaderData,
@@ -4241,7 +4264,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         run_block_guest_driver_probe()
     }
     #[cfg(feature = "vmx-root-probe")]
-    run_vmx_boot_diagnostic(handoff.framebuffer());
+    run_vmx_boot_diagnostic(&handoff);
     if let Some(madt) = handoff.madt(encoded) {
         smp_trace(0x03);
         let topology = X86CpuTopology::parse_madt(madt).unwrap_or_else(|_| halt());
