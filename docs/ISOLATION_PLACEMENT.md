@@ -42,8 +42,17 @@ service-image package is an optional diagnostic blocker, not a production
 exception. The compositor’s fixed one-shot service probe builds as a PE service
 payload and renders a private 128×32 frame. It uses the existing bounded
 shared-buffer syscall for output, releases the write grant, then sends a
-capability-free completion. This is build and protocol-test evidence only;
-launch, guest capture, and physical scanout are not yet connected.
+capability-free completion. Production launch and physical scanout are not
+yet connected. A signed KVM
+fixture now verifies the whole 16,384-byte raster (4,096 ordered BGRX words,
+243 white glyph pixels and an exact fixture checksum), across the existing
+user-copy boundary and only after the write grant is revoked and the exact
+sender’s completion is received. Its supervisor-only bootstrap page has no
+service alias. The same signed images with a read-only grant publish no frame.
+Both focused KVM runs used one admitted microVM and zero native fallback. This
+is hosted evidence for a single service, not WHP, physical display or full
+Total operation. Use release builds for the fixture; an initial debug kernel
+exhausted its fixed boot stack.
 Total placement does not promote an explicitly non-eligible class
 just because its supported placement list contains microVM. Existing admission
 and readiness evidence gates still determine whether Total is satisfied.

@@ -92,6 +92,9 @@ name = "q35-mmio-probe"
 name = "fat32-ready-probe"
 
 [[feature]]
+name = "scanout-service-probe"
+
+[[feature]]
 name = "service-probe"
 
 [[feature]]
@@ -212,6 +215,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe"]
 name = "service_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "scanout-service-probe"]
+name = "scanout_service_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]

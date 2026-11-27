@@ -482,6 +482,9 @@ use mrml_interface_storage_block_provider_v1::{
 #[cfg(feature = "fat32-ready-probe")]
 use mrml_interface_storage_filesystem_v3::FilesystemProviderReady;
 
+#[cfg(feature = "scanout-service-probe")]
+mod scanout_service_probe;
+
 #[cfg(feature = "fat32-ready-probe")]
 const FAT32_READY_ENDPOINT: ObjectId = ObjectId(0xf320);
 #[cfg(feature = "fat32-ready-probe")]
@@ -1209,6 +1212,11 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             .page_table();
         *runtime.context_mut(current).unwrap_or_else(|_| halt()) =
             UserContext::from_user_call(root, frame).unwrap_or_else(|_| halt());
+        #[cfg(feature = "scanout-service-probe")]
+        {
+            scanout_service_probe::dispatch(runtime, current, root, request, frame);
+            return;
+        }
         if cfg!(feature = "fat32-ready-probe")
             && !(cfg!(feature = "fat32-data-probe") && matches!(request,
                 SyscallRequest::ReceiveBuffer { .. } | SyscallRequest::WriteSharedBuffer { .. }))
@@ -4165,6 +4173,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML SMP READY");
         run_service_probe(&handoff, |handoff| {
             let _ = handoff;
+            #[cfg(feature = "scanout-service-probe")]
+            scanout_service_probe::start();
             #[cfg(feature = "fat32-ready-probe")]
             {
                 #[cfg(feature = "uefi-fat32-restart-probe")]

@@ -898,6 +898,25 @@ impl<const N: usize> PreparedKvmGuest<N> {
     /// Installs one exact user read/write page into both already constructed
     /// service roots. The backing is a single host-owned guest frame; only the
     /// page-table leaves are shared.
+    /// Populate the fixed kernel-only diagnostic mailbox without giving either
+    /// service root the user alias used by shared-page probes.
+    pub fn attach_scanout_bootstrap(mut self, mode: u8) -> Result<Self, KvmError> {
+        const MAILBOX: u64 = 0x00f0_0000;
+        if !matches!(mode, 1 | 2)
+            || self.service_shared.is_some()
+            || self.service_instance[..2].iter().any(Option::is_none)
+        {
+            return Err(KvmError::InvalidMapping);
+        }
+        let entry = self.service_entry().ok_or(KvmError::InvalidMapping)?;
+        self.backend.map_memory(MAILBOX, PAGE_SIZE as usize, false)?;
+        let mut bootstrap = [0; 25];
+        bootstrap[8..16].copy_from_slice(&entry.to_le_bytes());
+        bootstrap[24] = mode;
+        self.backend.write_guest(MAILBOX, &bootstrap)?;
+        Ok(self)
+    }
+
     pub fn attach_service_shared_page(mut self, mapping: Mapping) -> Result<Self, KvmError> {
         if self.service_shared.is_some()
             || mapping.pages() != 1

@@ -1056,6 +1056,8 @@ enum LaunchMode {
     BlockGuestDriverProbe,
     PciConfigurationProbe,
     ServiceRestartRequestProbe,
+    ScanoutServiceProbe,
+    ScanoutServiceDeniedProbe,
     Fat32ReadyProbe,
     Fat32DataProbe,
     Fat32RestartProbe,
@@ -1095,6 +1097,8 @@ impl LaunchMode {
             "block-guest-driver-probe" => Ok(Self::BlockGuestDriverProbe),
             "pci-configuration-probe" => Ok(Self::PciConfigurationProbe),
             "service-restart-request-probe" => Ok(Self::ServiceRestartRequestProbe),
+            "scanout-service-probe" => Ok(Self::ScanoutServiceProbe),
+            "scanout-service-denied-probe" => Ok(Self::ScanoutServiceDeniedProbe),
             "fat32-ready-probe" => Ok(Self::Fat32ReadyProbe),
             "fat32-data-probe" => Ok(Self::Fat32DataProbe),
             "fat32-restart-probe" => Ok(Self::Fat32RestartProbe),
@@ -1106,7 +1110,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, certificate-service-probe, deadline-receive-probe, deadline-receive-message-probe, deadline-receive-cancel-probe, deadline-receive-cancel-denied-probe, deadline-receive-cancel-replay-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, fat32-ready-probe, fat32-data-probe, fat32-restart-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, application-probe, gui-application-probe, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, certificate-service-probe, deadline-receive-probe, deadline-receive-message-probe, deadline-receive-cancel-probe, deadline-receive-cancel-denied-probe, deadline-receive-cancel-replay-probe, invalid-return-probe, buffer-drift-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, fat32-ready-probe, fat32-data-probe, fat32-restart-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, smp-periodic-balance-probe, scanout-service-probe, or scanout-service-denied-probe"
             )),
         }
     }
@@ -2321,9 +2325,12 @@ fn application_main() -> Result<()> {
     let component_service_mode = component_release_input_mode
         || mode == LaunchMode::ComponentServiceProbe
         || component_smp_mode;
+    let scanout_mode = matches!(mode, LaunchMode::ScanoutServiceProbe | LaunchMode::ScanoutServiceDeniedProbe);
     let total_service_mode = matches!(
         mode,
-        LaunchMode::ServiceProbe
+        LaunchMode::ScanoutServiceProbe
+            | LaunchMode::ScanoutServiceDeniedProbe
+            | LaunchMode::ServiceProbe
             | LaunchMode::CertificateServiceProbe
             | LaunchMode::DeadlineReceiveProbe
             | LaunchMode::DeadlineReceiveMessageProbe
@@ -2357,6 +2364,8 @@ fn application_main() -> Result<()> {
             | LaunchMode::BufferDriftProbe
             | LaunchMode::BlockServiceProbe
             | LaunchMode::ServiceRestartRequestProbe
+            | LaunchMode::ScanoutServiceProbe
+            | LaunchMode::ScanoutServiceDeniedProbe
             | LaunchMode::Fat32ReadyProbe
             | LaunchMode::Fat32DataProbe
             | LaunchMode::Fat32RestartProbe
@@ -2406,6 +2415,8 @@ fn application_main() -> Result<()> {
             | LaunchMode::ComponentReleaseInputs
             | LaunchMode::BlockServiceProbe
             | LaunchMode::ServiceRestartRequestProbe
+            | LaunchMode::ScanoutServiceProbe
+            | LaunchMode::ScanoutServiceDeniedProbe
             | LaunchMode::Fat32ReadyProbe
             | LaunchMode::Fat32DataProbe
             | LaunchMode::Fat32RestartProbe
@@ -3042,6 +3053,15 @@ fn application_main() -> Result<()> {
                         .artifact()
                         .version(),
                 )
+            } else if scanout_mode {
+                (
+                    ObjectId(0x5343_414e_4f55_54),
+                    ObjectId(0x5343_414e_0000_0001),
+                    1,
+                    service_executable.as_ref()
+                        .ok_or_else(|| anyhow!("missing verified scanout provider"))?
+                        .artifact().version(),
+                )
             } else {
                 (
                     ObjectId(0x434f_4e46_4947),
@@ -3315,6 +3335,8 @@ fn application_main() -> Result<()> {
         | LaunchMode::ComponentServiceProbe
         | LaunchMode::BlockServiceProbe
         | LaunchMode::ServiceRestartRequestProbe
+        | LaunchMode::ScanoutServiceProbe
+        | LaunchMode::ScanoutServiceDeniedProbe
         | LaunchMode::Fat32ReadyProbe
         | LaunchMode::Fat32DataProbe
         | LaunchMode::Fat32RestartProbe => system
@@ -3556,6 +3578,7 @@ fn application_main() -> Result<()> {
                     anyhow!("third isolated service preparation failed: {:?}", error)
                 })?;
         }
+        if !scanout_mode {
         let shared = Mapping::new(
             VirtAddr::new(SERVICE_SHARED_VIRTUAL)
                 .map_err(|_| anyhow!("invalid service shared virtual address"))?,
@@ -3580,6 +3603,7 @@ fn application_main() -> Result<()> {
         guest = guest
             .attach_service_resource_page(0, resource)
             .map_err(|error| anyhow!("service resource-page attachment failed: {:?}", error))?;
+        }
         if component_service_mode {
             let (
                 memory,
@@ -3653,12 +3677,18 @@ fn application_main() -> Result<()> {
                 "isolated service layout did not match the signed probe ABI"
             ));
         }
-        VmBackend::write_guest(
-            &mut guest,
-            SERVICE_SHARED_PHYSICAL + 8,
-            &service_entry.to_le_bytes(),
-        )
-        .map_err(|_| anyhow!("failed to publish KVM service entry"))?;
+        if scanout_mode {
+            let grant = if mode == LaunchMode::ScanoutServiceDeniedProbe { 2 } else { 1 };
+            guest = guest.attach_scanout_bootstrap(grant)
+                .map_err(|error| anyhow!("failed to prepare supervisor-only KVM scanout bootstrap: {:?}", error))?;
+        } else {
+            VmBackend::write_guest(
+                &mut guest,
+                SERVICE_SHARED_PHYSICAL + 8,
+                &service_entry.to_le_bytes(),
+            )
+            .map_err(|_| anyhow!("failed to publish KVM service entry"))?;
+        }
         if component_service_mode {
             VmBackend::write_guest(
                 &mut guest,
@@ -4387,6 +4417,42 @@ fn application_main() -> Result<()> {
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM invalid-return peer execution failed: {:?}", error))?;
         require_invalid_return_stage(exit, 0x27)?;
+        exit = VmExit::Halted;
+    } else if scanout_mode {
+        let probe = |value| VmExit::Io { port: SERVICE_PROBE_PORT, size: 4, write: true, value };
+        if mode == LaunchMode::ScanoutServiceDeniedProbe {
+            if exit != probe(0x5c02) {
+                let state = guest.snapshot().map_err(|error| anyhow!("scanout denial snapshot: {:?}", error))?;
+                return Err(anyhow!("KVM scanout denial mismatch: {:?}; rip={:#x} cr2={:#x}", exit, state.instruction_pointer(), state.fault_address()));
+            }
+            println!("scanout-probe|status=PASS|backend=kvm|scope=single-service-fixture|write_grant=denied|bytes=0|native_fallback=0");
+        } else {
+            if exit != probe(0x5c01) {
+                let state = guest.snapshot().map_err(|error| anyhow!("scanout snapshot: {:?}", error))?;
+                return Err(anyhow!("KVM scanout completion mismatch: {:?}; rip={:#x} cr2={:#x}", exit, state.instruction_pointer(), state.fault_address()));
+            }
+            let mut hash = 0xcbf2_9ce4_8422_2325u64;
+            let mut white = 0;
+            for _ in 0..4096 {
+                let word = match VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("KVM scanout capture failed: {:?}", error))?
+                {
+                    VmExit::Io { port: SERVICE_FRAME_PORT, size: 4, write: true, value } if matches!(value, 0x000b_3b5a | 0x00ff_ffff) => value,
+                    other => return Err(anyhow!("unexpected scanout pixel exit: {:?}", other)),
+                };
+                white += usize::from(word == 0x00ff_ffff);
+                for byte in word.to_le_bytes() {
+                    hash = (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3);
+                }
+            }
+            if hash != 0xbc3e_34ff_2bb4_77d0 || white != 243
+                || VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("missing KVM scanout terminal: {:?}", error))? != probe(0x5c03)
+            {
+                return Err(anyhow!("KVM scanout pixels or terminal proof mismatch: pixels={white} hash={hash:#x}"));
+            }
+            println!("scanout-probe|status=PASS|backend=kvm|scope=single-service-fixture|write_grant=released|bytes=16384|white_pixels={white}|native_fallback=0");
+        }
         exit = VmExit::Halted;
     } else if matches!(mode, LaunchMode::Fat32ReadyProbe | LaunchMode::Fat32DataProbe | LaunchMode::Fat32RestartProbe) {
         let data = mode == LaunchMode::Fat32DataProbe;
