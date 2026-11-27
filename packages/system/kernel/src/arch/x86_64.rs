@@ -86,10 +86,10 @@ pub use vtd::{
     VtdRegisterIo, VtdRegisterLayout, VtdRequesterRoute,
 };
 pub use vtd_tables::{
-    DirectVtdTables, VerifiedVtdUnit, VtdApertureRevokeError, VtdAuthorizedDmaSet,
-    VtdAuthorizedRoutes, VtdBindingError, VtdDmaAperture, VtdDomainAuthority, VtdDomainError,
-    VtdIdentityLeaf, VtdSetBindingError, VtdTableError, VtdTableMemory, VtdTableProvenance,
-    bind_legacy_identity_leaf, bind_routed_dma_isolation, bind_routed_dma_set,
+    DirectVtdTables, VerifiedVtdUnit, VtdApertureInstallError, VtdApertureRevokeError,
+    VtdAuthorizedDmaSet, VtdAuthorizedRoutes, VtdBindingError, VtdDmaAperture, VtdDomainAuthority,
+    VtdDomainError, VtdIdentityLeaf, VtdSetBindingError, VtdTableError, VtdTableMemory,
+    VtdTableProvenance, bind_legacy_identity_leaf, bind_routed_dma_isolation, bind_routed_dma_set,
     bind_routed_legacy_identity_leaf, prepare_direct_vtd_tables,
 };
 

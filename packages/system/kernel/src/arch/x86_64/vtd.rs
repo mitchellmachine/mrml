@@ -1159,10 +1159,20 @@ impl<'a, R: VtdRegisterIo> VtdDmaIsolation<'a, R> {
 }
 
 pub(super) fn clear_dma_leaf_permissions(leaf: &mut u64) {
+    update_dma_leaf(leaf, None);
+}
+
+pub(super) fn write_dma_leaf(leaf: &mut u64, value: u64) {
+    update_dma_leaf(leaf, Some(value));
+}
+
+fn update_dma_leaf(leaf: &mut u64, replacement: Option<u64>) {
     // SAFETY: exclusive pinned table backing is represented by the live
     // mutable entry. No other software may change it concurrently.
     unsafe {
-        core::ptr::write_volatile(leaf, core::ptr::read_volatile(leaf) & !VTD_PERMISSION_MASK)
+        let value =
+            replacement.unwrap_or_else(|| core::ptr::read_volatile(leaf) & !VTD_PERMISSION_MASK);
+        core::ptr::write_volatile(leaf, value)
     };
     compiler_fence(Ordering::SeqCst);
 }

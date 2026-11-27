@@ -2981,6 +2981,15 @@ The operation does not stop the device, disable ATS, establish ownership,
 scrub memory, or release pins. The native backend must supply those steps
 and wire installation and withdrawal to the xHCI assignment lifecycle.
 
+The kernel can also populate a bounded, existing legacy VT-d hierarchy while
+PCI bus mastering is off. Installation validates all destinations up front
+and accepts only zero entries; denied entries that retain prior backing are
+not free slots. Success requires a confirmed draining invalidation. A failed
+publication clears only the prefix it wrote and requires a second successful
+invalidation before it reports rollback. If that cannot be confirmed, the
+backing must remain quarantined. This does not allocate the hierarchy, issue
+native PCI assignments, reclaim revoked slots, or arm a controller.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The
