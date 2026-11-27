@@ -81,18 +81,21 @@ non-pass label) and `d0 d1 d2 d3 d4 df d6` with nested KVM (including the
 pass label) for the original single-guest image. Mitchell reported
 `VMX PROBE PASS` on the Dragonair after the CR0.NE fix. The two-guest image
 then reached `VMX 2 VM PASS` on the same Dragonair in a launch-only test.
-The switch-and-resume image requires
+The switch-and-resume image required
 `d0 d1 d2 d3 d4 f2 f3 f4 d7 d8 d9 f7 f8 f9 df d6` under nested KVM; the
-no-VMX trace remains unchanged.
+no-VMX trace remains unchanged. The operator also reported `VMX ABA PASS`
+on Dragonair. Further checks are emulator-only until the runtime is ready.
 
 On the Dragonair, use its one-time boot menu or launch
 `fsN:\EFI\BOOT\BOOTX64.EFI` from the EFI Shell as in the FAT32 test. Preserve
 the machine's current Secure Boot policy. Record the exact image hash, firmware
 version, and last visible label:
 
-- `VMX ABA PASS`: both guests yielded, resumed, updated retained private
-  memory, and faulted on the other guest's unmapped address. This checks
-  cooperative switching, not preemption, multicore operation, or an installed service.
+- `VMX 64 PASS`: after the cooperative switch test, a separate IA-32e guest
+  ran at a high-half address through its own guest page tables, wrote a
+  64-bit marker to an NX guest stack, and exited via VMCALL. Trace `c0 c1`
+  identifies this stage. It is a bootstrap fixture, not yet a signed
+  Gigakernel payload, scheduler, or installed service.
 - `VMX PROBE NOT PASSED - XX`: record the two-digit code and the final screen.
 
   | Code | Failing check |
@@ -119,6 +122,8 @@ version, and last visible label:
   | `13` | the exact guest yield was not observed or could not be parked |
   | `14` | the suspended VMCS/EPT pair could not be reloaded |
   | `15` | VMRESUME failed |
+  | `16` | IA-32e launch state could not be prepared |
+  | `17` | IA-32e guest did not exit with its expected 64-bit marker |
 
   Dragonair reported `07` in the first run with stage codes. The updated
   probe reports four hex masks: `CR0 ADD`, `CR0 CLEAR`, `CR4 ADD`, and

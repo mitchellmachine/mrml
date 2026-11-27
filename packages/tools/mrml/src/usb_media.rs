@@ -140,7 +140,7 @@ fn test_vmx(image: &str, code: &str, vars: &str, qemu: &str) -> Result<(), Strin
     copy()?;
     run("tcg", "vmx-absent.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0e0e6")?;
     copy()?;
-    run("kvm", "vmx-present.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9dfd6")
+    run("kvm", "vmx-present.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1dfd6")
 }
 
 fn test_dma_map(code: &str, vars: &str, qemu: &str) -> Result<(), String> {

@@ -408,6 +408,7 @@ mod tests {
             b"VMX PROBE PASS",
             b"VMX 2 VM PASS",
             b"VMX ABA PASS",
+            b"VMX 64 PASS",
             b"VMX PROBE NOT PASSED - 00",
             b"VMX PROBE NOT PASSED - 12",
             b"VMX PROBE NOT PASSED - 34",

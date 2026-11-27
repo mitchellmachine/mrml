@@ -3,12 +3,20 @@ use core::cell::UnsafeCell;
 
 use mrml_kernel::arch::x86_64::{
     ActivePageTables, EptPointer, MinimalVmcsLaunch, NativeVmx, VirtAddr, VmxCapabilities,
-    VmxControlPolicy, VmxController, VmxError, VmxHostState, VmxPrerequisites, VmxState,
+    VmxControlPolicy, VmxController, VmxError, VmxHostState, VmxLongModeGuest, VmxPrerequisites,
+    VmxState,
 };
 use mrml_kernel::{PAGE_SIZE, PhysAddr};
 
 const GUEST_PAGES: usize = 7;
-const PAGE_COUNT: usize = 1 + 2 * GUEST_PAGES;
+const LONG_BASE: usize = 1 + 2 * GUEST_PAGES;
+const PAGE_COUNT: usize = LONG_BASE + 12;
+const LONG_VMCS: usize = LONG_BASE;
+const LONG_EPT: usize = LONG_BASE + 1;
+const LONG_RAM: usize = LONG_BASE + 5;
+const HIGH: u64 = 0xffff_8000_0000_0000;
+const LONG_STACK_TOP: u64 = HIGH + 0x7000;
+const LONG_MARKER: u64 = 0x6574_6174_7334_3647;
 const VMXON_PAGE: usize = 0;
 const VMCS_PAGE: usize = 1;
 const EPT_PML4_PAGE: usize = 2;
@@ -206,6 +214,56 @@ fn observed_private_bytes() -> [u8; 2] {
     })
 }
 
+unsafe fn prepare_long_pages(pages: &[PhysAddr; PAGE_COUNT], revision: u32) {
+    const NX: u64 = 1 << 63;
+    // SAFETY: the BSP owns every distinct frame in the cleared diagnostic
+    // arena. Indices below are confined to the 12 reserved long-mode frames.
+    unsafe {
+        page(LONG_VMCS).cast::<u32>().write(revision);
+        for level in 0..3 {
+            page(LONG_EPT + level)
+                .cast::<u64>()
+                .write(pages[LONG_EPT + level + 1].get() | 7);
+        }
+        let leaf = page(LONG_EPT + 3).cast::<u64>();
+        for gpa_page in 1..=7 {
+            // Guest page tables must allow CPU A/D updates. Only code has X.
+            let rights = if gpa_page == 5 { 5 } else { 3 };
+            leaf.add(gpa_page)
+                .write(pages[LONG_RAM + gpa_page - 1].get() | (6 << 3) | rights);
+        }
+        page(LONG_RAM).cast::<u64>().add(256).write(0x2003);
+        page(LONG_RAM + 1).cast::<u64>().write(0x3003);
+        page(LONG_RAM + 2).cast::<u64>().write(0x4003);
+        let guest_pt = page(LONG_RAM + 3).cast::<u64>();
+        guest_pt.add(5).write(0x5001); // code RX
+        guest_pt.add(6).write(0x6003 | NX); // stack RW/NX
+        guest_pt.add(7).write(0x7001 | NX); // GDT/TSS read-only/NX
+        let gdt = page(LONG_RAM + 6).cast::<u64>();
+        gdt.add(1).write(0x00af_9b00_0000_ffff);
+        gdt.add(2).write(0x00cf_9300_0000_ffff);
+        gdt.add(3).write(0x0000_8b00_7080_0067);
+        gdt.add(4).write(HIGH >> 32);
+        // MOV RAX, imm64; MOV [RSP-8], RAX; VMCALL.
+        let mut code = [
+            0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0x48, 0x89, 0x44, 0x24, 0xf8, 0x0f, 0x01, 0xc1,
+        ];
+        code[2..10].copy_from_slice(&LONG_MARKER.to_le_bytes());
+        page(LONG_RAM + 4).copy_from_nonoverlapping(code.as_ptr(), code.len());
+    }
+}
+
+fn observed_long_stack_marker() -> u64 {
+    // SAFETY: read the aligned final word of the reserved guest stack while
+    // the long-mode vCPU is stopped and no guest can access the frame.
+    unsafe {
+        page(LONG_RAM + 5)
+            .cast::<u64>()
+            .add(PAGE_SIZE as usize / 8 - 1)
+            .read_volatile()
+    }
+}
+
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub(super) enum ProbeFault {
@@ -231,6 +289,8 @@ pub(super) enum ProbeFault {
     Yield = 0x13,
     Reload = 0x14,
     Resume = 0x15,
+    LongState = 0x16,
+    LongExecution = 0x17,
 }
 
 pub(super) fn mismatch_labels(masks: [u64; 4]) -> [[u8; 26]; 4] {
@@ -289,7 +349,11 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
     )
     .map_err(|_| ProbeFault::Controls)?;
     let pages = unsafe { physical_pages() }.map_err(|_| ProbeFault::Pages)?;
-    unsafe { prepare_pages(&pages, capabilities.revision_id()) };
+    // SAFETY: this is the BSP's sole preparation of the validated arena.
+    unsafe {
+        prepare_pages(&pages, capabilities.revision_id());
+        prepare_long_pages(&pages, capabilities.revision_id());
+    }
     let epts = [0, 1].map(|guest| EptPointer::new(pages[guest_page(guest, EPT_PML4_PAGE)], true));
     let [Ok(first_ept), Ok(second_ept)] = epts else {
         return Err(ProbeFault::Ept);
@@ -353,6 +417,22 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
     let [Ok(first_launch), Ok(second_launch)] = launches else {
         return Err(ProbeFault::LaunchState);
     };
+    let long_ept = EptPointer::new(pages[LONG_EPT], true).map_err(|_| ProbeFault::Ept)?;
+    let long_launch = MinimalVmcsLaunch::long_mode_probe(
+        long_ept,
+        controls,
+        host,
+        VmxLongModeGuest {
+            cr0: guest_cr0 | (1 << 31) | (1 << 16) | (1 << 5) | 1,
+            cr3: PhysAddr::new(0x1000).map_err(|_| ProbeFault::LongState)?,
+            cr4: guest_cr4 | (1 << 5),
+            rip: HIGH + 0x5000,
+            rsp: LONG_STACK_TOP,
+            gdt_base: HIGH + 0x7000,
+            tss_base: HIGH + 0x7080,
+        },
+    )
+    .map_err(|_| ProbeFault::LongState)?;
     if cr0 != original_cr0 {
         // SAFETY: in the BSP diagnostic, the validator allowed only the missing
         // required NE bit; every other CR0 bit retains its original value.
@@ -421,6 +501,27 @@ pub(super) unsafe fn run(host_mismatch: &mut Option<[u64; 4]>) -> Result<(), Pro
             }
             trace(0xd9 + 0x20 * guest as u8);
         }
+        controller
+            .clear_vmcs(pages[LONG_VMCS])
+            .map_err(|_| ProbeFault::LongState)?;
+        controller
+            .load_vmcs(pages[LONG_VMCS], long_ept)
+            .map_err(|_| ProbeFault::LongState)?;
+        controller
+            .program_minimal_vmcs(&long_launch)
+            .map_err(|_| ProbeFault::LongState)?;
+        trace(0xc0);
+        controller.launch().map_err(|_| ProbeFault::LongExecution)?;
+        let exit = controller
+            .record_vm_exit_snapshot()
+            .map_err(|_| ProbeFault::LongExecution)?;
+        if exit.reason() != 18
+            || observed_long_stack_marker() != LONG_MARKER
+            || observed_private_bytes() != expected
+        {
+            return Err(ProbeFault::LongExecution);
+        }
+        trace(0xc1);
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;
         Ok(())
     })();

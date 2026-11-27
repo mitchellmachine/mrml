@@ -79,7 +79,7 @@ pub use vmx::{
     EptPointer, EptViolation, MinimalVmcsLaunch, NativeVmx, VMCS_MINIMAL_LAUNCH_FIELDS,
     VmExitSnapshot, VmcsField, VmcsWrite, VmxCapabilities, VmxControl, VmxControlMask,
     VmxControlPolicy, VmxController, VmxError, VmxHostState, VmxInstructionError, VmxInstructions,
-    VmxLaunchOutcome, VmxPrerequisites, VmxState,
+    VmxLaunchOutcome, VmxLongModeGuest, VmxPrerequisites, VmxState,
 };
 pub use vtd::{
     CompleteVtdRoutes, DmarDeviceScope, DmarError, DmarReservedRegion, DmarTopology, DmarUnit, EcamCommandError,

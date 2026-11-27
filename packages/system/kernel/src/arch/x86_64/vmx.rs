@@ -480,7 +480,7 @@ impl VmcsWrite {
 
 pub const VMCS_MINIMAL_LAUNCH_FIELDS: usize = 84;
 
-/// Complete fixed field set for MRML's minimal unrestricted real-mode guest.
+/// Complete fixed field set for MRML's bounded real-mode and IA-32e bootstrap guests.
 /// Optional bitmap, MSR-list, CR3-target, and posted-interrupt fields remain
 /// disabled by the corresponding controls and therefore are deliberately not
 /// part of this canonical launch format.
@@ -533,7 +533,71 @@ pub struct VmxHostState {
     pub instruction_pointer: u64,
 }
 
+/// Initial supervisor state for a four-level identity/high-half guest bootstrap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmxLongModeGuest {
+    pub cr0: u64,
+    pub cr3: PhysAddr,
+    pub cr4: u64,
+    pub rip: u64,
+    pub rsp: u64,
+    pub gdt_base: u64,
+    pub tss_base: u64,
+}
+
+#[derive(Clone, Copy)]
+enum LaunchMode {
+    Real,
+    Long,
+}
+
 impl MinimalVmcsLaunch {
+    pub fn long_mode_probe(
+        ept: EptPointer,
+        controls: VmxControlPolicy,
+        host: VmxHostState,
+        guest: VmxLongModeGuest,
+    ) -> Result<Self, VmxError> {
+        let mut values = Self::real_mode_values(ept, controls, host, 0, 0, 0, 0);
+        // Fixed bootstrap GDT: null, 64-bit code, data, busy 64-bit TSS.
+        values[..8].copy_from_slice(&[16, 8, 16, 16, 16, 16, 0, 24]);
+        values[19] = (1 << 8) | (1 << 10) | (1 << 11); // EFER.LME/LMA/NXE
+        values[27] = u64::from(VmxControl::constrained((1 << 9) | (1 << 21), controls.exit).bits());
+        values[28] =
+            u64::from(VmxControl::constrained((1 << 9) | (1 << 15), controls.entry).bits());
+        values[29] = u64::from(VmxControl::constrained(1 << 1, controls.secondary).bits());
+        values[30..40].copy_from_slice(&[
+            0xffff_ffff,
+            0xffff_ffff,
+            0xffff_ffff,
+            0xffff_ffff,
+            0xffff_ffff,
+            0xffff_ffff,
+            0,
+            0x67,
+            39,
+            0,
+        ]);
+        values[40..48].copy_from_slice(&[
+            0xc093,
+            0xa09b,
+            0xc093,
+            0xc093,
+            0xc093,
+            0xc093,
+            1 << 16,
+            0x008b,
+        ]);
+        values[52] = guest.cr0;
+        values[53] = guest.cr3.get();
+        values[54] = guest.cr4;
+        values[62] = guest.tss_base;
+        values[63] = guest.gdt_base;
+        values[66] = guest.rsp;
+        values[67] = guest.rip;
+        Self::checked(values, controls, LaunchMode::Long)
+    }
+
     pub fn unrestricted_real_mode(
         ept: EptPointer,
         controls: VmxControlPolicy,
@@ -543,6 +607,23 @@ impl MinimalVmcsLaunch {
         guest_rip: u16,
         guest_rsp: u16,
     ) -> Result<Self, VmxError> {
+        Self::new(
+            Self::real_mode_values(
+                ept, controls, host, guest_cr0, guest_cr4, guest_rip, guest_rsp,
+            ),
+            controls,
+        )
+    }
+
+    fn real_mode_values(
+        ept: EptPointer,
+        controls: VmxControlPolicy,
+        host: VmxHostState,
+        guest_cr0: u64,
+        guest_cr4: u64,
+        guest_rip: u16,
+        guest_rsp: u16,
+    ) -> [u64; VMCS_MINIMAL_LAUNCH_FIELDS] {
         let mut values = [0u64; VMCS_MINIMAL_LAUNCH_FIELDS];
         values[..8].fill(0);
         for (destination, selector) in values[8..15].iter_mut().zip(host.selectors) {
@@ -599,12 +680,20 @@ impl MinimalVmcsLaunch {
             host.instruction_pointer,
         ]);
         values[51] = u64::from(host.sysenter_cs);
-        Self::new(values, controls)
+        values
     }
 
     pub fn new(
         values: [u64; VMCS_MINIMAL_LAUNCH_FIELDS],
         controls: VmxControlPolicy,
+    ) -> Result<Self, VmxError> {
+        Self::checked(values, controls, LaunchMode::Real)
+    }
+
+    fn checked(
+        values: [u64; VMCS_MINIMAL_LAUNCH_FIELDS],
+        controls: VmxControlPolicy,
+        mode: LaunchMode,
     ) -> Result<Self, VmxError> {
         let mut writes = [VmcsWrite {
             field: VmcsField(0),
@@ -617,11 +706,11 @@ impl MinimalVmcsLaunch {
             index += 1;
         }
         let launch = Self { writes };
-        launch.validate(controls)?;
+        launch.validate(controls, mode)?;
         Ok(launch)
     }
 
-    fn validate(&self, controls: VmxControlPolicy) -> Result<(), VmxError> {
+    fn validate(&self, controls: VmxControlPolicy, mode: LaunchMode) -> Result<(), VmxError> {
         let value = |encoding| {
             self.writes
                 .iter()
@@ -646,24 +735,54 @@ impl MinimalVmcsLaunch {
         const IA32E_GUEST: u32 = 1 << 9;
         if !controls.accepts(pin, primary, exit, entry, secondary)
             || primary & ACTIVATE_SECONDARY == 0
-            || secondary & (ENABLE_EPT | UNRESTRICTED_GUEST) != ENABLE_EPT | UNRESTRICTED_GUEST
+            || secondary & ENABLE_EPT == 0
             || exit & HOST_ADDRESS_SPACE_SIZE == 0
-            || entry & IA32E_GUEST != 0
             || EptPointer(ept).root().is_err()
-            || value(0x6800)? & ((1 << 31) | 1) != 0
-            || value(0x6804)? & (1 << 5) != 0
-            || value(0x2806)? & ((1 << 10) | (1 << 8)) != 0
             || value(0x2c02)? & ((1 << 10) | (1 << 8)) != (1 << 10) | (1 << 8)
             || !valid_pat(value(0x2804)?)
             || !valid_pat(value(0x2c00)?)
             || guest_rflags & 2 == 0
-            || guest_rip > u16::MAX as u64
             || host_rsp == 0
             || !canonical(host_rsp)
             || host_rip == 0
             || !canonical(host_rip)
             || value(0x2800)? != u64::MAX
         {
+            return Err(VmxError::InvalidControl);
+        }
+        const LONG_EFER: u64 = (1 << 8) | (1 << 10) | (1 << 11);
+        const PAGED_PE_NE: u64 = (1 << 31) | (1 << 5) | 1;
+        let guest_cr0 = value(0x6800)?;
+        let guest_cr4 = value(0x6804)?;
+        let guest_efer = value(0x2806)?;
+        let valid_guest = match mode {
+            LaunchMode::Real => {
+                secondary & UNRESTRICTED_GUEST != 0
+                    && entry & IA32E_GUEST == 0
+                    && guest_cr0 & ((1 << 31) | 1) == 0
+                    && guest_cr4 & (1 << 5) == 0
+                    && guest_efer & ((1 << 10) | (1 << 8)) == 0
+                    && guest_rip <= u16::MAX as u64
+            }
+            LaunchMode::Long => {
+                let cr3 = value(0x6802)?;
+                let rsp = value(0x681c)?;
+                let gdt = value(0x6816)?;
+                let tss = value(0x6814)?;
+                secondary & UNRESTRICTED_GUEST == 0
+                    && entry & (IA32E_GUEST | (1 << 15)) == IA32E_GUEST | (1 << 15)
+                    && exit & (1 << 21) != 0
+                    && guest_cr0 & PAGED_PE_NE == PAGED_PE_NE
+                    && guest_cr4 & (1 << 5) != 0  // PAE
+                    && guest_cr4 & ((1 << 12) | (1 << 17)) == 0 // no LA57 or PCID
+                    && guest_efer == LONG_EFER
+                    && cr3 != 0 && cr3 & 0xfff == 0 && PhysAddr::new(cr3).is_ok()
+                    && guest_rip != 0 && canonical(guest_rip)
+                    && rsp != 0 && canonical(rsp) && rsp & 0xf == 0
+                    && gdt != 0 && canonical(gdt) && tss != 0 && canonical(tss)
+            }
+        };
+        if !valid_guest {
             return Err(VmxError::InvalidControl);
         }
         for selector in [0x0c00, 0x0c02, 0x0c04, 0x0c06, 0x0c08, 0x0c0a] {
@@ -694,8 +813,8 @@ impl MinimalVmcsLaunch {
 }
 
 const fn canonical(address: u64) -> bool {
-    let upper = address >> 48;
-    upper == 0 || upper == 0xffff
+    let sign_extended = ((address << 16) as i64 >> 16) as u64;
+    address == sign_extended
 }
 
 const fn valid_pat(pat: u64) -> bool {
@@ -1446,6 +1565,82 @@ mod tests {
             controller.reload_boot_probe_guest(vmcs, ept),
             Err(VmxError::InvalidState)
         );
+    }
+
+    #[test]
+    fn long_mode_probe_requires_canonical_paged_supervisor_state() {
+        let ept = EptPointer::new(PhysAddr::new(0x3000).unwrap(), true).unwrap();
+        let fixture = minimal_launch(ept);
+        let host = VmxHostState {
+            cr0: 0x8001_0033,
+            cr3: 0x10_0000,
+            cr4: 0x2020,
+            efer: 0xd00,
+            pat: 0x0007_0406_0007_0406,
+            perf_global_control: 0,
+            selectors: [16, 8, 16, 16, 0, 0, 24],
+            fs_base: 0,
+            gs_base: 0,
+            tr_base: 0x3000,
+            gdtr_base: 0x4000,
+            idtr_base: 0x5000,
+            sysenter_cs: 0,
+            sysenter_esp: 0,
+            sysenter_eip: 0,
+            stack_pointer: 0x6000,
+            instruction_pointer: 0x7000,
+        };
+        let guest = VmxLongModeGuest {
+            cr0: 0x8001_0033,
+            cr3: PhysAddr::new(0x1000).unwrap(),
+            cr4: 0x20,
+            rip: 0xffff_8000_0000_1000,
+            rsp: 0xffff_8000_0000_2000,
+            gdt_base: 0x3000,
+            tss_base: 0x4000,
+        };
+        let build = |guest| {
+            MinimalVmcsLaunch::long_mode_probe(ept, permissive_control_policy(), host, guest)
+        };
+        let launch = build(guest).unwrap();
+        assert_eq!(launch.ept_pointer(), fixture.ept_pointer());
+        let field = |encoding| {
+            launch
+                .writes()
+                .iter()
+                .find(|w| w.field().encoding() == encoding)
+                .unwrap()
+                .value()
+        };
+        assert_eq!(field(0x681e), guest.rip);
+        assert_eq!(field(0x6802), guest.cr3.get());
+        assert_eq!(field(0x4012), (1 << 9) | (1 << 15));
+        assert_eq!(field(0x4816), 0xa09b);
+        for bad in [
+            VmxLongModeGuest {
+                cr0: guest.cr0 & !(1 << 31),
+                ..guest
+            },
+            VmxLongModeGuest {
+                cr3: PhysAddr::new(0).unwrap(),
+                ..guest
+            },
+            VmxLongModeGuest {
+                cr4: guest.cr4 | (1 << 12),
+                ..guest
+            },
+            VmxLongModeGuest { cr4: 0, ..guest },
+            VmxLongModeGuest {
+                rip: 1 << 47,
+                ..guest
+            },
+            VmxLongModeGuest {
+                rsp: guest.rsp - 8,
+                ..guest
+            },
+        ] {
+            assert_eq!(build(bad), Err(VmxError::InvalidControl));
+        }
     }
 
     #[test]
