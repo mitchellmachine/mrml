@@ -1,0 +1,49 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.test.usb-guest-probe"
+kind = "test"
+name = "mrml-usb-guest-probe"
+profile = "test"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_usb_guest_probe"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-usb-guest-probe"
+
+[rust]
+crate_name = "mrml_usb_guest_probe"
+crate_type = "lib"
+source = "packages/tests/usb-guest-probe/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_storage_fat32"
+compile_name = "mrml-storage-fat32"
+package = "org.mrml.library.storage.fat32"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_storage_usb"
+compile_name = "mrml-storage-usb"
+package = "org.mrml.library.storage.usb"
+scope = "compile"
+
+[[binary]]
+crate_name = "mrml_usb_guest_probe_image"
+output = "mrml-usb-guest-probe"
+self_extern = true
+source = "packages/tests/usb-guest-probe/src/main.rs"
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"

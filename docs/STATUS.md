@@ -6,37 +6,37 @@
 
 | Measure | Current value |
 | --- | ---: |
-| Workspace packages | 73 |
-| Package manifests | 73 |
-| Compile edges | 232 |
-| Package edges | 202 |
+| Workspace packages | 74 |
+| Package manifests | 74 |
+| Compile edges | 234 |
+| Package edges | 204 |
 | Runtime-interface edges | 5 |
 | Build-tool edges | 0 |
 | System-release edges | 3 |
 | Feature declarations | 108 |
-| Artifact declarations | 116 |
+| Artifact declarations | 118 |
 | Exact build-input declarations | 211 |
 | Declared integration tests | 11 |
 | Declared examples | 8 |
 | Declared benchmarks | 1 |
-| Declared binaries | 34 |
+| Declared binaries | 35 |
 
 ## Source and test inventory
 
 | Measure | Current value |
 | --- | ---: |
-| Rust source files | 791 |
-| Rust source lines | 688171 |
-| Static `#[test]` annotations | 4836 |
+| Rust source files | 793 |
+| Rust source lines | 688496 |
+| Static `#[test]` annotations | 4838 |
 | Largest Rust source | `packages/compiler/core/src/codegen/tests.rs` (996630 bytes) |
-| Files containing admitted unsafe boundaries | 186 |
-| Unsafe blocks | 2653 |
+| Files containing admitted unsafe boundaries | 187 |
+| Unsafe blocks | 2655 |
 | Unsafe functions | 448 |
 | Unsafe implementations | 290 |
 | Unsafe extern blocks | 302 |
 | Unsafe traits | 68 |
 | Unsafe blocks without a preceding `SAFETY:` line comment | 2237 |
-| Unsafe attributes (manual review) | 146 |
+| Unsafe attributes (manual review) | 147 |
 
 ## Enforced repository gates
 

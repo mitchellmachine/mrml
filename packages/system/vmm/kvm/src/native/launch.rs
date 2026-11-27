@@ -2788,18 +2788,34 @@ mod tests {
     }
 
     #[inline(never)]
-    fn write_signed_fixture(payload: [u8; 1024], kind: ArtifactKind, encoded: &mut [u8], test_salt: u8) {
+    fn write_signed_fixture(
+        payload: [u8; 1024],
+        kind: ArtifactKind,
+        encoded: &mut [u8],
+        test_salt: u8,
+    ) {
+        write_signed_fixture_bytes(&payload, kind, encoded, test_salt);
+    }
+
+    fn write_signed_fixture_bytes(
+        payload: &[u8],
+        kind: ArtifactKind,
+        encoded: &mut [u8],
+        test_salt: u8,
+    ) {
         assert_eq!(
             encoded.len(),
             SIGNED_ARTIFACT_OVERHEAD_BYTES + payload.len()
         );
         let mut private = [0u8; LAMPORT_PRIVATE_KEY_BYTES];
         for (index, byte) in private.iter_mut().enumerate() {
-            *byte = (index as u64).wrapping_mul(61).wrapping_add(17 + u64::from(test_salt)) as u8;
+            *byte = (index as u64)
+                .wrapping_mul(61)
+                .wrapping_add(17 + u64::from(test_salt)) as u8;
         }
         let mut public = [0u8; LAMPORT_PUBLIC_KEY_BYTES];
         lamport_public_key(&private, &mut public).unwrap();
-        let digest = Sha3_512::digest(&payload);
+        let digest = Sha3_512::digest(payload);
         let statement = artifact_statement(kind, 1, payload.len() as u64, digest);
         let mut signature = [0u8; LAMPORT_SIGNATURE_BYTES];
         lamport_sign(&private, &statement, &mut signature).unwrap();
@@ -2812,7 +2828,7 @@ mod tests {
         let payload_at = signature_at + LAMPORT_SIGNATURE_BYTES;
         encoded[SIGNED_ARTIFACT_HEADER_BYTES..signature_at].copy_from_slice(&public);
         encoded[signature_at..payload_at].copy_from_slice(&signature);
-        encoded[payload_at..].copy_from_slice(&payload);
+        encoded[payload_at..].copy_from_slice(payload);
     }
 
     fn signed_payload(payload: [u8; 1024]) -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
@@ -3144,6 +3160,12 @@ mod tests {
     #[ignore = "requires live KVM for the signed diagnostic USB guest"]
     fn live_kvm_guest_supplies_usb_write_payload() {
         usb_write_probe::exercise();
+    }
+
+    #[test]
+    #[ignore = "requires live KVM and a built MRML_USB_GUEST_PROBE diagnostic"]
+    fn live_kvm_guest_executes_usb_write_probe() {
+        usb_write_probe::exercise_in_guest();
     }
 
     mod usb_write_probe;

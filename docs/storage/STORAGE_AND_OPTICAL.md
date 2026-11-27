@@ -2954,6 +2954,20 @@ on a Linux host with KVM. The live guest test and the QEMU/xHCI FAT32 test
 are distinct: the KVM test does not put the USB driver inside a guest or
 access physical flash media.
 
+The separate `usb-guest-probe` fixture builds a freestanding Rust image that
+executes the FAT32 update and USB BOT/SCSI code inside a signed KVM guest.
+The guest verifies the preallocated `PROBE.TXT`, updates `old` to `new`,
+requires cache flush before readback, and verifies the untouched sector bytes.
+Only the result byte crosses the checked, non-executable peer page, which the
+launcher retires after the test. To reproduce this guest-only test, run
+`mrml build org.mrml.test.usb-guest-probe --target native --release`, then
+`mrml test org.mrml.system.vmm-kvm --target linux`. Set `MRML_USB_GUEST_PROBE`
+to the resulting `mrml-usb-guest-probe.efi` under
+`target/mrml-native/mrml_native-x86_64-unknown-uefi/release/` and invoke the
+same test binary with `--ignored --nocapture live_kvm_guest_executes_usb_write_probe`.
+The medium is entirely synthetic and resides in guest memory. This does not
+verify a live xHCI assignment, hardware DMA, or a persistent USB write.
+
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See
 [review log](../patents/REVIEW_LOG.md).

@@ -288,3 +288,113 @@ pub(super) fn exercise() {
         "usb-write-guest|status=PASS|backend=kvm|bot=synthetic|guest_marker=new"
     );
 }
+
+pub(super) fn exercise_in_guest() {
+    let path = mrml_runtime::environment_variable("MRML_USB_GUEST_PROBE")
+        .expect("set MRML_USB_GUEST_PROBE to the release EFI diagnostic path");
+    let image = mrml_runtime::read_file_bounded(path.as_str(), 1024 * 1024).unwrap();
+    let mut signed =
+        mrml_runtime::Vector::with_capacity(SIGNED_ARTIFACT_OVERHEAD_BYTES + image.len()).unwrap();
+    signed.resize(SIGNED_ARTIFACT_OVERHEAD_BYTES + image.len(), 0);
+    // These fixture keys are intentionally public and never trusted by a deployed system.
+    write_signed_fixture_bytes(&image, ArtifactKind::VmImage, &mut signed, 27);
+    let peer_image = signed_guest(framebuffer_pe(), 28);
+    let verify = |encoded: &[u8]| {
+        let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
+        TrustRoot::new(
+            ArtifactKind::VmImage,
+            Sha3_512::digest(&encoded[public_at..public_at + LAMPORT_PUBLIC_KEY_BYTES]),
+            1,
+        )
+    };
+    let a = SignedArtifact::decode(&signed)
+        .unwrap()
+        .verify_executable(&verify(&signed), ArtifactKind::VmImage)
+        .unwrap();
+    let b = SignedArtifact::decode(&peer_image)
+        .unwrap()
+        .verify_executable(&verify(&peer_image), ArtifactKind::VmImage)
+        .unwrap();
+    let layout = |image_virtual| {
+        KvmLaunchLayout::new(
+            0x10_0000,
+            16,
+            0x20_0000,
+            image_virtual,
+            0x30_0000,
+            0xffff_8001_5000_0000,
+            0x40_0000,
+            0xffff_8001_6000_0000,
+            PRIVILEGE_STACK_ARENA_PAGES,
+            false,
+        )
+        .unwrap()
+    };
+    let system = KvmSystem::open().expect("live KVM required for the USB guest");
+    let mut first = system
+        .prepare_guest::<8>(0, &a, &valid_handoff(), layout(0xffff_8001_4000_0000))
+        .unwrap();
+    let mut second = system
+        .prepare_guest::<8>(0, &b, &valid_handoff(), layout(b.image().image_base()))
+        .unwrap();
+
+    let mut caps = CapabilitySpace::<8>::new();
+    let mut memory = MemoryPoolTable::<1, 1, 2>::new(0xb10).unwrap();
+    let (pool, quota) = memory
+        .create_root(
+            1,
+            2,
+            0,
+            Rights::ALLOCATE
+                .union(Rights::CONTROL)
+                .union(Rights::INSPECT),
+            &mut caps,
+        )
+        .unwrap();
+    let peer_rights = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+    let client_cap = caps.insert(ObjectId(0xb11), peer_rights).unwrap();
+    let provider_cap = caps.insert(ObjectId(0xb12), peer_rights).unwrap();
+    let (projection, _) = reserve_microvm_peer_page_projection(
+        &mut memory,
+        pool,
+        quota,
+        client_cap,
+        provider_cap,
+        VIRTUAL / PAGE_SIZE,
+        VIRTUAL / PAGE_SIZE,
+        &mut caps,
+    )
+    .unwrap();
+    let mut peer = PreparedKvmPeerPage::prepare(
+        &mut first,
+        &mut second,
+        &projection,
+        client_cap,
+        provider_cap,
+        &caps,
+        0x70_0000,
+        0x80_0000,
+    )
+    .unwrap_or_else(|failed| panic!("guest result mapping: {:?}", failed.error()));
+    let mut observed = [0; PAGE_SIZE as usize];
+    peer.write_first(&observed).unwrap();
+    let outcome = DeadlineVmBackend::run_with_deadline(peer.first, 0, 1_000_000).unwrap();
+    peer.read_second(&mut observed).unwrap();
+    peer.retire()
+        .unwrap_or_else(|(error, _)| panic!("guest result page retirement: {error:?}"));
+    assert_eq!(outcome, VmDeadlineOutcome::Exit(VmExit::Halted));
+    assert_eq!(
+        observed[0], 0x51,
+        "0x52 means a verified write failed; zero means no report"
+    );
+    assert!(observed[1..].iter().all(|&byte| byte == 0));
+    for guest in [&first, &second] {
+        assert_eq!(
+            guest.page_walk(VIRTUAL).unwrap().physical_address(VIRTUAL),
+            None
+        );
+    }
+    mrml_runtime::mrml_println!(
+        "usb-write-guest|status=PASS|backend=kvm|driver=guest|bot=synthetic|file=PROBE.TXT"
+    );
+}
