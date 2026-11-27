@@ -1,21 +1,22 @@
 use mrml_interface_storage_block_provider_v1::{
-    BLOCK_DEVICE_FLAG_READ_ONLY, BlockProviderTransport, BorrowedWriteView, OpaqueHandle,
-    ReadError, decode_block_device_catalog_record, decode_enumerate_response,
-    encode_enumerate_request, validate_block_device_catalog,
+    BLOCK_DEVICE_FLAG_READ_ONLY, BlockProviderTransport, BorrowedReadView, BorrowedWriteView,
+    OpaqueHandle, ReadError, WriteError, decode_block_device_catalog_record,
+    decode_enumerate_response, decode_write_response, encode_enumerate_request,
+    encode_write_request, validate_block_device_catalog,
 };
 use mrml_kernel::{
     CapabilitySpace, MemoryPoolTable, ObjectId, PAGE_SIZE, Rights,
     reserve_microvm_peer_page_projection,
 };
 use mrml_storage::{MicrovmBlockReadError, bind_microvm_block_read};
-use mrml_storage_fat32::{
-    FixedFileWriteError, VerifiedSectorDevice,
-};
 use mrml_storage_fat32::provisioned_probe::{
-    PROBE_DATA_SECTOR, PROBE_PARTITION_SECTORS, ProbeError, ProvisionedProbe,
-    probe_metadata_sector,
+    PROBE_DATA_SECTOR, PROBE_PARTITION_SECTORS, ProbeError, ProvisionedProbe, probe_metadata_sector,
 };
+use mrml_storage_fat32::{FixedFileWriteError, VerifiedSectorDevice};
 use mrml_storage_usb::block_provider::UsbReadProvider;
+use mrml_storage_usb::diagnostic_partition::{
+    DiagnosticPartition, DiagnosticPartitionAssignment, DiagnosticPartitionError,
+};
 use mrml_storage_usb::xhci::{
     BulkDma, Controller, ControllerRetirement, DeviceDma, DmaLayout, Error, Platform,
     ProjectionError, RevocablePlatform, ScopedXhci,
@@ -508,11 +509,11 @@ fn exercise_qemu(super_speed: bool) {
         let pipe = controller
             .configure_bulk(&configuration[..length], bulk_dma, 1000)
             .unwrap();
-        let mut disk = mrml_storage_usb::UsbDisk::probe(pipe).unwrap();
+        let disk = mrml_storage_usb::UsbDisk::probe(pipe).unwrap();
         assert_eq!(disk.sectors(), (START + TOTAL) as u64);
-        exercise_fat32(&mut disk);
         let session = OpaqueHandle::new(1, 2).unwrap();
         let mut provider = UsbReadProvider::new(disk, session, 3).unwrap();
+        exercise_fat32(&mut provider, session);
         let catalog_view = BorrowedWriteView::within(7, 48, 64).unwrap();
         let enumerate = encode_enumerate_request(catalog_view).unwrap();
         let mut catalog = [0xa5; 64];
@@ -572,8 +573,31 @@ fn exercise_qemu(super_speed: bool) {
         assert_eq!(&sector[..3], b"new");
         assert_eq!(&sector[3..], &[0xa5; 509]);
 
-        qmp.remove_stick();
-        for error in [ReadError::IoFailure, ReadError::StaleObject] {
+        let expected_errors: &[ReadError] = if super_speed {
+            let cap = caps
+                .insert(ObjectId(0xa1), Rights::READ.union(Rights::WRITE))
+                .unwrap();
+            let mut view =
+                DiagnosticPartition::open(&mut provider, test_assignment(session), cap, &caps)
+                    .unwrap();
+            qmp.remove_stick();
+            let wire_view = BorrowedReadView::within(0, SECTOR as u64, SECTOR as u64).unwrap();
+            let wire =
+                encode_write_request(probe_session(), u64::from(PROBE_DATA_SECTOR), 1, wire_view)
+                    .unwrap();
+            for error in [WriteError::IoFailure, WriteError::StaleObject] {
+                let response = view.write(&caps, &wire, &[0x3c; SECTOR]).unwrap();
+                assert_eq!(
+                    decode_write_response(&response, SECTOR as u64),
+                    Ok(Err(error))
+                );
+            }
+            &[ReadError::StaleObject]
+        } else {
+            qmp.remove_stick();
+            &[ReadError::IoFailure, ReadError::StaleObject]
+        };
+        for &error in expected_errors {
             sector.fill(0xc3);
             let request = consumer
                 .submit(FILE_SECTOR as u64, &mut page, &projection, &caps)
@@ -691,20 +715,17 @@ fn sector_mut(image: &mut [u8], lba: usize) -> &mut [u8] {
     &mut image[lba * SECTOR..(lba + 1) * SECTOR]
 }
 
-struct TestPartition<'a, T: mrml_storage_usb::BulkTransport>(&'a mut mrml_storage_usb::UsbDisk<T>);
-
-impl<T: mrml_storage_usb::BulkTransport> TestPartition<'_, T> {
-    fn lba(sector: u32) -> u64 {
-        assert!((sector as usize) < TOTAL, "fixture partition out of bounds");
-        (START as u64) + u64::from(sector)
-    }
+struct TestPartition<'a, 'b, T: mrml_storage_usb::BulkTransport> {
+    view: DiagnosticPartition<'a, T>,
+    session: OpaqueHandle,
+    caps: &'b CapabilitySpace<4>,
 }
 
-impl<T: mrml_storage_usb::BulkTransport> VerifiedSectorDevice for TestPartition<'_, T> {
-    type Error = mrml_storage_usb::Error<T::Error>;
+impl<T: mrml_storage_usb::BulkTransport> VerifiedSectorDevice for TestPartition<'_, '_, T> {
+    type Error = DiagnosticPartitionError;
 
     fn read_sector(&mut self, sector: u32, output: &mut [u8; SECTOR]) -> Result<(), Self::Error> {
-        self.0.read_sector(Self::lba(sector), output)
+        self.view.read(self.caps, sector, output)
     }
 
     fn write_sector_verified(
@@ -712,47 +733,153 @@ impl<T: mrml_storage_usb::BulkTransport> VerifiedSectorDevice for TestPartition<
         sector: u32,
         input: &[u8; SECTOR],
     ) -> Result<(), Self::Error> {
-        self.0.write_sector_verified(Self::lba(sector), input)
+        let view = BorrowedReadView::within(0, SECTOR as u64, SECTOR as u64).unwrap();
+        let request = encode_write_request(self.session, u64::from(sector), 1, view).unwrap();
+        let response = self.view.write(self.caps, &request, input).unwrap();
+        match decode_write_response(&response, SECTOR as u64).unwrap() {
+            Ok(bytes) if bytes == SECTOR as u64 => Ok(()),
+            Err(WriteError::PermissionDenied) => Err(DiagnosticPartitionError::Denied),
+            Err(WriteError::StaleObject) => Err(DiagnosticPartitionError::StaleSession),
+            _ => Err(DiagnosticPartitionError::IoFailure),
+        }
     }
 }
 
-fn exercise_fat32<T>(disk: &mut mrml_storage_usb::UsbDisk<T>)
+fn probe_session() -> OpaqueHandle {
+    OpaqueHandle::new(2, 1).unwrap()
+}
+
+fn test_assignment(session: OpaqueHandle) -> DiagnosticPartitionAssignment {
+    DiagnosticPartitionAssignment {
+        disk_session: session,
+        partition_session: probe_session(),
+        media_generation: 3,
+        partition: ObjectId(0xa1),
+        first_lba: START as u32,
+        sectors: PROBE_PARTITION_SECTORS,
+        file_sector: PROBE_DATA_SECTOR,
+    }
+}
+
+fn exercise_fat32<T>(provider: &mut UsbReadProvider<T>, session: OpaqueHandle)
 where
     T: mrml_storage_usb::BulkTransport,
     T::Error: std::fmt::Debug,
 {
-    let mut mbr = [0; SECTOR];
-    disk.read_sector(0, &mut mbr).unwrap();
-    assert_eq!(&mbr[510..], &[0x55, 0xaa]);
-    assert_eq!(mbr[450], 0x0c);
-    assert_eq!(
-        u32::from_le_bytes(mbr[454..458].try_into().unwrap()),
-        START as u32
-    );
-    assert_eq!(
-        u32::from_le_bytes(mbr[458..462].try_into().unwrap()),
-        TOTAL as u32
-    );
-
-    let mut partition = TestPartition(disk);
-    let mut probe = ProvisionedProbe::verify(
-        &mut partition,
-        START as u32,
-        PROBE_PARTITION_SECTORS,
-        SERIAL,
-    )
-    .unwrap();
-    assert!(matches!(
-        probe.update(b"bad", b"new"),
-        Err(ProbeError::Update(FixedFileWriteError::StaleContents))
-    ));
-    // Cross multiple bulk and event ring wraps. The host compares the
-    // whole persisted image, not just the driver's readback.
-    let mut previous = *b"old";
-    for byte in b'A'..=b'K' {
-        let next = [byte; 3];
-        probe.update(&previous, &next).unwrap();
-        previous = next;
+    let mut caps = CapabilitySpace::<4>::new();
+    let partition_object = ObjectId(0xa1);
+    let read_only = caps.insert(partition_object, Rights::READ).unwrap();
+    let write_rights = Rights::READ.union(Rights::WRITE);
+    let foreign = caps.insert(ObjectId(0xa2), write_rights).unwrap();
+    let granted = caps.insert(partition_object, write_rights).unwrap();
+    let assignment = test_assignment(session);
+    for (changed, cap, expected) in [
+        (assignment, read_only, DiagnosticPartitionError::Denied),
+        (assignment, foreign, DiagnosticPartitionError::Denied),
+        (
+            DiagnosticPartitionAssignment {
+                partition_session: session,
+                ..assignment
+            },
+            granted,
+            DiagnosticPartitionError::InvalidExtent,
+        ),
+        (
+            DiagnosticPartitionAssignment {
+                media_generation: 2,
+                ..assignment
+            },
+            granted,
+            DiagnosticPartitionError::StaleSession,
+        ),
+        (
+            DiagnosticPartitionAssignment {
+                first_lba: (START - 1) as u32,
+                ..assignment
+            },
+            granted,
+            DiagnosticPartitionError::InvalidPartitionTable,
+        ),
+        (
+            DiagnosticPartitionAssignment {
+                sectors: PROBE_PARTITION_SECTORS + 1,
+                ..assignment
+            },
+            granted,
+            DiagnosticPartitionError::InvalidExtent,
+        ),
+    ] {
+        assert!(matches!(
+            DiagnosticPartition::open(provider, changed, cap, &caps),
+            Err(error) if error == expected
+        ));
     }
-    probe.update(&previous, b"new").unwrap();
+
+    let mut view = DiagnosticPartition::open(provider, assignment, granted, &caps).unwrap();
+    let input = [0x3c; SECTOR];
+    let wire_view = BorrowedReadView::within(0, SECTOR as u64, SECTOR as u64).unwrap();
+    let write = |handle, sector| encode_write_request(handle, sector, 1, wire_view).unwrap();
+    for (wire, expected) in [
+        (write(probe_session(), 0), WriteError::InvalidRequest),
+        (
+            write(session, u64::from(PROBE_DATA_SECTOR)),
+            WriteError::StaleObject,
+        ),
+    ] {
+        let response = view.write(&caps, &wire, &input).unwrap();
+        assert_eq!(
+            decode_write_response(&response, SECTOR as u64),
+            Ok(Err(expected))
+        );
+    }
+
+    {
+        let mut partition = TestPartition {
+            view,
+            session: probe_session(),
+            caps: &caps,
+        };
+        let mut probe = ProvisionedProbe::verify(
+            &mut partition,
+            START as u32,
+            PROBE_PARTITION_SECTORS,
+            SERIAL,
+        )
+        .unwrap();
+        assert!(matches!(
+            probe.update(b"bad", b"new"),
+            Err(ProbeError::Update(FixedFileWriteError::StaleContents))
+        ));
+        // Cross multiple bulk and event ring wraps. The host compares the
+        // whole persisted image, not just the driver's readback.
+        let mut previous = *b"old";
+        for byte in b'A'..=b'K' {
+            let next = [byte; 3];
+            probe.update(&previous, &next).unwrap();
+            previous = next;
+        }
+        probe.update(&previous, b"new").unwrap();
+    }
+
+    let mut view = DiagnosticPartition::open(provider, assignment, granted, &caps).unwrap();
+    caps.revoke(granted).unwrap();
+    let replacement = caps.insert(partition_object, write_rights).unwrap();
+    assert_ne!(granted, replacement);
+    let response = view
+        .write(
+            &caps,
+            &write(probe_session(), u64::from(PROBE_DATA_SECTOR)),
+            &input,
+        )
+        .unwrap();
+    assert_eq!(
+        decode_write_response(&response, SECTOR as u64),
+        Ok(Err(WriteError::PermissionDenied))
+    );
+    let mut output = [0x5c; SECTOR];
+    assert_eq!(
+        view.read(&caps, PROBE_DATA_SECTOR, &mut output),
+        Err(DiagnosticPartitionError::Denied)
+    );
+    assert_eq!(output, [0x5c; SECTOR]);
 }

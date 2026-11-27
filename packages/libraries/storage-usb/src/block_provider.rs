@@ -1,4 +1,4 @@
-//! Read-only USB data plane for the canonical block provider protocol.
+//! Read-only USB enumeration and data plane for the canonical block provider protocol.
 //! The service runtime must authenticate the sender and bound the writable
 //! view before calling this adapter. It does not grant or revoke DMA rights.
 
@@ -10,7 +10,7 @@ use mrml_interface_storage_block_provider_v1::{
     encode_enumerate_response, encode_read_response,
 };
 
-use crate::{BulkTransport, SECTOR_BYTES, UsbDisk};
+use crate::{BulkTransport, Error, SECTOR_BYTES, UsbDisk};
 
 /// One USB disk bound to one non-reusable block session. The caller selects the
 /// handle from the service's generational session allocator, not from a request.
@@ -37,6 +37,44 @@ impl<T: BulkTransport> UsbReadProvider<T> {
             device,
             available: true,
         })
+    }
+
+    pub(crate) fn diagnostic_session_is_live(
+        &self,
+        session: OpaqueHandle,
+        media_generation: u64,
+    ) -> bool {
+        self.available
+            && session == self.device.session
+            && media_generation == self.device.media_generation
+    }
+
+    pub(crate) fn capacity(&self) -> u64 {
+        self.device.logical_block_count
+    }
+
+    pub(crate) fn diagnostic_read(
+        &mut self,
+        sector: u64,
+        output: &mut [u8; SECTOR_BYTES],
+    ) -> Result<(), Error<T::Error>> {
+        let result = self.disk.read_sector(sector, output);
+        if result.is_err() {
+            self.invalidate_session();
+        }
+        result
+    }
+
+    pub(crate) fn diagnostic_write(
+        &mut self,
+        sector: u64,
+        input: &[u8; SECTOR_BYTES],
+    ) -> Result<(), Error<T::Error>> {
+        let result = self.disk.write_sector_verified(sector, input);
+        if result.is_err() {
+            self.invalidate_session();
+        }
+        result
     }
 
     /// Stop serving this session permanently. Hardware teardown is still
@@ -96,10 +134,7 @@ impl<T: BulkTransport> BlockProviderReadTransport for UsbReadProvider<T> {
             .get_mut(start..end)
             .ok_or(ProtocolError::InvalidRequest)?;
         let mut sector = [0; SECTOR_BYTES];
-        if self.disk.read_sector(request.lba, &mut sector).is_err() {
-            // Retire the session on transport failure; the only recovery is
-            // a fresh lease and a fresh handle, never a read through stale state.
-            self.invalidate_session();
+        if self.diagnostic_read(request.lba, &mut sector).is_err() {
             return Ok(encode_read_response(Err(ReadError::IoFailure)));
         }
         output.copy_from_slice(&sector);

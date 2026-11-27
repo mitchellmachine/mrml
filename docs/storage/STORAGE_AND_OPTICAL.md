@@ -2915,8 +2915,27 @@ write. The serial is not permission to write: this operation still requires
 an exclusive, generation-bound partition view. An uncertain result closes
 the view rather than retrying. This path does not create a file on an
 arbitrary FAT32 volume or expose a general sector-write RPC.
-Patent review: NOT_TRIGGERED; this is an exact fixture comparison using the
-existing FAT32 and USB write mechanisms. See [review log](../patents/REVIEW_LOG.md).
+
+The USB provider now has a separate diagnostic partition endpoint. It accepts
+only a supervisor-supplied partition capability with read/write rights, a
+matching live session and media generation, and the exact in-range partition
+from a single inactive FAT32 MBR entry. It allows relative reads inside that
+partition and a canonical 512-byte write on its own partition session (not
+on the disk's read session), only to the supervisor-selected file
+sector. The FAT32 test layer still verifies the full fixture and constrains
+the update to the three marker bytes. Revocation or replacement of the
+partition capability prevents further I/O; an uncertain write withdraws the
+USB session and is not retried. The USB 2/3 QEMU fixture exercises this
+endpoint and checks the entire persisted image. It also tests a wrong media
+generation, a substituted or read-only capability, a different extent, a
+stale session and an attempt to write metadata. In the USB 3 case it tests
+unplug before the write and verifies that the old session is retired. The
+test capability is modeled in the running host fixture, not transferred to
+an executing USB service MicroVM. Normal enumeration remains read-only.
+
+Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
+dispatch using the existing FAT32, capability and USB mechanisms. See
+[review log](../patents/REVIEW_LOG.md).
 
 The xHCI lifecycle now retains the original assignment on untouched startup
 failure, and a shutdown-only owner after partially programmed startup or

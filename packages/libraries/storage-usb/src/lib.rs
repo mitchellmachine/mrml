@@ -5,6 +5,7 @@
 //! below this layer. A session never retries an uncertain write.
 
 pub mod block_provider;
+pub mod diagnostic_partition;
 pub mod xhci;
 
 pub const SECTOR_BYTES: usize = 512;
