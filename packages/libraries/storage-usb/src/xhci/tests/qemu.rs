@@ -23,6 +23,7 @@ impl Drop for Qtest {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = fs::remove_file(self.directory.join("qtest.sock"));
+        let _ = fs::remove_file(self.directory.join("media.img"));
         let _ = fs::remove_dir(&self.directory);
     }
 }
@@ -111,6 +112,11 @@ fn qemu_controller_command_round_trip() {
     let dir = std::env::temp_dir().join(format!("mrml-xhci-qtest-{}", std::process::id()));
     fs::create_dir(&dir).unwrap();
     let sock = dir.join("qtest.sock");
+    let media = dir.join("media.img");
+    fs::File::create_new(&media)
+        .unwrap()
+        .set_len(2 * 1024 * 1024)
+        .unwrap();
     let mut child = Command::new("qemu-system-x86_64")
         .args([
             "-machine",
@@ -126,9 +132,16 @@ fn qemu_controller_command_round_trip() {
             "-serial",
             "none",
             "-device",
-            "qemu-xhci,id=xhci,addr=03.0",
+            "qemu-xhci,id=xhci,addr=03.0,p3=0",
+            "-drive",
+        ])
+        .arg(format!(
+            "if=none,format=raw,id=media,file={}",
+            media.display()
+        ))
+        .args([
             "-device",
-            "usb-kbd,bus=xhci.0",
+            "usb-storage,bus=xhci.0,port=1,drive=media",
             "-qtest",
         ])
         .arg(format!("unix:{},server=on,wait=off", sock.display()))
@@ -147,6 +160,7 @@ fn qemu_controller_command_round_trip() {
         let _ = child.kill();
         let _ = child.wait();
         let _ = fs::remove_file(&sock);
+        let _ = fs::remove_file(&media);
         let _ = fs::remove_dir(&dir);
         panic!("QEMU qtest socket not available");
     };
@@ -172,14 +186,56 @@ fn qemu_controller_command_round_trip() {
     qtest.config(0x14, 0).unwrap();
     qtest.config(4, 6).unwrap();
     let mut controller = Controller::start(qtest, 0x4000, DMA, 100).unwrap();
-    let ports = controller.registers.ports;
+    let port = (1..=controller.registers.ports)
+        .find(|&port| controller.port_status(port).unwrap().connected)
+        .expect("emulated USB disk should be connected");
     assert_eq!(
-        (1..=ports)
-            .filter(|&port| controller.port_status(port).unwrap().connected)
-            .count(),
-        1
+        controller.port_status(port).unwrap().speed_id,
+        HIGH_SPEED_ID
     );
     controller.no_op(100).unwrap();
+    let dma = DeviceDma {
+        input_context: 0x10_1000,
+        output_context: 0x10_2000,
+        control_ring: 0x10_3000,
+        control_buffer: 0x10_4000,
+    };
+    assert!(matches!(
+        controller.address_high_speed_device(
+            port,
+            DeviceDma {
+                input_context: DMA.command_ring,
+                ..dma
+            },
+            100
+        ),
+        Err(Error::InvalidDma)
+    ));
+    let addressed = controller
+        .address_high_speed_device(port, dma, 100)
+        .unwrap();
+    assert_eq!(addressed.port, port);
+    assert!((1..=127).contains(&addressed.address));
+    assert!(controller.port_status(port).unwrap().enabled);
+    let mut descriptor = [0; 18];
+    controller
+        .read_descriptor(1, 0, &mut descriptor, 100)
+        .unwrap();
+    assert_eq!(&descriptor[..2], &[18, 1]);
+    let mut header = [0; 9];
+    controller.read_descriptor(2, 0, &mut header, 100).unwrap();
+    let length = usize::from(u16::from_le_bytes([header[2], header[3]]));
+    let mut configuration = [0; 256];
+    controller
+        .read_descriptor(2, 0, &mut configuration[..length], 100)
+        .unwrap();
+    let interface = crate::find_bulk_interface(&configuration[..length]).unwrap();
+    assert_ne!(interface.bulk_in & 0x80, 0);
+    assert_eq!(interface.bulk_out & 0x80, 0);
+    assert!(matches!(
+        controller.address_high_speed_device(port, dma, 100),
+        Err(Error::InvalidPort)
+    ));
     controller.no_op(100).unwrap();
     controller.halt(100).unwrap();
 }

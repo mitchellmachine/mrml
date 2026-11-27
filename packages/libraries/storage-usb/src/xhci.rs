@@ -8,7 +8,14 @@ const FATAL: u32 = (1 << 2) | (1 << 12);
 const NOT_READY: u32 = 1 << 11;
 const TRB_BYTES: u64 = 16;
 const RING_BYTES: u64 = 16 * TRB_BYTES;
+const ENABLE_SLOT: u32 = 9;
+const ADDRESS_DEVICE: u32 = 11;
 const COMMAND_NOOP: u32 = 23;
+const PORT_RESET: u32 = 1 << 4;
+const PORT_RESET_CHANGE: u32 = 1 << 21;
+const PORT_CONNECT_CHANGE: u32 = 1 << 17;
+const PORT_POWER: u32 = 1 << 9;
+const HIGH_SPEED_ID: u8 = 3;
 const COMMAND_COMPLETION: u32 = 33;
 const PORT_STATUS_CHANGE: u32 = 34;
 
@@ -62,6 +69,7 @@ struct Registers {
     doorbell: u32,
     ports: u8,
     address64: bool,
+    context_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,9 +80,24 @@ pub struct PortStatus {
     pub speed_id: u8,
 }
 
+/// Caller-owned context and EP0 ring in the same isolated DMA aperture.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeviceDma {
+    pub input_context: u64,
+    pub output_context: u64,
+    pub control_ring: u64,
+    pub control_buffer: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AddressedDevice {
+    pub port: u8,
+    pub address: u8,
+}
+
 /// Takes exclusive ownership of the backend even if initialization fails.
 /// Currently admits one slot, one interrupter, 4 KiB page support, and no
-/// scratchpads. No device-facing transfer ring is armed in this profile.
+/// scratchpads. Addressing admits only one direct high-speed USB 2 device.
 pub struct Controller<P: Platform> {
     platform: P,
     registers: Registers,
@@ -82,6 +105,7 @@ pub struct Controller<P: Platform> {
     commands: u8,
     events: u8,
     event_cycle: bool,
+    control: Option<(DeviceDma, u8, u8)>,
     faulted: bool,
 }
 
@@ -101,6 +125,7 @@ impl<P: Platform> Controller<P> {
             commands: 0,
             events: 0,
             event_cycle: true,
+            control: None,
             faulted: false,
         };
         this.initialize(ticks)?;
@@ -163,71 +188,273 @@ impl<P: Platform> Controller<P> {
         })
     }
 
+    /// Resets a direct high-speed port, enables slot one, and lets xHCI issue
+    /// SET_ADDRESS. A failed hardware sequence faults the session; no retries.
+    pub fn address_high_speed_device(
+        &mut self,
+        port: u8,
+        dma: DeviceDma,
+        ticks: u32,
+    ) -> Result<AddressedDevice, Error<P::Error>> {
+        let status = self.port_status(port)?;
+        if self.control.is_some()
+            || !status.connected
+            || !status.powered
+            || status.speed_id != HIGH_SPEED_ID
+        {
+            return Err(Error::InvalidPort);
+        }
+        if self.commands > 13 {
+            return Err(Error::QueueExhausted);
+        }
+        let stride = self.registers.context_bytes;
+        validate_ranges::<P::Error>(
+            &[
+                (self.dma.device_contexts, 16),
+                (self.dma.command_ring, RING_BYTES),
+                (self.dma.event_segments, 16),
+                (self.dma.event_ring, RING_BYTES),
+                (dma.input_context, 33 * stride as u64),
+                (dma.output_context, 32 * stride as u64),
+                (dma.control_ring, RING_BYTES),
+                (dma.control_buffer, 256),
+            ],
+            self.registers.address64,
+        )?;
+        self.faulted = true;
+        let result = self.address_device_inner(port, dma, ticks);
+        if result.is_ok() {
+            self.faulted = false;
+            self.control = Some((dma, port, 0));
+        }
+        result
+    }
+
+    fn address_device_inner(
+        &mut self,
+        port: u8,
+        dma: DeviceDma,
+        ticks: u32,
+    ) -> Result<AddressedDevice, Error<P::Error>> {
+        let portsc = self.registers.operational + 0x400 + u32::from(port - 1) * 0x10;
+        // Do not echo PORTSC's write-one-to-clear bits or the port-disable bit.
+        // Acknowledge a stale reset-change before starting this reset.
+        self.write(portsc, PORT_POWER | PORT_RESET_CHANGE | PORT_CONNECT_CHANGE)?;
+        self.write(portsc, PORT_POWER | PORT_RESET)?;
+        self.wait(
+            portsc,
+            PORT_RESET | PORT_RESET_CHANGE,
+            PORT_RESET_CHANGE,
+            ticks,
+        )?;
+        let status = self.read(portsc)?;
+        if status & (3 | PORT_CONNECT_CHANGE) != 3 || ((status >> 10) & 0xf) as u8 != HIGH_SPEED_ID
+        {
+            return Err(Error::InvalidPort);
+        }
+        self.write(portsc, PORT_POWER | PORT_RESET_CHANGE)?;
+
+        let stride = self.registers.context_bytes;
+        let mut input = [0; 33 * 64];
+        input[4..8].copy_from_slice(&3u32.to_le_bytes()); // add slot and EP0
+        let slot = &mut input[stride..2 * stride];
+        slot[..4].copy_from_slice(&((1u32 << 27) | (u32::from(HIGH_SPEED_ID) << 20)).to_le_bytes());
+        slot[4..8].copy_from_slice(&(u32::from(port) << 16).to_le_bytes());
+        let control = &mut input[2 * stride..3 * stride];
+        control[4..8].copy_from_slice(&((64u32 << 16) | (4 << 3) | (3 << 1)).to_le_bytes());
+        control[8..16].copy_from_slice(&(dma.control_ring | 1).to_le_bytes());
+        control[16..20].copy_from_slice(&8u32.to_le_bytes());
+        // An empty EP0 ring is reserved solely for this slot.
+        let zeros = [0; 32 * 64];
+        self.platform
+            .dma_write(dma.input_context, &input[..33 * stride])
+            .map_err(Error::Platform)?;
+        self.platform
+            .dma_write(dma.output_context, &zeros[..32 * stride])
+            .map_err(Error::Platform)?;
+        self.platform
+            .dma_write(dma.control_ring, &zeros[..RING_BYTES as usize])
+            .map_err(Error::Platform)?;
+        let slot = self.issue_command(0, ENABLE_SLOT << 10, ticks)?;
+        if slot != 1 {
+            return Err(Error::UnexpectedEvent);
+        }
+        self.platform
+            .dma_write(
+                self.dma.device_contexts + 8,
+                &dma.output_context.to_le_bytes(),
+            )
+            .map_err(Error::Platform)?;
+        let completed =
+            self.issue_command(dma.input_context, (ADDRESS_DEVICE << 10) | (1 << 24), ticks)?;
+        if completed != slot {
+            return Err(Error::UnexpectedEvent);
+        }
+        let mut assigned = [0; 4];
+        self.platform
+            .dma_read(dma.output_context + 12, &mut assigned)
+            .map_err(Error::Platform)?;
+        let assigned = u32::from_le_bytes(assigned);
+        let address = (assigned & 0xff) as u8;
+        if assigned >> 27 != 2 || !(1..=127).contains(&address) {
+            return Err(Error::UnexpectedEvent);
+        }
+        Ok(AddressedDevice { port, address })
+    }
+
+    /// Reads one USB device or configuration descriptor from addressed EP0.
+    /// Only full successful transfers are published; no automatic retry.
+    pub fn read_descriptor(
+        &mut self,
+        kind: u8,
+        index: u8,
+        output: &mut [u8],
+        ticks: u32,
+    ) -> Result<(), Error<P::Error>> {
+        if self.faulted {
+            return Err(Error::Faulted);
+        }
+        let (dma, port, position) = self.control.ok_or(Error::InvalidPort)?;
+        if !matches!((kind, index, output.len()), (1, 0, 18) | (2, _, 9..=256)) {
+            return Err(Error::Unsupported);
+        }
+        if position > 12 {
+            return Err(Error::QueueExhausted);
+        }
+        self.faulted = true;
+        self.require_same_connection(port)?;
+        let length = output.len() as u16;
+        let [low, high] = length.to_le_bytes();
+        let setup = u64::from_le_bytes([0x80, 6, index, kind, 0, 0, low, high]);
+        let address = dma.control_ring + u64::from(position) * TRB_BYTES;
+        // Stage the tail first; the setup cycle bit is the publication point.
+        self.write_trb(address + 32, 0, 0, (4 << 10) | (1 << 5) | 1)?;
+        self.write_trb(
+            address + 16,
+            dma.control_buffer,
+            u32::from(length),
+            (3 << 10) | (1 << 16) | (1 << 2) | 1,
+        )?;
+        self.write_trb(address, setup, 8, (2 << 10) | (3 << 16) | (1 << 6) | 1)?;
+        self.platform.publish_dma().map_err(Error::Platform)?;
+        self.write(self.registers.doorbell + 4, 1)?;
+        for _ in 0..ticks {
+            let Some((control, fields)) = self.next_event()? else {
+                self.platform.wait_tick().map_err(Error::Platform)?;
+                continue;
+            };
+            match (control >> 10) & 0x3f {
+                PORT_STATUS_CHANGE => continue,
+                32 if u64::from_le_bytes(fields[..8].try_into().unwrap()) == address + 32
+                    && control >> 24 == 1
+                    && (control >> 16) & 0x1f == 1 =>
+                {
+                    if fields[11] != 1 || fields[8..11] != [0; 3] {
+                        return Err(Error::CommandFailed(fields[11]));
+                    }
+                    let mut staged = [0; 256];
+                    self.platform
+                        .dma_read(dma.control_buffer, &mut staged[..output.len()])
+                        .map_err(Error::Platform)?;
+                    if staged[1] != kind || staged[0] != if kind == 1 { 18 } else { 9 } {
+                        return Err(Error::UnexpectedEvent);
+                    }
+                    self.require_same_connection(port)?;
+                    output.copy_from_slice(&staged[..output.len()]);
+                    self.control = Some((dma, port, position + 3));
+                    self.faulted = false;
+                    return Ok(());
+                }
+                _ => return Err(Error::UnexpectedEvent),
+            }
+        }
+        Err(Error::Timeout)
+    }
+
+    fn require_same_connection(&mut self, port: u8) -> Result<(), Error<P::Error>> {
+        let register = self.registers.operational + 0x400 + u32::from(port - 1) * 0x10;
+        if self.read(register)? & (3 | PORT_CONNECT_CHANGE) != 3 {
+            return Err(Error::InvalidPort);
+        }
+        Ok(())
+    }
+
+    fn write_trb(
+        &mut self,
+        address: u64,
+        parameter: u64,
+        length: u32,
+        control: u32,
+    ) -> Result<(), Error<P::Error>> {
+        let mut fields = [0; 12];
+        fields[..8].copy_from_slice(&parameter.to_le_bytes());
+        fields[8..].copy_from_slice(&length.to_le_bytes());
+        self.platform
+            .dma_write(address, &fields)
+            .map_err(Error::Platform)?;
+        self.platform.publish_dma().map_err(Error::Platform)?;
+        self.platform
+            .dma_write(address + 12, &control.to_le_bytes())
+            .map_err(Error::Platform)
+    }
+
     /// Proves command/event DMA round-trip without addressing any USB device.
     pub fn no_op(&mut self, ticks: u32) -> Result<(), Error<P::Error>> {
         if self.faulted {
             return Err(Error::Faulted);
         }
-        // Do not allow the producer to reach nor wrap past the end of the
-        // command segment. One empty sentinel must remain after the last TRB.
         if self.commands >= 15 {
             return Err(Error::QueueExhausted);
         }
         self.faulted = true;
+        let slot = self.issue_command(0, COMMAND_NOOP << 10, ticks)?;
+        if slot != 0 {
+            return Err(Error::UnexpectedEvent);
+        }
+        self.faulted = false;
+        Ok(())
+    }
+
+    fn issue_command(
+        &mut self,
+        parameter: u64,
+        control: u32,
+        ticks: u32,
+    ) -> Result<u8, Error<P::Error>> {
+        // One empty sentinel remains; no wrap through an uninitialized entry.
+        if self.commands >= 15 {
+            return Err(Error::QueueExhausted);
+        }
         let target = self.dma.command_ring + u64::from(self.commands) * TRB_BYTES;
-        // A fresh slot already has a zero cycle bit. Publish dwords 0–2 before
-        // making the final control dword visible to an already-running xHC.
+        let mut fields = [0; 12];
+        fields[..8].copy_from_slice(&parameter.to_le_bytes());
         self.platform
-            .dma_write(target, &[0; 12])
+            .dma_write(target, &fields)
             .map_err(Error::Platform)?;
         self.platform.publish_dma().map_err(Error::Platform)?;
         self.platform
-            .dma_write(target + 12, &((COMMAND_NOOP << 10) | 1).to_le_bytes())
+            .dma_write(target + 12, &(control | 1).to_le_bytes())
             .map_err(Error::Platform)?;
         self.platform.publish_dma().map_err(Error::Platform)?;
         self.write(self.registers.doorbell, 0)?;
-        let result = self.complete(target, ticks);
-        if result.is_ok() {
-            self.commands += 1;
-            self.faulted = false;
-        }
-        result
+        let slot = self.complete(target, ticks)?;
+        self.commands += 1;
+        Ok(slot)
     }
 
-    fn complete(&mut self, target: u64, ticks: u32) -> Result<(), Error<P::Error>> {
+    fn complete(&mut self, target: u64, ticks: u32) -> Result<u8, Error<P::Error>> {
         for _ in 0..ticks {
-            self.check_status()?;
-            let event = self.dma.event_ring + u64::from(self.events) * TRB_BYTES;
-            let mut control = [0; 4];
-            self.platform
-                .dma_read(event + 12, &mut control)
-                .map_err(Error::Platform)?;
-            let control = u32::from_le_bytes(control);
-            if (control & 1 != 0) != self.event_cycle {
+            let Some((control, fields)) = self.next_event()? else {
                 self.platform.wait_tick().map_err(Error::Platform)?;
                 continue;
-            }
-            self.platform.acquire_dma().map_err(Error::Platform)?;
-            let mut fields = [0; 12];
-            self.platform
-                .dma_read(event, &mut fields)
-                .map_err(Error::Platform)?;
-            self.events += 1;
-            if self.events == 16 {
-                self.events = 0;
-                self.event_cycle = !self.event_cycle;
-            }
-            self.write64(
-                self.registers.runtime + 0x38,
-                (self.dma.event_ring + u64::from(self.events) * TRB_BYTES) | 8,
-            )?;
+            };
             match (control >> 10) & 0x3f {
                 PORT_STATUS_CHANGE => continue,
                 COMMAND_COMPLETION
                     if u64::from_le_bytes(fields[..8].try_into().unwrap()) == target =>
                 {
                     return if fields[11] == 1 {
-                        Ok(())
+                        Ok((control >> 24) as u8)
                     } else {
                         Err(Error::CommandFailed(fields[11]))
                     };
@@ -236,6 +463,34 @@ impl<P: Platform> Controller<P> {
             }
         }
         Err(Error::Timeout)
+    }
+
+    fn next_event(&mut self) -> Result<Option<(u32, [u8; 12])>, Error<P::Error>> {
+        self.check_status()?;
+        let event = self.dma.event_ring + u64::from(self.events) * TRB_BYTES;
+        let mut control = [0; 4];
+        self.platform
+            .dma_read(event + 12, &mut control)
+            .map_err(Error::Platform)?;
+        let control = u32::from_le_bytes(control);
+        if (control & 1 != 0) != self.event_cycle {
+            return Ok(None);
+        }
+        self.platform.acquire_dma().map_err(Error::Platform)?;
+        let mut fields = [0; 12];
+        self.platform
+            .dma_read(event, &mut fields)
+            .map_err(Error::Platform)?;
+        self.events += 1;
+        if self.events == 16 {
+            self.events = 0;
+            self.event_cycle = !self.event_cycle;
+        }
+        self.write64(
+            self.registers.runtime + 0x38,
+            (self.dma.event_ring + u64::from(self.events) * TRB_BYTES) | 8,
+        )?;
+        Ok(Some((control, fields)))
     }
 
     /// Puts the controller back in the halted state. The platform still owns
@@ -304,7 +559,7 @@ fn discover<P: Platform>(platform: &mut P, bar_bytes: u32) -> Result<Registers, 
     let runtime = read(0x18)? & !31;
     let ranges = [
         (0, op + 0x400 + 0x10 * u32::from(ports)),
-        (doorbell, 4),
+        (doorbell, 8),
         (runtime, 0x40),
     ];
     for (i, &(start, size)) in ranges.iter().enumerate() {
@@ -328,6 +583,7 @@ fn discover<P: Platform>(platform: &mut P, bar_bytes: u32) -> Result<Registers, 
                 doorbell,
                 ports,
                 address64: hcc1 & 1 != 0,
+                context_bytes: if hcc1 & 4 != 0 { 64 } else { 32 },
             });
         }
         if ext < 0x20 || ext.checked_add(4).is_none_or(|end| end > bar_bytes) {
@@ -354,6 +610,10 @@ fn validate_dma<E>(dma: DmaLayout, address64: bool) -> Result<(), Error<E>> {
         (dma.event_segments, 16),
         (dma.event_ring, RING_BYTES),
     ];
+    validate_ranges(&ranges, address64)
+}
+
+fn validate_ranges<E>(ranges: &[(u64, u64)], address64: bool) -> Result<(), Error<E>> {
     for (i, &(base, size)) in ranges.iter().enumerate() {
         let end = base.checked_add(size).ok_or(Error::InvalidDma)?;
         if base == 0

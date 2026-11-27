@@ -2881,13 +2881,16 @@ the read-only FAT32 service.
 
 The polled xHCI controller engine validates MMIO and DMA ranges, stops and
 resets a released controller, initializes the command/event rings, reports
-root-port status, and checks exact command completions. It has no native PCI
-or DMA backend yet. The current profile has one slot, no scratchpads, and
+root-port status, and checks exact command completions. It can reset one
+direct high-speed USB 2 port, assign a device address, and read device and
+configuration descriptors on endpoint zero. QEMU verified that sequence
+against a disposable emulated USB disk and identified its bulk IN/OUT pair.
+It has no native PCI or DMA backend yet. The current profile has one slot, no scratchpads, and
 a bounded nonwrapping command queue. The QEMU qtest backend is for testing
 only; it is not an MRML kernel driver or used during boot.
 
 End-to-end native writes are not yet enabled. They still require a native PCI
-assignment and DMA backend, device addressing and endpoint configuration and
+assignment and DMA backend, bulk endpoint configuration, transfer and
 recovery, generation-specific ownership, writable partition admission, and
 wiring to the filesystem operation. First exercise it on a separate expendable QEMU USB disk and
 verify the file from the host. The firmware-loaded bare-metal FAT32 fixture
