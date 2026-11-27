@@ -2870,7 +2870,7 @@ sector on LUN 0. A write succeeds only after WRITE(10), SYNCHRONIZE CACHE(10),
 and matching READ(10). Transport errors, short transfers, invalid status and
 readback mismatches fault the session; no uncertain write is retried. This
 is a protocol implementation tested against scripted bulk transfers, not
-an enabled controller or a storage provider exposed to applications.
+a storage provider exposed to applications.
 
 FAT32 has a separate fixed-size data update primitive for an existing file
 occupying one 512-byte sector. It checks the expected previous bytes and
@@ -2879,10 +2879,17 @@ directory metadata. Its caller must prove exclusive partition access and
 validate the file extent, including absence of aliases. It is not exposed by
 the read-only FAT32 service.
 
-End-to-end native writes are not yet enabled. The remaining path requires
-xHCI enumeration, bounded DMA and endpoint recovery, generation-specific
-ownership and writable partition admission, and wiring to the filesystem
-operation. First exercise it on a separate expendable QEMU USB disk and
+The polled xHCI controller engine validates MMIO and DMA ranges, stops and
+resets a released controller, initializes the command/event rings, reports
+root-port status, and checks exact command completions. It has no native PCI
+or DMA backend yet. The current profile has one slot, no scratchpads, and
+a bounded nonwrapping command queue. The QEMU qtest backend is for testing
+only; it is not an MRML kernel driver or used during boot.
+
+End-to-end native writes are not yet enabled. They still require a native PCI
+assignment and DMA backend, device addressing and endpoint configuration and
+recovery, generation-specific ownership, writable partition admission, and
+wiring to the filesystem operation. First exercise it on a separate expendable QEMU USB disk and
 verify the file from the host. The firmware-loaded bare-metal FAT32 fixture
 does not exercise this path.
 
