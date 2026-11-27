@@ -86,6 +86,16 @@ described a route to DRHD 0xfed91000. The controller reported firmware
 ownership with bus mastering enabled. The application returned to EFI Shell.
 This was a read-only firmware inventory, not native USB I/O or a test of
 controller handoff. That build did not verify the boot-source relationship.
+The subsequent topology-only EFI test (build 659ea7ed) reported
+`shared-usb` on the same Chromebook: the boot stick uses that xHCI
+controller. Another port or USB stick does not prove controller separation.
+
+The signed QEMU/OVMF negative control boots the same sealed test release
+from a read-only virtual disk attached directly to the sole xHCI candidate.
+The host verifies the attachment and that firmware read the boot backend
+with zero completed writes. With no sealed QEMU fixture marker the loader
+rejects native activation; the host never releases the native probe. This
+tests refusal, not a successful transition from firmware-owned USB.
 
 ### Diagnose a return to firmware
 

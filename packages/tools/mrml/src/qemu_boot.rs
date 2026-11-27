@@ -91,6 +91,7 @@ pub(super) fn run_qemu_with_q35_evidence(args: &[String]) -> Result<(), String> 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Q35FixtureCase {
     NoMarker,
+    SharedBootNoMarker,
     WrongRelease,
     ValidRelease,
     IsolatedWrongRelease,
@@ -322,6 +323,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         map_only_marker,
     } = options;
     let isolated = map_only_marker.is_some_and(Q35FixtureCase::isolated);
+    let shared_boot = map_only_marker == Some(Q35FixtureCase::SharedBootNoMarker);
     let machine = if isolated {
         format!("q35,accel={accelerator},default-bus-bypass-iommu=on,sata=off")
     } else {
@@ -383,7 +385,10 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 "qemu-xhci,bus=pcie.0,addr=0x1b,id=mrml_probe_xhci",
             ]);
         }
-        if case != Q35FixtureCase::NoMarker {
+        if !matches!(
+            case,
+            Q35FixtureCase::NoMarker | Q35FixtureCase::SharedBootNoMarker
+        ) {
             command.args([
                 "-smp",
                 "1",
@@ -403,21 +408,27 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             command.args(["-acpitable", "file=q35-mmio.acpi"]);
         }
     }
-    let (boot_xhci, boot_disk) = if map_only_marker.is_some() {
+    let (boot_xhci, boot_disk) = if shared_boot {
+        (
+            None,
+            "usb-storage,bus=mrml_probe_xhci.0,drive=esp,id=mrml_shared_boot,removable=on,bootindex=1",
+        )
+    } else if map_only_marker.is_some() {
         (
             if isolated {
-                "qemu-xhci,bus=pcie.0,addr=0x5,id=mrml_boot_xhci"
+                Some("qemu-xhci,bus=pcie.0,addr=0x5,id=mrml_boot_xhci")
             } else {
-                "qemu-xhci,id=mrml_boot_xhci"
+                Some("qemu-xhci,id=mrml_boot_xhci")
             },
             "usb-storage,bus=mrml_boot_xhci.0,drive=esp,removable=on,bootindex=1",
         )
     } else {
         (
-            "qemu-xhci",
+            Some("qemu-xhci"),
             "usb-storage,drive=esp,removable=on,bootindex=1",
         )
     };
+    let esp_mode = if shared_boot { ",readonly=on" } else { "" };
     let mut child = command
         .args(["-machine", &machine, "-m", "512M", "-display", "none"])
         .args(["-serial", "none", "-monitor", "none", "-no-reboot"])
@@ -426,8 +437,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         .arg("-drive")
         .arg(format!("if=pflash,format=raw,file={}", vars.display()))
         .arg("-drive")
-        .arg(format!("if=none,id=esp,format=raw,file={image}"))
-        .args(["-device", boot_xhci])
+        .arg(format!("if=none,id=esp,format=raw,file={image}{esp_mode}"))
+        .args(boot_xhci.into_iter().flat_map(|arg| ["-device", arg]))
         .args(["-device", boot_disk])
         .args([
             "-device",
@@ -455,7 +466,9 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         .map_err(|error| format!("PackageQemuLaunchError {{ detail: {error} }}"))?;
     let start = Instant::now();
     let release = map_only_marker.and_then(|case| match case {
-        Q35FixtureCase::NoMarker | Q35FixtureCase::StorageNoRemapper => None,
+        Q35FixtureCase::NoMarker
+        | Q35FixtureCase::SharedBootNoMarker
+        | Q35FixtureCase::StorageNoRemapper => None,
         Q35FixtureCase::WrongRelease
         | Q35FixtureCase::IsolatedWrongRelease
         | Q35FixtureCase::ShutdownWrongRelease
@@ -550,6 +563,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 let evidence = (verify_q35 && !released).then(|| {
                     if no_remapper {
                         crate::qemu_mmio::verify_paused_no_remapper(&mut child, trace)
+                    } else if shared_boot {
+                        crate::qemu_mmio::verify_paused_shared_boot(&mut child, trace)
                     } else {
                         crate::qemu_mmio::verify_paused_q35_resources(&mut child)
                     }

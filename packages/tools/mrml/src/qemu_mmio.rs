@@ -34,6 +34,13 @@ pub(super) fn verify_paused_no_remapper(
     inspect_q35(child, None, true, Some((trace, &[])), None).map(|_| ())
 }
 
+pub(super) fn verify_paused_shared_boot(
+    child: &mut Child,
+    trace: &std::path::Path,
+) -> Result<(), String> {
+    inspect_q35(child, None, false, Some((trace, &[])), None).map(|_| ())
+}
+
 pub(super) fn release_q35_fixture(
     child: &mut Child,
     release: u8,
@@ -101,6 +108,11 @@ fn inspect_qmp(
     if release.is_none()
         && let Some((trace, _)) = post
     {
+        if !isolated {
+            validate(&map)?;
+            verify_shared_boot(stdin, reader)?;
+            return Ok(None);
+        }
         validate_resources(&map, false)?;
         verify_scratch_state(stdin, reader, trace, false, false)?;
         println!(
@@ -685,11 +697,69 @@ fn inspect_command_completion(
     );
     Ok(())
 }
+fn shared_boot_topology(tree: &str) -> bool {
+    let mut bus = None;
+    let mut buses = 0;
+    let mut disks = 0;
+    let mut matched = false;
+    for line in tree.lines() {
+        let content = line.trim_start();
+        let indent = line.len() - content.len();
+        if bus.is_some_and(|depth| indent <= depth) {
+            bus = None;
+        }
+        if content == "bus: mrml_probe_xhci.0" {
+            buses += 1;
+            bus = Some(indent);
+        }
+        if content == "dev: usb-storage, id \"mrml_shared_boot\"" {
+            disks += 1;
+            matched = bus.is_some_and(|depth| indent == depth + 2);
+        }
+    }
+    buses == 1 && disks == 1 && matched
+}
+
+fn verify_shared_boot(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+) -> Result<(), String> {
+    qmp_write(
+        stdin,
+        "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info qtree\"},\"id\":150}\n",
+    )?;
+    if !shared_boot_topology(&read_monitor(&mut *reader, 150)?) {
+        return Err(
+            "QEMU did not attach the firmware boot disk directly to the probe controller".into(),
+        );
+    }
+    qmp_write(
+        stdin,
+        "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info blockstats\"},\"id\":151}\n",
+    )?;
+    let stats = read_monitor(reader, 151)?;
+    let [read_bytes, reads, write_bytes, writes] =
+        named_block_stats(&stats, "esp:").map_err(|e| format!("{e}: {stats}"))?;
+    if read_bytes == 0 || reads == 0 || write_bytes != 0 || writes != 0 {
+        return Err(format!(
+            "unexpected shared boot disk counters: {read_bytes}/{reads} reads, {write_bytes}/{writes} writes"
+        ));
+    }
+    println!(
+        "q35-usb-shared-boot|status=PASS|firmware_disk_read=true|loader_rejected=true|native_release=false|boot_backend_writes=0"
+    );
+    Ok(())
+}
+
 fn scratch_stats(stats: &str) -> Result<[u64; 4], String> {
+    named_block_stats(stats, "mrml_read:")
+}
+
+fn named_block_stats(stats: &str, prefix: &str) -> Result<[u64; 4], String> {
     let stats = stats.replace("\r\n", "\n");
     let mut entries = stats
         .split("\n\n")
-        .filter_map(|entry| entry.trim().strip_prefix("mrml_read:"));
+        .filter_map(|entry| entry.trim().strip_prefix(prefix));
     let (entry, structured) = match entries.next() {
         Some(entry) if entry.lines().any(|row| row.starts_with("Read:")) => {
             if entries.next().is_some() {
@@ -700,7 +770,7 @@ fn scratch_stats(stats: &str) -> Result<[u64; 4], String> {
         _ => {
             let mut lines = stats
                 .lines()
-                .filter_map(|line| line.trim().strip_prefix("mrml_read:"));
+                .filter_map(|line| line.trim().strip_prefix(prefix));
             let entry = lines.next().ok_or("missing named scratch statistics")?;
             if lines.next().is_some() {
                 return Err("duplicate scratch statistics".into());
@@ -1330,6 +1400,32 @@ fn validate_resources(map: &str, expect_drhd: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_boot_requires_unique_direct_attachment_and_named_stats() {
+        let tree = concat!(
+            "  bus: mrml_probe_xhci.0\n",
+            "    dev: usb-storage, id \"mrml_shared_boot\"\n",
+            "      drive = \"esp\"\n",
+            "  bus: usb-other.0\n",
+        );
+        assert!(shared_boot_topology(tree));
+        assert!(!shared_boot_topology(
+            &tree.replace("mrml_probe_xhci.0", "different.0")
+        ));
+        assert!(!shared_boot_topology(
+            &tree.replace("    dev:", "      dev:")
+        ));
+        assert!(!shared_boot_topology(&format!("{tree}{tree}")));
+        assert_eq!(
+            named_block_stats(
+                "esp: rd_bytes=512 rd_operations=1 wr_bytes=0 wr_operations=0\n",
+                "esp:"
+            )
+            .unwrap(),
+            [512, 1, 0, 0]
+        );
+    }
 
     #[test]
     fn vtd_trace_requires_fresh_exact_requester_and_nonidentity_pages() {
