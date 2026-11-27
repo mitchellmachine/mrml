@@ -493,6 +493,41 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
         }
     }
 
+    /// Bind a non-identity boot mapping to this unit's exact active root.
+    ///
+    /// # Safety
+    /// The exclusive WB slice must cover exactly the six consecutive pinned
+    /// physical frames at `root`, already synchronized before activation.
+    /// Keep the mapping, cache type and CPU geometry stable; serialize root
+    /// changes and all table writers and exclude hardware A/D writes.
+    pub unsafe fn borrow_boot_tables<'a>(
+        &mut self,
+        route: VtdRequesterRoute,
+        root: PhysAddr,
+        backing: &'a mut [[u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES],
+    ) -> Result<BootVtdTables<'a>, VtdBindingError> {
+        if !verified_unit_matches_route(&self.verified, route) {
+            return Err(VtdBindingError::UnitSubstitution);
+        }
+        if root.get()
+            != self
+                .invalidator
+                .active_legacy_root()
+                .map_err(VtdBindingError::Unit)?
+        {
+            return Err(VtdBindingError::TableSubstitution);
+        }
+        local_clflush_line_bytes()
+            .ok_or(VtdBindingError::Table(VtdTableError::WritebackUnavailable))?;
+        Ok(BootVtdTables {
+            provenance: VtdTableProvenance {
+                register_base: route.register_base(),
+                root_table: root,
+            },
+            backing,
+        })
+    }
+
     /// Samples the active root through this exact unit and creates the exclusive
     /// direct-map view that coherent binding will independently revalidate.
     ///
@@ -794,6 +829,82 @@ pub unsafe trait VtdTableMemory {
     /// all competing table access serialized.
     unsafe fn leaf_mut(&mut self, table: PhysAddr, index: usize)
     -> Result<&mut u64, VtdTableError>;
+}
+
+/// Exclusive bounded view over the exact six WB frames of a prepared
+/// boot hierarchy. Physical addresses are translated only within this slice.
+pub struct BootVtdTables<'a> {
+    provenance: VtdTableProvenance,
+    backing: &'a mut [[u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES],
+}
+
+impl BootVtdTables<'_> {
+    fn page(&self, table: PhysAddr) -> Result<usize, VtdTableError> {
+        let offset = table
+            .get()
+            .checked_sub(self.provenance.root_table.get())
+            .filter(|offset| offset.is_multiple_of(PAGE_SIZE))
+            .ok_or(VtdTableError::Storage)?;
+        let page = offset / PAGE_SIZE;
+        if page >= SINGLE_REQUESTER_VTD_TABLE_PAGES as u64 {
+            return Err(VtdTableError::Storage);
+        }
+        Ok(page as usize)
+    }
+}
+
+// SAFETY: construction binds the active unit and exact pinned frames. The
+// unique view returns strictly bounded entries without identity dereferences,
+// and writes back only the modified leaf through the same WB mapping.
+unsafe impl VtdTableMemory for BootVtdTables<'_> {
+    fn provenance(&self) -> VtdTableProvenance {
+        self.provenance
+    }
+
+    fn supports_explicit_writeback(&self) -> bool {
+        true
+    }
+
+    fn write_back_leaf(&mut self, table: PhysAddr, index: usize) -> Result<(), VtdTableError> {
+        let page = self.page(table)?;
+        let leaf = self.backing[page]
+            .get(index)
+            .ok_or(VtdTableError::Storage)?;
+        // SAFETY: the backing contract establishes WB/pins/exclusivity and
+        // fixed CPU geometry; this is exactly the just-modified leaf.
+        unsafe { write_back_vtd_table_words(core::slice::from_ref(leaf)) }
+    }
+
+    fn read128(&self, table: PhysAddr, index: usize) -> Result<[u64; 2], VtdTableError> {
+        if index >= 256 {
+            return Err(VtdTableError::Storage);
+        }
+        Ok([
+            self.read64(table, index * 2)?,
+            self.read64(table, index * 2 + 1)?,
+        ])
+    }
+
+    fn read64(&self, table: PhysAddr, index: usize) -> Result<u64, VtdTableError> {
+        let page = self.page(table)?;
+        let leaf = self.backing[page]
+            .get(index)
+            .ok_or(VtdTableError::Storage)?;
+        // SAFETY: the exact entry is pinned with no concurrent writer,
+        // including hardware A/D writes, for the lifetime of this view.
+        Ok(unsafe { core::ptr::from_ref(leaf).read_volatile() })
+    }
+
+    unsafe fn leaf_mut(
+        &mut self,
+        table: PhysAddr,
+        index: usize,
+    ) -> Result<&mut u64, VtdTableError> {
+        let page = self.page(table)?;
+        self.backing[page]
+            .get_mut(index)
+            .ok_or(VtdTableError::Storage)
+    }
 }
 
 /// Identity-mapped physical table access for the bare-metal monitor.
@@ -1255,6 +1366,32 @@ fn checked_table(address: u64) -> Result<PhysAddr, VtdTableError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn boot_table_view_cannot_read_or_modify_outside_six_frames() {
+        let root = PhysAddr::new(0x400000).unwrap();
+        let mut backing = [[0u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES];
+        let mut view = BootVtdTables {
+            provenance: VtdTableProvenance {
+                register_base: PhysAddr::new(0xfed90000).unwrap(),
+                root_table: root,
+            },
+            backing: &mut backing,
+        };
+        let last = PhysAddr::new(root.get() + 5 * PAGE_SIZE).unwrap();
+        let below = PhysAddr::new(root.get() - PAGE_SIZE).unwrap();
+        let past = PhysAddr::new(root.get() + 6 * PAGE_SIZE).unwrap();
+        assert_eq!(view.read64(last, 511), Ok(0));
+        assert_eq!(view.read128(last, 256), Err(VtdTableError::Storage));
+        assert_eq!(view.read64(below, 0), Err(VtdTableError::Storage));
+        assert_eq!(view.read64(last, 512), Err(VtdTableError::Storage));
+        // SAFETY: the test owns this local backing; there is no live device.
+        unsafe {
+            assert_eq!(view.leaf_mut(past, 0), Err(VtdTableError::Storage));
+            *view.leaf_mut(last, 511).unwrap() = 0x1234;
+        }
+        assert_eq!(view.read128(last, 255), Ok([0, 0x1234]));
+    }
+
     use super::super::DmaIsolation;
     use super::super::VirtAddr;
     use super::super::platform_mmio::{verified_vtd_for_test, verified_vtd_mapping_for_test};

@@ -498,9 +498,37 @@ fn fixture_activate(
                         let token = verify_q35_activation_mmio(active, dmar).ok()?;
                         let mut unit = VerifiedVtdUnit::from_native(token, 1024).ok()?;
                         unit.activate_cold_legacy_root(prepared).ok()?;
+                        let backing = &mut *(dma.mapping().virtual_start().get()
+                            as *mut [[u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES]);
+                        let mut tables = unit.borrow_boot_tables(route, root, backing).ok()?;
+                        unit.install_routed_dma_aperture(&mut tables, aperture)
+                            .ok()?;
+                        unit.verify_routed_dma_aperture(
+                            &tables,
+                            route,
+                            aperture.hardware_domain,
+                            aperture.device_base,
+                            aperture.physical_base,
+                            aperture.pages,
+                        )
+                        .ok()?;
+                        trace(0xc3);
+                        // Keep the window pinned, with BME still off, until
+                        // the host independently observes the present leaf.
+                        for _ in 0..100_000_000 {
+                            match fixture_scratch() {
+                                0xb8 => core::hint::spin_loop(),
+                                0xb9 => {
+                                    unit.revoke_routed_dma_aperture(&mut tables, aperture)
+                                        .ok()?;
+                                    trace(0xc5);
+                                    return Some(());
+                                }
+                                _ => return None,
+                            }
+                        }
                     }
-                    trace(0xc3);
-                    return Some(());
+                    return None;
                 }
                 _ => {
                     trace(0xc4);

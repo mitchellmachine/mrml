@@ -88,7 +88,7 @@ pub use vtd::{
     VtdInvalidator, VtdRegisterIo, VtdRegisterLayout, VtdRequesterRoute,
 };
 pub use vtd_tables::{
-    DirectVtdTables, SINGLE_REQUESTER_VTD_TABLE_PAGES, VerifiedVtdUnit, VtdApertureInstallError, VtdApertureRevokeError,
+    BootVtdTables, DirectVtdTables, SINGLE_REQUESTER_VTD_TABLE_PAGES, VerifiedVtdUnit, VtdApertureInstallError, VtdApertureRevokeError,
     PreparedColdVtdRoot, VtdAuthorizedDmaSet, VtdAuthorizedRoutes, VtdBindingError, VtdDmaAperture, VtdDomainAuthority,
     VtdDomainError, VtdIdentityLeaf, VtdSetBindingError, VtdTableError, VtdTableMemory,
     VtdTableProvenance, bind_legacy_identity_leaf, bind_routed_dma_isolation, bind_routed_dma_set,

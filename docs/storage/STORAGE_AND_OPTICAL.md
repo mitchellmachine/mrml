@@ -3212,6 +3212,15 @@ A conflicting type, malformed mask, disabled cache or uncovered page stops
 the probe. This read-only check validates a prerequisite of table writeback;
 it does not activate translation or authorize DMA.
 
+The live cold-profile test then installs one read/write DMA leaf through a
+bounded view of the six high-mapped frames, with no identity-map fallback.
+The same paused monitor checks the leaf points to the exact first payload
+page and that all other leaves are absent. A third release authorizes
+withdrawal only. The guest flushes the cleared permissions and waits for
+draining invalidation; the host confirms the leaf is non-present, the root
+is unchanged, and bus mastering is still off. The boot allocation remains
+pinned; no hardware or data transfer is implied.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

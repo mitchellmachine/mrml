@@ -92,7 +92,7 @@ fn inspect_qmp(
     )?;
     let map = read_monitor(&mut *reader, 73)?;
     validate(&map)?;
-    let bar = if matches!(release, Some(0xa6 | 0xa7 | 0xa8)) {
+    let bar = if matches!(release, Some(0xa6..=0xa8)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
         }
@@ -146,7 +146,7 @@ fn inspect_qmp(
     }
     if let (Some(before), Some((path, prefix)), Some(state)) = (before, post, bar) {
         if let Some(allow) = cold {
-            inspect_cold_activation(stdin, reader, &map, path, prefix, state, before, allow)?;
+            inspect_cold_activation(stdin, reader, &map, (path, prefix), state, before, allow)?;
             return Ok(bar);
         }
         await_shutdown_report(path, prefix, state)?;
@@ -194,12 +194,12 @@ fn wait_cold_trace(
     path: &std::path::Path,
     prefix: &[u8],
     state: FixtureState,
-    stage: Option<u8>,
+    stages: &[u8],
 ) -> Result<(u64, String), String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     let report_end = prefix.len() + 66;
     let ready = report_end + 10;
-    let target = ready + usize::from(stage.is_some());
+    let target = ready + stages.len();
     while std::time::Instant::now() < deadline {
         let mut bytes = Vec::new();
         std::fs::File::open(path)
@@ -215,7 +215,7 @@ fn wait_cold_trace(
         if bytes.len() != target
             || bytes[report_end] != 0xc1
             || bytes[ready - 1] != 0xc2
-            || stage.is_some_and(|value| bytes[ready] != value)
+            || &bytes[ready..] != stages
         {
             return Err("unexpected signed cold activation trace".into());
         }
@@ -253,7 +253,7 @@ fn verify_root_ram(map: &str, root: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn verify_root_page(text: &str, root: u64, page: u64) -> Result<(), String> {
+fn verify_root_page(text: &str, root: u64, page: u64, leaf: u64) -> Result<(), String> {
     let address = root + page * 4096;
     let mut index = 0u64;
     for line in text.lines() {
@@ -271,6 +271,7 @@ fn verify_root_page(text: &str, root: u64, page: u64) -> Result<(), String> {
                 (0, 130) | (1, 0) => (address + 4096) | 1,
                 (1, 1) => 0x102,
                 (2 | 3, 0) | (4, 1) => (address + 4096) | 3,
+                (5, 0) => leaf,
                 _ => 0,
             };
             if actual != expected {
@@ -286,6 +287,22 @@ fn verify_root_page(text: &str, root: u64, page: u64) -> Result<(), String> {
         .ok_or("short cold table dump".into())
 }
 
+fn check_live_leaf(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    root: u64,
+    leaf: u64,
+) -> Result<(), String> {
+    qmp_write(
+        stdin,
+        &format!(
+            "{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"xp /512gx {:#x}\"}},\"id\":112}}\n",
+            root + 5 * 4096,
+        ),
+    )?;
+    verify_root_page(&read_monitor(reader, 112)?, root, 5, leaf)
+}
+
 fn read_root_pointer(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
@@ -299,13 +316,13 @@ fn inspect_cold_activation(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
     map: &str,
-    path: &std::path::Path,
-    prefix: &[u8],
+    trace: (&std::path::Path, &[u8]),
     state: FixtureState,
     firmware: ShutdownSample,
     allow: bool,
 ) -> Result<(), String> {
-    let (root, _) = wait_cold_trace(path, prefix, state, None)?;
+    let (path, prefix) = trace;
+    let (root, _) = wait_cold_trace(path, prefix, state, &[])?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 94}")?;
     let shutdown = ShutdownSample {
@@ -329,7 +346,7 @@ fn inspect_cold_activation(
                 root + page * 4096,
             ),
         )?;
-        verify_root_page(&read_monitor(&mut *reader, 105)?, root, page)?;
+        verify_root_page(&read_monitor(&mut *reader, 105)?, root, page, 0)?;
     }
     let byte = if allow { 0xb8 } else { 0x5b };
     qmp_write(
@@ -342,7 +359,7 @@ fn inspect_cold_activation(
     qmp_write(stdin, "{\"execute\":\"cont\",\"id\":107}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 107}")?;
     let (after_root, _) =
-        wait_cold_trace(path, prefix, state, Some(if allow { 0xc3 } else { 0xc4 }))?;
+        wait_cold_trace(path, prefix, state, if allow { &[0xc3] } else { &[0xc4] })?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":108}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 108}")?;
     let expected = ShutdownSample {
@@ -357,8 +374,31 @@ fn inspect_cold_activation(
     {
         return Err("paused QEMU did not confirm the exact cold remapper state".into());
     }
+    if allow {
+        let payload = root + 6 * 4096;
+        check_live_leaf(stdin, reader, root, payload | 3)?;
+        qmp_write(
+            stdin,
+            "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"o /b 0x2ff 0xb9\"},\"id\":109}\n",
+        )?;
+        ack(reader, "{\"return\": \"\", \"id\": 109}")?;
+        qmp_write(stdin, "{\"execute\":\"cont\",\"id\":110}\n")?;
+        ack(reader, "{\"return\": {}, \"id\": 110}")?;
+        let (revoked_root, _) = wait_cold_trace(path, prefix, state, &[0xc3, 0xc5])?;
+        qmp_write(stdin, "{\"execute\":\"stop\",\"id\":111}\n")?;
+        ack(reader, "{\"return\": {}, \"id\": 111}")?;
+        if revoked_root != root
+            || sample_shutdown(stdin, reader, 95)? != expected
+            || sample_xhci_state(stdin, reader, state.bar)? != state
+            || read_root_pointer(stdin, reader)? != root
+            || read_model_dword(stdin, reader, 0xfed9_0034, 104)? != 0
+        {
+            return Err("unexpected remapper or PCI state after DMA leaf withdrawal".into());
+        }
+        check_live_leaf(stdin, reader, root, payload)?;
+    }
     println!(
-        "q35-vtd-cold|status=PASS|activated={allow}|root={root:#x}|no_dma_leaves=true|bme=false"
+        "q35-vtd-cold|status=PASS|activated={allow}|root={root:#x}|aperture_installed_and_revoked={allow}|no_present_dma_leaves=true|bme=false"
     );
     Ok(())
 }
@@ -912,17 +952,18 @@ mod tests {
         for word in 0..512 {
             writeln!(dump, "{:08x}: 0x0000000000000000", 0x405000 + word * 8).unwrap();
         }
-        assert!(verify_root_page(&dump, 0x400000, 5).is_ok());
+        assert!(verify_root_page(&dump, 0x400000, 5, 0).is_ok());
         assert!(
             verify_root_page(
                 &dump.replacen("0000000000000000", "0000000000406003", 1),
                 0x400000,
-                5
+                5,
+                0
             )
             .is_err()
         );
-        assert!(verify_root_page(&dump[1..], 0x400000, 5).is_err());
-        assert!(verify_root_page(&dump[..dump.len() - 4], 0x400000, 5).is_err());
+        assert!(verify_root_page(&dump[1..], 0x400000, 5, 0).is_err());
+        assert!(verify_root_page(&dump[..dump.len() - 4], 0x400000, 5, 0).is_err());
     }
 
     #[test]
@@ -949,7 +990,7 @@ mod tests {
     #[test]
     fn qmp_framing_rejects_wrong_id_errors_and_missing_newline() {
         let line = concat!(r#"{"return": "AS \"memory\"\r\n", "id": 73}"#, "\n").as_bytes();
-        assert_eq!(read_monitor(&line[..], 73).unwrap(), "AS \"memory\"\r\n");
+        assert_eq!(read_monitor(line, 73).unwrap(), "AS \"memory\"\r\n");
         assert!(read_monitor(&line[..line.len() - 1], 73).is_err());
         assert!(read_monitor(&b"{\"return\": \"x\", \"id\": 61}\n"[..], 73).is_err());
         assert!(read_monitor(&b"{\"error\": {}}\n"[..], 73).is_err());
