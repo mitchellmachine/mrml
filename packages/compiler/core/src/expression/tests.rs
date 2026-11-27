@@ -82,6 +82,18 @@ mod tests {
     }
 
     #[test]
+    fn requires_lowercase_integer_base_prefixes() {
+        for source in ["0x2A_u8", "0o52_u8", "0b10_1010u8"] {
+            assert_eq!(evaluate(source), Ok(42));
+        }
+        for source in ["1 + 0X2A", "1 + 0O52", "1 + 0B101010"] {
+            let error = ExpressionParser::<4>::new(source).parse().unwrap_err();
+            assert_eq!(error.kind, ExpressionErrorKind::InvalidIntegerRadixPrefix);
+            assert_eq!(error.span, Span { start: 4, end: 6 });
+        }
+    }
+
+    #[test]
     fn unicode_character_escapes_count_hex_digits_and_validate_scalars() {
         for (source, scalar) in [
             (r"'\u{41}'", 0x41),

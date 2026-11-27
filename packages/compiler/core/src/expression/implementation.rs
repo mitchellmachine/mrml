@@ -1039,6 +1039,7 @@ pub enum ExpressionErrorKind {
     InconsistentMatchBindings,
     TrailingToken,
     InvalidInteger,
+    InvalidIntegerRadixPrefix,
     InvalidIntegerSuffix,
     InvalidTupleField,
     InvalidCharacter,
@@ -6448,9 +6449,18 @@ fn binary_operator(text: &str) -> Option<(BinaryOperator, u8)> {
 fn decode_integer(token: Token<'_>) -> Result<IntegerLiteral<'_>, ExpressionError> {
     let bytes = token.text.as_bytes();
     let (radix, mut position) = match bytes {
-        [b'0', b'x' | b'X', ..] => (16u32, 2usize),
-        [b'0', b'o' | b'O', ..] => (8, 2),
-        [b'0', b'b' | b'B', ..] => (2, 2),
+        [b'0', b'x', ..] => (16u32, 2usize),
+        [b'0', b'o', ..] => (8, 2),
+        [b'0', b'b', ..] => (2, 2),
+        [b'0', b'X' | b'O' | b'B', ..] => {
+            return Err(ExpressionError {
+                kind: ExpressionErrorKind::InvalidIntegerRadixPrefix,
+                span: Span {
+                    start: token.span.start,
+                    end: token.span.start + 2,
+                },
+            });
+        }
         _ => (10, 0),
     };
     let mut value = 0u128;

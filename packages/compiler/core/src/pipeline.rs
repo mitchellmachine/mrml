@@ -186,6 +186,12 @@ impl CompileError {
                 Some(message) => message,
                 None => "source parsing failed",
             },
+            CompileErrorKind::Semantic(SemanticErrorKind::Expression(
+                crate::ExpressionErrorKind::InvalidIntegerRadixPrefix,
+            ))
+            | CompileErrorKind::Codegen(CodegenErrorKind::Expression(
+                crate::ExpressionErrorKind::InvalidIntegerRadixPrefix,
+            )) => "use a lowercase integer base prefix: `0x`, `0o`, or `0b`",
             CompileErrorKind::Semantic(_) => "semantic analysis failed",
             CompileErrorKind::TraitDeclaration(_) => "trait declaration admission failed",
             CompileErrorKind::TraitImplementation(_) => "trait implementation admission failed",
@@ -415,6 +421,22 @@ mod tests {
             format,
             TargetLayout::X86_64,
         )
+    }
+
+    #[test]
+    fn uppercase_integer_base_prefixes_report_how_to_fix_the_literal() {
+        for source in [
+            "const VALUE: i32 = 0X2A; #[unsafe(no_mangle)] pub extern \"C\" fn answer() -> i32 { VALUE }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> i32 { 0X2A }",
+        ] {
+            let error = compile(source, "answer", ObjectFormat::Elf64).unwrap_err();
+            let span = error.span.unwrap();
+            assert_eq!(&source[span.start..span.end], "0X");
+            assert_eq!(
+                error.message(),
+                "use a lowercase integer base prefix: `0x`, `0o`, or `0b`"
+            );
+        }
     }
 
     #[test]
