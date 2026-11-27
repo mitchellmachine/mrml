@@ -54,8 +54,20 @@ Boot, package verification, or TPM policy.
 If the shell prints no MRML line at all, record the shell's own status;
 firmware may have rejected the executable before entering it, or provided
 no working firmware text console. After the last memory-map message the
-loader stops using the firmware console; the kernel's framebuffer result
-is then the success criterion.
+loader stops using the firmware console. Record the last label drawn directly
+to the framebuffer:
+
+- `MRML EFI END START`: the loader is about to get its final memory map and
+  exit boot services. `MRML EFI END PASS` confirms firmware exit returned success.
+- `MRML MAP PASS` and `MRML MADT PASS`: the loader normalized the memory map
+  and copied the ACPI interrupt-controller table, respectively.
+- `MRML KERNEL START`: the handoff is encoded and the loader is about to change
+  address spaces. `MRML KERNEL ENTRY` is drawn by the diagnostic kernel after
+  validating the handoff and building its early context.
+- `MRML SMP START`: the diagnostic kernel is starting the secondary CPUs.
+  `MRML SMP READY`: that stage is complete or unnecessary on a single core.
+
+Only the terminal `FAT32 RESTART: PASS - 28 BYTES` label confirms the test.
 
 ### Create and write the diagnostic USB image
 

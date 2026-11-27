@@ -275,6 +275,45 @@ mod tests {
     }
 
     #[test]
+    fn handoff_stage_labels_render_at_small_framebuffer_size() {
+        let info = FramebufferInfo::new(
+            0x1000,
+            38_400,
+            200,
+            48,
+            200,
+            PixelFormat::BlueGreenRedReserved,
+        )
+        .unwrap();
+        let labels: &[&[u8]] = &[
+            b"MRML EFI END START",
+            b"MRML EFI END PASS",
+            b"MRML MAP PASS",
+            b"MRML MADT PASS",
+            b"MRML KERNEL START",
+            b"MRML KERNEL ENTRY",
+            b"MRML SMP START",
+            b"MRML SMP READY",
+        ];
+        let mut bytes = [0; 38_400];
+        for label in labels {
+            bytes.fill(0);
+            FramebufferSurface::new(info, &mut bytes)
+                .unwrap()
+                .draw_boot_label(
+                    label,
+                    Color {
+                        red: 255,
+                        green: 255,
+                        blue: 255,
+                    },
+                )
+                .unwrap();
+            assert_eq!(&bytes[(24 * 200 + 16) * 4..][..4], &[255, 255, 255, 0]);
+        }
+    }
+
+    #[test]
     fn ready_text_requires_room_and_respects_padding() {
         let info = FramebufferInfo::new(
             0x1000,

@@ -143,7 +143,7 @@ pub(super) fn finish(pass: bool) {
     }
 }
 
-fn paint(info: FramebufferInfo, label: &[u8]) -> bool {
+pub(super) fn paint(info: FramebufferInfo, label: &[u8]) -> bool {
     // A complete one-pixel-scale label must fit even in a firmware fallback mode.
     if label.is_empty()
         || label.len() > 40

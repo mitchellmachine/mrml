@@ -4000,6 +4000,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     let early = EarlyKernelContext::from_handoff(&handoff, &regions[..region_count])
         .unwrap_or_else(|_| halt());
+    #[cfg(feature = "uefi-fat32-restart-probe")]
+    let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML KERNEL ENTRY");
     #[cfg(feature = "certificate-service-probe")]
     let _ = &early;
     #[cfg(feature = "pci-configuration-probe")]
@@ -4033,6 +4035,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 }
                 if topology.len() > 1 {
                     smp_trace(0x04);
+                    #[cfg(feature = "uefi-fat32-restart-probe")]
+                    let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML SMP START");
                     unsafe { start_application_processors(&topology, &handoff) };
                     smp_trace(0x05);
                     #[cfg(feature = "smp-ipi-probe")]
@@ -4065,6 +4069,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     #[cfg(feature = "service-probe")]
     unsafe {
+        #[cfg(feature = "uefi-fat32-restart-probe")]
+        let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML SMP READY");
         run_service_probe(&handoff, |handoff| {
             let _ = handoff;
             #[cfg(feature = "fat32-ready-probe")]

@@ -8,13 +8,13 @@ use core::fmt::{self, Write as _};
 use mrml_crypto::Sha3_512;
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
-    ArtifactKind, BOOTSTRAP_STATE_BYTES, BootIsolationOverride, BuildReceipt, FramebufferInfo,
-    InstalledRecoveryBootIdentity, InstalledRecoverySataRoute, MAX_CUDA_KERNEL_BUNDLE_BYTES,
-    MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
-    MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MemoryKind, MemoryRegion, MonotonicStateStore,
-    PeImage, PendingBootRelease, PhysAddr, PixelFormat, RELEASE_MANIFEST_BYTES,
-    RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact,
-    TrustRoot,
+    ArtifactKind, BOOTSTRAP_STATE_BYTES, BootIsolationOverride, BuildReceipt, Color,
+    FramebufferInfo, FramebufferSurface, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
+    MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES,
+    MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES,
+    MemoryKind, MemoryRegion, MonotonicStateStore, PeImage, PendingBootRelease, PhysAddr,
+    PixelFormat, RELEASE_MANIFEST_BYTES, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    ServiceLaunch, SignedArtifact, TrustRoot,
     arch::x86_64::{
         AcpiMemory, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions,
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
@@ -1071,7 +1071,9 @@ unsafe fn boot(
 
     loader_trace(0xa8);
     trace.at("final memory map; console ends at ExitBootServices");
+    paint_boot_stage(framebuffer, b"MRML EFI END START");
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services, trace) }?;
+    paint_boot_stage(framebuffer, b"MRML EFI END PASS");
     unsafe {
         launch_after_exit(
             map_size,
@@ -1140,6 +1142,7 @@ unsafe fn launch_after_exit(
         halt();
     }
     loader_trace(0xb1);
+    paint_boot_stage(framebuffer, b"MRML MAP PASS");
     let mut acpi_memory = FirmwareAcpiMemory {
         regions: &regions[..region_count],
     };
@@ -1149,6 +1152,7 @@ unsafe fn launch_after_exit(
         Err(_) => halt(),
     };
     loader_trace(0xb2);
+    paint_boot_stage(framebuffer, b"MRML MADT PASS");
     if enter_kernel(
         transition,
         kernel_entry,
@@ -1991,6 +1995,7 @@ fn enter_kernel(
     if kernel_entry == 0 {
         return Err(LOAD_ERROR);
     }
+    paint_boot_stage(framebuffer, b"MRML KERNEL START");
     // SAFETY: the authenticated PE parser proved the entry lies in an
     // executable section, materialization completed before boot-services exit,
     // and the canonical handoff remains in static loader memory.
@@ -2290,6 +2295,51 @@ fn paint(framebuffer: Framebuffer, rgb: [u8; 3]) {
         unsafe { core::slice::from_raw_parts_mut(framebuffer.base as *mut u8, bytes) };
     for pixel in framebuffer.as_chunks_mut::<4>().0 {
         pixel.copy_from_slice(&encoded);
+    }
+}
+
+/// Writes only to the validated GOP buffer, never to the firmware console.
+fn paint_boot_stage(framebuffer: Framebuffer, label: &[u8]) {
+    let format = if framebuffer.format == 0 {
+        PixelFormat::RedGreenBlueReserved
+    } else {
+        PixelFormat::BlueGreenRedReserved
+    };
+    let Ok(info) = FramebufferInfo::new(
+        framebuffer.base,
+        framebuffer.size as u64,
+        framebuffer.width,
+        framebuffer.height,
+        framebuffer.stride,
+        format,
+    ) else {
+        return;
+    };
+    // SAFETY: selected direct GOP mode supplies this buffer and extent; firmware
+    // still maps it before CR3 changes. The loader alone draws at this point.
+    let bytes = unsafe {
+        core::slice::from_raw_parts_mut(info.base().get() as *mut u8, info.byte_length() as usize)
+    };
+    if let Ok(mut surface) = FramebufferSurface::new(info, bytes) {
+        let _ = surface.fill_rectangle(
+            0,
+            0,
+            info.width(),
+            info.height().min(48),
+            Color {
+                red: 12,
+                green: 27,
+                blue: 49,
+            },
+        );
+        let _ = surface.draw_boot_label(
+            label,
+            Color {
+                red: 255,
+                green: 255,
+                blue: 255,
+            },
+        );
     }
 }
 
