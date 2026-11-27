@@ -109,6 +109,16 @@ impl Platform for Qtest {
 #[test]
 #[ignore = "requires qemu-system-x86_64 and an available Unix socket"]
 fn qemu_controller_command_round_trip() {
+    exercise_qemu(false);
+    exercise_qemu(true);
+}
+
+fn exercise_qemu(super_speed: bool) {
+    let controller_arg = if super_speed {
+        "qemu-xhci,id=xhci,addr=03.0"
+    } else {
+        "qemu-xhci,id=xhci,addr=03.0,p3=0"
+    };
     let dir = std::env::temp_dir().join(format!("mrml-xhci-qtest-{}", std::process::id()));
     fs::create_dir(&dir).unwrap();
     let sock = dir.join("qtest.sock");
@@ -132,7 +142,7 @@ fn qemu_controller_command_round_trip() {
             "-serial",
             "none",
             "-device",
-            "qemu-xhci,id=xhci,addr=03.0,p3=0",
+            controller_arg,
             "-drive",
         ])
         .arg(format!(
@@ -191,7 +201,11 @@ fn qemu_controller_command_round_trip() {
         .expect("emulated USB disk should be connected");
     assert_eq!(
         controller.port_status(port).unwrap().speed_id,
-        HIGH_SPEED_ID
+        if super_speed {
+            SUPER_SPEED_ID
+        } else {
+            HIGH_SPEED_ID
+        }
     );
     controller.no_op(100).unwrap();
     let dma = DeviceDma {
@@ -201,7 +215,7 @@ fn qemu_controller_command_round_trip() {
         control_buffer: 0x10_4000,
     };
     assert!(matches!(
-        controller.address_high_speed_device(
+        controller.address_device(
             port,
             DeviceDma {
                 input_context: DMA.command_ring,
@@ -211,9 +225,7 @@ fn qemu_controller_command_round_trip() {
         ),
         Err(Error::InvalidDma)
     ));
-    let addressed = controller
-        .address_high_speed_device(port, dma, 100)
-        .unwrap();
+    let addressed = controller.address_device(port, dma, 100).unwrap();
     assert_eq!(addressed.port, port);
     assert!((1..=127).contains(&addressed.address));
     assert!(controller.port_status(port).unwrap().enabled);
@@ -233,9 +245,32 @@ fn qemu_controller_command_round_trip() {
     assert_ne!(interface.bulk_in & 0x80, 0);
     assert_eq!(interface.bulk_out & 0x80, 0);
     assert!(matches!(
-        controller.address_high_speed_device(port, dma, 100),
+        controller.address_device(port, dma, 100),
         Err(Error::InvalidPort)
     ));
-    controller.no_op(100).unwrap();
+    let bulk_dma = BulkDma {
+        input_ring: 0x10_5000,
+        output_ring: 0x10_6000,
+        buffer: 0x10_7000,
+    };
+    {
+        let pipe = controller
+            .configure_bulk(&configuration[..length], bulk_dma, 1000)
+            .unwrap();
+        let mut disk = crate::UsbDisk::probe(pipe).unwrap();
+        assert_eq!(disk.sectors(), 4096);
+        let mut contents = [0xff; 512];
+        disk.read_sector(3, &mut contents).unwrap();
+        assert_eq!(contents, [0; 512]);
+        disk.write_sector_verified(3, &[0x5a; 512]).unwrap();
+    }
     controller.halt(100).unwrap();
+    let bytes = fs::read(&media).unwrap();
+    assert_eq!(&bytes[3 * 512..4 * 512], &[0x5a; 512]);
+    assert!(
+        bytes[..3 * 512]
+            .iter()
+            .chain(&bytes[4 * 512..])
+            .all(|&byte| byte == 0)
+    );
 }

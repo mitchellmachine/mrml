@@ -18,6 +18,10 @@ pub struct BulkInterface {
     pub interface: u8,
     pub bulk_in: u8,
     pub bulk_out: u8,
+    pub packet_in: u16,
+    pub packet_out: u16,
+    pub burst_in: Option<u8>,
+    pub burst_out: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +44,9 @@ pub fn find_bulk_interface(bytes: &[u8]) -> Result<BulkInterface, DescriptorErro
     let mut remaining = &bytes[9..];
     let mut interface = None;
     let mut endpoints = [0; 2];
+    let mut packets = [0; 2];
+    let mut bursts = [None; 2];
+    let mut previous_endpoint = None;
     let mut selected = None;
     loop {
         let next = if remaining.is_empty() {
@@ -68,11 +75,18 @@ pub fn find_bulk_interface(bytes: &[u8]) -> Result<BulkInterface, DescriptorErro
                     interface: number,
                     bulk_in: endpoints[0],
                     bulk_out: endpoints[1],
+                    packet_in: packets[0],
+                    packet_out: packets[1],
+                    burst_in: bursts[0],
+                    burst_out: bursts[1],
                 });
             }
             endpoints = [0; 2];
+            packets = [0; 2];
+            bursts = [None; 2];
         }
         let Some(descriptor) = next else { break };
+        let companion_direction = previous_endpoint.take();
         match descriptor[1] {
             2 => return Err(DescriptorError::Malformed),
             4 => {
@@ -99,11 +113,21 @@ pub fn find_bulk_interface(bytes: &[u8]) -> Result<BulkInterface, DescriptorErro
                 {
                     return Err(DescriptorError::Unsupported);
                 }
-                let endpoint = &mut endpoints[usize::from(address & 0x80 == 0)];
+                let direction = usize::from(address & 0x80 == 0);
+                let endpoint = &mut endpoints[direction];
                 if *endpoint != 0 {
                     return Err(DescriptorError::Ambiguous);
                 }
                 *endpoint = address;
+                packets[direction] = packet;
+                previous_endpoint = Some(direction);
+            }
+            48 if interface.is_some() => {
+                let direction = companion_direction.ok_or(DescriptorError::Malformed)?;
+                if descriptor.len() != 6 || descriptor[2] > 15 || descriptor[3..6] != [0; 3] {
+                    return Err(DescriptorError::Unsupported);
+                }
+                bursts[direction] = Some(descriptor[2]);
             }
             _ => {}
         }
@@ -161,7 +185,27 @@ impl<T: BulkTransport> UsbDisk<T> {
             faulted: false,
         };
         let mut capacity = [0; 8];
-        disk.command([0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0], Data::In(&mut capacity))?;
+        const READ_CAPACITY: [u8; 10] = [0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        match disk.command(READ_CAPACITY, Data::In(&mut capacity)) {
+            Ok(()) => {}
+            Err(Error::CommandFailed) => {
+                // An exact CSW reported a SCSI failure during read-only probe.
+                // Clear only a reset/power-on unit attention, never a write
+                // failure or a transport ambiguity. One sense and one retry.
+                disk.faulted = false;
+                let mut sense = [0; 18];
+                disk.command([3, 0, 0, 0, 18, 0, 0, 0, 0, 0], Data::In(&mut sense))?;
+                if !matches!(sense[0] & 0x7f, 0x70 | 0x71)
+                    || sense[2] & 0x0f != 6
+                    || sense[7] < 6
+                    || sense[12] != 0x29
+                {
+                    return Err(Error::CommandFailed);
+                }
+                disk.command(READ_CAPACITY, Data::In(&mut capacity))?;
+            }
+            Err(error) => return Err(error),
+        }
         let last = u32::from_be_bytes(capacity[..4].try_into().unwrap());
         let block_size = u32::from_be_bytes(capacity[4..].try_into().unwrap());
         if last == u32::MAX || block_size != SECTOR_BYTES as u32 {
@@ -236,7 +280,7 @@ impl<T: BulkTransport> UsbDisk<T> {
         cbw[4..8].copy_from_slice(&tag.to_le_bytes());
         cbw[8..12].copy_from_slice(&(length as u32).to_le_bytes());
         cbw[12] = flags;
-        cbw[14] = cdb.len() as u8;
+        cbw[14] = if cdb[0] == 3 { 6 } else { 10 };
         cbw[15..25].copy_from_slice(&cdb);
         exact(self.endpoint.bulk_out(&cbw), CBW_BYTES)?;
         match data {
@@ -251,7 +295,9 @@ impl<T: BulkTransport> UsbDisk<T> {
         }
         match csw[12] {
             0 if csw[8..12] == [0; 4] => {}
-            1 => return Err(Error::CommandFailed),
+            1 if u32::from_le_bytes(csw[8..12].try_into().unwrap()) <= length as u32 => {
+                return Err(Error::CommandFailed);
+            }
             2 => return Err(Error::PhaseError),
             _ => return Err(Error::InvalidStatus),
         }

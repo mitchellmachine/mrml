@@ -2879,22 +2879,31 @@ directory metadata. Its caller must prove exclusive partition access and
 validate the file extent, including absence of aliases. It is not exposed by
 the read-only FAT32 service.
 
-The polled xHCI controller engine validates MMIO and DMA ranges, stops and
-resets a released controller, initializes the command/event rings, reports
-root-port status, and checks exact command completions. It can reset one
-direct high-speed USB 2 port, assign a device address, and read device and
-configuration descriptors on endpoint zero. QEMU verified that sequence
-against a disposable emulated USB disk and identified its bulk IN/OUT pair.
-It has no native PCI or DMA backend yet. The current profile has one slot, no scratchpads, and
-a bounded nonwrapping command queue. The QEMU qtest backend is for testing
-only; it is not an MRML kernel driver or used during boot.
+The polled xHCI controller engine validates MMIO and DMA ranges, initializes
+command/event rings, and addresses one direct USB 2 High-Speed or USB 3
+SuperSpeed device. It reads descriptors on endpoint zero, binds one
+configuration with a single Bulk-Only Transport interface, and makes exact,
+bounded bulk transfers. The opt-in QEMU qtest performs capacity discovery, a
+sector read, a write, cache synchronization, and readback on disposable disk
+images in both modes. A separate host read verifies the intended sector
+changed and no other bytes did. This is emulated functional evidence, not
+hardware speed, durability under power loss, or certification evidence.
 
-End-to-end native writes are not yet enabled. They still require a native PCI
-assignment and DMA backend, bulk endpoint configuration, transfer and
-recovery, generation-specific ownership, writable partition admission, and
-wiring to the filesystem operation. First exercise it on a separate expendable QEMU USB disk and
-verify the file from the host. The firmware-loaded bare-metal FAT32 fixture
-does not exercise this path.
+Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
+partition admission, and FAT32 connection remain unimplemented. The
+controller has one slot, no scratchpads, finite nonwrapping command and
+transfer queues, and no hub support. The existing Dragonair test exercises
+firmware USB access and embedded FAT32, not this native path.
+
+The forward compatibility target is [USB4 v2.0](https://usb.org/documents).
+This storage path does not implement a USB4 connection manager, router or
+tunneling policy. Those require separate topology, DMA authorization and
+revocation, and physical validation. USB Type-C and Power Delivery are
+separate from xHCI storage. After native USB 2 and USB 3 storage work, qualify
+hardware link modes and loss/recovery (including 20 Gbps where the controller,
+device, and cable support it), then qualify USB4 routing separately. Do not
+infer a link rate from an emulated device or claim support across USB classes
+from a bulk-storage test.
 
 ## Optical object and common MMC layer
 

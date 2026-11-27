@@ -194,6 +194,10 @@ fn descriptors_select_only_an_unambiguous_bulk_only_interface() {
             interface: 0,
             bulk_in: 0x81,
             bulk_out: 2,
+            packet_in: 512,
+            packet_out: 512,
+            burst_in: None,
+            burst_out: None,
         })
     );
     assert_eq!(
@@ -206,6 +210,28 @@ fn descriptors_select_only_an_unambiguous_bulk_only_interface() {
         Err(DescriptorError::Ambiguous)
     );
     config[16] = 0x62;
+    assert_eq!(
+        find_bulk_interface(&config),
+        Err(DescriptorError::Unsupported)
+    );
+}
+
+#[test]
+fn superspeed_companions_bind_to_their_exact_endpoints() {
+    let mut config = [
+        9, 2, 44, 0, 1, 1, 0, 0x80, 50, 9, 4, 0, 0, 2, 8, 6, 0x50, 0, 7, 5, 0x81, 2, 0, 4, 0, 6,
+        48, 15, 0, 0, 0, 7, 5, 0x02, 2, 0, 4, 0, 6, 48, 3, 0, 0, 0,
+    ];
+    let parsed = find_bulk_interface(&config).unwrap();
+    assert_eq!((parsed.packet_in, parsed.packet_out), (1024, 1024));
+    assert_eq!((parsed.burst_in, parsed.burst_out), (Some(15), Some(3)));
+    config[28] = 1; // Streams are not part of this BOT profile.
+    assert_eq!(
+        find_bulk_interface(&config),
+        Err(DescriptorError::Unsupported)
+    );
+    config[28] = 0;
+    config[40] = 16;
     assert_eq!(
         find_bulk_interface(&config),
         Err(DescriptorError::Unsupported)

@@ -1,6 +1,9 @@
 //! Bounded, polled xHCI bring-up over an exclusively assigned MMIO/DMA backend.
 //! This controller session does not grant PCI or DMA access to its caller.
 
+mod bulk;
+pub use bulk::{BulkDma, BulkPipe};
+
 const RUN: u32 = 1;
 const RESET: u32 = 2;
 const HALTED: u32 = 1;
@@ -16,6 +19,7 @@ const PORT_RESET_CHANGE: u32 = 1 << 21;
 const PORT_CONNECT_CHANGE: u32 = 1 << 17;
 const PORT_POWER: u32 = 1 << 9;
 const HIGH_SPEED_ID: u8 = 3;
+const SUPER_SPEED_ID: u8 = 4;
 const COMMAND_COMPLETION: u32 = 33;
 const PORT_STATUS_CHANGE: u32 = 34;
 
@@ -97,7 +101,7 @@ pub struct AddressedDevice {
 
 /// Takes exclusive ownership of the backend even if initialization fails.
 /// Currently admits one slot, one interrupter, 4 KiB page support, and no
-/// scratchpads. Addressing admits only one direct high-speed USB 2 device.
+/// scratchpads. Addressing admits one direct high-speed or SuperSpeed device.
 pub struct Controller<P: Platform> {
     platform: P,
     registers: Registers,
@@ -107,6 +111,7 @@ pub struct Controller<P: Platform> {
     event_cycle: bool,
     control: Option<(DeviceDma, u8, u8)>,
     faulted: bool,
+    bulk_configured: bool,
 }
 
 impl<P: Platform> Controller<P> {
@@ -127,6 +132,7 @@ impl<P: Platform> Controller<P> {
             event_cycle: true,
             control: None,
             faulted: false,
+            bulk_configured: false,
         };
         this.initialize(ticks)?;
         Ok(this)
@@ -188,9 +194,9 @@ impl<P: Platform> Controller<P> {
         })
     }
 
-    /// Resets a direct high-speed port, enables slot one, and lets xHCI issue
-    /// SET_ADDRESS. A failed hardware sequence faults the session; no retries.
-    pub fn address_high_speed_device(
+    /// Admits one direct high-speed or enabled SuperSpeed port, then issues
+    /// SET_ADDRESS through xHCI. A failed hardware sequence faults the session.
+    pub fn address_device(
         &mut self,
         port: u8,
         dma: DeviceDma,
@@ -200,7 +206,8 @@ impl<P: Platform> Controller<P> {
         if self.control.is_some()
             || !status.connected
             || !status.powered
-            || status.speed_id != HIGH_SPEED_ID
+            || !matches!(status.speed_id, HIGH_SPEED_ID | SUPER_SPEED_ID)
+            || (status.speed_id == SUPER_SPEED_ID && !status.enabled)
         {
             return Err(Error::InvalidPort);
         }
@@ -222,7 +229,7 @@ impl<P: Platform> Controller<P> {
             self.registers.address64,
         )?;
         self.faulted = true;
-        let result = self.address_device_inner(port, dma, ticks);
+        let result = self.address_device_inner(port, status.speed_id, dma, ticks);
         if result.is_ok() {
             self.faulted = false;
             self.control = Some((dma, port, 0));
@@ -233,6 +240,7 @@ impl<P: Platform> Controller<P> {
     fn address_device_inner(
         &mut self,
         port: u8,
+        speed: u8,
         dma: DeviceDma,
         ticks: u32,
     ) -> Result<AddressedDevice, Error<P::Error>> {
@@ -240,16 +248,17 @@ impl<P: Platform> Controller<P> {
         // Do not echo PORTSC's write-one-to-clear bits or the port-disable bit.
         // Acknowledge a stale reset-change before starting this reset.
         self.write(portsc, PORT_POWER | PORT_RESET_CHANGE | PORT_CONNECT_CHANGE)?;
-        self.write(portsc, PORT_POWER | PORT_RESET)?;
-        self.wait(
-            portsc,
-            PORT_RESET | PORT_RESET_CHANGE,
-            PORT_RESET_CHANGE,
-            ticks,
-        )?;
+        if speed == HIGH_SPEED_ID {
+            self.write(portsc, PORT_POWER | PORT_RESET)?;
+            self.wait(
+                portsc,
+                PORT_RESET | PORT_RESET_CHANGE,
+                PORT_RESET_CHANGE,
+                ticks,
+            )?;
+        }
         let status = self.read(portsc)?;
-        if status & (3 | PORT_CONNECT_CHANGE) != 3 || ((status >> 10) & 0xf) as u8 != HIGH_SPEED_ID
-        {
+        if status & (3 | PORT_CONNECT_CHANGE) != 3 || ((status >> 10) & 0xf) as u8 != speed {
             return Err(Error::InvalidPort);
         }
         self.write(portsc, PORT_POWER | PORT_RESET_CHANGE)?;
@@ -258,10 +267,15 @@ impl<P: Platform> Controller<P> {
         let mut input = [0; 33 * 64];
         input[4..8].copy_from_slice(&3u32.to_le_bytes()); // add slot and EP0
         let slot = &mut input[stride..2 * stride];
-        slot[..4].copy_from_slice(&((1u32 << 27) | (u32::from(HIGH_SPEED_ID) << 20)).to_le_bytes());
+        slot[..4].copy_from_slice(&((1u32 << 27) | (u32::from(speed) << 20)).to_le_bytes());
         slot[4..8].copy_from_slice(&(u32::from(port) << 16).to_le_bytes());
         let control = &mut input[2 * stride..3 * stride];
-        control[4..8].copy_from_slice(&((64u32 << 16) | (4 << 3) | (3 << 1)).to_le_bytes());
+        control[4..8].copy_from_slice(
+            &((u32::from(if speed == SUPER_SPEED_ID { 512u16 } else { 64 }) << 16)
+                | (4 << 3)
+                | (3 << 1))
+                .to_le_bytes(),
+        );
         control[8..16].copy_from_slice(&(dma.control_ring | 1).to_le_bytes());
         control[16..20].copy_from_slice(&8u32.to_le_bytes());
         // An empty EP0 ring is reserved solely for this slot.
