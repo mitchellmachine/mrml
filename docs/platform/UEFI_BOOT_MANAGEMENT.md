@@ -313,7 +313,11 @@ while polling or observing a changed lease or owner at the final acceptance
 check prevents transfer; the model never retries the write. This is not a
 real firmware handshake. The bounded ownership-sequence validator is Rust
 library code shared with the model. Its result is not an authorization to
-write registers, enable DMA, or reset the controller.
+write registers, enable DMA, or reset the controller. The VT-d table layer
+can also verify that an exact requester has an empty context before and
+after a completed read/write drain on a coherent active legacy root.
+Register-model tests reject an occupied context, a different root, and an
+incomplete drain. No boot path uses this as hardware handoff authority.
 
 ### Diagnose a return to firmware
 

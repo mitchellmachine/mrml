@@ -32,6 +32,7 @@ pub enum VtdTableError {
     InvalidAperture,
     InsufficientPermissions,
     OccupiedLeaf,
+    OccupiedContext,
     WritebackUnavailable,
     Storage,
 }
@@ -554,6 +555,52 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
         })
     }
 
+    /// Verify that an exact stopped requester has a canonical empty context
+    /// on the active coherent legacy root, including a completed cache drain.
+    ///
+    /// The caller must hold the retained assignment lock, keep the requester
+    /// stopped, and independently exclude ATS, requester aliases and firmware
+    /// reserved ranges. Do not use a success after releasing that lock or
+    /// changing any relevant table, route, or unit state. On uncertainty the
+    /// caller must keep the requester stopped and the assignment quarantined.
+    /// No table entries or PCI command bits are changed here.
+    pub fn verify_routed_dma_denied<M: VtdTableMemory>(
+        &mut self,
+        memory: &M,
+        route: VtdRequesterRoute,
+    ) -> Result<(), VtdBindingError> {
+        if !verified_unit_matches_route(&self.verified, route) {
+            return Err(VtdBindingError::UnitSubstitution);
+        }
+        let root = self
+            .invalidator
+            .active_legacy_root()
+            .map_err(VtdBindingError::Unit)?;
+        let provenance = memory.provenance();
+        if provenance.register_base() != route.register_base()
+            || provenance.root_table().get() != root
+        {
+            return Err(VtdBindingError::TableSubstitution);
+        }
+        let check = || {
+            require_empty_legacy_context(memory, root, route.requester())
+                .map_err(VtdBindingError::Table)
+        };
+        check()?;
+        // An observed zero is insufficient on noncoherent walks. This path
+        // does not publish context/root cache lines, so only admit coherent
+        // walks and require the hardware's synchronous read/write drains.
+        self.invalidator.ready_for_dma_drain(false).map_err(VtdBindingError::Unit)?;
+        self.invalidator.invalidate_global().map_err(VtdBindingError::Unit)?;
+        if self.invalidator.active_legacy_root().map_err(VtdBindingError::Unit)? != root {
+            return Err(VtdBindingError::TableSubstitution);
+        }
+        if memory.provenance() != provenance {
+            return Err(VtdBindingError::TableSubstitution);
+        }
+        check()
+    }
+
     /// Checks a bounded, contiguous device-to-physical read/write window in
     /// the exact active legacy domain. This does not install mappings or
     /// establish that the pages, domain, or requester aliases are exclusive.
@@ -785,6 +832,27 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
     fn into_parts(self) -> (VerifiedPlatformMmio, VtdInvalidator<R>) {
         (self.verified, self.invalidator)
     }
+}
+
+fn require_empty_legacy_context(
+    memory: &impl VtdTableMemory,
+    root: u64,
+    requester: DeviceAddress,
+) -> Result<(), VtdTableError> {
+    let root = checked_table(root).map_err(|_| VtdTableError::InvalidRoot)?;
+    let entry = memory.read128(root, usize::from(requester.bus()))?;
+    // Require the exact existing context table. Do not confuse an absent
+    // bus table or malformed root with a verified empty requester slot.
+    if entry[1] != 0 || entry[0] & !(ADDRESS_MASK | 1) != 0 || entry[0] & 1 == 0 {
+        return Err(VtdTableError::InvalidRootEntry);
+    }
+    let table =
+        checked_table(entry[0] & ADDRESS_MASK).map_err(|_| VtdTableError::InvalidRootEntry)?;
+    let slot = usize::from(requester.device()) * 8 + usize::from(requester.function());
+    if memory.read128(table, slot)? != [0, 0] {
+        return Err(VtdTableError::OccupiedContext);
+    }
+    Ok(())
 }
 
 fn verified_unit_matches_route(verified: &VerifiedPlatformMmio, route: VtdRequesterRoute) -> bool {
@@ -1627,6 +1695,7 @@ mod tests {
         coherent: bool,
         bad_completion_once: bool,
         stuck_iotlb: bool,
+        root_after_drain: Option<u64>,
     }
 
     impl UnitRegisters {
@@ -1640,6 +1709,7 @@ mod tests {
                 coherent: true,
                 bad_completion_once: false,
                 stuck_iotlb: false,
+                root_after_drain: None,
             }
         }
     }
@@ -1678,7 +1748,12 @@ mod tests {
                 }
                 0x208 if self.stuck_iotlb => self.iotlb = value,
                 0x208 if core::mem::take(&mut self.bad_completion_once) => self.iotlb = 0,
-                0x208 => self.iotlb = (value & !(1 << 63)) | (1 << 57),
+                0x208 => {
+                    self.iotlb = (value & !(1 << 63)) | (1 << 57);
+                    if let Some(root) = self.root_after_drain.take() {
+                        self.root = root;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1892,6 +1967,54 @@ mod tests {
         assert_eq!(
             unit.revoke_routed_dma_aperture(&mut tables, aperture),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn routed_denial_requires_the_exact_empty_context_and_completed_drain() {
+        let physical = PhysAddr::new(0x20_0000).unwrap();
+        let register = PhysAddr::new(0xfed9_0000).unwrap();
+        let route = VtdRequesterRoute::for_test(requester(), register);
+        let mut tables = Tables::identity(physical, 9);
+        let mut unit = verified_unit(register, UnitRegisters::active(ROOT));
+        let occupied = Err(VtdBindingError::Table(VtdTableError::OccupiedContext));
+        assert_eq!(unit.verify_routed_dma_denied(&tables, route), occupied);
+        let slot = 2 * (3 * 8);
+        tables.context[slot + 2] = tables.context[slot];
+        tables.context[slot + 3] = tables.context[slot + 1];
+        tables.context[slot] = 0;
+        assert_eq!(unit.verify_routed_dma_denied(&tables, route), occupied);
+        tables.context[slot + 1] = 0;
+        assert_eq!(unit.verify_routed_dma_denied(&tables, route), Ok(()));
+        let neighbor = VtdRequesterRoute::for_test(DeviceAddress::new(0, 2, 3, 1).unwrap(), register);
+        assert_eq!(unit.verify_routed_dma_denied(&tables, neighbor), occupied);
+
+        let mut missing_drain = UnitRegisters::active(ROOT);
+        missing_drain.drain = false;
+        let mut unit = verified_unit(register, missing_drain);
+        assert_eq!(
+            unit.verify_routed_dma_denied(&tables, route),
+            Err(VtdBindingError::Unit(VtdError::DrainUnsupported))
+        );
+        let mut failed_drain = UnitRegisters::active(ROOT);
+        failed_drain.bad_completion_once = true;
+        let mut unit = verified_unit(register, failed_drain);
+        assert_eq!(
+            unit.verify_routed_dma_denied(&tables, route),
+            Err(VtdBindingError::Unit(VtdError::InvalidCompletion))
+        );
+        assert_eq!(unit.verify_routed_dma_denied(&tables, route), Ok(()));
+        let mut switched = UnitRegisters::active(ROOT);
+        switched.root_after_drain = Some(ROOT + 4096);
+        let mut switched_unit = verified_unit(register, switched);
+        assert_eq!(
+            switched_unit.verify_routed_dma_denied(&tables, route),
+            Err(VtdBindingError::TableSubstitution)
+        );
+        let new_root = tables.for_root(PhysAddr::new(ROOT + 4096).unwrap());
+        assert_eq!(
+            unit.verify_routed_dma_denied(&new_root, route),
+            Err(VtdBindingError::TableSubstitution)
         );
     }
 
