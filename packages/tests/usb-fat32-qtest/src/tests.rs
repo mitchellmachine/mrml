@@ -1,7 +1,18 @@
+use mrml_interface_storage_block_provider_v1::{
+    BLOCK_DEVICE_FLAG_READ_ONLY, BlockProviderTransport, BorrowedWriteView, OpaqueHandle,
+    ReadError, decode_block_device_catalog_record, decode_enumerate_response,
+    encode_enumerate_request, validate_block_device_catalog,
+};
+use mrml_kernel::{
+    CapabilitySpace, MemoryPoolTable, ObjectId, PAGE_SIZE, Rights,
+    reserve_microvm_peer_page_projection,
+};
+use mrml_storage::{MicrovmBlockReadError, bind_microvm_block_read};
 use mrml_storage_fat32::{
     Fat32EntryReader, FixedFileWriteError, VerifiedSectorDevice, overwrite_fixed_file,
     parse_fat32_boot_sector, parse_fat32_short_directory, read_fat32_cluster_chain,
 };
+use mrml_storage_usb::block_provider::UsbReadProvider;
 use mrml_storage_usb::xhci::{
     BulkDma, Controller, DeviceDma, DmaLayout, Error, Platform, RevocablePlatform,
 };
@@ -428,11 +439,86 @@ fn exercise_qemu(super_speed: bool) {
         let mut disk = mrml_storage_usb::UsbDisk::probe(pipe).unwrap();
         assert_eq!(disk.sectors(), (START + TOTAL) as u64);
         exercise_fat32(&mut disk);
+        let session = OpaqueHandle::new(1, 2).unwrap();
+        let mut provider = UsbReadProvider::new(disk, session, 3).unwrap();
+        let catalog_view = BorrowedWriteView::within(7, 48, 64).unwrap();
+        let enumerate = encode_enumerate_request(catalog_view).unwrap();
+        let mut catalog = [0xa5; 64];
+        let response = provider.enumerate(&enumerate, &mut catalog).unwrap();
+        assert_eq!(decode_enumerate_response(&response, 48), Ok(Ok(48)));
+        assert_eq!(validate_block_device_catalog(&catalog[7..55]), Ok(1));
+        let device = decode_block_device_catalog_record(&catalog[7..55], 0).unwrap();
+        assert_eq!(device.session, session);
+        assert_eq!(device.flags, BLOCK_DEVICE_FLAG_READ_ONLY);
+        assert_eq!(device.logical_block_count, (START + TOTAL) as u64);
+        assert_eq!(device.media_generation, 3);
+
+        // Drive the same capability-checked queue a service uses, with
+        // the USB adapter attached to QEMU's live xHCI controller.
+        let mut caps = CapabilitySpace::<8>::new();
+        let mut memory = MemoryPoolTable::<1, 2, 4>::new(0x91).unwrap();
+        let (pool, quota) = memory
+            .create_root(
+                2,
+                4,
+                0,
+                Rights::ALLOCATE
+                    .union(Rights::CONTROL)
+                    .union(Rights::INSPECT),
+                &mut caps,
+            )
+            .unwrap();
+        let target = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+        let client = caps.insert(ObjectId(0x92), target).unwrap();
+        let server = caps.insert(ObjectId(0x93), target).unwrap();
+        let (projection, _) = reserve_microvm_peer_page_projection(
+            &mut memory,
+            pool,
+            quota,
+            client,
+            server,
+            0x700,
+            0x800,
+            &mut caps,
+        )
+        .unwrap();
+        let (_, mut consumer, mut endpoint) =
+            bind_microvm_block_read(3, 1, 1, 1, session, &projection, client, server, &caps)
+                .unwrap();
+        let mut page = [0; PAGE_SIZE as usize];
+        consumer.initialize(&mut page, &projection, &caps).unwrap();
+        let mut sector = [0x5c; 512];
+        let request = consumer
+            .submit(FILE_SECTOR as u64, &mut page, &projection, &caps)
+            .unwrap();
+        let response = endpoint
+            .serve(&mut page, &projection, &caps, request, &mut provider)
+            .unwrap();
+        consumer
+            .complete(&mut page, &projection, &caps, response, &mut sector)
+            .unwrap();
+        assert_eq!(&sector[..3], b"new");
+        assert_eq!(&sector[3..], &[0xa5; 509]);
+
         qmp.remove_stick();
-        assert!(matches!(
-            disk.write_sector_verified(4, &[0xc3; 512]),
-            Err(mrml_storage_usb::Error::Transport(Error::InvalidPort))
-        ));
+        for error in [ReadError::IoFailure, ReadError::StaleObject] {
+            sector.fill(0xc3);
+            let request = consumer
+                .submit(FILE_SECTOR as u64, &mut page, &projection, &caps)
+                .unwrap();
+            let response = endpoint
+                .serve(&mut page, &projection, &caps, request, &mut provider)
+                .unwrap();
+            assert_eq!(
+                consumer.complete(&mut page, &projection, &caps, response, &mut sector),
+                Err(MicrovmBlockReadError::Provider(error))
+            );
+            assert_eq!(sector, [0xc3; 512]);
+        }
+        let response = provider.enumerate(&enumerate, &mut catalog).unwrap();
+        assert_eq!(decode_enumerate_response(&response, 48), Ok(Ok(16)));
+        assert_eq!(validate_block_device_catalog(&catalog[7..23]), Ok(0));
+        let mut disk = provider.into_disk();
         assert!(matches!(
             disk.write_sector_verified(4, &[0x3c; 512]),
             Err(mrml_storage_usb::Error::Faulted)

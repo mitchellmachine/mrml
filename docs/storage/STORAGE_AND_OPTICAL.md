@@ -3277,8 +3277,14 @@ existing generation-1 block-provider protocol; FAT32 stays in its separate
 filesystem service. A read-only adapter now implements canonical enumeration
 and one-sector reads over the existing BOT/SCSI driver. Hosted tests check
 stale-session denial, invalid range and buffer rejection, and no publication
-after a transport failure. This adapter is not an installed provider and does
-not authenticate IPC or retire DMA leases by itself. The kernel grants and
+after a transport failure. In QEMU, the capability-checked MicroVM block-read
+queue now drives this adapter over the emulated USB 2 and USB 3 xHCI ports.
+The consumer reads back the FAT32 file sector, then sees an I/O failure on
+unplug and a stale session on retry, with no partial sector copied. The
+provider stops advertising the removed disk, and the fixture halts the
+controller and revokes bus mastering. These are hosted queue and emulated
+device results, not an executing service MicroVM. The adapter is not an
+installed provider and does not authenticate IPC or retire DMA leases by itself. The kernel grants and
 revokes scoped device, interrupt, and DMA resources; it does not run USB
 commands or implement a fallback transport. Until a service can receive and
 retire such a lease, native USB storage is unavailable. The driver library has one slot, no scratchpads,
