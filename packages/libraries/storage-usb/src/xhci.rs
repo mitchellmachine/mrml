@@ -5,6 +5,8 @@ mod activation;
 mod bulk;
 pub use activation::{DmaAssignment, PciActivation, VtdActivation};
 mod lifecycle;
+mod managed_vtd;
+pub use managed_vtd::{ManagedVtd, ManagedVtdError, VtdPciPlatform};
 pub mod pci;
 pub use bulk::{BulkDma, BulkPipe};
 pub use lifecycle::{Halted, RevocablePlatform, RevocationFailure, StartFailure, StopFailure};

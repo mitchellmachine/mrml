@@ -2990,6 +2990,18 @@ invalidation before it reports rollback. If that cannot be confirmed, the
 backing must remain quarantined. This does not allocate the hierarchy, issue
 native PCI assignments, reclaim revoked slots, or arm a controller.
 
+The supervisor-side xHCI adapter now composes installation, activation
+verification and withdrawal for a preallocated Intel VT-d assignment. It
+matches PCI location and DMA extent, installs only with xHCI halted and bus
+mastering disabled, and confines register and DMA access to the assigned
+ranges. Shutdown confirms halt and bus-master disable before withdrawing
+the exact aperture, then asks the owner to scrub and release. If release
+fails after draining, retry does not reprogram the device or IOMMU.
+Tests inject an unchanged PCI command, uncertain withdrawal, and failed
+final release. A concrete native owner must still issue PCI assignments,
+allocate/pin resources, and implement quarantine and final release; the
+adapter is not called from native boot.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

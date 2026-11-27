@@ -27,7 +27,7 @@ impl DmaAssignment {
                 .is_some_and(|(end, limit)| end <= limit)
     }
 
-    fn valid(self) -> bool {
+    pub(super) fn valid(self) -> bool {
         self.mapping_generation != 0
             && self.device_base != 0
             && self.device_base % 4096 == 0

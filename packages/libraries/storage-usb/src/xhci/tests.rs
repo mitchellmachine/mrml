@@ -21,6 +21,10 @@ struct Fake {
     fail_revoke_once: bool,
     activation_fault: u8,
     activation_reads: u8,
+    pci_command: u16,
+    pci_writes: u8,
+    releases: u8,
+    ignore_pci_write: bool,
 }
 
 impl Fake {
@@ -36,6 +40,10 @@ impl Fake {
             fail_revoke_once: false,
             activation_fault: 0,
             activation_reads: 0,
+            pci_command: 6,
+            pci_writes: 0,
+            releases: 0,
+            ignore_pci_write: false,
         };
         fake.regs[0] = 0x0110_0040;
         fake.regs[1] = 0x0200_0108;
@@ -333,4 +341,81 @@ fn independent_translation_check_blocks_programming_or_running_at_each_stage() {
             pending.retry(5).unwrap().revoke().unwrap();
         }
     }
+}
+
+impl VtdPciPlatform for Fake {
+    fn live_pci(&mut self, expected: DmaAssignment) -> Result<pci::PciSnapshot, ()> {
+        assert_eq!(expected, activation_assignment());
+        let mut live = activation_snapshot();
+        live.command = self.pci_command;
+        Ok(live)
+    }
+
+    fn set_bus_master(
+        &mut self,
+        expected: DmaAssignment,
+        before: u16,
+        enabled: bool,
+    ) -> Result<(), ()> {
+        assert_eq!(expected, activation_assignment());
+        assert_eq!(before, self.pci_command);
+        assert!(!enabled);
+        self.pci_writes += 1;
+        if !self.ignore_pci_write {
+            self.pci_command &= !4;
+        }
+        Ok(())
+    }
+
+    fn release_revoked(&mut self, expected: DmaAssignment) -> Result<(), ()> {
+        assert_eq!(expected, activation_assignment());
+        assert_eq!(self.pci_command & 4, 0);
+        self.releases += 1;
+        if core::mem::take(&mut self.fail_revoke_once) {
+            Err(())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn managed_vtd_requires_pci_readback_before_withdrawal_and_resumes_release_only() {
+    use managed_vtd::{Cleanup, finish_cleanup};
+    use mrml_kernel::arch::x86_64::{VtdApertureRevokeError, VtdBindingError};
+    let mut progress = Cleanup::Active;
+    let mut fake = Fake::new();
+    let assignment = activation_assignment();
+    fake.ignore_pci_write = true;
+    assert_eq!(
+        finish_cleanup(&mut progress, &mut fake, assignment, || panic!(
+            "DMA is still armed"
+        )),
+        Err(ManagedVtdError::Pci(pci::PciError::BusMasterEnabled))
+    );
+    assert_eq!(fake.releases, 0);
+    fake.ignore_pci_write = false;
+    let uncertain = ManagedVtdError::Revoke(VtdApertureRevokeError::Uncertain(
+        VtdBindingError::TableSubstitution,
+    ));
+    assert_eq!(
+        finish_cleanup(&mut progress, &mut fake, assignment, || Err(uncertain)),
+        Err(uncertain)
+    );
+    assert_eq!(progress, Cleanup::Withdrawing);
+    assert_eq!(fake.pci_command, 2);
+    assert_eq!(fake.releases, 0);
+    fake.fail_revoke_once = true;
+    assert_eq!(
+        finish_cleanup(&mut progress, &mut fake, assignment, || Ok(())),
+        Err(ManagedVtdError::Platform(()))
+    );
+    assert_eq!(progress, Cleanup::Withdrawn);
+    finish_cleanup(&mut progress, &mut fake, assignment, || {
+        panic!("already drained")
+    })
+    .unwrap();
+    assert_eq!(progress, Cleanup::Released);
+    assert_eq!(fake.pci_writes, 2);
+    assert_eq!(fake.releases, 2);
 }
