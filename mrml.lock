@@ -518,6 +518,19 @@ boot_bound = []
 system_release_bound = []
 
 [[package]]
+id = "org.mrml.library.storage.usb"
+path = "packages/libraries/storage-usb"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "microvm"
+isolation_supported = ["native-service", "microvm"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
 id = "org.mrml.library.tensor"
 path = "packages/gpu/tensor"
 isolation_default = "in-process"

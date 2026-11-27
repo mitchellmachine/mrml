@@ -1,0 +1,45 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = true
+id = "org.mrml.library.storage.usb"
+kind = "library"
+name = "mrml-storage-usb"
+profile = "library"
+
+[isolation]
+default = "native-service"
+minimum = "native-service"
+must_run = true
+runtime_class = "microvm-eligible"
+supported = ["native-service", "microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_storage_usb"
+
+[rust]
+crate_name = "mrml_storage_usb"
+crate_type = "lib"
+source = "packages/libraries/storage-usb/src/lib.rs"
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]

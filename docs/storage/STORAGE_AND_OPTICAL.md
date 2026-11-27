@@ -2861,6 +2861,31 @@ the deployment transaction: create GPT, ESP and MRML partitions, format, deploy
 an authenticated `.mrz`/`SystemRelease` package graph, flush, reread, and verify.
 Writing an image to a physical disk is never modeled as an authorized blind copy.
 
+## Native USB mass-storage bring-up
+
+**PARTIALLY IMPLEMENTED.** The USB storage library identifies an unambiguous
+SCSI transparent Bulk-Only Transport interface and validates command tags,
+transfer lengths, status and capacity. Its current contract is one 512-byte
+sector on LUN 0. A write succeeds only after WRITE(10), SYNCHRONIZE CACHE(10),
+and matching READ(10). Transport errors, short transfers, invalid status and
+readback mismatches fault the session; no uncertain write is retried. This
+is a protocol implementation tested against scripted bulk transfers, not
+an enabled controller or a storage provider exposed to applications.
+
+FAT32 has a separate fixed-size data update primitive for an existing file
+occupying one 512-byte sector. It checks the expected previous bytes and
+preserves sector slack; it cannot create, resize, allocate or modify FAT or
+directory metadata. Its caller must prove exclusive partition access and
+validate the file extent, including absence of aliases. It is not exposed by
+the read-only FAT32 service.
+
+End-to-end native writes are not yet enabled. The remaining path requires
+xHCI enumeration, bounded DMA and endpoint recovery, generation-specific
+ownership and writable partition admission, and wiring to the filesystem
+operation. First exercise it on a separate expendable QEMU USB disk and
+verify the file from the host. The firmware-loaded bare-metal FAT32 fixture
+does not exercise this path.
+
 ## Optical object and common MMC layer
 
 Optical media is not an ordinary random-write disk. `OpticalDrive` reports
