@@ -2883,16 +2883,19 @@ The polled xHCI controller engine validates MMIO and DMA ranges, initializes
 command/event rings, and addresses one direct USB 2 High-Speed or USB 3
 SuperSpeed device. It reads descriptors on endpoint zero, binds one
 configuration with a single Bulk-Only Transport interface, and makes exact,
-bounded bulk transfers. The opt-in QEMU qtest performs capacity discovery, a
-sector read, a write, cache synchronization, and readback on disposable disk
-images in both modes. A separate host read verifies the intended sector
+bounded bulk transfers. The two bulk endpoint rings recycle with Link TRBs
+and independent cycle bits, only after exact, successful transfer completion
+and connection revalidation. The opt-in QEMU qtest performs capacity discovery,
+a sector read, and repeated write/cache synchronization/readback across multiple
+bulk and event ring wraps on disposable images in both modes. A separate host
+read verifies the intended sector
 changed and no other bytes did. This is emulated functional evidence, not
 hardware speed, durability under power loss, or certification evidence.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and FAT32 connection remain unimplemented. The
-controller has one slot, no scratchpads, finite nonwrapping command and
-transfer queues, and no hub support. The existing Dragonair test exercises
+controller has one slot, no scratchpads, nonwrapping command and control
+queues, and no hub support. The existing Dragonair test exercises
 firmware USB access and embedded FAT32, not this native path.
 
 The forward compatibility target is [USB4 v2.0](https://usb.org/documents).

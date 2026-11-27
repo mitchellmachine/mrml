@@ -1,4 +1,4 @@
-//! Polled USB 2 bulk IN/OUT on the addressed slot, with exact completion.
+//! Polled USB 2 and SuperSpeed bulk IN/OUT, with exact completion.
 use super::*;
 use crate::{BulkTransport, SECTOR_BYTES, find_bulk_interface};
 
@@ -9,12 +9,35 @@ pub struct BulkDma {
     pub buffer: u64,
 }
 
-/// Borrows the controller exclusively; this profile has no ring recycling.
+const LINK_INDEX: u8 = 15;
+
+#[derive(Clone, Copy)]
+struct Cursor {
+    index: u8,
+    cycle: bool,
+}
+
+impl Cursor {
+    const INITIAL: Self = Self {
+        index: 0,
+        cycle: true,
+    };
+
+    fn advance(&mut self) {
+        self.index += 1;
+        if self.index == LINK_INDEX {
+            self.index = 0;
+            self.cycle = !self.cycle;
+        }
+    }
+}
+
+/// Borrows the controller exclusively, with at most one outstanding transfer.
 pub struct BulkPipe<'a, P: Platform> {
     controller: &'a mut Controller<P>,
     dma: BulkDma,
     endpoint: [u8; 2],
-    enqueue: [u8; 2],
+    enqueue: [Cursor; 2],
     port: u8,
     ticks: u32,
 }
@@ -122,7 +145,7 @@ impl<P: Platform> Controller<P> {
             controller: self,
             dma,
             endpoint,
-            enqueue: [0; 2],
+            enqueue: [Cursor::INITIAL; 2],
             port,
             ticks,
         })
@@ -179,9 +202,6 @@ impl<P: Platform> BulkPipe<'_, P> {
         if !(1..=SECTOR_BYTES).contains(&len) {
             return Err(Error::Unsupported);
         }
-        if self.enqueue[direction] >= 15 {
-            return Err(Error::QueueExhausted);
-        }
         c.faulted = true;
         c.require_same_connection(self.port)?;
         if let Direction::Out(bytes) = &data {
@@ -190,13 +210,21 @@ impl<P: Platform> BulkPipe<'_, P> {
                 .map_err(Error::Platform)?;
         }
         let ring = [self.dma.input_ring, self.dma.output_ring][direction];
-        let trb = ring + u64::from(self.enqueue[direction]) * TRB_BYTES;
+        let head = self.enqueue[direction];
+        let cycle = u32::from(head.cycle);
+        let trb = ring + u64::from(head.index) * TRB_BYTES;
+        // The final Normal TRB is still software-owned. Publish the Link
+        // before that Normal TRB hands control to the controller. Entry zero
+        // retains the old cycle until the next transfer is actually issued.
+        if head.index + 1 == LINK_INDEX {
+            c.write_trb(trb + TRB_BYTES, ring, 0, (6 << 10) | (1 << 1) | cycle)?;
+        }
         let dci = self.endpoint[direction];
         c.write_trb(
             trb,
             self.dma.buffer,
             len as u32,
-            (1 << 10) | (1 << 5) | (1 << 2) | 1,
+            (1 << 10) | (1 << 5) | (1 << 2) | cycle,
         )?;
         c.platform.publish_dma().map_err(Error::Platform)?;
         c.write(c.registers.doorbell + 4, u32::from(dci))?;
@@ -211,7 +239,7 @@ impl<P: Platform> BulkPipe<'_, P> {
         if let Direction::In(bytes) = data {
             bytes.copy_from_slice(&staged[..len]);
         }
-        self.enqueue[direction] += 1;
+        self.enqueue[direction].advance();
         c.faulted = false;
         Ok(len)
     }

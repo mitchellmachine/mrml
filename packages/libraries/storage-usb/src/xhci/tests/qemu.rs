@@ -262,7 +262,11 @@ fn exercise_qemu(super_speed: bool) {
         let mut contents = [0xff; 512];
         disk.read_sector(3, &mut contents).unwrap();
         assert_eq!(contents, [0; 512]);
-        disk.write_sector_verified(3, &[0x5a; 512]).unwrap();
+        // Reuse every bulk and event ring entry across multiple cycle changes;
+        // each readback must reflect this write, not a previous DMA payload.
+        for pattern in 0x50..=0x5a {
+            disk.write_sector_verified(3, &[pattern; 512]).unwrap();
+        }
     }
     controller.halt(100).unwrap();
     let bytes = fs::read(&media).unwrap();
