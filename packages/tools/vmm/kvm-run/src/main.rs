@@ -3206,13 +3206,20 @@ fn application_main() -> Result<()> {
             let verified = provider_executable
                 .as_ref()
                 .ok_or_else(|| anyhow!("missing verified KVM Zstd provider"))?;
-            if !total.installed_admission().release().matches_service_executable(
-                spec, "org.mrml.zstd", verified,
-            ) {
+            let consumer = service_executable
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing verified KVM ZIM consumer"))?;
+            let release = total.installed_admission().release();
+            if !release.matches_service_executable(spec, "org.mrml.zstd", verified)
+                || !release.matches_service_executable_set([
+                    (spec, "org.mrml.zim", consumer),
+                    (spec, "org.mrml.zstd", verified),
+                ])
+            {
                 prepared.cancel_all(total.admission_mut()).map_err(|error| {
-                    anyhow!("KVM recovered provider cancellation failed: {:?}", error)
+                    anyhow!("KVM recovered executable set cancellation failed: {:?}", error)
                 })?;
-                return Err(anyhow!("KVM provider not bound to recovered domain and release"));
+                return Err(anyhow!("KVM service executable set not bound to recovered release"));
             }
             let route = prepared.take(domain).ok_or_else(|| {
                 anyhow!("KVM complete preparation omitted the recovered component route")
@@ -6171,11 +6178,26 @@ mod tests {
         let prepare = |owner: &mut RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>| {
             let prepared = owner.prepare_complete_service_set(&bindings).unwrap();
             let release = owner.installed_admission().release();
+            let entries = [0, 1].map(|i| {
+                (prepared.spec(DOMAINS[i]).unwrap(), IDS[i], &executables[i])
+            });
+            assert!(release.matches_service_executable_set(entries));
+            assert!(release.matches_service_executable_set(entries.into_iter().rev()));
+            assert!(!release.matches_service_executable_set([entries[0]]));
+            assert!(!release.matches_service_executable_set([entries[0], entries[0]]));
+            assert!(!release.matches_service_executable_set([
+                entries[0], entries[1], entries[1],
+            ]));
             for i in 0..2 {
-                let spec = prepared.spec(DOMAINS[i]).unwrap();
-                assert!(release.matches_service_executable(spec, IDS[i], &executables[i]));
-                assert!(!release.matches_service_executable(spec, IDS[1 - i], &executables[1 - i]));
-                assert!(!release.matches_service_executable(spec, IDS[i], &executables[1 - i]));
+                let (spec, _, _) = entries[i];
+                assert!(!release.matches_service_executable_set([
+                    entries[1 - i],
+                    (spec, IDS[i], &executables[1 - i]),
+                ]));
+                assert!(!release.matches_service_executable_set([
+                    entries[1 - i],
+                    (spec, IDS[1 - i], &executables[1 - i]),
+                ]));
             }
             prepared
         };

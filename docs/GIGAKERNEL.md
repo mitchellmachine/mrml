@@ -2504,6 +2504,19 @@ The separately signed two-VM test runs small diagnostic executables on hosted
 KVM; it does not boot the installed service set, exercise peer IPC, or qualify
 physical hardware. The grouped runner still launches ZIM and Zstd together.
 
+The recovered hosted startup now preflights the complete eligible service
+executable set before constructing its guest. The check consumes no routes
+and rejects missing, duplicate, or mismatched package assignments. Every
+member must carry its own authenticated package version and payload digest,
+even when two packages share one domain. The provider still separately
+matches the route's provider generation. KVM and WHP use this check for both
+signed artifacts in the grouped ZIM/Zstd probe. The opt-in separate-VM KVM
+test accepts either order and rejects incomplete, duplicate, and substituted
+sets before creating the guest objects. A freshly signed release containing
+ZIM version 1 and Zstd version 2 completed on both KVM and WHP with zero
+fallback and retired its grouped domain. This service-only gate does not
+implement installed-media discovery or peer IPC.
+
 The implemented backend-neutral VM boundary uses a fixed 64-byte `MRMLHC01`
 hypercall descriptor and a caller-owned copy buffer. Reserved bytes and
 operation-specific unused fields must be zero, sequences are exact and advance

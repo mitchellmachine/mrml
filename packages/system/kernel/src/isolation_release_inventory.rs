@@ -508,23 +508,69 @@ impl<const N: usize> ActivatedReleaseTotalMicrovmInventory<N> {
         package_id: &str,
         executable: &VerifiedExecutable<'_>,
     ) -> bool {
+        executable.artifact().version() == spec.provider_generation()
+            && self
+                .service_package_slot(spec, package_id, executable)
+                .is_some()
+    }
+
+    /// Validates every MicroVM-eligible package in this exact release before
+    /// any service construction. A colocated dependency keeps its own package
+    /// version, which need not be the interface provider's version.
+    pub fn matches_service_executable_set<'a, 'image: 'a>(
+        &self,
+        entries: impl IntoIterator<
+            Item = (
+                IsolationServiceSpec,
+                &'a str,
+                &'a VerifiedExecutable<'image>,
+            ),
+        >,
+    ) -> bool {
+        let mut matched = [false; N];
+        for (spec, package, executable) in entries {
+            let Some(slot) = self.service_package_slot(spec, package, executable) else {
+                return false;
+            };
+            if core::mem::replace(&mut matched[slot], true) {
+                return false;
+            }
+        }
+        self.release
+            .packages
+            .iter()
+            .zip(matched)
+            .all(|(package, matched)| {
+                package.as_ref().is_none_or(|package| {
+                    package.class != TotalMicrovmClass::MicrovmEligible || matched
+                })
+            })
+    }
+
+    fn service_package_slot(
+        &self,
+        spec: IsolationServiceSpec,
+        package_id: &str,
+        executable: &VerifiedExecutable<'_>,
+    ) -> Option<usize> {
         let artifact = executable.artifact();
         if spec.system_generation() != self.system_generation()
             || spec.policy_generation() != self.policy_generation()
             || spec.class() != TotalMicrovmClass::MicrovmEligible
             || spec.placement() != IsolationPlacement::Microvm
             || artifact.kind() != ArtifactKind::ServiceImage
-            || artifact.version() != spec.provider_generation()
         {
-            return false;
+            return None;
         }
         let name_digest = Sha3_256::digest(package_id.as_bytes());
-        self.release.packages.iter().flatten().any(|package| {
-            package.name_digest == name_digest
-                && package.domain == spec.domain()
-                && package.class == spec.class()
-                && package.version == artifact.version()
-                && &package.artifact_digest == artifact.digest()
+        self.release.packages.iter().position(|package| {
+            package.as_ref().is_some_and(|package| {
+                package.name_digest == name_digest
+                    && package.domain == spec.domain()
+                    && package.class == spec.class()
+                    && package.version == artifact.version()
+                    && &package.artifact_digest == artifact.digest()
+            })
         })
     }
 

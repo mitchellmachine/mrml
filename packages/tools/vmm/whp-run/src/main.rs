@@ -3014,13 +3014,20 @@ fn application_main() -> Result<()> {
             let verified = provider_executable
                 .as_ref()
                 .ok_or_else(|| anyhow!("missing verified WHP Zstd provider"))?;
-            if !total.installed_admission().release().matches_service_executable(
-                spec, "org.mrml.zstd", verified,
-            ) {
+            let consumer = service_executable
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing verified WHP ZIM consumer"))?;
+            let release = total.installed_admission().release();
+            if !release.matches_service_executable(spec, "org.mrml.zstd", verified)
+                || !release.matches_service_executable_set([
+                    (spec, "org.mrml.zim", consumer),
+                    (spec, "org.mrml.zstd", verified),
+                ])
+            {
                 prepared.cancel_all(total.admission_mut()).map_err(|error| {
-                    anyhow!("WHP recovered provider cancellation failed: {:?}", error)
+                    anyhow!("WHP recovered executable set cancellation failed: {:?}", error)
                 })?;
-                return Err(anyhow!("WHP provider not bound to recovered domain and release"));
+                return Err(anyhow!("WHP service executable set not bound to recovered release"));
             }
             let route = prepared.take(domain).ok_or_else(|| {
                 anyhow!("WHP complete preparation omitted the recovered component route")
