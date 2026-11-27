@@ -188,30 +188,57 @@ struct FirmwareTpm {
     protocol: *mut Tcg2Protocol,
 }
 
-struct FirmwareRng {
-    protocol: *mut RngProtocol,
+#[derive(Clone, Copy)]
+enum BootRandom {
+    Firmware(core::ptr::NonNull<RngProtocol>),
+    RdRand,
+}
+
+impl BootRandom {
+    fn fill(self, output: &mut [u8; 32]) -> Result<(), Status> {
+        *output = [0; 32];
+        match self {
+            Self::Firmware(protocol) => {
+                let protocol = protocol.as_ptr();
+                // SAFETY: LocateProtocol supplied the live interface; all callers
+                // are before ExitBootServices and output is writable for 32 bytes.
+                check(unsafe {
+                    ((*protocol).get_rng)(
+                        protocol,
+                        core::ptr::null(),
+                        output.len(),
+                        output.as_mut_ptr(),
+                    )
+                })?;
+            }
+            Self::RdRand => {
+                // Collect a fresh sample for each boot seed or TPM nonce.
+                *output = mrml_uefi::boot_random::collect(|| {
+                    let mut word = 0;
+                    // SAFETY: the selected CPU supports RDRAND, and word is writable.
+                    (unsafe { core::arch::x86_64::_rdrand64_step(&mut word) } == 1).then_some(word)
+                })
+                .ok_or(LOAD_ERROR)?;
+            }
+        }
+        if *output == [0; 32] {
+            return Err(LOAD_ERROR);
+        }
+        Ok(())
+    }
 }
 
 struct PreparedRelease {
-    journal: PcrReleaseStateJournal<FirmwareTpm, FirmwareRng>,
+    journal: PcrReleaseStateJournal<FirmwareTpm, BootRandom>,
     admission: PendingBootRelease,
 }
 
 const MAX_TPM_COMMAND_BYTES: usize = 256;
 const _: () = assert!(MAX_TPM_COMMAND_BYTES >= 35 + mrml_storage::RELEASE_STATE_JOURNAL_SLOT_BYTES);
 
-impl TpmNonceSource for FirmwareRng {
+impl TpmNonceSource for BootRandom {
     fn fill_nonce(&mut self, output: &mut [u8; 32]) -> Result<(), NvCounterError> {
-        let protocol = unsafe { self.protocol.as_mut() }.ok_or(NvCounterError::Transport)?;
-        check(unsafe {
-            (protocol.get_rng)(
-                protocol,
-                core::ptr::null(),
-                output.len(),
-                output.as_mut_ptr(),
-            )
-        })
-        .map_err(|_| NvCounterError::Transport)
+        self.fill(output).map_err(|_| NvCounterError::Transport)
     }
 }
 
@@ -687,29 +714,29 @@ unsafe fn boot(
 
     trace.at("firmware RNG: LocateProtocol");
     let mut rng_pointer = core::ptr::null_mut();
-    check(unsafe {
-        (services.locate_protocol)(&RNG_GUID, core::ptr::null_mut(), &mut rng_pointer)
-    })?;
-    trace.at("firmware RNG: GetRNG");
-    let rng = unsafe { (rng_pointer as *mut RngProtocol).as_mut() }.ok_or(LOAD_ERROR)?;
+    let status =
+        unsafe { (services.locate_protocol)(&RNG_GUID, core::ptr::null_mut(), &mut rng_pointer) };
+    let rng = if status == NOT_FOUND {
+        trace.at("CPU RNG: RDRAND availability");
+        if core::arch::x86_64::__cpuid(1).ecx & (1 << 30) == 0 {
+            return Err(LOAD_ERROR);
+        }
+        trace.at("CPU RNG: RDRAND");
+        BootRandom::RdRand
+    } else {
+        check(status)?;
+        trace.at("firmware RNG: GetRNG");
+        BootRandom::Firmware(core::ptr::NonNull::new(rng_pointer.cast()).ok_or(LOAD_ERROR)?)
+    };
     let mut entropy = [0u8; 32];
-    check(unsafe { (rng.get_rng)(rng, core::ptr::null(), entropy.len(), entropy.as_mut_ptr()) })?;
-    if entropy.iter().all(|byte| *byte == 0) {
-        trace.stage = "firmware RNG: all-zero entropy rejected";
-        return Err(LOAD_ERROR);
-    }
+    rng.fill(&mut entropy)?;
+
     paint(framebuffer, [0x80, 0x40, 0x00]);
 
     trace.at("release and recovery configuration");
     let recovery_configuration = configured_recovery_journal()?;
     let mut prepared_release = unsafe {
-        prepare_configured_release(
-            image,
-            services,
-            framebuffer,
-            rng_pointer.cast(),
-            recovery_configuration,
-        )
+        prepare_configured_release(image, services, framebuffer, rng, recovery_configuration)
     }?;
 
     trace.at("load kernel from boot volume");
@@ -1037,8 +1064,7 @@ unsafe fn boot(
     if require_rollback_counter() && !rollback_protected {
         return Err(LOAD_ERROR);
     }
-    let recovery_state =
-        admit_configured_recovery_journal(services, rng_pointer.cast(), recovery_configuration)?;
+    let recovery_state = admit_configured_recovery_journal(services, rng, recovery_configuration)?;
     let installed_recovery =
         validate_configured_installed_recovery(services, image, recovery_state)?;
     let coherent_release = prepared_release.is_some();
@@ -1293,7 +1319,7 @@ unsafe fn prepare_configured_release(
     image: Handle,
     services: &BootServices,
     framebuffer: Framebuffer,
-    rng: *mut RngProtocol,
+    rng: BootRandom,
     recovery: Option<RecoveryJournalConfiguration>,
 ) -> Result<Option<PreparedRelease>, Status> {
     let Some(configuration) = configured_release_state_journal()? else {
@@ -1303,9 +1329,6 @@ unsafe fn prepare_configured_release(
             Ok(None)
         };
     };
-    if rng.is_null() {
-        return Err(LOAD_ERROR);
-    }
     let (layout, policy) = configuration.into_parts();
     if let Some(recovery) = recovery {
         let (recovery_layout, _) = recovery.into_parts();
@@ -1338,9 +1361,8 @@ unsafe fn prepare_configured_release(
     let transport = FirmwareTpm {
         protocol: protocol_pointer.cast(),
     };
-    let nonce_source = FirmwareRng { protocol: rng };
-    let journal = open_release_state_journal(transport, nonce_source, layout, policy)
-        .map_err(|_| LOAD_ERROR)?;
+    let journal =
+        open_release_state_journal(transport, rng, layout, policy).map_err(|_| LOAD_ERROR)?;
     let mut expected = [0; BOOTSTRAP_STATE_BYTES];
     journal
         .load_authenticated(&mut expected)
@@ -1385,15 +1407,12 @@ unsafe fn prepare_configured_release(
 
 fn admit_configured_recovery_journal(
     services: &BootServices,
-    rng: *mut RngProtocol,
+    rng: BootRandom,
     configuration: Option<RecoveryJournalConfiguration>,
 ) -> Result<Option<RecoveryStateMetadata>, Status> {
     let Some(configuration) = configuration else {
         return Ok(None);
     };
-    if rng.is_null() {
-        return Err(LOAD_ERROR);
-    }
     let mut protocol_pointer = core::ptr::null_mut();
     check(unsafe {
         (services.locate_protocol)(
@@ -1406,9 +1425,7 @@ fn admit_configured_recovery_journal(
     let transport = FirmwareTpm {
         protocol: protocol_pointer.cast(),
     };
-    let nonce_source = FirmwareRng { protocol: rng };
-    let journal =
-        open_recovery_journal(transport, nonce_source, layout, policy).map_err(|_| LOAD_ERROR)?;
+    let journal = open_recovery_journal(transport, rng, layout, policy).map_err(|_| LOAD_ERROR)?;
     let mut state = [0; AUTHORITY_RECOVERY_STATE_BYTES];
     let result = journal
         .load_authenticated(&mut state)

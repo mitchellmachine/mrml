@@ -1328,8 +1328,9 @@ into bounded static storage and passes its address and exact length to a
 separately built kernel PE entry point.
 
 `mrml-loader.efi` is now a repository-owned PE/COFF UEFI application with raw
-ABI definitions rather than a firmware crate dependency. It locates required
-GOP and RNG protocols, rejects unsupported modes and zero entropy, obtains a
+ABI definitions rather than a firmware crate dependency. It locates the required
+GOP protocol and obtains boot randomness from the firmware RNG or the documented
+x86-64 fallback. It rejects unsupported modes and zero entropy, obtains a
 bounded memory map, retries the map-key-sensitive `ExitBootServices` transition,
 and retains only copied framebuffer values afterward. The framebuffer changes
 from blue before the transition to green after successful exit, providing a

@@ -40,9 +40,17 @@ Boot the UEFI Shell and run `map -r`, then use the USB filesystem mapping
 to launch `fsN:\EFI\BOOT\BOOTX64.EFI` (replace `N` with the USB mapping).
 The loader prints `MRML: UEFI loader started` using firmware text output,
 then names each stage. If it returns before the boot-services exit attempt,
-record the `MRML: FAILED at ...` line and hexadecimal EFI status. For example,
-a failure at `firmware RNG: LocateProtocol` means the loader could not obtain
-the firmware RNG protocol, not that the disk image or FAT32 test failed.
+record the `MRML: FAILED at ...` line and hexadecimal EFI status.
+
+The loader prefers the UEFI RNG protocol. Only when the protocol lookup returns
+`EFI_NOT_FOUND` does x86-64 try the CPU's RDRAND instruction. It checks CPUID
+before executing RDRAND and allows ten attempts for each of four 64-bit words.
+The selected source supplies the 32-byte boot seed and fresh TPM journal nonces.
+An advertised firmware RNG that fails is not bypassed. Missing CPU support,
+exhausted retries, or an all-zero sample stops boot; the EFI console identifies
+the source and stage without logging random bytes. This does not change Secure
+Boot, package verification, or TPM policy.
+
 If the shell prints no MRML line at all, record the shell's own status;
 firmware may have rejected the executable before entering it, or provided
 no working firmware text console. After the last memory-map message the

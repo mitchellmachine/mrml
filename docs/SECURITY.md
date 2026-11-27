@@ -608,7 +608,8 @@ on the raw transport, then constructs the provider from that sealed admission;
 mismatched layout policy never yields a usable store.
 The UEFI loader's optional development integration requires all six exact
 configuration fields together, obtains every session nonce from a separate
-firmware RNG call, and authenticates only the counter-selected slot before
+call to the selected boot RNG (firmware first, CPU fallback only when the
+firmware protocol is missing), and authenticates only the counter-selected slot before
 `ExitBootServices`. Partial configuration and all TPM/RNG uncertainty fail
 closed; temporary recovery bytes are erased. This admission is not owner
 provisioning, authority reconstruction, artifact rollback evidence, remote

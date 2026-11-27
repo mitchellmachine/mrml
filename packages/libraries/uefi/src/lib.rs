@@ -1,5 +1,50 @@
 #![no_std]
 
+pub mod boot_random {
+    /// Fills a 32-byte sample with four independently successful RDRAND words.
+    /// An unavailable word is retried at most ten times; no partial sample escapes.
+    pub fn collect(mut next_word: impl FnMut() -> Option<u64>) -> Option<[u8; 32]> {
+        let mut sample = [0; 32];
+        for chunk in sample.chunks_exact_mut(8) {
+            let word = (0..10).find_map(|_| next_word())?;
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        Some(sample)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::collect;
+
+        #[test]
+        fn retries_each_word_without_using_failed_attempts() {
+            let mut attempts = 0u64;
+            let sample = collect(|| {
+                attempts += 1;
+                (attempts.is_multiple_of(10)).then_some(attempts)
+            })
+            .unwrap();
+            assert_eq!(attempts, 40);
+            for (word, expected) in sample.chunks_exact(8).zip([10u64, 20, 30, 40]) {
+                assert_eq!(word, expected.to_le_bytes());
+            }
+        }
+
+        #[test]
+        fn exhausted_retries_discard_the_partial_sample() {
+            let mut attempts = 0;
+            assert_eq!(
+                collect(|| {
+                    attempts += 1;
+                    (attempts <= 2).then_some(42)
+                }),
+                None
+            );
+            assert_eq!(attempts, 12);
+        }
+    }
+}
+
 pub mod tpm;
 
 use core::ffi::c_void;
