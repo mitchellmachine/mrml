@@ -276,7 +276,7 @@ fn record_coff_section_rebinding(
 #[cfg(windows)]
 #[used]
 #[unsafe(link_section = ".drectve")]
-static WINDOWS_STACK_RESERVE: [u8; 16] = *b"/STACK:16777216 ";
+static WINDOWS_STACK_RESERVE: [u8; 16] = *b"/STACK:33554432 ";
 
 #[cfg_attr(test, allow(dead_code))]
 fn application_main() -> Result<()> {
