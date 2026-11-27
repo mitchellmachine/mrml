@@ -24,7 +24,7 @@ pub struct RecoveredReachableState<const E: usize, const O: usize> {
 /// integrity-validated graph selected by redundant-root recovery.
 #[derive(Clone, Copy)]
 pub struct ReachableFileSelection<'a, const E: usize> {
-    selected: RecoveredSuperblock,
+    selected: &'a RecoveredSuperblock,
     file: &'a FileState<E>,
 }
 
@@ -43,6 +43,15 @@ impl<'a, const E: usize> ReachableFileSelection<'a, E> {
 
     pub const fn generation(&self) -> u64 {
         self.file.generation()
+    }
+
+    /// True only for selections borrowed from one validated recovery graph.
+    /// Equal generation numbers (even on identical copies) do not join graphs.
+    pub fn same_recovered_root<const OTHER: usize>(
+        &self,
+        other: &ReachableFileSelection<'_, OTHER>,
+    ) -> bool {
+        core::ptr::eq(self.selected, other.selected)
     }
 
     pub const fn file_state(self) -> &'a FileState<E> {
@@ -64,7 +73,7 @@ impl<const E: usize, const O: usize> RecoveredReachableState<E, O> {
 
     pub fn select_file(&self, object: StorageObjectId) -> Option<ReachableFileSelection<'_, E>> {
         self.file(object).map(|file| ReachableFileSelection {
-            selected: self.selected,
+            selected: &self.selected,
             file,
         })
     }

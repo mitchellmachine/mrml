@@ -60,6 +60,44 @@ ready. "Gigakernel" is MRML's name for this combination of design choices,
 not a claim of architectural priority or of formal verification equivalent to
 Hyperkernel's or seL4's.
 
+## Privileged footprint baseline
+
+Baseline: `a9ca7377`, x86-64, default release kernel image, dated
+`nightly-2026-11-26` on Arch WSL. Build with
+`mrml build org.mrml.system.bootloader --target uefi-x86_64 --release`
+without a diagnostic feature profile. In the resulting `mrml-kernel-pe.efi`,
+the only executable PE section was `.text`: **35,133 virtual bytes**
+(35,328 file bytes with alignment). The whole PE was 2,144,256 bytes;
+it was mostly data, not executable text. This excludes the separate EFI
+loader, and is not an estimate of source lines or a complete trusted base.
+
+The default image's privileged entry sets up descriptor and exception
+handling, decodes the boot handoff, and validates early kernel state.
+Malformed input and the terminal bootstrap path halt. The normal image
+does not yet start installed service MicroVMs, so there is no live guest
+service dispatch surface to count for this build. The DPL-3 user-call
+gate and guest-facing service paths in the diagnostic profiles are not
+part of the default boot baseline. The separate VMX monitor, hosted KVM
+and WHP, firmware, and the loader's package and memory-map handling are
+different trust boundaries and not included in the number above.
+
+For the first normal image that starts installed services, remeasure the
+executable sections and enumerate every guest-reachable entry: hypercall
+and trapped instruction dispatch, interrupts, route/queue validation, and
+page and device teardown wherever enabled. Keep only enforcement mechanics
+privileged; prefer movement of policy and parsing to admitted services
+where the working lifecycle can sustain it. Do not compare PE bytes
+directly with Hyperkernel's reported source-line count.
+
+Installed recovery now joins the configuration, authority checkpoint,
+deployment checkpoint, and signed-release file selections only when all
+were borrowed from the same validated recovery graph. Equal on-disk volume
+and generation numbers do not establish that relationship. This is a local
+provenance check; separate file capabilities and signature verification
+remain required. The hosted recovery regression rejects a checkpoint and a
+release selected from a separately validated copy with identical generation
+metadata.
+
 ## Implementation evidence
 
 The current UEFI filesystem calls load boot artifacts and the current GOP

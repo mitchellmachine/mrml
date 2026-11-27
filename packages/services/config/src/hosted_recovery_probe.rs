@@ -1418,8 +1418,32 @@ mod tests {
             &mut previous_scratch,
         )
         .unwrap();
+        // A separately recovered graph with the same volume and generation
+        // cannot contribute checkpoint files to this selection.
+        let mut clone_scratch = [0; BLOCK_BYTES];
+        let mut clone_backend =
+            build_reachable_device(14, 1, &configuration, 1, &authority, None).unwrap();
+        let mut clone_service = recovery_block_service().unwrap();
+        let cloned = recover_reachable_files(
+            &mut clone_service,
+            &mut clone_backend,
+            installed_boot_identity(14).unwrap(),
+            &mut clone_scratch,
+        )
+        .unwrap();
         let selected = current.selected();
         let configuration_selection = selected.configuration();
+        let cloned_selection = cloned.selected();
+        assert_eq!(selected.volume(), cloned_selection.volume());
+        assert_eq!(selected.root_generation(), cloned_selection.root_generation());
+        assert!(!configuration_selection.same_recovered_root(&cloned_selection.authority_checkpoint()));
+        assert!(matches!(
+            SelectedStableSystemRecovery::new(
+                configuration_selection,
+                cloned_selection.authority_checkpoint(),
+            ),
+            Err(SelectedStableSystemRecoveryError::RootMismatch)
+        ));
         assert_eq!(selected.volume(), volume());
         assert_eq!(selected.root_generation(), 14);
         assert!(matches!(
@@ -1471,6 +1495,15 @@ mod tests {
                 previous.selected().authority_checkpoint(),
                 deployment_selection,
                 release_selection,
+            ),
+            Err(SelectedStableSystemRecoveryError::RootMismatch)
+        ));
+        assert!(matches!(
+            SelectedStableTotalSystemRecovery::new(
+                configuration_selection,
+                selected.authority_checkpoint(),
+                deployment_selection,
+                cloned_selection.system_release(),
             ),
             Err(SelectedStableSystemRecoveryError::RootMismatch)
         ));

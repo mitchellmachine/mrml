@@ -2754,9 +2754,7 @@ impl<'a, const CONFIG_EXTENTS: usize, const AUTH_EXTENTS: usize>
         configuration: ReachableFileSelection<'a, CONFIG_EXTENTS>,
         authority_checkpoint: ReachableFileSelection<'a, AUTH_EXTENTS>,
     ) -> Result<Self, SelectedStableSystemRecoveryError> {
-        if configuration.volume() != authority_checkpoint.volume()
-            || configuration.root_generation() != authority_checkpoint.root_generation()
-        {
+        if !configuration.same_recovered_root(&authority_checkpoint) {
             return Err(SelectedStableSystemRecoveryError::RootMismatch);
         }
         if configuration.object() == authority_checkpoint.object() {
@@ -2808,9 +2806,7 @@ impl<'a, const EXTENTS: usize> SelectedStableTotalSystemRecovery<'a, EXTENTS> {
             system_release,
         ];
         for selection in &selections[1..] {
-            if selection.volume() != configuration.volume()
-                || selection.root_generation() != configuration.root_generation()
-            {
+            if !configuration.same_recovered_root(selection) {
                 return Err(SelectedStableSystemRecoveryError::RootMismatch);
             }
         }
