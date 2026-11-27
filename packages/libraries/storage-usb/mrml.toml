@@ -43,11 +43,3 @@ triple = "x86_64-unknown-uefi"
 
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]
-
-[[build_input]]
-fingerprint = "fnv1a64:8db0f15f31a6d4fb"
-id = "external-command.audit-exercise-qemu.qemu-system-x86-64.1"
-kind = "external-command"
-line = 132
-path = "packages/libraries/storage-usb/src/xhci/tests/qemu.rs"
-reason = "Launch QEMU only in the opt-in host xHCI controller test; the two emulated USB modes use only disposable guest RAM and temporary images, with sector-write readback and unplug rejection verified from the host."

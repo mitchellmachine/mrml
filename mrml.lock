@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 217
+compile_edges = 219
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 195
+package_edges = 197
 system_release_edges = 3
 
 [[package]]
@@ -826,6 +826,19 @@ isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.acme", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.library.tls", "org.mrml.service.certificate", "org.mrml.zim"]
 
 static_runtime = ["org.mrml.library.acme", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.library.tls", "org.mrml.service.certificate", "org.mrml.zim"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.test.usb-fat32-qtest"
+path = "packages/tests/usb-fat32-qtest"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
+compile_dependencies = ["org.mrml.library.storage.fat32", "org.mrml.library.storage.usb"]
+
+static_runtime = ["org.mrml.library.storage.fat32", "org.mrml.library.storage.usb"]
 boot_bound = []
 system_release_bound = []
 

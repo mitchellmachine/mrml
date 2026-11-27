@@ -1,5 +1,9 @@
-extern crate std;
-use self::std::{
+use mrml_storage_fat32::{
+    Fat32EntryReader, FixedFileWriteError, VerifiedSectorDevice, overwrite_fixed_file,
+    parse_fat32_boot_sector, parse_fat32_short_directory, read_fat32_cluster_chain,
+};
+use mrml_storage_usb::xhci::{BulkDma, Controller, DeviceDma, DmaLayout, Error, Platform};
+use std::{
     format, fs,
     io::{self, BufRead, BufReader, Write},
     os::unix::net::UnixStream,
@@ -8,7 +12,13 @@ use self::std::{
     thread,
     time::Duration,
 };
-use super::*;
+
+const DMA: DmaLayout = DmaLayout {
+    device_contexts: 0x10_0000,
+    command_ring: 0x10_0100,
+    event_segments: 0x10_0200,
+    event_ring: 0x10_0300,
+};
 
 const BAR: u32 = 0xfeb0_0000;
 
@@ -125,9 +135,10 @@ fn exercise_qemu(super_speed: bool) {
     let sock = dir.join("qtest.sock");
     let qmp_sock = dir.join("qmp.sock");
     let media = dir.join("media.img");
+    let mut expected = synthetic_image();
     fs::File::create_new(&media)
         .unwrap()
-        .set_len(2 * 1024 * 1024)
+        .write_all(&expected)
         .unwrap();
     let mut child = Command::new("qemu-system-x86_64")
         .args([
@@ -202,16 +213,16 @@ fn exercise_qemu(super_speed: bool) {
     qtest.config(0x14, 0).unwrap();
     qtest.config(4, 6).unwrap();
     let mut controller = Controller::start(qtest, 0x4000, DMA, 100).unwrap();
-    let port = (1..=controller.registers.ports)
-        .find(|&port| controller.port_status(port).unwrap().connected)
+    let port = (1..=u8::MAX)
+        .find(|&port| {
+            controller
+                .port_status(port)
+                .is_ok_and(|status| status.connected)
+        })
         .expect("emulated USB disk should be connected");
     assert_eq!(
         controller.port_status(port).unwrap().speed_id,
-        if super_speed {
-            SUPER_SPEED_ID
-        } else {
-            HIGH_SPEED_ID
-        }
+        if super_speed { 4 } else { 3 }
     );
     controller.no_op(100).unwrap();
     let dma = DeviceDma {
@@ -247,7 +258,7 @@ fn exercise_qemu(super_speed: bool) {
     controller
         .read_descriptor(2, 0, &mut configuration[..length], 100)
         .unwrap();
-    let interface = crate::find_bulk_interface(&configuration[..length]).unwrap();
+    let interface = mrml_storage_usb::find_bulk_interface(&configuration[..length]).unwrap();
     assert_ne!(interface.bulk_in & 0x80, 0);
     assert_eq!(interface.bulk_out & 0x80, 0);
     assert!(matches!(
@@ -263,34 +274,30 @@ fn exercise_qemu(super_speed: bool) {
         let pipe = controller
             .configure_bulk(&configuration[..length], bulk_dma, 1000)
             .unwrap();
-        let mut disk = crate::UsbDisk::probe(pipe).unwrap();
-        assert_eq!(disk.sectors(), 4096);
-        let mut contents = [0xff; 512];
-        disk.read_sector(3, &mut contents).unwrap();
-        assert_eq!(contents, [0; 512]);
-        // Reuse every bulk and event ring entry across multiple cycle changes;
-        // each readback must reflect this write, not a previous DMA payload.
-        for pattern in 0x50..=0x5a {
-            disk.write_sector_verified(3, &[pattern; 512]).unwrap();
-        }
+        let mut disk = mrml_storage_usb::UsbDisk::probe(pipe).unwrap();
+        assert_eq!(disk.sectors(), (START + TOTAL) as u64);
+        exercise_fat32(&mut disk);
         qmp.remove_stick();
         assert!(matches!(
             disk.write_sector_verified(4, &[0xc3; 512]),
-            Err(crate::Error::Transport(Error::InvalidPort))
+            Err(mrml_storage_usb::Error::Transport(Error::InvalidPort))
         ));
         assert!(matches!(
             disk.write_sector_verified(4, &[0x3c; 512]),
-            Err(crate::Error::Faulted)
+            Err(mrml_storage_usb::Error::Faulted)
         ));
     }
     controller.halt(100).unwrap();
+    sector_mut(&mut expected, FILE_SECTOR)[..3].copy_from_slice(b"new");
     let bytes = fs::read(&media).unwrap();
-    assert_eq!(&bytes[3 * 512..4 * 512], &[0x5a; 512]);
-    assert!(
-        bytes[..3 * 512]
+    assert_eq!(bytes.len(), expected.len());
+    assert_eq!(
+        bytes
             .iter()
-            .chain(&bytes[4 * 512..])
-            .all(|&byte| byte == 0)
+            .zip(&expected)
+            .position(|(actual, expected)| actual != expected),
+        None,
+        "unexpected byte offset in persisted image"
     );
 }
 
@@ -341,4 +348,164 @@ impl Qmp {
         }
         panic!("QEMU did not confirm deletion of the emulated USB disk");
     }
+}
+
+const SECTOR: usize = 512;
+const START: usize = 32;
+const RESERVED: usize = 32;
+const FAT_LEN: usize = 520;
+const DATA: usize = RESERVED + 2 * FAT_LEN;
+const TOTAL: usize = DATA + 65_525;
+const FILE_SECTOR: usize = START + DATA + 1;
+
+fn synthetic_image() -> Vec<u8> {
+    // One known partition; exclusive ownership and no aliases follow from
+    // constructing the entire disposable image here, not from its name.
+    let mut image = vec![0; (START + TOTAL) * SECTOR];
+    let mbr = &mut image[..SECTOR];
+    mbr[450] = 0x0c;
+    mbr[454..458].copy_from_slice(&(START as u32).to_le_bytes());
+    mbr[458..462].copy_from_slice(&(TOTAL as u32).to_le_bytes());
+    mbr[510..512].copy_from_slice(&[0x55, 0xaa]);
+
+    let boot = sector_mut(&mut image, START);
+    boot[..3].copy_from_slice(&[0xeb, 0x58, 0x90]);
+    boot[3..11].copy_from_slice(b"MRMLTEST");
+    boot[11..13].copy_from_slice(&(SECTOR as u16).to_le_bytes());
+    boot[13] = 1;
+    boot[14..16].copy_from_slice(&(RESERVED as u16).to_le_bytes());
+    boot[16] = 2;
+    boot[21] = 0xf8;
+    boot[28..32].copy_from_slice(&(START as u32).to_le_bytes());
+    boot[32..36].copy_from_slice(&(TOTAL as u32).to_le_bytes());
+    boot[36..40].copy_from_slice(&(FAT_LEN as u32).to_le_bytes());
+    boot[44..48].copy_from_slice(&2u32.to_le_bytes());
+    boot[64] = 0x80;
+    boot[66] = 0x29;
+    boot[67..71].copy_from_slice(&42u32.to_le_bytes());
+    boot[71..82].copy_from_slice(b"NO NAME    ");
+    boot[82..90].copy_from_slice(b"FAT32   ");
+    boot[510..512].copy_from_slice(&[0x55, 0xaa]);
+    for table in [START + RESERVED, START + RESERVED + FAT_LEN] {
+        for (index, value) in [0x0fff_fff8u32, 0x0fff_ffff, 0x0fff_ffff, 0x0fff_ffff]
+            .into_iter()
+            .enumerate()
+        {
+            sector_mut(&mut image, table)[index * 4..index * 4 + 4]
+                .copy_from_slice(&value.to_le_bytes());
+        }
+    }
+    let root = sector_mut(&mut image, START + DATA);
+    root[..11].copy_from_slice(b"PROBE   TXT");
+    root[11] = 0x20;
+    root[26..28].copy_from_slice(&3u16.to_le_bytes());
+    root[28..32].copy_from_slice(&3u32.to_le_bytes());
+    let data = sector_mut(&mut image, FILE_SECTOR);
+    data.fill(0xa5);
+    data[..3].copy_from_slice(b"old");
+    image
+}
+
+fn sector_mut(image: &mut [u8], lba: usize) -> &mut [u8] {
+    &mut image[lba * SECTOR..(lba + 1) * SECTOR]
+}
+
+struct TestPartition<'a, T: mrml_storage_usb::BulkTransport>(&'a mut mrml_storage_usb::UsbDisk<T>);
+
+impl<T: mrml_storage_usb::BulkTransport> TestPartition<'_, T> {
+    fn lba(sector: u32) -> u64 {
+        assert!((sector as usize) < TOTAL, "fixture partition out of bounds");
+        (START as u64) + u64::from(sector)
+    }
+}
+
+impl<T: mrml_storage_usb::BulkTransport> VerifiedSectorDevice for TestPartition<'_, T> {
+    type Error = mrml_storage_usb::Error<T::Error>;
+
+    fn read_sector(&mut self, sector: u32, output: &mut [u8; SECTOR]) -> Result<(), Self::Error> {
+        self.0.read_sector(Self::lba(sector), output)
+    }
+
+    fn write_sector_verified(
+        &mut self,
+        sector: u32,
+        input: &[u8; SECTOR],
+    ) -> Result<(), Self::Error> {
+        self.0.write_sector_verified(Self::lba(sector), input)
+    }
+}
+
+impl<T: mrml_storage_usb::BulkTransport> Fat32EntryReader for TestPartition<'_, T> {
+    fn read_entry(&mut self, fat_index: u8, cluster: u32) -> Result<u32, ()> {
+        assert!(fat_index < 2 && matches!(cluster, 2 | 3));
+        let table = RESERVED + usize::from(fat_index) * FAT_LEN;
+        let mut bytes = [0; SECTOR];
+        self.read_sector(table as u32, &mut bytes).map_err(|_| ())?;
+        let offset = cluster as usize * 4;
+        Ok(u32::from_le_bytes(
+            bytes[offset..offset + 4].try_into().unwrap(),
+        ))
+    }
+}
+
+fn exercise_fat32<T>(disk: &mut mrml_storage_usb::UsbDisk<T>)
+where
+    T: mrml_storage_usb::BulkTransport,
+    T::Error: std::fmt::Debug,
+{
+    let mut mbr = [0; SECTOR];
+    disk.read_sector(0, &mut mbr).unwrap();
+    assert_eq!(&mbr[510..], &[0x55, 0xaa]);
+    assert_eq!(mbr[450], 0x0c);
+    assert_eq!(
+        u32::from_le_bytes(mbr[454..458].try_into().unwrap()),
+        START as u32
+    );
+    assert_eq!(
+        u32::from_le_bytes(mbr[458..462].try_into().unwrap()),
+        TOTAL as u32
+    );
+
+    let mut partition = TestPartition(disk);
+    let mut boot = [0; SECTOR];
+    partition.read_sector(0, &mut boot).unwrap();
+    let geometry = parse_fat32_boot_sector(&boot).unwrap();
+    assert_eq!(geometry.total_sectors, TOTAL as u32);
+    assert_eq!(geometry.data_start_sector, DATA as u32);
+    assert_eq!(geometry.root_cluster, 2);
+
+    let root =
+        read_fat32_cluster_chain::<1, _>(geometry, geometry.root_cluster, &mut partition).unwrap();
+    assert_eq!(root.clusters(), &[2]);
+    let mut directory = [0; SECTOR];
+    partition
+        .read_sector(geometry.data_start_sector, &mut directory)
+        .unwrap();
+    let entries = parse_fat32_short_directory::<2>(geometry, &directory).unwrap();
+    let [entry] = entries.entries() else {
+        panic!("expected exactly one fixture file");
+    };
+    assert_eq!(entry.short_name, *b"PROBE   TXT");
+    let chain =
+        read_fat32_cluster_chain::<1, _>(geometry, entry.first_cluster, &mut partition).unwrap();
+    assert_eq!(chain.clusters(), &[3]);
+    assert!(matches!(
+        overwrite_fixed_file(&mut partition, geometry, *entry, &chain, b"bad", b"new"),
+        Err(FixedFileWriteError::StaleContents)
+    ));
+    let mut contents = [0; SECTOR];
+    partition
+        .read_sector((DATA + 1) as u32, &mut contents)
+        .unwrap();
+    assert_eq!(&contents[..3], b"old");
+    assert_eq!(&contents[3..], &[0xa5; SECTOR - 3]);
+    // Cross multiple bulk and event ring wraps without changing any other byte
+    // in the image. Each readback must see the newly written payload.
+    let mut previous = *b"old";
+    for byte in b'A'..=b'K' {
+        let next = [byte; 3];
+        overwrite_fixed_file(&mut partition, geometry, *entry, &chain, &previous, &next).unwrap();
+        previous = next;
+    }
+    overwrite_fixed_file(&mut partition, geometry, *entry, &chain, &previous, b"new").unwrap();
 }

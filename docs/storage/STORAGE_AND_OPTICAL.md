@@ -2885,18 +2885,30 @@ SuperSpeed device. It reads descriptors on endpoint zero, binds one
 configuration with a single Bulk-Only Transport interface, and makes exact,
 bounded bulk transfers. The two bulk endpoint rings recycle with Link TRBs
 and independent cycle bits, only after exact, successful transfer completion
-and connection revalidation. The opt-in QEMU qtest performs capacity discovery,
-a sector read, and repeated write/cache synchronization/readback across multiple
-bulk and event ring wraps on disposable images in both modes. A separate host
-read verifies that only the intended sector changed. After QEMU confirms
-removal of the emulated disk, the first write through the old session is
-rejected at the port check, later writes return a latched fault, and the
-target sector remains unchanged. This tests removal between requests, not
+and connection revalidation. The Linux host QEMU qtest links the public USB
+and FAT32 libraries without adding a dependency between them. In both emulated
+USB modes, the fixture reads the partition table, FAT32 boot sector, directory,
+and mirrored FAT entries through the xHCI disk. It rejects a stale expected
+payload and performs repeated fixed-file overwrites across bulk and event ring
+wraps. The host compares the entire persisted image against its expected bytes:
+only the three payload bytes in `PROBE.TXT` differ. Sector slack, partition
+and FAT32 metadata, and the rest of the disk stay unchanged. After confirmed
+emulated unplug, the old session rejects a write at the port check and latches
+the fault for later operations. This covers removal between requests, not
 mid-transfer removal, recovery, hardware speed, power-loss durability, or
 certification.
 
-Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
-partition admission, and FAT32 connection remain unimplemented. The
+Run the opt-in fixture on Linux with QEMU installed from the repository root:
+
+```bash
+./target/debug/mrml test org.mrml.test.usb-fat32-qtest --target linux
+./target/mrml-native/linux/debug/mrml_usb_fat32_qtest_tests --ignored
+```
+
+The partition bounds and exclusivity in this test are supplied by its private
+synthetic image, not by a native storage authority. Native PCI/DMA assignment
+and revocation, bulk endpoint recovery, writable partition admission, and
+connection to the native FAT32 service remain unimplemented. The
 controller has one slot, no scratchpads, nonwrapping command and control
 queues, and no hub support. The existing Dragonair test exercises
 firmware USB access and embedded FAT32, not this native path.

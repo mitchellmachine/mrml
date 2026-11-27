@@ -157,6 +157,3 @@ fn a_timeout_or_wrong_command_pointer_faults_the_session() {
         controller.halt(5).unwrap();
     }
 }
-
-#[cfg(unix)]
-mod qemu;

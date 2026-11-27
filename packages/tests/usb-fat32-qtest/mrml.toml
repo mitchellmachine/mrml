@@ -1,0 +1,46 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.test.usb-fat32-qtest"
+kind = "test"
+name = "mrml-usb-fat32-qtest"
+profile = "test"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_usb_fat32_qtest"
+
+[rust]
+crate_name = "mrml_usb_fat32_qtest"
+crate_type = "lib"
+source = "packages/tests/usb-fat32-qtest/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_storage_fat32"
+compile_name = "mrml-storage-fat32"
+package = "org.mrml.library.storage.fat32"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_storage_usb"
+compile_name = "mrml-storage-usb"
+package = "org.mrml.library.storage.usb"
+scope = "compile"
+
+[[host_test]]
+targets = ["LINUX"]
+
+[[build_input]]
+fingerprint = "fnv1a64:8db0f15f31a6d4fb"
+id = "external-command.audit-exercise-qemu.qemu-system-x86-64.1"
+kind = "external-command"
+line = 143
+path = "packages/tests/usb-fat32-qtest/src/tests.rs"
+reason = "Run the opt-in qtest against fresh disposable USB FAT32 images and emulated guest memory; no physical devices are passed through."
