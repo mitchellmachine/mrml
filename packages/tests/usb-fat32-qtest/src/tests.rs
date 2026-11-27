@@ -231,20 +231,112 @@ impl RevocablePlatform for Qtest {
 #[test]
 #[ignore = "requires qemu-system-x86_64 and an available Unix socket"]
 fn qemu_controller_command_round_trip() {
-    exercise_qemu(false, None);
-    exercise_qemu(true, None);
+    exercise_qemu(false, Mode::Hosted);
+    exercise_qemu(true, Mode::Hosted);
 }
 
 type ProbePipe<'a> = &'a mut dyn mrml_storage_usb::BulkTransport<Error = ()>;
 
 pub fn with_emulated_probe_disk(super_speed: bool, exercise: &mut dyn FnMut(ProbePipe<'_>)) {
-    exercise_qemu(super_speed, Some(exercise));
+    exercise_qemu(super_speed, Mode::Bulk(exercise));
 }
 
 mod scoped_pipe;
 use scoped_pipe::ScopedProbePipe;
 
-fn exercise_qemu(super_speed: bool, external: Option<&mut dyn FnMut(ProbePipe<'_>)>) {
+pub trait PreflightIo {
+    fn capability(&mut self, offset: u32) -> Result<u32, ()>;
+    fn write_marker(&mut self, address: u64, bytes: &[u8]) -> Result<(), ()>;
+    fn read_marker(&mut self, address: u64, bytes: &mut [u8]) -> Result<(), ()>;
+}
+
+const SCRATCH: u64 = 0x10_7fc0;
+const MARKER: [u8; 4] = *b"MRML";
+
+struct Preflight<'a, P> {
+    platform: &'a mut P,
+    offsets: Vec<u32>,
+    written: bool,
+    read_back: bool,
+}
+
+impl<P: Platform> PreflightIo for Preflight<'_, P> {
+    fn capability(&mut self, offset: u32) -> Result<u32, ()> {
+        if !self.offsets.contains(&offset) || self.written {
+            return Err(());
+        }
+        self.platform.read32(offset).map_err(|_| ())
+    }
+
+    fn write_marker(&mut self, address: u64, bytes: &[u8]) -> Result<(), ()> {
+        if self.written || address != SCRATCH || bytes != MARKER {
+            return Err(());
+        }
+        self.written = true;
+        self.platform.dma_write(address, bytes).map_err(|_| ())
+    }
+
+    fn read_marker(&mut self, address: u64, bytes: &mut [u8]) -> Result<(), ()> {
+        if !self.written || self.read_back || address != SCRATCH || bytes.len() != MARKER.len() {
+            return Err(());
+        }
+        self.platform.dma_read(address, bytes).map_err(|_| ())?;
+        self.read_back = *bytes == MARKER;
+        self.read_back.then_some(()).ok_or(())
+    }
+}
+
+fn run_preflight<P: PciActivation>(platform: &mut P, probe: &mut dyn FnMut(&mut dyn PreflightIo))
+where
+    P::Error: core::fmt::Debug,
+{
+    let (before, assignment) = platform.activation_state().unwrap();
+    assert_eq!(before.command & 4, 0);
+    let mut offsets = vec![0];
+    mrml_storage_usb::xhci::inspect_legacy_ownership(0x4000, |offset| {
+        offsets.push(offset);
+        platform.read32(offset)
+    })
+    .unwrap();
+    let mut adjacent = [0; 16];
+    platform.dma_read(SCRATCH - 4, &mut adjacent).unwrap();
+    assert_eq!(adjacent, [0; 16]);
+    let mut scoped = Preflight {
+        platform,
+        offsets,
+        written: false,
+        read_back: false,
+    };
+    assert!(scoped.capability(0x3000).is_err());
+    assert!(scoped.write_marker(SCRATCH + 4, &MARKER).is_err());
+    probe(&mut scoped);
+    assert!(scoped.written && scoped.read_back);
+    platform.dma_read(SCRATCH - 4, &mut adjacent).unwrap();
+    assert_eq!(&adjacent[4..8], &MARKER);
+    assert_eq!(&adjacent[..4], &[0; 4]);
+    assert_eq!(&adjacent[8..], &[0; 8]);
+    platform.dma_write(SCRATCH, &[0; 4]).unwrap();
+    platform.dma_read(SCRATCH - 4, &mut adjacent).unwrap();
+    assert_eq!(adjacent, [0; 16]);
+    let (after, observed) = platform.activation_state().unwrap();
+    assert_eq!(observed, assignment);
+    assert_eq!(after.command, before.command);
+}
+
+enum Mode<'a> {
+    Hosted,
+    Bulk(&'a mut dyn FnMut(ProbePipe<'_>)),
+    Preflight(&'a mut dyn FnMut(&mut dyn PreflightIo)),
+}
+
+pub fn with_emulated_probe_preflight(
+    super_speed: bool,
+    probe: &mut dyn FnMut(&mut dyn PreflightIo),
+) {
+    exercise_qemu(super_speed, Mode::Preflight(probe));
+}
+
+fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
     let controller_arg = if super_speed {
         "qemu-xhci,id=xhci,addr=03.0"
     } else {
@@ -438,6 +530,20 @@ fn exercise_qemu(super_speed: bool, external: Option<&mut dyn FnMut(ProbePipe<'_
         projected.enable_bus_master(wrong, 2),
         Err(ProjectionError::Assignment)
     ));
+    let external = match external {
+        Mode::Preflight(probe) => {
+            run_preflight(&mut projected, probe);
+            projected.revoke_after_halt().unwrap();
+            assert_eq!(
+                fs::read(&media).unwrap(),
+                expected,
+                "preflight must not modify media"
+            );
+            return;
+        }
+        Mode::Hosted => None,
+        Mode::Bulk(exercise) => Some(exercise),
+    };
     let mut controller = Controller::start_pci(projected, assignment, DMA, 100).unwrap();
     let port = (1..=u8::MAX)
         .find(|&port| {

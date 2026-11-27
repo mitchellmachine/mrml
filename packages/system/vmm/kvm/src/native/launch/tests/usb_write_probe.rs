@@ -290,13 +290,13 @@ pub(super) fn exercise() {
 }
 
 pub(super) fn exercise_in_guest() {
-    run_signed_probe(None);
+    run_signed_probe(ProbeMode::Synthetic);
 }
 
 pub(super) fn exercise_external() {
     for super_speed in [false, true] {
         mrml_usb_fat32_qtest::with_emulated_probe_disk(super_speed, &mut |pipe| {
-            run_signed_probe(Some(pipe));
+            run_signed_probe(ProbeMode::Bulk(pipe));
         });
     }
     mrml_runtime::mrml_println!(
@@ -304,7 +304,24 @@ pub(super) fn exercise_external() {
     );
 }
 
-fn run_signed_probe(mut external: Option<&mut dyn BulkTransport<Error = ()>>) {
+pub(super) fn exercise_preflight() {
+    for super_speed in [false, true] {
+        mrml_usb_fat32_qtest::with_emulated_probe_preflight(super_speed, &mut |io| {
+            run_signed_probe(ProbeMode::Preflight(io));
+        });
+    }
+    mrml_runtime::mrml_println!(
+        "usb-preflight-guest|status=PASS|backend=kvm|xhci=qemu|speeds=2,3|bus_master=off"
+    );
+}
+
+enum ProbeMode<'a> {
+    Synthetic,
+    Bulk(&'a mut dyn BulkTransport<Error = ()>),
+    Preflight(&'a mut (dyn mrml_usb_fat32_qtest::PreflightIo + 'a)),
+}
+
+fn run_signed_probe(mut mode: ProbeMode<'_>) {
     const PAYLOAD: usize = 16;
     // Three BOT transfers for every metadata sector, plus probe and readback.
     const MAX_EXITS: usize = 3_400;
@@ -395,32 +412,49 @@ fn run_signed_probe(mut external: Option<&mut dyn BulkTransport<Error = ()>>) {
     )
     .unwrap_or_else(|failed| panic!("guest result mapping: {:?}", failed.error()));
     let mut observed = [0; PAGE_SIZE as usize];
-    let bridged = external.is_some();
-    if bridged {
-        observed[0] = 0x60;
-    }
+    let (bridged, exits, kind) = match mode {
+        ProbeMode::Synthetic => (false, 1, 0),
+        ProbeMode::Bulk(_) => (true, MAX_EXITS, 0x60),
+        ProbeMode::Preflight(_) => (true, 72, 0x61),
+    };
+    observed[0] = kind;
     peer.write_first(&observed).unwrap();
     let mut completed = false;
-    for _ in 0..MAX_EXITS {
+    for _ in 0..exits {
         let outcome = DeadlineVmBackend::run_with_deadline(peer.first, 0, 1_000_000).unwrap();
         assert_eq!(outcome, VmDeadlineOutcome::Exit(VmExit::Halted));
         peer.read_second(&mut observed).unwrap();
-        let Some(pipe) = external.as_deref_mut() else {
-            completed = true;
-            break;
-        };
+
         let opcode = observed[0];
         if matches!(opcode, 0x51 | 0x52) {
             completed = true;
             break;
         }
-        assert!(observed[3..PAYLOAD].iter().all(|&byte| byte == 0));
+        assert!(observed[3..8].iter().all(|&byte| byte == 0));
+        let address = u64::from_le_bytes(observed[8..PAYLOAD].try_into().unwrap());
         assert!(observed[PAYLOAD + 512..].iter().all(|&byte| byte == 0));
         let size = usize::from(u16::from_le_bytes([observed[1], observed[2]]));
         let mut reply = [0; PAGE_SIZE as usize];
-        let result = match (opcode, size) {
-            (1, 31 | 512) => pipe.bulk_out(&observed[PAYLOAD..PAYLOAD + size]),
-            (2, 8 | 13 | 18 | 512) => pipe.bulk_in(&mut reply[PAYLOAD..PAYLOAD + size]),
+        let result = match (&mut mode, opcode, size) {
+            (ProbeMode::Bulk(pipe), 1, 31 | 512) if address == 0 => {
+                pipe.bulk_out(&observed[PAYLOAD..PAYLOAD + size])
+            }
+            (ProbeMode::Bulk(pipe), 2, 8 | 13 | 18 | 512) if address == 0 => {
+                pipe.bulk_in(&mut reply[PAYLOAD..PAYLOAD + size])
+            }
+            (ProbeMode::Preflight(io), 5, 4) => u32::try_from(address)
+                .map_err(|_| ())
+                .and_then(|offset| io.capability(offset))
+                .map(|value| {
+                    reply[PAYLOAD..PAYLOAD + 4].copy_from_slice(&value.to_le_bytes());
+                    4
+                }),
+            (ProbeMode::Preflight(io), 6, 4) => io
+                .write_marker(address, &observed[PAYLOAD..PAYLOAD + 4])
+                .map(|()| 4),
+            (ProbeMode::Preflight(io), 7, 4) => io
+                .read_marker(address, &mut reply[PAYLOAD..PAYLOAD + 4])
+                .map(|()| 4),
             _ => Err(()),
         };
         reply[0] = if result == Ok(size) { 3 } else { 4 };

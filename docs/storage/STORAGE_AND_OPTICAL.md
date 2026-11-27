@@ -2979,6 +2979,17 @@ and DMA transport still resides in the hosted QEMU fixture, not inside the
 MicroVM. Neither mode verifies an installed VMX/VT-d device assignment or a
 physical Chromebook write.
 
+The signed guest also has a distinct read-only controller preflight mode:
+`--ignored --nocapture live_kvm_guest_preflights_qemu_xhci`. It reads the
+emulated capability header and walks the legacy ownership chain using the
+guest-side xHCI platform adapter. The fixture permits only the discovered
+capability dwords and one four-byte scratch marker in projected DMA RAM. The
+host verifies readback and unchanged adjacent bytes, scrubs the marker, checks
+that PCI bus mastering stayed off, and compares the unmodified disk image.
+The scratch transaction tests guest access to emulated DMA backing, not a
+device-initiated DMA transfer. This mode cannot reset or start a controller
+and does not authorize writes to physical storage.
+
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See
 [review log](../patents/REVIEW_LOG.md).
