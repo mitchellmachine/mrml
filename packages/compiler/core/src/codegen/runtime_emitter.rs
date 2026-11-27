@@ -10596,6 +10596,21 @@ impl<
             }
         }
 
+        // Normalize source CRLF without changing the token or its source span.
+        fn take_source_byte(bytes: &[u8], index: &mut usize) -> Option<u8> {
+            let byte = *bytes.get(*index)?;
+            *index += 1;
+            if byte != b'\r' {
+                return Some(byte);
+            }
+            if bytes.get(*index) != Some(&b'\n') {
+                return None;
+            }
+            *index += 1;
+            Some(b'\n')
+        }
+
+        let malformed = self.error(CodegenErrorKind::RuntimeExpressionUnsupported);
         let mut decoded = [0u8; MAX_X86_64_READONLY_DATA_BYTES];
         let mut decoded_length = 0usize;
         let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
@@ -10641,11 +10656,14 @@ impl<
             {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
-            for byte in &bytes[content_start..content_end] {
+            let source = &bytes[content_start..content_end];
+            let mut index = 0;
+            while index < source.len() {
+                let byte = take_source_byte(source, &mut index).ok_or(malformed)?;
                 if byte_string && !byte.is_ascii() {
-                    return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    return Err(malformed);
                 }
-                push(*byte)?;
+                push(byte)?;
             }
             drop(push);
             if c_string {
@@ -10672,19 +10690,15 @@ impl<
         let bytes = literal.as_bytes();
         let mut index = 0usize;
         while index < bytes.len() {
-            if bytes[index] != b'\\' {
-                if byte_string && !bytes[index].is_ascii() {
-                    return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            let byte = take_source_byte(bytes, &mut index).ok_or(malformed)?;
+            if byte != b'\\' {
+                if byte_string && !byte.is_ascii() {
+                    return Err(malformed);
                 }
-                push(bytes[index])?;
-                index += 1;
+                push(byte)?;
                 continue;
             }
-            index += 1;
-            let escaped = *bytes
-                .get(index)
-                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-            index += 1;
+            let escaped = take_source_byte(bytes, &mut index).ok_or(malformed)?;
             match escaped {
                 b'n' => push(b'\n')?,
                 b'r' => push(b'\r')?,
@@ -10750,13 +10764,7 @@ impl<
                     }
                 }
                 b'\n' => {
-                    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
-                        index += 1;
-                    }
-                }
-                b'\r' if bytes.get(index) == Some(&b'\n') => {
-                    index += 1;
-                    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+                    while matches!(bytes.get(index), Some(b' ' | b'\t' | b'\r' | b'\n')) {
                         index += 1;
                     }
                 }

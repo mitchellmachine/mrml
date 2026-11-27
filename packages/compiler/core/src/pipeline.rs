@@ -721,6 +721,76 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_source_line_endings_in_string_objects() {
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static str { \"plum\r\npear\" }",
+                b"plum\npear".as_slice(),
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static str { r#\"plum\r\npear\"# }",
+                b"plum\npear",
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static [u8] { b\"plum\r\npear\" }",
+                b"plum\npear",
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static [u8] { br#\"plum\r\npear\"# }",
+                b"plum\npear",
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> *const i8 { c\"plum\r\npear\".as_ptr() }",
+                b"plum\npear\0",
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> *const i8 { cr#\"plum\r\npear\"#.as_ptr() }",
+                b"plum\npear\0",
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static str { \"plum\\r\r\npear\" }",
+                b"plum\r\npear",
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static str { \"plum\\\r\n \r \t\u{c}pear\" }",
+                b"plum\x0cpear",
+            ),
+        ] {
+            for format in [ObjectFormat::Coff, ObjectFormat::Elf64] {
+                let object = compile_wide(source, "probe", format).unwrap();
+                assert!(
+                    object
+                        .bytes()
+                        .windows(expected.len())
+                        .any(|bytes| bytes == expected),
+                    "incorrect literal bytes in {format:?} for {source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_bare_carriage_returns_in_materialized_strings() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static str { \"plum\rpear\" }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static str { r\"plum\rpear\" }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static [u8] { b\"plum\rpear\" }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static [u8] { br\"plum\rpear\" }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> *const i8 { c\"plum\rpear\".as_ptr() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> *const i8 { cr\"plum\rpear\".as_ptr() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static str { \"plum\r\r\npear\" }",
+        ] {
+            for format in [ObjectFormat::Coff, ObjectFormat::Elf64] {
+                let error = compile_wide(source, "probe", format).unwrap_err();
+                assert_eq!(
+                    error.kind,
+                    CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn emits_runtime_byte_string_literals_as_internal_readonly_data() {
         let cooked = r##"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &[u8], choose: bool) -> &[u8] { if choose { input } else { b"A\xFF\n" } }"##;
         for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {

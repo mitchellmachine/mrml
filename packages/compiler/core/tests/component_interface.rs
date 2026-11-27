@@ -100,6 +100,26 @@ fn char_casts_compile_in_constant_and_runtime_paths() {
     }
 }
 
+#[test]
+fn crate_header_and_unicode_whitespace_reach_public_frontend() {
+    let source = concat!(
+        "\u{feff}#!/usr/bin/env rust-script\r\n",
+        "#! /* ordinary comment */ [no_std]\n",
+        "#[unsafe(no_mangle)]\n",
+        "pub\u{200e}extern \"C\" fn probe() -> i32 { 40\u{0085}+\u{2028}2 }",
+    );
+    for format in [ObjectFormat::Coff, ObjectFormat::Elf64] {
+        let object = compile_source_function::<4096, 1024, 4, 4, 4, 48>(
+            source,
+            "probe",
+            format,
+            TargetLayout::X86_64,
+        )
+        .expect("Rust source-file trivia preserves the exported function");
+        assert!(!object.is_empty());
+    }
+}
+
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }

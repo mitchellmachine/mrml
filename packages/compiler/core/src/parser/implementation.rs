@@ -4439,6 +4439,7 @@ impl<'source> Parser<'source> {
     pub fn parse_module<const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>(
         mut self,
     ) -> Result<Module<'source, MAX_ITEMS, MAX_PARAMETERS>, ParseError> {
+        self.lexer.skip_source_header();
         // The supported source subset already compiles without a standard library.
         self.crate_attributes()?;
         let mut module = Module {

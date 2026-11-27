@@ -87,14 +87,53 @@ impl<'source> Lexer<'source> {
         self.source.as_bytes()
     }
 
-    fn skip_trivia(&mut self) -> Result<(), LexError> {
+    pub(crate) fn skip_source_header(&mut self) {
+        if self.source.starts_with('\u{feff}') {
+            self.position = '\u{feff}'.len_utf8();
+        }
+        let rest = &self.source[self.position..];
+        if !rest.starts_with("#!") {
+            return;
+        }
+        let mut after_bang = self.clone();
+        after_bang.position += 2;
+        // An inner attribute can have ordinary comments and whitespace after `#!`.
+        // Doc comments are tokens for this decision.
+        if after_bang.skip_trivia(false).is_ok()
+            && after_bang.bytes().get(after_bang.position) == Some(&b'[')
+        {
+            return;
+        }
+        self.position += rest.find('\n').unwrap_or(rest.len());
+    }
+
+    fn skip_trivia(&mut self, include_doc_comments: bool) -> Result<(), LexError> {
         loop {
-            while self
-                .bytes()
-                .get(self.position)
-                .is_some_and(u8::is_ascii_whitespace)
-            {
-                self.position += 1;
+            while let Some(space) = self.source[self.position..].chars().next().filter(|value| {
+                matches!(
+                    value,
+                    '\t'..='\r'
+                        | ' '
+                        | '\u{0085}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{2028}'
+                        | '\u{2029}'
+                )
+            }) {
+                self.position += space.len_utf8();
+            }
+            if !include_doc_comments {
+                let rest = &self.bytes()[self.position..];
+                if rest.starts_with(b"//!")
+                    || (rest.starts_with(b"///") && !rest.starts_with(b"////"))
+                    || rest.starts_with(b"/*!")
+                    || (rest.starts_with(b"/**")
+                        && !rest.starts_with(b"/***")
+                        && !rest.starts_with(b"/**/"))
+                {
+                    return Ok(());
+                }
             }
             if self.bytes().get(self.position..self.position + 2) == Some(b"//") {
                 self.position += 2;
@@ -255,7 +294,7 @@ impl<'source> Lexer<'source> {
     }
 
     pub fn next_token(&mut self) -> Result<Option<Token<'source>>, LexError> {
-        self.skip_trivia()?;
+        self.skip_trivia(true)?;
         let start = self.position;
         let Some(&byte) = self.bytes().get(start) else {
             return Ok(None);
@@ -374,11 +413,15 @@ impl<'source> Lexer<'source> {
             b'+' | b'-' | b'*' | b'/' | b'%' | b'=' | b'<' | b'>' | b'&' | b'|' | b'^' | b'~'
             | b'@' => TokenKind::Operator,
             _ => {
+                let width = self.source[start..]
+                    .chars()
+                    .next()
+                    .map_or(1, char::len_utf8);
                 return Err(LexError {
                     kind: LexErrorKind::UnexpectedByte,
                     span: Span {
                         start,
-                        end: start + 1,
+                        end: start + width,
                     },
                 });
             }
@@ -443,6 +486,20 @@ mod tests {
             "a /* outer /* inner */ end */ // rest\n b",
             &[(TokenKind::Identifier, "a"), (TokenKind::Identifier, "b")],
         );
+    }
+
+    #[test]
+    fn recognizes_rust_source_whitespace_and_preserves_utf8_error_spans() {
+        assert_tokens(
+            "a\t\u{000b}\u{000c}\r\n \u{0085}\u{200e}\u{200f}\u{2028}\u{2029}b",
+            &[(TokenKind::Identifier, "a"), (TokenKind::Identifier, "b")],
+        );
+        let source = "a\u{00a0}b";
+        let mut lexer = Lexer::new(source);
+        assert_eq!(lexer.next_token().unwrap().unwrap().text, "a");
+        let error = lexer.next_token().unwrap_err();
+        assert_eq!(error.kind, LexErrorKind::UnexpectedByte);
+        assert_eq!(&source[error.span.start..error.span.end], "\u{00a0}");
     }
 
     #[test]

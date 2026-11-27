@@ -48,6 +48,56 @@ mod tests {
     }
 
     #[test]
+    fn source_header_preserves_inner_attributes_and_original_offsets() {
+        for header in [
+            "\u{feff}",
+            "\u{feff}#!/usr/bin/env rust-script\r\n#![no_std]\n",
+            "#! /* ordinary */\n[no_std]\n",
+            "#! // ordinary\n[no_std]\n",
+            "#! /***/ /**/ \n[no_std]\n",
+            "#! /* unfinished text on the shebang\n",
+            "#! /** documentation */ [ignored_on_the_shebang]\n",
+        ] {
+            let function_source = "fn total() -> i32 { 42 }";
+            let mut source = [0; 128];
+            let length = header.len() + function_source.len();
+            source[..header.len()].copy_from_slice(header.as_bytes());
+            source[header.len()..length].copy_from_slice(function_source.as_bytes());
+            let source = core::str::from_utf8(&source[..length]).unwrap();
+            let module = Parser::new(source).parse_module::<1, 0>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(function.name_span.start, header.len() + "fn ".len());
+            assert_eq!(
+                &source[function.body_expression_span.start..function.body_expression_span.end],
+                "42"
+            );
+        }
+    }
+
+    #[test]
+    fn source_header_rejects_misplaced_prefixes() {
+        for (source, token) in [
+            (" \u{feff}fn total() -> i32 { 42 }", "\u{feff}"),
+            ("\u{feff}\u{feff}fn total() -> i32 { 42 }", "\u{feff}"),
+            (" #!/usr/bin/env rust-script\nfn total() -> i32 { 42 }", "/"),
+            ("fn total() -> i32 { \u{feff}42 }", "\u{feff}"),
+            (
+                "#! /** documentation */\n[no_std]\nfn total() -> i32 { 42 }",
+                "[",
+            ),
+            (
+                "#! /// documentation\n[no_std]\nfn total() -> i32 { 42 }",
+                "[",
+            ),
+        ] {
+            let error = Parser::new(source).parse_module::<1, 0>().unwrap_err();
+            assert_eq!(&source[error.span.start..error.span.end], token);
+        }
+    }
+
+    #[test]
     fn leading_no_std_preserves_the_remaining_attribute_checks() {
         for (source, kind, token) in [
             (
