@@ -52,6 +52,13 @@ invariants and evidence without making this README difficult to read.
 
 MRML is now hosted on GitHub at [mitchellmachine/mrml](https://github.com/mitchellmachine/mrml).
 
+## Security review
+
+MRML maintainer Mitchell Renouf has access to OpenAI Daybreak, which can
+automatically scan connected code for potential security flaws. Automated
+findings are leads for review, not proof of a vulnerability or a guarantee
+of security. See [MRML's security model](docs/SECURITY.md) for scope and limits.
+
 ## Important limitations
 
 MRML does not currently claim production security, complete compiler or codec
