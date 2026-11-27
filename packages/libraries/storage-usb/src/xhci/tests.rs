@@ -634,6 +634,7 @@ fn native_binding() -> NativePciBinding {
         device: ObjectId(1),
         memory: ObjectId(2),
         bar_generation: 1,
+        bar_pages: [0, RT, DB],
         allocation_generation: 1,
         dma,
         aperture: VtdDmaAperture {
@@ -689,6 +690,31 @@ fn native_owner_binds_capabilities_generations_and_exact_command_write() {
     let mut owner = NativePciOwner::admit(&caps, device, memory, binding, fake)
         .ok()
         .unwrap();
+    let (bar_base, bar_bytes) = dma.controller.bar0();
+    let projection = mrml_kernel::DeviceDmaProjection {
+        requester: binding.aperture.route.requester(),
+        device: binding.device,
+        dma_memory: binding.memory,
+        bar_generation: binding.bar_generation,
+        dma_generation: dma.mapping_generation,
+        dma_allocation_generation: binding.allocation_generation,
+        bar_base,
+        bar_bytes,
+        bar_pages: binding.bar_pages,
+        dma_base: dma.device_base,
+        dma_bytes: dma.bytes,
+    };
+    assert_eq!(owner.validate_projection(projection), Ok(()));
+    assert_eq!(owner.validate_projection(mrml_kernel::DeviceDmaProjection {
+        bar_pages: [0, RT, 0x3000], ..projection
+    }), Err(NativePciOwnerError::Binding));
+    assert_eq!(
+        owner.validate_projection(mrml_kernel::DeviceDmaProjection {
+            dma_allocation_generation: projection.dma_allocation_generation + 1,
+            ..projection
+        }),
+        Err(NativePciOwnerError::Binding)
+    );
     assert_eq!(owner.validate_aperture(binding.aperture), Ok(()));
     assert_eq!(
         owner.validate_aperture(VtdDmaAperture {
@@ -706,6 +732,7 @@ fn native_owner_binds_capabilities_generations_and_exact_command_write() {
     owner.set_bus_master(dma, 0x406, false).unwrap();
     assert_eq!(owner.live_pci(dma).unwrap().command, 0x402);
     owner.release_revoked(dma).unwrap();
+    assert_eq!(owner.validate_projection(projection), Err(NativePciOwnerError::Binding));
     assert_eq!(owner.live_pci(dma), Err(NativePciOwnerError::Binding));
 
     let mut fake = Fake::new();

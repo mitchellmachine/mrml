@@ -117,7 +117,7 @@ pub use deadline_receive_syscall::{
     DeadlineReceiveSyscallError, DeadlineReceiveSyscallExecutor,
 };
 pub use device_service::{
-    DeviceServiceAuthority, DeviceServiceLaunchAttachment,
+    DeviceDmaProjection, DeviceServiceAuthority, DeviceServiceLaunchAttachment,
     DeviceServiceLaunchAttachmentError, MAX_NATIVE_DEVICE_SERVICE_AUTHORITIES,
     NativeDeviceServiceActivationError, NativeDeviceServiceEntry, NativeDeviceServiceEntryError,
     NativeDeviceServiceRetirement, NativeDeviceServiceRetirementError, NativeDeviceServiceTask,

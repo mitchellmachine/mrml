@@ -358,7 +358,42 @@ fn exercise_qemu(super_speed: bool) {
     else {
         panic!("duplicated BAR page must not open a projection");
     };
-    let mut projected = ScopedXhci::new(qtest, assignment, [0, 0x1000, 0x2000])
+    let projection = mrml_kernel::DeviceDmaProjection {
+        requester: mrml_kernel::DeviceAddress::new(0, 0, 3, 0).unwrap(),
+        device: ObjectId(0x1010),
+        dma_memory: ObjectId(0x1011),
+        bar_generation: 1,
+        dma_generation: assignment.mapping_generation,
+        dma_allocation_generation: 1,
+        bar_base: u64::from(BAR),
+        bar_bytes: 0x4000,
+        bar_pages: [0, 0x1000, 0x2000],
+        dma_base: assignment.device_base,
+        dma_bytes: assignment.bytes,
+    };
+    let mut qtest = qtest;
+    for invalid in [
+        mrml_kernel::DeviceDmaProjection {
+            requester: mrml_kernel::DeviceAddress::new(0, 0, 4, 0).unwrap(),
+            ..projection
+        },
+        mrml_kernel::DeviceDmaProjection {
+            dma_generation: 2,
+            ..projection
+        },
+        mrml_kernel::DeviceDmaProjection {
+            dma_bytes: 0x4000,
+            ..projection
+        },
+    ] {
+        let Err((ProjectionError::Assignment, returned)) =
+            ScopedXhci::for_device_projection(qtest, assignment, invalid)
+        else {
+            panic!("substituted broker projection was accepted");
+        };
+        qtest = returned;
+    }
+    let mut projected = ScopedXhci::for_device_projection(qtest, assignment, projection)
         .unwrap_or_else(|(error, _)| panic!("invalid fixture projection: {error:?}"));
     assert!(matches!(
         projected.read32(0x3000),

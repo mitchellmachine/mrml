@@ -3294,8 +3294,15 @@ The scoped xHCI adapter now admits only the three broker-selected BAR pages
 and nonempty, in-range transfers in the exact DMA aperture. QEMU exercises
 USB 2 and USB 3 through this adapter, rejects the unprojected MSI-X page and
 out-of-range DMA, and still retires the same controller. These checks do not
-install hardware mappings. No test yet establishes a DMA mapping from xHCI
-to an executing service MicroVM. The adapter is not an installed provider and does not authenticate
+install hardware mappings. The supervisor now matches the lease's PCI
+requester, BAR pages and generation, and DMA object, range, mapping and allocation generations
+against a broker-provided projection. The controller-control and pinned
+DMA capabilities must authorize the two distinct objects at attachment.
+The xHCI adapter checks the same descriptor against the discovered
+controller and DMA assignment. The native lease owner independently checks
+it against the retained backing, including the exact BAR pages and pin generation. Live KVM exercises attachment with a
+modeled lease; QEMU exercises the controller and descriptor checks.
+No test yet establishes a DMA mapping from xHCI to an executing service MicroVM. The adapter is not an installed provider and does not authenticate
 IPC or retire DMA leases by itself. The kernel grants and
 revokes scoped device, interrupt, and DMA resources; it does not run USB
 commands or implement a fallback transport. Until a service can receive and

@@ -876,6 +876,7 @@ mod tests {
         #[derive(Debug)]
         struct Lease<'a> {
             endpoint: ConfigurationMicrovmEndpoint,
+            projection: DeviceDmaProjection,
             withdrawals: &'a Cell<u8>,
         }
         impl ConfigurationMicrovmDeviceLease for Lease<'_> {
@@ -883,6 +884,7 @@ mod tests {
             fn endpoint(&self) -> ConfigurationMicrovmEndpoint {
                 self.endpoint
             }
+            fn projection(&self) -> DeviceDmaProjection { self.projection }
             fn withdraw(&mut self) -> Result<(), ()> {
                 let calls = self.withdrawals.get() + 1;
                 self.withdrawals.set(calls);
@@ -896,10 +898,54 @@ mod tests {
         });
         let withdrawals = Cell::new(0);
         let endpoint = launcher.launch_microvm(spec).unwrap();
-        let lease = || Lease { endpoint, withdrawals: &withdrawals };
-        launcher.attach_device_lease(lease()).unwrap();
+        let projection = DeviceDmaProjection {
+            requester: mrml_kernel::DeviceAddress::new(0, 0, 3, 0).unwrap(),
+            device: ObjectId(0x1010),
+            dma_memory: ObjectId(0x1011),
+            bar_generation: 3,
+            dma_generation: 7,
+            dma_allocation_generation: 5,
+            bar_base: 0xfeb0_0000,
+            bar_bytes: 0x4000,
+            bar_pages: [0, 0x1000, 0x2000],
+            dma_base: 0x10_0000,
+            dma_bytes: 0x8000,
+        };
+        let mut caps = CapabilitySpace::<4>::new();
+        let device = caps.insert(projection.device, DeviceDmaProjection::DEVICE_RIGHTS).unwrap();
+        let dma = caps.insert(projection.dma_memory, DeviceDmaProjection::DMA_RIGHTS).unwrap();
+        let wrong = caps.insert(ObjectId(0x1012), DeviceDmaProjection::DEVICE_RIGHTS).unwrap();
+        let unpinned = caps.insert(projection.dma_memory, Rights::READ.union(Rights::MAP)).unwrap();
+        let lease = || Lease { endpoint, projection, withdrawals: &withdrawals };
+        for substituted in [
+            DeviceDmaProjection { bar_generation: 4, ..projection },
+            DeviceDmaProjection { dma_generation: 8, ..projection },
+            DeviceDmaProjection { dma_allocation_generation: 6, ..projection },
+            DeviceDmaProjection { dma_bytes: 0x4000, ..projection },
+            DeviceDmaProjection { bar_pages: [0, 0x1000, 0x3000], ..projection },
+        ] {
+            assert!(matches!(
+                launcher.attach_device_lease(lease(), substituted, &caps, device, dma),
+                Err((ConfigurationMicrovmLeaseAttachError::ProjectionMismatch, _))
+            ));
+        }
         assert!(matches!(
-            launcher.attach_device_lease(lease()),
+            launcher.attach_device_lease(lease(), projection, &caps, wrong, dma),
+            Err((ConfigurationMicrovmLeaseAttachError::WrongAuthorityObject, _))
+        ));
+        assert!(matches!(
+            launcher.attach_device_lease(lease(), projection, &caps, device, unpinned),
+            Err((ConfigurationMicrovmLeaseAttachError::DmaAuthority(_), _))
+        ));
+        caps.revoke(dma).unwrap();
+        assert!(matches!(
+            launcher.attach_device_lease(lease(), projection, &caps, device, dma),
+            Err((ConfigurationMicrovmLeaseAttachError::DmaAuthority(_), _))
+        ));
+        let dma = caps.insert(projection.dma_memory, DeviceDmaProjection::DMA_RIGHTS).unwrap();
+        launcher.attach_device_lease(lease(), projection, &caps, device, dma).unwrap();
+        assert!(matches!(
+            launcher.attach_device_lease(lease(), projection, &caps, device, dma),
             Err((ConfigurationMicrovmLeaseAttachError::AlreadyAttached, _))
         ));
         assert_eq!(launcher.revoke_microvm(&endpoint), Err(PreparedMicrovmConfigurationError::DeviceLease(())));
@@ -909,7 +955,7 @@ mod tests {
         assert!(matches!(launcher.launch_microvm(spec), Err((_, PreparedMicrovmConfigurationError::AlreadyRunning))));
         assert_eq!(launcher.active_guest(endpoint), Err(PreparedMicrovmConfigurationAccessError::Retiring));
         assert!(matches!(
-            launcher.attach_device_lease(lease()),
+            launcher.attach_device_lease(lease(), projection, &caps, device, dma),
             Err((ConfigurationMicrovmLeaseAttachError::Retiring, _))
         ));
         assert_eq!(launcher.revoke_microvm(&endpoint), Err(PreparedMicrovmConfigurationError::Backend(())));
@@ -922,7 +968,7 @@ mod tests {
         let replacement = launcher.launch_microvm(spec).unwrap();
         assert_ne!(replacement, endpoint);
         assert!(matches!(
-            launcher.attach_device_lease(lease()),
+            launcher.attach_device_lease(lease(), projection, &caps, device, dma),
             Err((ConfigurationMicrovmLeaseAttachError::WrongEndpoint, _))
         ));
         assert_eq!(launcher.revoke_microvm(&endpoint), Err(PreparedMicrovmConfigurationError::WrongEndpoint));

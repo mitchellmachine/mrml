@@ -6255,11 +6255,13 @@ mod tests {
         #[derive(Debug)]
         struct ProbeDeviceLease {
             endpoint: ConfigurationMicrovmEndpoint,
+            projection: mrml_kernel::DeviceDmaProjection,
             pending: bool,
         }
         impl ConfigurationMicrovmDeviceLease for ProbeDeviceLease {
             type Error = ();
             fn endpoint(&self) -> ConfigurationMicrovmEndpoint { self.endpoint }
+            fn projection(&self) -> mrml_kernel::DeviceDmaProjection { self.projection }
             fn withdraw(&mut self) -> core::result::Result<(), Self::Error> {
                 if core::mem::take(&mut self.pending) { Err(()) } else { Ok(()) }
             }
@@ -6327,6 +6329,22 @@ mod tests {
         .expect("recover the exact two-domain release and its service executables");
         assert_eq!(owner.admission().running().count(), 0);
         let prepared = prepare(&mut owner, &executables);
+        let projection = mrml_kernel::DeviceDmaProjection {
+            requester: mrml_kernel::DeviceAddress::new(0, 0, 3, 0).unwrap(),
+            device: ObjectId(0x1010),
+            dma_memory: ObjectId(0x1011),
+            bar_generation: 3,
+            dma_generation: 7,
+            dma_allocation_generation: 5,
+            bar_base: 0xfeb0_0000,
+            bar_bytes: 0x4000,
+            bar_pages: [0, 0x1000, 0x2000],
+            dma_base: 0x10_0000,
+            dma_bytes: 0x8000,
+        };
+        let mut lease_caps = CapabilitySpace::<2>::new();
+        let device = lease_caps.insert(projection.device, mrml_kernel::DeviceDmaProjection::DEVICE_RIGHTS).unwrap();
+        let dma = lease_caps.insert(projection.dma_memory, mrml_kernel::DeviceDmaProjection::DMA_RIGHTS).unwrap();
         let stops = core::cell::Cell::new(0);
         let mut stop =
             |domain, (mut launcher, endpoint): (TestLauncher, ConfigurationMicrovmEndpoint)| {
@@ -6359,8 +6377,8 @@ mod tests {
                     }
                     let mut launched = launch(spec, &executables);
                     launched.0.attach_device_lease(ProbeDeviceLease {
-                        endpoint: launched.1, pending: true,
-                    }).unwrap();
+                        endpoint: launched.1, projection, pending: true,
+                    }, projection, &lease_caps, device, dma).unwrap();
                     stale.set(Some(launched.1));
                     Ok(launched)
                 },

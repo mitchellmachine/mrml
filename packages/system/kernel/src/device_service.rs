@@ -14,6 +14,60 @@ use crate::arch::x86_64::UserContext;
 
 pub const MAX_NATIVE_DEVICE_SERVICE_AUTHORITIES: usize = 6;
 
+/// Supervisor-side description of one PCI register and DMA projection.
+/// Addresses and generations identify existing mappings; they are not
+/// capabilities and must not be accepted from service launch bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeviceDmaProjection {
+    pub requester: crate::DeviceAddress,
+    pub device: ObjectId,
+    pub dma_memory: ObjectId,
+    pub bar_generation: u64,
+    pub dma_generation: u64,
+    pub dma_allocation_generation: u64,
+    pub bar_base: u64,
+    pub bar_bytes: u32,
+    pub bar_pages: [u32; 3],
+    pub dma_base: u64,
+    pub dma_bytes: u64,
+}
+
+impl DeviceDmaProjection {
+    pub const DEVICE_RIGHTS: Rights = Rights::CONTROL.union(Rights::MAP);
+    pub const DMA_RIGHTS: Rights = Rights::MAP
+        .union(Rights::PIN)
+        .union(Rights::READ)
+        .union(Rights::WRITE);
+
+    pub fn valid(&self) -> bool {
+        const PAGE: u64 = crate::PAGE_SIZE;
+        self.device.0 != 0
+            && self.dma_memory.0 != 0
+            && self.device != self.dma_memory
+            && self.bar_generation != 0
+            && self.dma_generation != 0
+            && self.dma_allocation_generation != 0
+            && self.bar_base != 0
+            && self.bar_base % PAGE == 0
+            && self
+                .bar_base
+                .checked_add(u64::from(self.bar_bytes))
+                .is_some()
+            && self.bar_pages[0] == 0
+            && self.bar_pages[0] < self.bar_pages[1]
+            && self.bar_pages[1] < self.bar_pages[2]
+            && self.bar_pages.iter().all(|&offset| {
+                u64::from(offset) % PAGE == 0
+                    && u64::from(offset) + PAGE <= u64::from(self.bar_bytes)
+            })
+            && self.dma_base != 0
+            && self.dma_base % PAGE == 0
+            && self.dma_bytes != 0
+            && self.dma_bytes % PAGE == 0
+            && self.dma_base.checked_add(self.dma_bytes).is_some()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeviceServiceAuthority {
     object: ObjectId,

@@ -14,7 +14,7 @@ use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{IsolationBackendFailure, ServiceAddressSpaceEraser, ServiceCleanupError};
 use mrml_kernel::{
     ActivatedReleaseTotalMicrovmInventory, ArtifactError, ArtifactKind, BootHandoff, BootIsolationOverride,
-    BootRecoveryEnvelope, Capability, CapabilityError, CapabilitySpace, EarlyKernelContext,
+    BootRecoveryEnvelope, Capability, CapabilityError, CapabilitySpace, DeviceDmaProjection, EarlyKernelContext,
     ExecutableArtifactError, MAX_SERVICE_IMAGE_BYTES, SIGNED_ARTIFACT_OVERHEAD_BYTES,
     SignedArtifact, TrustRoot, VerifiedExecutable,
     HostSubstrateReason, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
@@ -291,6 +291,7 @@ pub trait ConfigurationMicrovmDeviceLease {
     type Error;
 
     fn endpoint(&self) -> ConfigurationMicrovmEndpoint;
+    fn projection(&self) -> DeviceDmaProjection;
     fn withdraw(&mut self) -> Result<(), Self::Error>;
 }
 
@@ -303,6 +304,10 @@ impl ConfigurationMicrovmDeviceLease for NoConfigurationMicrovmDeviceLease {
         match *self {}
     }
 
+    fn projection(&self) -> DeviceDmaProjection {
+        match *self {}
+    }
+
     fn withdraw(&mut self) -> Result<(), Self::Error> {
         match *self {}
     }
@@ -311,6 +316,10 @@ impl ConfigurationMicrovmDeviceLease for NoConfigurationMicrovmDeviceLease {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfigurationMicrovmLeaseAttachError {
     WrongEndpoint,
+    ProjectionMismatch,
+    DeviceAuthority(CapabilityError),
+    DmaAuthority(CapabilityError),
+    WrongAuthorityObject,
     Retiring,
     AlreadyAttached,
 }
@@ -349,9 +358,13 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
     /// Attach only to the exact active launch, including its runtime generation.
     /// A rejected lease is returned to its original owner for cleanup. The
     /// attachment does not grant device capabilities or install IOMMU mappings.
-    pub fn attach_device_lease(
+    pub fn attach_device_lease<const C: usize>(
         &mut self,
         lease: Lease,
+        expected: DeviceDmaProjection,
+        capabilities: &CapabilitySpace<C>,
+        device: Capability,
+        dma_memory: Capability,
     ) -> Result<(), (ConfigurationMicrovmLeaseAttachError, Lease)> {
         use ConfigurationMicrovmLeaseAttachError as Error;
         let endpoint = lease.endpoint();
@@ -363,6 +376,19 @@ impl<Factory: ConfigurationMicrovmFactory, Lease: ConfigurationMicrovmDeviceLeas
         }
         if self.device_lease.is_some() {
             return Err((Error::AlreadyAttached, lease));
+        }
+        if !expected.valid() || lease.projection() != expected {
+            return Err((Error::ProjectionMismatch, lease));
+        }
+        match capabilities.authorize_exact(device, DeviceDmaProjection::DEVICE_RIGHTS) {
+            Ok(object) if object == expected.device => {}
+            Ok(_) => return Err((Error::WrongAuthorityObject, lease)),
+            Err(error) => return Err((Error::DeviceAuthority(error), lease)),
+        }
+        match capabilities.authorize_exact(dma_memory, DeviceDmaProjection::DMA_RIGHTS) {
+            Ok(object) if object == expected.dma_memory => {}
+            Ok(_) => return Err((Error::WrongAuthorityObject, lease)),
+            Err(error) => return Err((Error::DmaAuthority(error), lease)),
         }
         self.device_lease = Some(lease);
         Ok(())

@@ -49,6 +49,37 @@ impl<P: Platform> ScopedXhci<P> {
         })
     }
 
+    /// Bind the broker's exact projection to the controller discovered by
+    /// the host. Guest-provided geometry must not be used to form this value.
+    pub fn for_device_projection(
+        backend: P,
+        assignment: DmaAssignment,
+        projection: mrml_kernel::DeviceDmaProjection,
+    ) -> Result<Self, (ProjectionError<P::Error>, P)> {
+        let location = assignment.controller.location();
+        let address = projection.requester;
+        if !projection.valid()
+            || (
+                location.segment,
+                location.bus,
+                location.device,
+                location.function,
+            ) != (
+                address.segment(),
+                address.bus(),
+                address.device(),
+                address.function(),
+            )
+            || assignment.controller.bar0() != (projection.bar_base, projection.bar_bytes)
+            || assignment.mapping_generation != projection.dma_generation
+            || assignment.device_base != projection.dma_base
+            || assignment.bytes != projection.dma_bytes
+        {
+            return Err((ProjectionError::Assignment, backend));
+        }
+        Self::new(backend, assignment, projection.bar_pages)
+    }
+
     fn check_mmio(&self, offset: u32) -> Result<(), ProjectionError<P::Error>> {
         let page = offset & !(PAGE - 1);
         if offset % 4 != 0 || !self.pages.contains(&page) {

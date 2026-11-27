@@ -12,6 +12,7 @@ pub struct NativePciBinding {
     pub device: ObjectId,
     pub memory: ObjectId,
     pub bar_generation: u64,
+    pub bar_pages: [u32; 3],
     pub allocation_generation: u64,
     pub dma: DmaAssignment,
     pub aperture: VtdDmaAperture,
@@ -91,6 +92,31 @@ impl<L: NativePciLease> NativePciOwner<L> {
             binding: expected,
             released: false,
         })
+    }
+
+    /// Reconcile a broker's requested projection with the independently
+    /// retained PCI lease. This is a read-only check, not a mapping operation.
+    pub fn validate_projection(
+        &self,
+        projection: mrml_kernel::DeviceDmaProjection,
+    ) -> Result<(), NativePciOwnerError<L::Error>> {
+        let binding = self.binding;
+        self.check(binding.dma)?;
+        let dma = binding.dma;
+        if !projection.valid()
+            || projection.requester != binding.aperture.route.requester()
+            || projection.device != binding.device
+            || projection.dma_memory != binding.memory
+            || projection.bar_generation != binding.bar_generation
+            || projection.bar_pages != binding.bar_pages
+            || projection.dma_allocation_generation != binding.allocation_generation
+            || projection.dma_generation != dma.mapping_generation
+            || (projection.bar_base, projection.bar_bytes) != dma.controller.bar0()
+            || (projection.dma_base, projection.dma_bytes) != (dma.device_base, dma.bytes)
+        {
+            return Err(NativePciOwnerError::Binding);
+        }
+        Ok(())
     }
 
     fn check(&self, expected: DmaAssignment) -> Result<(), NativePciOwnerError<L::Error>> {
