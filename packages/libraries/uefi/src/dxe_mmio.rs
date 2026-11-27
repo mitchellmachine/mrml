@@ -47,6 +47,12 @@ pub enum DxeMmioError {
     Fragmented,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DxeAccess {
+    Table,
+    Entrypoint,
+}
+
 /// Observe positive firmware classification over an exact page range. This is
 /// not device ownership, final memory map validation, or permission to map it.
 ///
@@ -59,6 +65,7 @@ pub unsafe fn inspect_dxe_mmio(
     system: &SystemTable,
     base: u64,
     bytes: u64,
+    contains: impl Fn(DxeAccess, usize, usize) -> bool,
 ) -> Result<(), DxeMmioError> {
     if system.table_entry_count == 0 {
         return Err(DxeMmioError::Unavailable);
@@ -82,13 +89,23 @@ pub unsafe fn inspect_dxe_mmio(
         return Err(DxeMmioError::MalformedTable);
     }
     let ptr = entry.vendor_table.cast::<u8>();
-    // SAFETY: the caller guarantees the firmware table header is readable.
+    if !contains(DxeAccess::Table, ptr.addr(), HEADER_BYTES) {
+        return Err(DxeMmioError::MalformedTable);
+    }
+    // SAFETY: caller guarantees the table mapping, and the observed
+    // firmware map covers the complete header.
     let header = unsafe { core::slice::from_raw_parts(ptr, HEADER_BYTES) };
     let length = table_length(header)?;
+    if !contains(DxeAccess::Table, ptr.addr(), length) {
+        return Err(DxeMmioError::MalformedTable);
+    }
     // SAFETY: the caller guarantees bounded declared firmware bytes are
     // readable and initialized for the duration of the call.
     let table = unsafe { core::slice::from_raw_parts(ptr, length) };
     let address = query_address(table)?;
+    if !contains(DxeAccess::Entrypoint, address, 1) {
+        return Err(DxeMmioError::MalformedTable);
+    }
     // SAFETY: the validated PI table supplies the nonnull EFIAPI function at
     // this slot; its validity while boot services are live is a caller condition.
     let query: Query = unsafe { core::mem::transmute(address) };

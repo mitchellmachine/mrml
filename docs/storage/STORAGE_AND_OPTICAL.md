@@ -3077,9 +3077,13 @@ The UEFI library has a boot-only, read-only
 for the next discovery step. It checks the declared table signature, size,
 revision, CRC and query slot, then requires explicit MMIO with uncacheable
 capability across the whole requested range. It rejects holes, overlaps,
-non-MMIO descriptors and excessive fragmentation. This mechanism currently
-has hosted tests only. It does not issue mapping authority, confer ownership
-of firmware resources, or prove that a CPU mapping is uncacheable.
+non-MMIO descriptors and excessive fragmentation. The opt-in loader checks
+the DXE table and function address against a fresh bounded boot memory map,
+then queries each DRHD bootstrap page and each complete ECAM window. The
+QEMU q35/OVMF fixture returned no positive uncacheable MMIO classification
+for either window (one DRHD, one ECAM; trace `e1f1`). This is observational
+only: it does not change the firmware resource map, issue mapping authority,
+prove CPU cache attributes, confer ownership or read device registers.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

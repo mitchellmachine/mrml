@@ -1121,6 +1121,8 @@ unsafe fn boot(
     let coherent_release = prepared_release.is_some();
 
     loader_trace(0xa8);
+    #[cfg(feature = "boot-dma-probe")]
+    probe_dxe_resource_coverage(system, services, acpi_root, framebuffer);
     trace.line(format_args!(
         "If MRML MAP fails, reboot to EFI Shell. On USB FS0: run memmap >a FS0:\\MRML-MAP.TXT"
     ));
@@ -1150,6 +1152,114 @@ unsafe fn boot(
             installed_recovery,
             isolation_selection,
         )
+    }
+}
+
+#[cfg(feature = "boot-dma-probe")]
+fn probe_dxe_resource_coverage(
+    system: &SystemTable,
+    services: &BootServices,
+    acpi_root: u64,
+    framebuffer: Framebuffer,
+) {
+    use mrml_kernel::arch::x86_64::{DmarTopology, McfgTopology, copy_dmar, copy_mcfg};
+    use mrml_uefi::dxe_mmio::{DxeAccess, DxeMmioError, inspect_dxe_mmio};
+
+    // SAFETY: the loader is still on its original BSP/firmware mapping,
+    // before any ExitBootServices attempt. These scratch buffers have no
+    // concurrent users and are not retained after this observational probe.
+    unsafe {
+        let buffer = MEMORY_MAP.0.get().cast::<MemoryDescriptor>();
+        let mut size = MAP_BYTES;
+        let mut key = 0;
+        let mut stride = 0;
+        let mut version = 0;
+        if (services.get_memory_map)(&mut size, buffer, &mut key, &mut stride, &mut version)
+            != SUCCESS
+            || version != 1
+            || size > MAP_BYTES
+        {
+            loader_trace(0xe8);
+            return;
+        }
+        let raw = core::slice::from_raw_parts(buffer.cast::<u8>(), size);
+        let regions = &mut *REGIONS.0.get();
+        let Ok(count) = normalize_memory_map(
+            raw,
+            stride,
+            framebuffer.base,
+            framebuffer.size as u64,
+            regions,
+        ) else {
+            loader_trace(0xe8);
+            return;
+        };
+        let mut memory = FirmwareAcpiMemory {
+            regions: &regions[..count],
+        };
+        let mut dmar = [0; MAX_HANDOFF_DMA_ACPI_TABLE_BYTES];
+        let mut mcfg = [0; MAX_HANDOFF_DMA_ACPI_TABLE_BYTES];
+        let (Ok(dmar_len), Ok(mcfg_len)) = (
+            copy_dmar(&mut memory, acpi_root, &mut dmar),
+            copy_mcfg(&mut memory, acpi_root, &mut mcfg),
+        ) else {
+            // Missing and bad tables remain distinguishable in the final
+            // loader path. Neither supplies a pair for this observation.
+            return;
+        };
+        let (Ok(dmar), Ok(mcfg)) = (
+            DmarTopology::<8, 64>::parse(&dmar[..dmar_len]),
+            McfgTopology::<8>::parse(&mcfg[..mcfg_len]),
+        ) else {
+            return;
+        };
+        let contains = |access, start: usize, bytes: usize| {
+            let Some(end) = start.checked_add(bytes) else {
+                return false;
+            };
+            raw.chunks_exact(stride).any(|desc| {
+                let kind = u32::from_le_bytes(desc[..4].try_into().unwrap());
+                let permitted = match access {
+                    DxeAccess::Table => matches!(kind, 3 | 4),
+                    DxeAccess::Entrypoint => kind == 3,
+                };
+                let base = u64::from_le_bytes(desc[8..16].try_into().unwrap());
+                let pages = u64::from_le_bytes(desc[24..32].try_into().unwrap());
+                permitted
+                    && base <= start as u64
+                    && pages
+                        .checked_mul(PAGE_BYTES as u64)
+                        .and_then(|length| base.checked_add(length))
+                        .is_some_and(|limit| limit >= end as u64)
+            })
+        };
+        let status = |value| match value {
+            Ok(()) => 0,
+            Err(DxeMmioError::NotUncacheableMmio) => 1,
+            Err(DxeMmioError::Unavailable) => 2,
+            Err(DxeMmioError::MalformedTable) => 3,
+            Err(_) => 4,
+        };
+        for unit in dmar.units() {
+            loader_trace(
+                0xe0 + status(inspect_dxe_mmio(
+                    system,
+                    unit.register_base.get(),
+                    PAGE_BYTES as u64,
+                    contains,
+                )),
+            );
+        }
+        for allocation in mcfg.allocations() {
+            loader_trace(
+                0xf0 + status(inspect_dxe_mmio(
+                    system,
+                    allocation.physical_start(),
+                    allocation.bytes() as u64,
+                    contains,
+                )),
+            );
+        }
     }
 }
 
