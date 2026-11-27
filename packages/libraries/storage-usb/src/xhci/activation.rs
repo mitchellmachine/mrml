@@ -5,7 +5,7 @@ use mrml_kernel::arch::x86_64::{
 };
 
 use super::pci::{PciController, PciError, PciSnapshot};
-use super::{Controller, DmaLayout, Error, RevocablePlatform, StartFailure};
+use super::{Controller, DmaLayout, Error, RevocablePlatform, ScratchpadPlan, StartFailure};
 
 const MEMORY: u16 = 1 << 1;
 const BUS_MASTER: u16 = 1 << 2;
@@ -114,9 +114,22 @@ impl<P: PciActivation> Controller<P> {
     }
 
     pub(super) fn start_checked_pci(
+        platform: P,
+        expected: DmaAssignment,
+        dma: DmaLayout,
+        ticks: u32,
+        verify_translation: impl FnMut() -> Result<(), Error<P::Error>>,
+    ) -> Result<Self, StartFailure<P>> {
+        Self::start_checked_pci_with_scratchpads(
+            platform, expected, dma, None, ticks, verify_translation,
+        )
+    }
+
+    pub(super) fn start_checked_pci_with_scratchpads(
         mut platform: P,
         expected: DmaAssignment,
         dma: DmaLayout,
+        scratchpads: Option<ScratchpadPlan>,
         ticks: u32,
         mut verify_translation: impl FnMut() -> Result<(), Error<P::Error>>,
     ) -> Result<Self, StartFailure<P>> {
@@ -124,11 +137,12 @@ impl<P: PciActivation> Controller<P> {
         {
             return Err(StartFailure::Untouched { error, platform });
         }
-        Self::start_inner(
+        Self::start_inner_with_scratchpads(
             platform,
             expected.controller.bar0().1,
             Some(expected),
             dma,
+            scratchpads,
             ticks,
             |platform| {
                 let before = check(platform, expected, None)?;

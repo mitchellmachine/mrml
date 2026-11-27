@@ -171,6 +171,27 @@ impl<'a, P: VtdPciPlatform, M: VtdTableMemory, R: VtdRegisterIo> ManagedVtd<'a, 
         self.revoke_after_halt()
     }
 
+    /// Opt-in initialization for an already admitted, exclusively assigned
+    /// controller. No firmware handoff or platform policy is granted here.
+    pub fn start_with_scratchpads(
+        self,
+        dma: super::DmaLayout,
+        scratchpads: super::ScratchpadPlan,
+        ticks: u32,
+    ) -> Result<super::Controller<Self>, super::StartFailure<Self>> {
+        let expected = self.assignment;
+        // PciActivation on ManagedVtd verifies the live routed aperture
+        // both before enabling bus mastering and on exact readback.
+        super::Controller::start_checked_pci_with_scratchpads(
+            self,
+            expected,
+            dma,
+            Some(scratchpads),
+            ticks,
+            || Ok(()),
+        )
+    }
+
     fn verify(&mut self) -> Result<(), ManagedVtdError<P::Error>> {
         if self.cleanup != Cleanup::Active {
             return Err(ManagedVtdError::Retired);

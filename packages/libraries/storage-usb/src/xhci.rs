@@ -95,6 +95,7 @@ struct Registers {
     ports: u8,
     address64: bool,
     context_bytes: usize,
+    scratchpads: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,6 +135,7 @@ pub struct Controller<P: Platform> {
     faulted: bool,
     bulk_configured: bool,
     assignment: Option<DmaAssignment>,
+    scratchpads: Option<ScratchpadPlan>,
 }
 
 impl<P: Platform> Controller<P> {
@@ -149,15 +151,43 @@ impl<P: Platform> Controller<P> {
     }
 
     fn start_inner(
-        mut platform: P,
+        platform: P,
         bar_bytes: u32,
         assignment: Option<DmaAssignment>,
         dma: DmaLayout,
         ticks: u32,
         activate: impl FnOnce(&mut P) -> Result<(), Error<P::Error>>,
     ) -> Result<Self, StartFailure<P>> {
+        Self::start_inner_with_scratchpads(
+            platform, bar_bytes, assignment, dma, None, ticks, activate,
+        )
+    }
+
+    fn start_inner_with_scratchpads(
+        mut platform: P,
+        bar_bytes: u32,
+        assignment: Option<DmaAssignment>,
+        dma: DmaLayout,
+        scratchpads: Option<ScratchpadPlan>,
+        ticks: u32,
+        activate: impl FnOnce(&mut P) -> Result<(), Error<P::Error>>,
+    ) -> Result<Self, StartFailure<P>> {
         let registers = match discover(&mut platform, bar_bytes).and_then(|(registers, initial)| {
-            validate_dma::<P::Error>(dma, registers.address64, assignment)?;
+            let io_assignment = match scratchpads {
+                Some(plan) => {
+                    let assignment = assignment.ok_or(Error::InvalidDma)?;
+                    let page_mask = platform
+                        .read32(registers.operational + 8)
+                        .map_err(Error::Platform)?;
+                    Some(
+                        plan.admit(assignment, registers.scratchpads, page_mask, registers.address64)
+                            .map_err(|_| Error::InvalidDma)?,
+                    )
+                }
+                None if registers.scratchpads == 0 => assignment,
+                None => return Err(Error::Unsupported),
+            };
+            validate_dma::<P::Error>(dma, registers.address64, io_assignment)?;
             // Inspect the same capability again before the first reset, PCI
             // activation, or DMA publication. Held/changed observations do
             // not authorize handoff and leave the backend untouched.
@@ -166,11 +196,12 @@ impl<P: Platform> Controller<P> {
             if current != initial {
                 return Err(Error::OwnershipChanged);
             }
-            Ok(registers)
+            Ok((registers, io_assignment))
         }) {
             Ok(registers) => registers,
             Err(error) => return Err(StartFailure::Untouched { error, platform }),
         };
+        let (registers, io_assignment) = registers;
         let mut this = Self {
             platform,
             registers,
@@ -181,7 +212,8 @@ impl<P: Platform> Controller<P> {
             control: None,
             faulted: false,
             bulk_configured: false,
-            assignment,
+            assignment: io_assignment,
+            scratchpads,
         };
         match this.initialize(ticks, activate) {
             Ok(()) => Ok(this),
@@ -203,7 +235,8 @@ impl<P: Platform> Controller<P> {
         self.write(op, RESET)?;
         self.wait(op, RESET, 0, ticks)?;
         self.wait(op + 4, NOT_READY, 0, ticks)?;
-        if self.read(op + 8)? & 1 == 0 {
+        let page_mask = self.read(op + 8)?;
+        if page_mask & 1 == 0 {
             return Err(Error::Unsupported);
         }
         for (address, len) in [
@@ -213,6 +246,18 @@ impl<P: Platform> Controller<P> {
         ] {
             self.platform
                 .dma_write(address, &[0; RING_BYTES as usize][..len])
+                .map_err(Error::Platform)?;
+        }
+        if let Some(plan) = self.scratchpads {
+            let hcs2 = self.read(8)?;
+            if page_mask > u32::from(u16::MAX)
+                || decode_scratchpads(hcs2) != Some(self.registers.scratchpads)
+            {
+                return Err(Error::Unsupported);
+            }
+            plan.publish_pages(&mut self.platform).map_err(Error::Platform)?;
+            self.platform
+                .dma_write(self.dma.device_contexts, &plan.table_device_address().to_le_bytes())
                 .map_err(Error::Platform)?;
         }
         let mut segment = [0; 16];
@@ -728,6 +773,12 @@ fn legacy_capability_chain<E>(
     Err(Error::InvalidBar)
 }
 
+fn decode_scratchpads(hcs2: u32) -> Option<u16> {
+    // Scratchpad restore is not implemented; do not admit that geometry.
+    (hcs2 != u32::MAX && hcs2 & (1 << 26) == 0)
+        .then_some(((((hcs2 >> 21) & 31) << 5) | ((hcs2 >> 27) & 31)) as u16)
+}
+
 fn discover<P: Platform>(
     platform: &mut P,
     bar_bytes: u32,
@@ -745,7 +796,8 @@ fn discover<P: Platform>(
     let hcs2 = read(8)?;
     let hcc1 = read(0x10)?;
     let ports = (hcs1 >> 24) as u8;
-    if hcs1 & 0xff == 0 || hcs1 & 0x7ff00 == 0 || ports == 0 || hcs2 & 0xffe0_0000 != 0 {
+    let scratchpads = decode_scratchpads(hcs2).ok_or(Error::Unsupported)?;
+    if hcs1 & 0xff == 0 || hcs1 & 0x7ff00 == 0 || ports == 0 {
         return Err(Error::Unsupported);
     }
     let doorbell = read(0x14)? & !3;
@@ -777,6 +829,7 @@ fn discover<P: Platform>(
             ports,
             address64: hcc1 & 1 != 0,
             context_bytes: if hcc1 & 4 != 0 { 64 } else { 32 },
+            scratchpads,
         },
         legacy,
     ))

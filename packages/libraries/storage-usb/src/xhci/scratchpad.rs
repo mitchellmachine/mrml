@@ -1,6 +1,6 @@
 //! CPU-only staging for xHCI scratchpads. This module never maps memory,
 //! writes a register, publishes DCBAA slot zero, or authorizes activation.
-use super::DmaAssignment;
+use super::{DmaAssignment, Platform};
 
 const PAGE: u64 = 4096;
 const POINTER_BYTES: usize = 8;
@@ -61,6 +61,55 @@ impl ScratchpadPlan {
         (usize::from(self.count) + 1) * PAGE as usize
     }
 
+    pub(super) fn admit(
+        self,
+        assignment: DmaAssignment,
+        count: u16,
+        page_mask: u32,
+        address64: bool,
+    ) -> Result<DmaAssignment, ScratchpadError> {
+        if assignment != self.assignment {
+            return Err(ScratchpadError::AssignmentChanged);
+        }
+        let mask = u16::try_from(page_mask).map_err(|_| ScratchpadError::UnsupportedGeometry)?;
+        let prefix = self.table - assignment.device_base;
+        if self != Self::plan(assignment, prefix, count, mask, address64)? {
+            return Err(ScratchpadError::UnsupportedGeometry);
+        }
+        Ok(DmaAssignment {
+            bytes: prefix,
+            ..assignment
+        })
+    }
+
+    /// Initialize only the already checked assignment while the device is
+    /// stopped and bus mastering is still disabled. The caller publishes
+    /// DCBAA slot zero only on success.
+    pub(super) fn publish_pages<P: Platform>(self, platform: &mut P) -> Result<(), P::Error> {
+        let mut chunk = [0; 256];
+        // Zero all buffers before writing any pointer to them.
+        for offset in (PAGE..self.staging_bytes() as u64).step_by(chunk.len()) {
+            platform.dma_write(self.table + offset, &chunk)?;
+        }
+        for offset in (0..PAGE as usize).step_by(chunk.len()) {
+            self.encode_table_chunk(offset, &mut chunk);
+            platform.dma_write(self.table + offset as u64, &chunk)?;
+        }
+        Ok(())
+    }
+
+    fn encode_table_chunk(self, offset: usize, bytes: &mut [u8]) {
+        for (index, entry) in bytes.chunks_exact_mut(POINTER_BYTES).enumerate() {
+            let index = offset / POINTER_BYTES + index;
+            let address = if index < usize::from(self.count) {
+                self.table + (index as u64 + 1) * PAGE
+            } else {
+                0
+            };
+            entry.copy_from_slice(&address.to_le_bytes());
+        }
+    }
+
     /// Encode into an ordinary CPU staging buffer. The supervisor must later
     /// verify that installed backing matches this assignment before publishing.
     /// On error the supplied bytes remain unchanged.
@@ -72,13 +121,7 @@ impl ScratchpadPlan {
             return Err(ScratchpadError::StagingLength);
         }
         bytes.fill(0);
-        for (i, entry) in bytes[..usize::from(self.count) * POINTER_BYTES]
-            .chunks_exact_mut(POINTER_BYTES)
-            .enumerate()
-        {
-            let page = self.table + (i as u64 + 1) * PAGE;
-            entry.copy_from_slice(&page.to_le_bytes());
-        }
+        self.encode_table_chunk(0, &mut bytes[..PAGE as usize]);
         Ok(())
     }
 }

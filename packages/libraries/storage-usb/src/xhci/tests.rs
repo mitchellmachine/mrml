@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "scratchpad_cycle_tests.rs"]
+mod scratchpad_cycle_tests;
+
 #[test]
 fn read_only_legacy_inventory_reports_exact_semaphore_states() {
     for (bits, expected) in [

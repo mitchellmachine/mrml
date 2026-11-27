@@ -3467,8 +3467,12 @@ commands or implement a fallback transport. Until a service can receive and
 retire such a lease, native USB storage is unavailable. A CPU-only scratchpad planner can stage a zeroed pointer table and 34 aligned
 4 KiB buffers in one generation-bound aperture without touching its other
 DMA objects. The planner does not install a mapping, publish DCBAA slot
-zero, or make the controller available; live startup still rejects
-controllers requiring scratchpads. The live driver has one slot,
+zero, or make the controller available. The opt-in managed startup path
+checks a live count, page geometry, and an exact isolated assignment. Its
+software-model test publishes the pointer table before enabling bus
+mastering and checks cleanup retry after halt. The default startup path
+still refuses scratchpads, and native boot policy does not select the new
+path. The live driver has one slot,
 nonwrapping command and control queues, and no hub support. Dragonair boot
 exercises firmware USB access and embedded FAT32, not native USB I/O.
 
