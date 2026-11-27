@@ -34,6 +34,21 @@ again. This tests firmware handoff, framebuffer and the service on one machine,
 not MRML USB drive access, installation, or a physical storage driver. The
 internal system disk is not a target. No bare-metal pass has been recorded.
 
+### Diagnose a return to firmware
+
+Boot the UEFI Shell and run `map -r`, then use the USB filesystem mapping
+to launch `fsN:\EFI\BOOT\BOOTX64.EFI` (replace `N` with the USB mapping).
+The loader prints `MRML: UEFI loader started` using firmware text output,
+then names each stage. If it returns before the boot-services exit attempt,
+record the `MRML: FAILED at ...` line and hexadecimal EFI status. For example,
+a failure at `firmware RNG: LocateProtocol` means the loader could not obtain
+the firmware RNG protocol, not that the disk image or FAT32 test failed.
+If the shell prints no MRML line at all, record the shell's own status;
+firmware may have rejected the executable before entering it, or provided
+no working firmware text console. After the last memory-map message the
+loader stops using the firmware console; the kernel's framebuffer result
+is then the success criterion.
+
 ### Create and write the diagnostic USB image
 
 In a trusted checkout with the [MRML toolchain](../human/GETTING_STARTED.md)

@@ -3,6 +3,7 @@
 
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
+use core::fmt::{self, Write as _};
 #[cfg(feature = "package-boot")]
 use mrml_crypto::Sha3_512;
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
@@ -343,12 +344,98 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 /// services and protocols must remain live until the successful one-way
 /// `ExitBootServices` transition.
 pub unsafe extern "efiapi" fn efi_main(image: Handle, table: *mut SystemTable) -> Status {
+    let mut trace = ConsoleTrace::empty();
     // SAFETY: UEFI invokes this entry point with a live system table. Every
     // pointer obtained below is checked for null before it is dereferenced and
     // is used only while boot services remain active.
-    match unsafe { boot(image, table) } {
+    match unsafe { boot(image, table, &mut trace) } {
         Ok(()) => SUCCESS,
-        Err(status) => status,
+        Err(status) => {
+            trace.line(format_args!(
+                "MRML: FAILED at {} (EFI status {status:#018x})",
+                trace.stage
+            ));
+            status
+        }
+    }
+}
+
+// Prefix of the firmware's EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL.
+#[repr(C)]
+struct FirmwareTextOutput {
+    reset: usize,
+    output_string: Option<unsafe extern "efiapi" fn(*mut Self, *const u16) -> Status>,
+}
+
+struct ConsoleLine {
+    words: [u16; 192],
+    len: usize,
+}
+
+impl fmt::Write for ConsoleLine {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        for byte in value.bytes() {
+            if self.len >= self.words.len() - 3 {
+                return Err(fmt::Error);
+            }
+            self.words[self.len] = u16::from(if byte.is_ascii_graphic() || byte == b' ' {
+                byte
+            } else {
+                b'?'
+            });
+            self.len += 1;
+        }
+        Ok(())
+    }
+}
+
+struct ConsoleTrace {
+    output: *mut FirmwareTextOutput,
+    error: *mut FirmwareTextOutput,
+    stage: &'static str,
+    active: bool,
+}
+
+impl ConsoleTrace {
+    fn empty() -> Self {
+        Self {
+            output: core::ptr::null_mut(),
+            error: core::ptr::null_mut(),
+            stage: "system table",
+            active: true,
+        }
+    }
+
+    fn at(&mut self, stage: &'static str) {
+        self.stage = stage;
+        self.line(format_args!("MRML: {stage}"));
+    }
+
+    fn line(&self, text: fmt::Arguments<'_>) {
+        if !self.active {
+            return;
+        }
+        let mut line = ConsoleLine {
+            words: [0; 192],
+            len: 0,
+        };
+        let _ = line.write_fmt(text);
+        line.words[line.len..line.len + 2].copy_from_slice(&[13, 10]);
+        for protocol in [self.output, self.error] {
+            if protocol.is_null() || !protocol.is_aligned() {
+                continue;
+            }
+            // SAFETY: these are the live firmware-owned console pointers from
+            // the system table. This method is disabled before the first exit
+            // attempt; the fixed caller buffer remains alive and terminated.
+            if unsafe {
+                (*protocol)
+                    .output_string
+                    .is_some_and(|write| !status_is_error(write(protocol, line.words.as_ptr())))
+            } {
+                break;
+            }
+        }
     }
 }
 
@@ -572,30 +659,48 @@ fn paired_gop(
     }
 }
 
-unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
+unsafe fn boot(
+    image: Handle,
+    table: *mut SystemTable,
+    trace: &mut ConsoleTrace,
+) -> Result<(), Status> {
+    if !table.is_aligned() {
+        return Err(LOAD_ERROR);
+    }
     let system = unsafe { table.as_mut() }.ok_or(LOAD_ERROR)?;
+    trace.output = system.con_out.cast();
+    trace.error = system.std_err.cast();
+    trace.line(format_args!("MRML: UEFI loader started"));
+    trace.at("boot services");
     let services = unsafe { system.boot_services.as_mut() }.ok_or(LOAD_ERROR)?;
+    trace.at("loaded-image protocol and boot options");
     let isolation_selection = unsafe { loaded_boot_isolation_selection(image, services) }?;
+    trace.at("Secure Boot state and policy");
     let secure_boot = detect_secure_boot(system.runtime_services)?;
     if require_secure_boot() && !secure_boot {
         return Err(LOAD_ERROR);
     }
 
+    trace.at("graphics output (GOP) and framebuffer");
     let framebuffer = select_framebuffer(services, system.console_out_handle)?;
     paint(framebuffer, [0x80, 0x00, 0x00]);
 
+    trace.at("firmware RNG: LocateProtocol");
     let mut rng_pointer = core::ptr::null_mut();
     check(unsafe {
         (services.locate_protocol)(&RNG_GUID, core::ptr::null_mut(), &mut rng_pointer)
     })?;
+    trace.at("firmware RNG: GetRNG");
     let rng = unsafe { (rng_pointer as *mut RngProtocol).as_mut() }.ok_or(LOAD_ERROR)?;
     let mut entropy = [0u8; 32];
     check(unsafe { (rng.get_rng)(rng, core::ptr::null(), entropy.len(), entropy.as_mut_ptr()) })?;
     if entropy.iter().all(|byte| *byte == 0) {
+        trace.stage = "firmware RNG: all-zero entropy rejected";
         return Err(LOAD_ERROR);
     }
     paint(framebuffer, [0x80, 0x40, 0x00]);
 
+    trace.at("release and recovery configuration");
     let recovery_configuration = configured_recovery_journal()?;
     let mut prepared_release = unsafe {
         prepare_configured_release(
@@ -607,6 +712,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         )
     }?;
 
+    trace.at("load kernel from boot volume");
     #[cfg(not(feature = "package-boot"))]
     let kernel_file = unsafe {
         load_file(
@@ -629,6 +735,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     let kernel_bytes = unsafe {
         core::slice::from_raw_parts(kernel_file.address as *const u8, kernel_file.length)
     };
+    trace.at("verify kernel signature and trust");
     let signed = SignedArtifact::decode(kernel_bytes).map_err(|_| LOAD_ERROR)?;
     let verified = if let Some(release) = prepared_release.as_mut() {
         release
@@ -652,6 +759,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         return Err(LOAD_ERROR);
     }
     paint(framebuffer, [0x20, 0x40, 0x80]);
+    trace.at("allocate and materialize kernel");
     let image_size = verified.image().image_size() as usize;
     let image_pages = image_size
         .checked_add(4095)
@@ -673,6 +781,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         .materialize_at(image_destination, image_address)
         .map_err(|_| LOAD_ERROR)?;
     loader_trace(0xa2);
+    trace.at("load service from boot volume");
     let service_file = unsafe {
         load_file(
             image,
@@ -686,6 +795,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     let service_bytes = unsafe {
         core::slice::from_raw_parts(service_file.address as *const u8, service_file.length)
     };
+    trace.at("verify service signature and trust");
     let service_signed = SignedArtifact::decode(service_bytes).map_err(|_| LOAD_ERROR)?;
     let service_verified = if let Some(release) = prepared_release.as_mut() {
         release
@@ -705,6 +815,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
             .map_err(|_| LOAD_ERROR)?
     };
     loader_trace(0xa4);
+    trace.at("admit release and measure boot artifacts");
     let additional_release_artifacts = if let Some(release) = prepared_release.as_mut() {
         Some([
             unsafe {
@@ -825,6 +936,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     if require_tpm_measurement() && !measured_boot {
         return Err(LOAD_ERROR);
     }
+    trace.at("allocate and materialize service");
     let service_image_size = service_verified.image().image_size() as usize;
     let service_slot_pages = service_image_size.div_ceil(PAGE_BYTES);
     let service_image_pages = service_slot_pages
@@ -899,6 +1011,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         .map_err(|_| LOAD_ERROR)?,
     };
     loader_trace(0xa6);
+    trace.at("prepare kernel transition");
     let transition = prepare_transition(
         services,
         verified.image(),
@@ -913,10 +1026,12 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
 
     paint(framebuffer, [0x14, 0x21, 0x35]);
 
+    trace.at("ACPI root table");
     let acpi_root = unsafe { find_acpi_root(system) }.map_err(|_| LOAD_ERROR)?;
     if acpi_root == 0 {
         return Err(LOAD_ERROR);
     }
+    trace.at("rollback policy and installed recovery");
     let legacy_rollback_protected = enforce_rollback_counter(services, kernel_version)?;
     let rollback_protected = prepared_release.is_some() || legacy_rollback_protected;
     if require_rollback_counter() && !rollback_protected {
@@ -929,7 +1044,8 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     let coherent_release = prepared_release.is_some();
 
     loader_trace(0xa8);
-    let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services) }?;
+    trace.at("final memory map; console ends at ExitBootServices");
+    let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services, trace) }?;
     unsafe {
         launch_after_exit(
             map_size,
@@ -2092,6 +2208,7 @@ fn map_identity(
 unsafe fn exit_boot_services(
     image: Handle,
     services: &BootServices,
+    trace: &mut ConsoleTrace,
 ) -> Result<(usize, usize), Status> {
     let map = MEMORY_MAP.0.get().cast::<MemoryDescriptor>();
     let mut last_status = LOAD_ERROR;
@@ -2116,6 +2233,9 @@ unsafe fn exit_boot_services(
         {
             return Err(LOAD_ERROR);
         }
+        // Firmware may partially shut down on the first attempt, even on error.
+        // Do not call console protocols after this point or invalidate the map key.
+        trace.active = false;
         last_status = unsafe { (services.exit_boot_services)(image, map_key) };
         if !status_is_error(last_status) {
             return Ok((map_size, descriptor_size));
