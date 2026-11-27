@@ -9,6 +9,7 @@ use super::{DmaAssignment, PciActivation, Platform, RevocablePlatform};
 
 const MEMORY: u16 = 1 << 1;
 const BUS_MASTER: u16 = 1 << 2;
+const MAX_HALT_TICKS: u32 = 4096;
 
 /// A trusted supervisor owner, not a device-driver capability. It owns the
 /// PCI generation, pinned backing, BAR and exclusion of ATS, aliases and
@@ -158,6 +159,18 @@ impl<'a, P: VtdPciPlatform, M: VtdTableMemory, R: VtdRegisterIo> ManagedVtd<'a, 
         })
     }
 
+    /// Retire a controller without depending on the driver to stop it.
+    /// The supervisor must already have stopped guest vCPUs and fenced all
+    /// guest and peer access to this assignment. A failure leaves the same
+    /// lease fenced for cleanup retry; it never returns a usable controller.
+    pub fn halt_and_revoke(&mut self, ticks: u32) -> Result<(), ManagedVtdError<P::Error>> {
+        if matches!(self.cleanup, Cleanup::Active | Cleanup::Withdrawing) {
+            self.cleanup = Cleanup::Withdrawing;
+            halt_for_withdrawal(&mut self.owner, self.assignment, self.operational, ticks)?;
+        }
+        self.revoke_after_halt()
+    }
+
     fn verify(&mut self) -> Result<(), ManagedVtdError<P::Error>> {
         if self.cleanup != Cleanup::Active {
             return Err(ManagedVtdError::Retired);
@@ -177,10 +190,15 @@ impl<'a, P: VtdPciPlatform, M: VtdTableMemory, R: VtdRegisterIo> ManagedVtd<'a, 
 }
 
 impl<P: VtdPciPlatform, M, R> ManagedVtd<'_, P, M, R> {
-    fn check_mmio(&self, offset: u32) -> Result<(), ManagedVtdError<P::Error>> {
+    fn require_active(&self) -> Result<(), ManagedVtdError<P::Error>> {
         if self.cleanup != Cleanup::Active {
             return Err(ManagedVtdError::Retired);
         }
+        Ok(())
+    }
+
+    fn check_mmio(&self, offset: u32) -> Result<(), ManagedVtdError<P::Error>> {
+        self.require_active()?;
         if offset % 4 != 0
             || offset
                 .checked_add(4)
@@ -192,9 +210,7 @@ impl<P: VtdPciPlatform, M, R> ManagedVtd<'_, P, M, R> {
     }
 
     fn check_dma(&self, address: u64, bytes: usize) -> Result<(), ManagedVtdError<P::Error>> {
-        if self.cleanup != Cleanup::Active {
-            return Err(ManagedVtdError::Retired);
-        }
+        self.require_active()?;
         if bytes == 0 || !self.assignment.contains(address, bytes as u64) {
             return Err(ManagedVtdError::Geometry);
         }
@@ -228,12 +244,15 @@ impl<P: VtdPciPlatform, M, R> Platform for ManagedVtd<'_, P, M, R> {
             .map_err(ManagedVtdError::Platform)
     }
     fn publish_dma(&mut self) -> Result<(), Self::Error> {
+        self.require_active()?;
         self.owner.publish_dma().map_err(ManagedVtdError::Platform)
     }
     fn acquire_dma(&mut self) -> Result<(), Self::Error> {
+        self.require_active()?;
         self.owner.acquire_dma().map_err(ManagedVtdError::Platform)
     }
     fn wait_tick(&mut self) -> Result<(), Self::Error> {
+        self.require_active()?;
         self.owner.wait_tick().map_err(ManagedVtdError::Platform)
     }
 }
@@ -302,6 +321,48 @@ impl<P: VtdPciPlatform, M: VtdTableMemory, R: VtdRegisterIo> RevocablePlatform
                 .map_err(ManagedVtdError::Revoke)
         })
     }
+}
+
+pub(super) fn halt_for_withdrawal<P: VtdPciPlatform>(
+    owner: &mut P,
+    assignment: DmaAssignment,
+    operational: u32,
+    ticks: u32,
+) -> Result<(), ManagedVtdError<P::Error>> {
+    let pci = owner.live_pci(assignment).map_err(ManagedVtdError::Platform)?;
+    assignment.controller.verify_identity(pci).map_err(ManagedVtdError::Pci)?;
+    if pci.command & MEMORY == 0 {
+        return Err(ManagedVtdError::Pci(PciError::CommandMismatch));
+    }
+    // Use only the retained operational offset. If CAPLENGTH changed, no
+    // register write is authorized on this attempt.
+    if owner.read32(0).map_err(ManagedVtdError::Platform)? & 0xff != operational {
+        return Err(ManagedVtdError::Geometry);
+    }
+    let mut stop_sent = false;
+    for tick in 0..=ticks.min(MAX_HALT_TICKS) {
+        let command = owner.read32(operational).map_err(ManagedVtdError::Platform)?;
+        let status = owner.read32(operational + 4).map_err(ManagedVtdError::Platform)?;
+        if command & (super::RUN | super::RESET) == 0
+            && status & (super::HALTED | super::NOT_READY) == super::HALTED
+        {
+            return Ok(());
+        }
+        if tick == ticks.min(MAX_HALT_TICKS) {
+            break;
+        }
+        if !stop_sent
+            && command & (super::RUN | super::RESET) == super::RUN
+            && status & super::NOT_READY == 0
+        {
+            // Clear only Run/Stop. Never reset or touch another register.
+            owner.write32(operational, command & !super::RUN)
+                .map_err(ManagedVtdError::Platform)?;
+            stop_sent = true;
+        }
+        owner.wait_tick().map_err(ManagedVtdError::Platform)?;
+    }
+    Err(ManagedVtdError::NotHalted)
 }
 
 pub(super) fn finish_cleanup<P: VtdPciPlatform>(

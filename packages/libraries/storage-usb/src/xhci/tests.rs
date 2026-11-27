@@ -519,6 +519,52 @@ impl VtdPciPlatform for Fake {
 }
 
 #[test]
+fn supervisor_halts_only_the_retained_controller_before_withdrawing_dma() {
+    use managed_vtd::halt_for_withdrawal;
+
+    let mut fake = Fake::new();
+    let assignment = activation_assignment();
+    fake.regs[OP as usize / 4] = RUN;
+    fake.regs[(OP as usize + 4) / 4] = 0;
+    assert_eq!(
+        halt_for_withdrawal(&mut fake, assignment, OP, 0),
+        Err(ManagedVtdError::NotHalted)
+    );
+    assert_eq!(fake.mmio_writes, 0);
+    assert_eq!(
+        halt_for_withdrawal(&mut fake, assignment, OP + 4, 2),
+        Err(ManagedVtdError::Geometry)
+    );
+    assert_eq!(fake.mmio_writes, 0);
+    fake.regs[(OP as usize + 4) / 4] = NOT_READY;
+    assert_eq!(
+        halt_for_withdrawal(&mut fake, assignment, OP, 2),
+        Err(ManagedVtdError::NotHalted)
+    );
+    assert_eq!(fake.mmio_writes, 0);
+    fake.regs[(OP as usize + 4) / 4] = 0;
+    fake.ignore_stop_once = true;
+    assert_eq!(
+        halt_for_withdrawal(&mut fake, assignment, OP, 4),
+        Err(ManagedVtdError::NotHalted)
+    );
+    assert_eq!(fake.mmio_writes, 1);
+    assert_eq!(fake.pci_command, 6);
+    assert_eq!(fake.releases, 0);
+
+    let retained_status = (OP as usize + 4) / 4;
+    let retained_command = OP as usize / 4;
+    fake.regs[retained_command] |= 1 << 2;
+    halt_for_withdrawal(&mut fake, assignment, OP, 2).unwrap();
+    assert_eq!(fake.regs[retained_command], 1 << 2);
+    assert_eq!(fake.regs[retained_status], HALTED);
+    assert_eq!(fake.mmio_writes, 2);
+    halt_for_withdrawal(&mut fake, assignment, OP, 0).unwrap();
+    assert_eq!(fake.mmio_writes, 2);
+    assert_eq!(fake.pci_command, 6);
+}
+
+#[test]
 fn managed_vtd_requires_pci_readback_before_withdrawal_and_resumes_release_only() {
     use managed_vtd::{Cleanup, finish_cleanup};
     use mrml_kernel::arch::x86_64::{VtdApertureRevokeError, VtdBindingError};

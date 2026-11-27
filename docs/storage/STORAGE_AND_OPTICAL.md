@@ -3366,6 +3366,12 @@ access without discarding the lease needed for teardown. Once a change is
 observed, the same endpoint stays fenced even if a subsequent sample appears
 unchanged. Only withdrawal and a fresh launch can make a new endpoint
 available. This is a supervisor admission fence, not hardware DMA teardown.
+The managed VT-d backend now also exposes a supervisor-only retirement step
+for a stopped, fenced guest. It revalidates the retained controller, clears
+only Run/Stop, and waits within a bounded budget for halt before disabling
+bus mastering and draining VT-d. Timeout leaves that lease closed to driver
+access and available for an exact cleanup retry. The controller model tests
+this path; it has not been installed in the Chromebook runtime.
 The adapter is not an installed provider and does not authenticate
 IPC or retire DMA leases by itself. The kernel grants and
 revokes scoped device, interrupt, and DMA resources; it does not run USB
