@@ -41,6 +41,6 @@ targets = ["LINUX"]
 fingerprint = "fnv1a64:8db0f15f31a6d4fb"
 id = "external-command.audit-exercise-qemu.qemu-system-x86-64.1"
 kind = "external-command"
-line = 164
+line = 210
 path = "packages/tests/usb-fat32-qtest/src/tests.rs"
 reason = "Run the opt-in qtest against fresh disposable USB FAT32 images and emulated guest memory; no physical devices are passed through."

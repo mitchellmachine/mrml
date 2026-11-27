@@ -15,6 +15,8 @@ use std::{
     time::Duration,
 };
 
+use mrml_storage_usb::xhci::pci::{PciController, PciError, PciLocation, PciSnapshot};
+
 const DMA: DmaLayout = DmaLayout {
     device_contexts: 0x10_0000,
     command_ring: 0x10_0100,
@@ -73,6 +75,50 @@ impl Qtest {
             .strip_prefix("OK 0x")
             .ok_or_else(|| io::Error::other(line.clone()))?;
         u32::from_str_radix(s, 16).map_err(io::Error::other)
+    }
+
+    fn config_read(&mut self, offset: u32) -> io::Result<u32> {
+        self.call(&format!("outl 0xcf8 {:#x}", 0x8000_1800 | offset))?;
+        self.value("inl 0xcfc")
+    }
+
+    fn pci_snapshot(&mut self, bytes: u64) -> io::Result<PciSnapshot> {
+        Ok(PciSnapshot {
+            location: PciLocation {
+                segment: 0,
+                bus: 0,
+                device: 3,
+                function: 0,
+            },
+            configuration_generation: 1,
+            vendor_device: self.config_read(0)?,
+            class_revision: self.config_read(8)?,
+            header_type: (self.config_read(12)? >> 16) as u8,
+            command: self.config_read(4)? as u16,
+            bar0: self.config_read(0x10)?,
+            bar1: self.config_read(0x14)?,
+            bar0_bytes: bytes,
+        })
+    }
+
+    fn enumerate_xhci(&mut self) -> PciSnapshot {
+        // Probe only this fixture's PCI function, with both decoders off.
+        assert_eq!(self.config_read(4).unwrap() & 7, 0);
+        let low = self.config_read(0x10).unwrap();
+        let high = self.config_read(0x14).unwrap();
+        assert_eq!(low & 0xf, 4);
+        self.config(0x10, u32::MAX).unwrap();
+        self.config(0x14, u32::MAX).unwrap();
+        let mask = (u64::from(self.config_read(0x14).unwrap()) << 32)
+            | u64::from(self.config_read(0x10).unwrap() & !0xf);
+        let bytes = (!mask).checked_add(1).unwrap();
+        self.config(0x10, low).unwrap();
+        self.config(0x14, high).unwrap();
+        assert_eq!(self.config_read(0x10).unwrap(), low);
+        assert_eq!(self.config_read(0x14).unwrap(), high);
+        self.config(0x10, BAR).unwrap();
+        self.config(0x14, 0).unwrap();
+        self.pci_snapshot(bytes).unwrap()
     }
 
     fn config(&mut self, offset: u32, value: u32) -> io::Result<()> {
@@ -223,12 +269,21 @@ fn exercise_qemu(super_speed: bool) {
         .unwrap();
     let mut qmp = Qmp::open(&qmp_sock);
     // Configure only the explicitly created emulated controller.
-    qtest.call("outl 0xcf8 0x80001808").unwrap();
-    assert_eq!(qtest.value("inl 0xcfc").unwrap() >> 8, 0x0c0330);
-    qtest.config(0x10, BAR).unwrap();
-    qtest.config(0x14, 0).unwrap();
+    let snapshot = qtest.enumerate_xhci();
+    let pci = PciController::discover(snapshot).unwrap();
+    assert_eq!(pci.bar0(), (u64::from(BAR), 0x4000));
+    let observed = qtest.pci_snapshot(snapshot.bar0_bytes).unwrap();
+    assert_eq!(
+        pci.verify_unarmed(PciSnapshot {
+            configuration_generation: 2,
+            ..observed
+        }),
+        Err(PciError::AssignmentChanged)
+    );
+    assert_eq!(qtest.config_read(4).unwrap() & 4, 0);
+    pci.verify_unarmed(observed).unwrap();
     qtest.config(4, 6).unwrap();
-    let mut controller = Controller::start(qtest, 0x4000, DMA, 100).unwrap();
+    let mut controller = Controller::start(qtest, pci.bar0().1, DMA, 100).unwrap();
     let port = (1..=u8::MAX)
         .find(|&port| {
             controller

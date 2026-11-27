@@ -2920,6 +2920,17 @@ emulated function only. Tests with a synthetic backend cover an uncertain
 start write, halt timeout, and failed revocation. This does not prove physical
 DMA isolation or implement the native assignment backend.
 
+The xHCI PCI admission check compares a fresh snapshot with an expected
+controller descriptor: segment/bus/device/function, configuration generation,
+vendor/device and class/revision, header, and BAR0 base, type, and size.
+It admits aligned, non-prefetchable 32- or 64-bit memory BARs and rejects an
+already enabled bus master. The QEMU fixture sizes, restores and reads back
+its own synthetic BAR, exercises a stale-generation rejection while bus
+mastering is off, and passes the validated size to the controller. These
+checks do not grant rights or establish an exclusive assignment. Native
+activation must hold the same assignment lock from revalidation through
+mapping and bus-master enable, with IOMMU isolation installed first.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The

@@ -3,6 +3,7 @@
 
 mod bulk;
 mod lifecycle;
+pub mod pci;
 pub use bulk::{BulkDma, BulkPipe};
 pub use lifecycle::{Halted, RevocablePlatform, RevocationFailure, StartFailure, StopFailure};
 
