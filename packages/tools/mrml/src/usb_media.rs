@@ -19,7 +19,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU";
 
 pub(super) fn command(args: &[String]) -> Result<(), String> {
     match args {
@@ -27,11 +27,17 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             println!("{USAGE}");
             Ok(())
         }
-        [mode, file] if mode == "image" => create(&load_workspace()?, Path::new(file)),
-        [mode, code, vars, qemu] if mode == "test" => {
+        [mode, file] if mode == "image" => create(&load_workspace()?, Path::new(file), false),
+        [mode, code, vars, qemu] if matches!(mode.as_str(), "test" | "test-dma") => {
+            let dma_probe = mode == "test-dma";
             let scratch = Scratch::new().map_err(|error| error.to_string())?;
             let image = scratch.path("bringup.img");
-            create(&load_workspace()?, &image)?;
+            create(&load_workspace()?, &image, dma_probe)?;
+            let expected_trace = if dma_probe {
+                "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d4d0d1d2d3"
+            } else {
+                "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3"
+            };
             crate::qemu_boot::run_qemu(&words(&[
                 &string(&image),
                 code,
@@ -39,7 +45,7 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
                 qemu,
                 &string(&scratch.path("boot.trace")),
                 "--expect-hex",
-                "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3",
+                expected_trace,
                 "--timeout-seconds",
                 "60",
             ]))
@@ -221,7 +227,7 @@ fn autoburn(erase: bool) -> io::Result<()> {
         || discover_autoburn(erase),
         || {
             let workspace = load_workspace().map_err(io::Error::other)?;
-            let image = build_image(&workspace).map_err(io::Error::other)?;
+            let image = build_image(&workspace, false).map_err(io::Error::other)?;
             usb_image::check_image(&image)?;
             println!("Image SHA3-512: {}", sha3(&image));
             Ok(image)
@@ -245,7 +251,7 @@ fn request_autoburn(erase: bool) -> io::Result<()> {
     );
     let scratch = Scratch::new()?;
     let file = scratch.path("autoburn.img");
-    create(&load_workspace().map_err(io::Error::other)?, &file).map_err(io::Error::other)?;
+    create(&load_workspace().map_err(io::Error::other)?, &file, false).map_err(io::Error::other)?;
     if host::autoburn_token()?.0 != token {
         return Err(io::Error::other("USB identity changed; no bytes written"));
     }
@@ -409,7 +415,7 @@ fn string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn create(workspace: &Workspace, output: &Path) -> Result<(), String> {
+fn create(workspace: &Workspace, output: &Path, dma_probe: bool) -> Result<(), String> {
     if !(cfg!(target_os = "linux") || cfg!(windows)) {
         return Err(
             "Image assembly currently requires the Windows or Linux MRML build toolchain".into(),
@@ -420,7 +426,7 @@ fn create(workspace: &Workspace, output: &Path) -> Result<(), String> {
     {
         return Err("Choose a new .img filename; images are never overwritten".into());
     }
-    let bytes = build_image(workspace)?;
+    let bytes = build_image(workspace, dma_probe)?;
     publish(output, &bytes).map_err(|e| format!("USB image output error: {e}"))?;
     println!(
         "usb-image|bytes={}|sha3-512={}|output={}",
@@ -431,7 +437,7 @@ fn create(workspace: &Workspace, output: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn build_image(workspace: &Workspace) -> Result<Vec<u8>, String> {
+fn build_image(workspace: &Workspace, dma_probe: bool) -> Result<Vec<u8>, String> {
     let usb = Scratch::new().map_err(|e| e.to_string())?;
     let target = if cfg!(windows) { "windows" } else { "linux" };
     let native = workspace.root.join("target/mrml-native");
@@ -494,7 +500,11 @@ fn build_image(workspace: &Workspace) -> Result<Vec<u8>, String> {
         "uefi-x86_64",
         words(&[
             "--feature-profile",
-            "fat32_restart_boot",
+            if dma_probe {
+                "boot_dma_probe"
+            } else {
+                "fat32_restart_boot"
+            },
             "--compile-env",
             &format!("MRML_KERNEL_ROOT_DIGEST_HEX={kr}"),
             "--compile-env",

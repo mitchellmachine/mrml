@@ -7,8 +7,8 @@ use super::{
 use crate::{
     BootDmaReservation, Capability, CapabilitySpace, GuestMappingRevoker, MemoryBackingKind,
     MemoryMappingBackend, MemoryMappingBackendRequest, MemoryMappingRevocationBackend,
-    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
-    PhysAddr, Rights,
+    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryRegion, MemoryResourceError, ObjectId,
+    PAGE_SIZE, PhysAddr, Rights,
 };
 
 const LEAF_ACCESSED_DIRTY: u64 = (1 << 5) | (1 << 6);
@@ -1361,12 +1361,46 @@ impl ActivePageTables {
             // SAFETY: all leaves have been checked; their current,
             // exclusive normal-RAM translations are the caller's contract.
             unsafe {
-                zero_boot_dma_words(
-                    mapping.virtual_start().get() as *mut u64,
-                    (mapping.pages() * (PAGE_SIZE / 8)) as usize,
-                );
+                let start = mapping.virtual_start().get() as *mut u64;
+                let words = (mapping.pages() * (PAGE_SIZE / 8)) as usize;
+                zero_boot_dma_words(start, words);
+                if !(0..words).all(|word| start.wrapping_add(word).read_volatile() == 0) {
+                    return Err(PageTableBuildError::Storage);
+                }
             }
+            Ok(())
         })
+    }
+
+    /// Adopts and initializes the dedicated mapping from the UEFI handoff.
+    ///
+    /// # Safety
+    ///
+    /// The allocation must come from the trusted loader and the contract of
+    /// `initialize_boot_dma` applies. The tag is not itself authority to write
+    /// RAM or use DMA. Invoke only once before the range is shared.
+    pub unsafe fn initialize_uefi_boot_dma(
+        &mut self,
+        region: MemoryRegion,
+    ) -> Result<InitializedBootDma, PageTableBuildError> {
+        let reservation = BootDmaReservation::from_handoff_region(region)
+            .map_err(|_| PageTableBuildError::MappingMismatch)?;
+        let mapping = Mapping::new(
+            VirtAddr::new(super::BOOT_DMA_VIRTUAL_START).map_err(PageTableBuildError::Page)?,
+            reservation.physical_base(),
+            u64::from(reservation.pages()),
+            PagePermissions::KERNEL_READ_WRITE,
+        )
+        .map_err(|_| PageTableBuildError::MappingMismatch)?;
+        // SAFETY: the caller owns the loader allocation, and initialization
+        // independently checks every active translation before touching RAM.
+        unsafe {
+            self.initialize_boot_dma(InstalledBootDma {
+                reservation,
+                root: self.root,
+                mapping,
+            })
+        }
     }
 
     /// Validates every active leaf touched by a bounded user copy. The caller
@@ -1464,10 +1498,10 @@ fn initialize_boot_dma_from_store<S: PageTableStore>(
     store: &S,
     root: PhysAddr,
     installed: InstalledBootDma,
-    zero: impl FnOnce(Mapping),
+    zero: impl FnOnce(Mapping) -> Result<(), PageTableBuildError>,
 ) -> Result<InitializedBootDma, PageTableBuildError> {
     verify_active_mapping_from_store(store, root, installed.root, installed.mapping)?;
-    zero(installed.mapping);
+    zero(installed.mapping)?;
     Ok(InitializedBootDma {
         reservation: installed.reservation,
         root,
@@ -2156,6 +2190,7 @@ mod tests {
                 // SAFETY: the test owns the writable aligned slice for its
                 // full length, and the guard words lie outside the slice.
                 unsafe { zero_boot_dma_words(backing.as_mut_ptr(), backing.len()) };
+                Ok(())
             })
             .unwrap();
         assert_eq!(initialized.reservation().bytes(), 2 * PAGE_SIZE);

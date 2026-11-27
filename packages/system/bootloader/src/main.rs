@@ -4001,6 +4001,20 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     let early = EarlyKernelContext::from_handoff(&handoff, &regions[..region_count])
         .unwrap_or_else(|_| halt());
     #[cfg(feature = "uefi-fat32-restart-probe")]
+    let _boot_dma = handoff.boot_dma().map(|region| {
+        // SAFETY: the trusted probe loader exclusively allocated LoaderData,
+        // mapped it only at the dedicated CPU address, checked the final map,
+        // and switched to its new root. APs are not started and the probe has
+        // not given any device access to this allocation.
+        let initialized = unsafe {
+            ActivePageTables::current()
+                .and_then(|mut tables| tables.initialize_uefi_boot_dma(region))
+        }
+        .unwrap_or_else(|_| halt());
+        native_fat32_probe::dma_handoff_verified();
+        initialized
+    });
+    #[cfg(feature = "uefi-fat32-restart-probe")]
     let _ = native_fat32_probe::paint(handoff.framebuffer(), b"MRML KERNEL ENTRY");
     #[cfg(feature = "certificate-service-probe")]
     let _ = &early;

@@ -2360,6 +2360,16 @@ fn prepare_transition(
         }
         let reservation =
             BootDmaReservation::from_handoff_region(region).map_err(|_| LOAD_ERROR)?;
+        // SAFETY: this loader alone owns the just-allocated RAM, writable
+        // through the pre-exit identity mapping. The kernel probe clears
+        // this nonzero pattern after checking the new address space.
+        unsafe {
+            core::ptr::write_bytes(
+                base as *mut u8,
+                0xa5,
+                usize::from(BOOT_DMA_PROBE_PAGES) * PAGE_BYTES,
+            );
+        }
         let _installed = tables
             .install_boot_dma(
                 reservation,

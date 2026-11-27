@@ -3038,11 +3038,15 @@ supervisor RW/NX at a dedicated virtual address, and validates the exact
 allocation in the raw final firmware map. It then tags that range after
 framebuffer overlay; neighboring ranges keep their original classification.
 The kernel handoff accepts one bounded DMA tag, and the allocator does not
-treat that range as free. Use a matching signed kernel with this profile;
-normal loader profiles do not emit the tag. The kernel entry path still
-needs to consume the tag and check and clear the live mapping before
-issuing scoped capabilities. The profile does not grant DMA authority,
-write PCI configuration, or touch external media.
+treat that range as free. Normal loader profiles do not emit the tag.
+On the paired diagnostic kernel, before AP startup, verify every active
+4 KiB mapping, clear the loader's nonzero pattern, and read back the
+complete range before reporting success. To run the signed, disposable-image
+regression, use `mrml usb test-dma OVMF_CODE OVMF_VARS QEMU`. Its trace
+requires a dedicated DMA handoff success byte before the embedded FAT32
+restart trace. This exercises the CPU mapping, not controller DMA. It
+does not issue device capabilities, write PCI configuration or touch
+physical media.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

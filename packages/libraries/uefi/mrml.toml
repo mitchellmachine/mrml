@@ -102,7 +102,7 @@ name = "fat32_restart_boot"
 targets = ["UEFI"]
 
 [[feature_profile]]
-features = ["uefi-image", "package-boot", "boot-dma-probe"]
+features = ["uefi-image", "package-boot", "fat32-restart-probe", "boot-dma-probe"]
 name = "boot_dma_probe"
 targets = ["UEFI"]
 
