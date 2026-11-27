@@ -57,7 +57,11 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             if acpi_probe {
                 options.extend(words(&["--iommu", "intel"]));
             }
-            crate::qemu_boot::run_qemu(&options)
+            if acpi_probe {
+                crate::qemu_boot::run_qemu_with_q35_evidence(&options)
+            } else {
+                crate::qemu_boot::run_qemu(&options)
+            }
         }
         _ => device_command(args).map_err(|error| format!("mrml usb: {error}")),
     }

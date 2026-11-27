@@ -1664,6 +1664,7 @@ fn write_new(path: &str, bytes: &[u8], role: &str) -> Result<(), String> {
 }
 
 mod qemu_boot;
+mod qemu_mmio;
 mod usb_image;
 mod usb_media;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

@@ -81,6 +81,14 @@ pub fn create_media(args: &[String]) -> Result<(), String> {
 }
 
 pub fn run_qemu(args: &[String]) -> Result<(), String> {
+    run_qemu_config(args, false)
+}
+
+pub(super) fn run_qemu_with_q35_evidence(args: &[String]) -> Result<(), String> {
+    run_qemu_config(args, true)
+}
+
+fn run_qemu_config(args: &[String], verify_q35: bool) -> Result<(), String> {
     if args.len() < 5 {
         return Err("PackageQemuBootUsage { expected: IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--accelerator tcg|whpx|kvm] [--iommu intel] [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX] }".into());
     }
@@ -112,6 +120,9 @@ pub fn run_qemu(args: &[String]) -> Result<(), String> {
         Some("intel") => true,
         Some(_) => return Err("PackageQemuIommuInvalid".into()),
     };
+    if verify_q35 && (!intel_iommu || accelerator != "tcg") {
+        return Err("QEMU resource evidence requires q35/TCG with Intel IOMMU".into());
+    }
     let expected = option(args, "--expect-hex")?
         .map(parse_hex)
         .transpose()?
@@ -152,6 +163,7 @@ pub fn run_qemu(args: &[String]) -> Result<(), String> {
         timeout,
         accelerator,
         intel_iommu,
+        verify_q35,
     });
     let _ = fs::remove_file(vars);
     result
@@ -168,6 +180,7 @@ struct QemuChildOptions<'a> {
     timeout: u64,
     accelerator: &'a str,
     intel_iommu: bool,
+    verify_q35: bool,
 }
 
 fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
@@ -182,11 +195,15 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         timeout,
         accelerator,
         intel_iommu,
+        verify_q35,
     } = options;
     let machine = format!("q35,accel={accelerator}");
     let mut command = Command::new(qemu);
     if intel_iommu {
         command.args(["-device", "intel-iommu,aw-bits=48,intremap=off"]);
+    }
+    if verify_q35 {
+        command.args(["-no-user-config", "-qmp", "stdio"]);
     }
     let mut child = command
         .args(["-machine", &machine, "-m", "512M", "-display", "none"])
@@ -203,8 +220,16 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         .arg("-debugcon")
         .arg(format!("file:{}", trace.display()))
         .args(["-global", "isa-debugcon.iobase=0xe9"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdin(if verify_q35 {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(if verify_q35 {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("PackageQemuLaunchError {{ detail: {error} }}"))?;
@@ -225,10 +250,18 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 return Ok(());
             }
             if rejection.is_none() && bytes == expected {
+                let evidence =
+                    verify_q35.then(|| crate::qemu_mmio::verify_paused_q35_resources(&mut child));
                 child
                     .kill()
                     .map_err(|error| format!("PackageQemuStopError {{ detail: {error} }}"))?;
                 let _ = child.wait();
+                if let Some(evidence) = evidence {
+                    evidence?;
+                    println!(
+                        "qemu-mmio-model|status=PASS|ecam=0xe0000000..=0xefffffff|drhd=0xfed90000..=0xfed9022f|padding=unmapped"
+                    );
+                }
                 println!(
                     "package-qemu-boot|status=QEMU_UEFI_BOOT_PASS|accelerator={accelerator}|stage={}|trace={}|bytes={}",
                     boot_stage(&bytes),

@@ -3085,6 +3085,15 @@ for either window (one DRHD, one ECAM; trace `e1f1`). This is observational
 only: it does not change the firmware resource map, issue mapping authority,
 prove CPU cache attributes, confer ownership or read device registers.
 
+In the separate host-side QEMU fixture, `test-dma-acpi` pauses that same
+emulated machine after the signed trace. The Rust runner verifies in QEMU's
+CPU-visible flat resource map that PCI ECAM is the exact 256 MiB I/O window
+and the Intel remapper registers occupy only their expected byte extent.
+It also rejects any other visible resource in the rest of the remapper's
+4 KiB page. Unrecognized monitor output fails closed. This evidence is for
+the q35/TCG test fixture only: it is not guest firmware evidence, supplies
+no authority to a physical build, and is not yet passed to the guest.
+
 Before secondary CPUs start, the DMA probe also reads the live CPU
 protection controls. The requirement is four-level paging, supervisor
 write protection, NX enabled and an architectural UC entry at PAT index 3
