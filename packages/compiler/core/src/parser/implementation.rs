@@ -3763,6 +3763,36 @@ impl<'source> Parser<'source> {
         })
     }
 
+    fn crate_attributes(&mut self) -> Result<(), ParseError> {
+        while self
+            .peek()?
+            .is_some_and(|token| token.kind == TokenKind::Pound)
+        {
+            let mut probe = self.lexer.clone();
+            let Some(bang) = probe.next_token().map_err(Self::lexical)? else {
+                break;
+            };
+            if bang.kind != TokenKind::Bang {
+                break;
+            }
+            self.take()?;
+            self.take()?;
+            self.expect_kind(
+                TokenKind::OpenBracket,
+                ParseErrorKind::ExpectedAttributeDelimiter,
+            )?;
+            let attribute = self.identifier()?;
+            if attribute.text != "no_std" {
+                return Err(self.error(ParseErrorKind::UnsupportedAttribute, Some(attribute)));
+            }
+            self.expect_kind(
+                TokenKind::CloseBracket,
+                ParseErrorKind::ExpectedAttributeDelimiter,
+            )?;
+        }
+        Ok(())
+    }
+
     fn function_attributes(&mut self) -> Result<(bool, bool, Option<FunctionAbi>), ParseError> {
         let mut no_mangle = false;
         let mut naked = false;
@@ -4412,6 +4442,8 @@ impl<'source> Parser<'source> {
     pub fn parse_module<const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>(
         mut self,
     ) -> Result<Module<'source, MAX_ITEMS, MAX_PARAMETERS>, ParseError> {
+        // The supported source subset already compiles without a standard library.
+        self.crate_attributes()?;
         let mut module = Module {
             items: [None; MAX_ITEMS],
             item_count: 0,

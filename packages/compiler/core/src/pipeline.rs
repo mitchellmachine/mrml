@@ -418,6 +418,18 @@ mod tests {
     }
 
     #[test]
+    fn no_std_crate_header_preserves_scalar_object_bytes() {
+        const FUNCTION: &str = "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> i32 { 42 }";
+        const NO_STD_SOURCE: &str =
+            "#![no_std]\n#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> i32 { 42 }";
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            let baseline = compile(FUNCTION, "answer", format).unwrap();
+            let no_std = compile(NO_STD_SOURCE, "answer", format).unwrap();
+            assert_eq!(no_std.bytes(), baseline.bytes());
+        }
+    }
+
+    #[test]
     fn compiles_source_to_both_native_object_formats() {
         let source = "const BASE: u64 = 40; #[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { BASE + 2 }";
         let elf = compile(source, "answer", ObjectFormat::Elf64).unwrap();

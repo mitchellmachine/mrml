@@ -33,6 +33,47 @@ mod tests {
     }
 
     #[test]
+    fn leading_no_std_attributes_do_not_consume_item_capacity() {
+        let source = "// crate header\n#![no_std]\n#![no_std]\nfn total() -> i32 { 42 }";
+        let module = Parser::new(source).parse_module::<1, 0>().unwrap();
+        assert_eq!(module.item_count(), 1);
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function");
+        };
+        assert_eq!(function.name, "total");
+        assert_eq!(
+            &source[function.name_span.start..function.name_span.end],
+            "total"
+        );
+    }
+
+    #[test]
+    fn leading_no_std_preserves_the_remaining_attribute_checks() {
+        for (source, kind, token) in [
+            (
+                "#![no_std(extra)]",
+                ParseErrorKind::ExpectedAttributeDelimiter,
+                "(",
+            ),
+            ("#![other]", ParseErrorKind::UnsupportedAttribute, "other"),
+            (
+                "#[no_std] fn total() {}",
+                ParseErrorKind::UnsupportedAttribute,
+                "no_std",
+            ),
+            (
+                "fn total() {}\n#![no_std]",
+                ParseErrorKind::ExpectedAttributeDelimiter,
+                "!",
+            ),
+        ] {
+            let error = Parser::new(source).parse_module::<2, 0>().unwrap_err();
+            assert_eq!(error.kind, kind);
+            assert_eq!(&source[error.span.start..error.span.end], token);
+        }
+    }
+
+    #[test]
     fn parses_bounded_marker_trait_declarations() {
         let source = "pub trait Sendable {} trait Local { /* marker */ }";
         let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
