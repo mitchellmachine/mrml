@@ -1,10 +1,12 @@
+use mrml_crypto::Sha3_256;
 use mrml_package_format::{
     ActivatedSystemGeneration, ActivatedSystemRelease, RuntimeInventoryView, RuntimeIsolationClass,
     SystemReleaseError, parse_system_release,
 };
 
 use crate::{
-    HostSubstrateReason, ObjectId, TotalMicrovmClass, TotalMicrovmInventoryEntry,
+    ArtifactKind, HostSubstrateReason, IsolationPlacement, IsolationServiceSpec, ObjectId,
+    TotalMicrovmClass, TotalMicrovmInventoryEntry, VerifiedExecutable,
     TotalMicrovmRuntimeError, isolation_total_runtime::TotalMicrovmInventory,
 };
 
@@ -375,6 +377,7 @@ impl<'a, const N: usize> RuntimeDomainAssignmentPlan<'a, N> {
 /// construct this wrapper from ad hoc domain records.
 pub struct ReleaseTotalMicrovmInventory<const N: usize> {
     inventory: TotalMicrovmInventory<N>,
+    packages: [Option<BoundReleasePackage>; N],
     signer: [u8; 64],
     system_generation: u64,
     generation_digest: [u8; 64],
@@ -382,6 +385,15 @@ pub struct ReleaseTotalMicrovmInventory<const N: usize> {
     release_content_digest: [u8; 64],
     runtime_inventory_digest: [u8; 64],
     policy_generation: u64,
+}
+
+#[derive(Clone, Copy)]
+struct BoundReleasePackage {
+    name_digest: [u8; 32],
+    version: u64,
+    artifact_digest: [u8; 64],
+    domain: ObjectId,
+    class: TotalMicrovmClass,
 }
 
 impl<const N: usize> ReleaseTotalMicrovmInventory<N> {
@@ -487,6 +499,35 @@ impl<const N: usize> ActivatedReleaseTotalMicrovmInventory<N> {
         self.release.policy_generation()
     }
 
+    /// Checks a separately verified service executable against the exact
+    /// recovered package-to-domain assignment. This does not create a route,
+    /// verify a signer on its own, or authorize access to guest resources.
+    pub fn matches_service_executable(
+        &self,
+        spec: IsolationServiceSpec,
+        package_id: &str,
+        executable: &VerifiedExecutable<'_>,
+    ) -> bool {
+        let artifact = executable.artifact();
+        if spec.system_generation() != self.system_generation()
+            || spec.policy_generation() != self.policy_generation()
+            || spec.class() != TotalMicrovmClass::MicrovmEligible
+            || spec.placement() != IsolationPlacement::Microvm
+            || artifact.kind() != ArtifactKind::ServiceImage
+            || artifact.version() != spec.provider_generation()
+        {
+            return false;
+        }
+        let name_digest = Sha3_256::digest(package_id.as_bytes());
+        self.release.packages.iter().flatten().any(|package| {
+            package.name_digest == name_digest
+                && package.domain == spec.domain()
+                && package.class == spec.class()
+                && package.version == artifact.version()
+                && &package.artifact_digest == artifact.digest()
+        })
+    }
+
     pub fn finalize<const DOMAINS: usize>(
         &self,
         admission: &crate::IsolationAdmissionTable<DOMAINS>,
@@ -532,7 +573,8 @@ pub fn total_inventory_from_system_release<const N: usize>(
     let mut inventory =
         TotalMicrovmInventory::new(release.generation().generation(), policy_generation)
             .map_err(ReleaseInventoryError::Inventory)?;
-    for record in runtime.records() {
+    let mut packages = [None; N];
+    for (index, record) in runtime.records().enumerate() {
         let binding = bindings
             .iter()
             .find(|binding| binding.package_id == record.package_id)
@@ -561,6 +603,13 @@ pub fn total_inventory_from_system_release<const N: usize>(
         if binding.reason != record.reason {
             return Err(ReleaseInventoryError::ReasonMismatch);
         }
+        packages[index] = Some(BoundReleasePackage {
+            name_digest: Sha3_256::digest(record.package_id.as_bytes()),
+            version: record.version,
+            artifact_digest: *record.artifact_digest,
+            domain: binding.domain,
+            class: binding.class,
+        });
     }
     for (index, binding) in bindings.iter().enumerate() {
         if bindings[..index]
@@ -592,6 +641,7 @@ pub fn total_inventory_from_system_release<const N: usize>(
     }
     Ok(ReleaseTotalMicrovmInventory {
         inventory,
+        packages,
         signer: *expected_key_id,
         system_generation: release.generation().generation(),
         generation_digest: release.generation().digest(),
@@ -685,7 +735,8 @@ pub fn total_inventory_from_system_release_assignments<const N: usize>(
 mod tests {
     use super::*;
     use mrml_crypto::{LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, lamport_public_key};
-    use mrml_package_format::{
+    use mrml_crypto::Sha3_256;
+use mrml_package_format::{
         ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
         MAX_SYSTEM_RELEASE_BYTES, RuntimeInventoryRecord, RuntimeIsolationPlacement,
         SystemGenerationDigestRecord, encode_interface_catalog, encode_runtime_inventory,
