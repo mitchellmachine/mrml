@@ -182,7 +182,10 @@ suites pass 574 tests. Native one-page backing and exact GPA map/unmap are now
 both mappings are removed and leaks rather than frees it if unmapping is
 uncertain. Nested KVM exercised two distinct live VMs and observed the same
 bytes. This nested WHP host rejects a second simultaneous partition with a typed
-VID collision, so WHP has API/source parity but no two-partition execution claim.
+VID collision when registering the second partition's first GPA range. The
+separate-process WHP storage diagnostic now verifies two signed guests using a
+bounded copy, not an alias of the same host backing. WHP same-process shared
+backing remains unverified on this host.
 Guest page-table projection, peer queues, and execution remain **PLANNED**.
 
 Exact guest translation is now **PARTIALLY IMPLEMENTED** by the same retained

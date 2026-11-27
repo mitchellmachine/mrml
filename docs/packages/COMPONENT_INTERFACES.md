@@ -777,8 +777,13 @@ checks that stale request and completion notifications do not reach the
 replacement provider or change the caller's buffer. The focused signed guest
 payloads now generate and check the sector through their own page tables.
 Nested KVM reached both guest payloads and verified native mapping retirement.
-The WHP test compiles but skipped the live body on the local host because it
-could not create the second partition. The host coordinates the canonical queue
+On the local WHP host, the second partition object and setup succeeded but
+its first `WHvMapGpaRange` returned `0xC0370008` (`ERROR_VID_PARTITION_ALREADY_EXISTS`).
+The diagnostic now runs the provider in a separate test process while the
+consumer partition remains live. It copies one bounded fixture page per
+handoff; the signed provider and consumer both executed and verified the
+512-byte result. This verifies distinct WHP guests, not shared physical
+backing or a production worker transport. The host coordinates the canonical queue
 and its interrupt routing separately; the guest payloads do not consume
 injected interrupts. This reuses the
 existing slot and adds no mapping or service authority. Release fences precede request, response, and idle publication;

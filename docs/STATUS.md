@@ -15,7 +15,7 @@
 | System-release edges | 3 |
 | Feature declarations | 105 |
 | Artifact declarations | 115 |
-| Exact build-input declarations | 204 |
+| Exact build-input declarations | 205 |
 | Declared integration tests | 11 |
 | Declared examples | 8 |
 | Declared benchmarks | 1 |
@@ -26,8 +26,8 @@
 | Measure | Current value |
 | --- | ---: |
 | Rust source files | 783 |
-| Rust source lines | 680457 |
-| Static `#[test]` annotations | 4801 |
+| Rust source lines | 680592 |
+| Static `#[test]` annotations | 4802 |
 | Largest Rust source | `packages/compiler/core/src/codegen/tests.rs` (996630 bytes) |
 | Files containing admitted unsafe boundaries | 182 |
 | Unsafe blocks | 2632 |

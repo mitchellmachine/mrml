@@ -3221,6 +3221,8 @@ fn validate_ranges(ranges: &[(u64, u64)]) -> Result<(), WhpError> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
     use mrml_crypto::{
         LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, Sha3_512,
@@ -3996,6 +3998,140 @@ mod tests {
         pe
     }
 
+    fn read_peer_fixture_page(path: &std::path::Path) -> [u8; PAGE_SIZE as usize] {
+        use std::io::Read as _;
+
+        let mut file = std::fs::File::open(path).unwrap();
+        let mut page = [0; PAGE_SIZE as usize];
+        file.read_exact(&mut page).unwrap();
+        assert_eq!(file.read(&mut [0u8; 1]).unwrap(), 0);
+        page
+    }
+
+    // Test-only transport for WHP hosts that reject the second GPA owner
+    // in one process. It carries exactly one synthetic request page each
+    // way; the parent retains its own live partition while the worker runs.
+    fn run_peer_block_in_worker(
+        first: &mut PreparedWhpGuest<'_>,
+        virtual_page: u64,
+    ) {
+        use mrml_interface_storage_block_provider_v1::OpaqueHandle;
+        use mrml_kernel::VmDeadlineOutcome;
+        use mrml_storage::{ReadOnlyBlockImage, bind_microvm_block_read};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(mrml_runtime::mrml_format!(
+            "mrml-whp-peer-{}-{stamp:x}", std::process::id()
+        ).as_str());
+        std::fs::create_dir(&directory).unwrap();
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(self.0.join("request.page"));
+                let _ = std::fs::remove_file(self.0.join("response.page"));
+                let _ = std::fs::remove_dir(&self.0);
+            }
+        }
+        let directory = Scratch(directory);
+        let mut caps = CapabilitySpace::<8>::new();
+        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x771).unwrap();
+        let (pool, quota) = memory.create_root(
+            1, 2, 0, Rights::ALLOCATE.union(Rights::CONTROL).union(Rights::INSPECT), &mut caps,
+        ).unwrap();
+        let target = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+        let consumer = caps.insert(ObjectId(0x772), target).unwrap();
+        let provider = caps.insert(ObjectId(0x773), target).unwrap();
+        let (projection, _) = reserve_microvm_peer_page_projection(
+            &mut memory, pool, quota, consumer, provider,
+            virtual_page / PAGE_SIZE, virtual_page / PAGE_SIZE, &mut caps,
+        ).unwrap();
+        let session = OpaqueHandle::new(1, 14).unwrap();
+        let (_, mut client, mut server) = bind_microvm_block_read(
+            14, 9, 7, 11, session, &projection, consumer, provider, &caps,
+        ).unwrap();
+
+        let physical = 0x70_0000;
+        first.partition.map_zeroed(range(physical, PAGE_SIZE, MapPermissions::read_write()).unwrap())
+            .unwrap();
+        first.install_peer_page(virtual_page, physical).unwrap();
+        let mut page = [0; PAGE_SIZE as usize];
+        client.initialize(&mut page, &projection, &caps).unwrap();
+        let notification = client.submit(1, &mut page, &projection, &caps).unwrap();
+        std::fs::write(directory.0.join("request.page"), page).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let completed = mrml_runtime::Command::new(executable.to_str().unwrap())
+            .args(["--ignored", "--exact", "native::launch::tests::peer_block_partition_worker"])
+            .current_dir(directory.0.to_str().unwrap())
+            .output_with_limits(64 * 1024, 15_000)
+            .expect("WHP worker execution");
+        assert!(completed.status.success(), "WHP worker failed: {} {}",
+            core::str::from_utf8(&completed.stdout).unwrap_or(""),
+            core::str::from_utf8(&completed.stderr).unwrap_or(""));
+        let mut expected = page;
+        expected[1024..1536].fill(0xa6);
+        let worker_page = read_peer_fixture_page(&directory.0.join("response.page"));
+        assert_eq!(worker_page, expected);
+        let mut image = [0; 1024];
+        image[512..].copy_from_slice(&worker_page[1024..1536]);
+        let mut storage = ReadOnlyBlockImage::new(&image, 512, session).unwrap();
+        let response = server.serve(&mut page, &projection, &caps, notification, &mut storage).unwrap();
+        VmBackend::write_guest(first, physical, &page).unwrap();
+        assert_eq!(DeadlineVmBackend::run_with_deadline(first, 0, 1_000_000).unwrap(),
+            VmDeadlineOutcome::Exit(VmExit::Halted));
+        let mut sector = [0; 512];
+        client.complete(&mut page, &projection, &caps, response, &mut sector).unwrap();
+        assert_eq!(sector, [0xa6; 512]);
+        first.withdraw_peer_page(virtual_page, physical).unwrap();
+        assert_eq!(first.page_walk(virtual_page).unwrap().physical_address(virtual_page), None);
+        first.revoke_guest_mapping(physical, PAGE_SIZE).unwrap();
+        caps.revoke(provider).unwrap();
+        mrml_runtime::mrml_println!(
+            "peer-block-guest|status=PASS|backend=whp|guest_payload_bytes=512|transport=worker-copy"
+        );
+    }
+
+    #[test]
+    #[ignore = "run only by the WHP two-partition test in its private scratch directory"]
+    fn peer_block_partition_worker() {
+        use mrml_kernel::VmDeadlineOutcome;
+        use std::io::Write as _;
+
+        let directory = std::env::current_dir().unwrap();
+        if !directory.file_name().and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("mrml-whp-peer-")) {
+            return;
+        }
+        let mut page = read_peer_fixture_page(&directory.join("request.page"));
+
+        let system = WhpSystem::open().unwrap();
+        let virtual_page = 0xffff_8000_004f_0000;
+        let mut encoded = [0; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024];
+        write_signed_fixture(peer_block_probe_pe(true, virtual_page), ArtifactKind::VmImage, &mut encoded, 1);
+        let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
+        let root = TrustRoot::new(
+            ArtifactKind::VmImage, Sha3_512::digest(&encoded[public_at..public_at + LAMPORT_PUBLIC_KEY_BYTES]), 1,
+        );
+        let signed = SignedArtifact::decode(&encoded).unwrap();
+        let executable = signed.verify_executable(&root, ArtifactKind::VmImage).unwrap();
+        let layout = WhpLaunchLayout::new(
+            0x10_0000, 16, 0x20_0000, 0x20_0000, 0x30_0000, 0x30_0000,
+            0x40_0000, 0xffff_8000_0040_0000, PRIVILEGE_STACK_ARENA_PAGES, true,
+        ).unwrap();
+        let mut guest = system.prepare_boot_kernel(&executable, &valid_handoff(), layout).unwrap();
+        let physical = 0x80_0000;
+        guest.partition.map_initialized(range(physical, PAGE_SIZE, MapPermissions::read_write()).unwrap(), &page).unwrap();
+        guest.install_peer_page(virtual_page, physical).unwrap();
+        assert_eq!(DeadlineVmBackend::run_with_deadline(&mut guest, 0, 1_000_000).unwrap(),
+            VmDeadlineOutcome::Exit(VmExit::Halted));
+        VmBackend::read_guest(&guest, physical, &mut page).unwrap();
+        guest.withdraw_peer_page(virtual_page, physical).unwrap();
+        guest.revoke_guest_mapping(physical, PAGE_SIZE).unwrap();
+        drop(guest);
+        std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(directory.join("response.page")).unwrap().write_all(&page).unwrap();
+    }
+
     #[test]
     fn live_two_partition_peer_page_shares_and_retires_exact_backing() {
         use mrml_kernel::VmDeadlineOutcome;
@@ -4005,7 +4141,7 @@ mod tests {
             mrml_runtime::mrml_println!("peer-block-guest|status=SKIP|backend=whp|reason=no-hypervisor");
             return;
         }
-        let peer_virtual = 0xffff_8001_400f_0000;
+        let peer_virtual = 0xffff_8000_004f_0000;
         let encoded = signed_payload(peer_block_probe_pe(false, peer_virtual));
         let mut provider_encoded = [0u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024];
         write_signed_fixture(
@@ -4054,11 +4190,10 @@ mod tests {
             &provider_executable, &valid_handoff(), layout,
         ) {
             Ok(second) => second,
-            // Some nested WHP hosts admit only one active partition and return
-            // the documented VID identity collision for a second. Total mode
-            // must classify that as unavailable rather than use one VM twice.
+            // A second partition object can be created on this host, but
+            // its first GPA mapping collides with the live in-process owner.
             Err(WhpError::PartitionAlreadyExists) => {
-                mrml_runtime::mrml_println!("peer-block-guest|status=SKIP|backend=whp|reason=second-partition-unavailable");
+                run_peer_block_in_worker(&mut first, peer_virtual);
                 return;
             }
             Err(error) => panic!("second WHP partition failed: {error:?}"),
@@ -4081,8 +4216,8 @@ mod tests {
             pool_capability,
             first_target,
             second_target,
-            0xffff_8001_400f_0000 / PAGE_SIZE,
-            0xffff_8001_400f_0000 / PAGE_SIZE,
+            peer_virtual / PAGE_SIZE,
+            peer_virtual / PAGE_SIZE,
             &mut capabilities,
         )
         .unwrap();
@@ -4233,16 +4368,16 @@ mod tests {
             .unwrap_or_else(|(error, _)| panic!("WHP peer retirement failed: {error:?}"));
         assert_eq!(
             first
-                .page_walk(0xffff_8001_400f_0000)
+                .page_walk(peer_virtual)
                 .unwrap()
-                .physical_address(0xffff_8001_400f_0000),
+                .physical_address(peer_virtual),
             None
         );
         assert_eq!(
             second
-                .page_walk(0xffff_8001_400f_0000)
+                .page_walk(peer_virtual)
                 .unwrap()
-                .physical_address(0xffff_8001_400f_0000),
+                .physical_address(peer_virtual),
             None
         );
         assert_eq!(
