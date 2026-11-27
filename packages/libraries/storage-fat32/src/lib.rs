@@ -5,6 +5,7 @@
 //! Native MRML storage does not inherit FAT authority or namespace semantics.
 
 mod fixed_write;
+pub mod provisioned_probe;
 pub use fixed_write::{FixedFileWriteError, VerifiedSectorDevice, overwrite_fixed_file};
 
 mod service_loop;

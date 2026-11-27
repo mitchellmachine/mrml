@@ -2906,7 +2906,17 @@ Run the opt-in fixture on Linux with QEMU installed from the repository root:
 ```
 
 The partition bounds and exclusivity in this test are supplied by its private
-synthetic image, not by a native storage authority.
+synthetic image, not by a native storage authority. The probe now compares the
+complete provisioned FAT32 metadata (the reserved area, both FAT copies and
+the one-sector root) before authorizing the bounded file update locally. It
+checks the expected provisioned volume serial and rejects altered metadata,
+including a second root entry or an unexpected FAT link, without issuing a
+write. The serial is not permission to write: this operation still requires
+an exclusive, generation-bound partition view. An uncertain result closes
+the view rather than retrying. This path does not create a file on an
+arbitrary FAT32 volume or expose a general sector-write RPC.
+Patent review: NOT_TRIGGERED; this is an exact fixture comparison using the
+existing FAT32 and USB write mechanisms. See [review log](../patents/REVIEW_LOG.md).
 
 The xHCI lifecycle now retains the original assignment on untouched startup
 failure, and a shutdown-only owner after partially programmed startup or

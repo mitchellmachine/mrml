@@ -9,8 +9,11 @@ use mrml_kernel::{
 };
 use mrml_storage::{MicrovmBlockReadError, bind_microvm_block_read};
 use mrml_storage_fat32::{
-    Fat32EntryReader, FixedFileWriteError, VerifiedSectorDevice, overwrite_fixed_file,
-    parse_fat32_boot_sector, parse_fat32_short_directory, read_fat32_cluster_chain,
+    FixedFileWriteError, VerifiedSectorDevice,
+};
+use mrml_storage_fat32::provisioned_probe::{
+    PROBE_DATA_SECTOR, PROBE_PARTITION_SECTORS, ProbeError, ProvisionedProbe,
+    probe_metadata_sector,
 };
 use mrml_storage_usb::block_provider::UsbReadProvider;
 use mrml_storage_usb::xhci::{
@@ -660,11 +663,9 @@ impl Qmp {
 
 const SECTOR: usize = 512;
 const START: usize = 32;
-const RESERVED: usize = 32;
-const FAT_LEN: usize = 520;
-const DATA: usize = RESERVED + 2 * FAT_LEN;
-const TOTAL: usize = DATA + 65_525;
-const FILE_SECTOR: usize = START + DATA + 1;
+const TOTAL: usize = PROBE_PARTITION_SECTORS as usize;
+const FILE_SECTOR: usize = START + PROBE_DATA_SECTOR as usize;
+const SERIAL: u32 = 42;
 
 fn synthetic_image() -> Vec<u8> {
     // One known partition; exclusive ownership and no aliases follow from
@@ -676,38 +677,10 @@ fn synthetic_image() -> Vec<u8> {
     mbr[458..462].copy_from_slice(&(TOTAL as u32).to_le_bytes());
     mbr[510..512].copy_from_slice(&[0x55, 0xaa]);
 
-    let boot = sector_mut(&mut image, START);
-    boot[..3].copy_from_slice(&[0xeb, 0x58, 0x90]);
-    boot[3..11].copy_from_slice(b"MRMLTEST");
-    boot[11..13].copy_from_slice(&(SECTOR as u16).to_le_bytes());
-    boot[13] = 1;
-    boot[14..16].copy_from_slice(&(RESERVED as u16).to_le_bytes());
-    boot[16] = 2;
-    boot[21] = 0xf8;
-    boot[28..32].copy_from_slice(&(START as u32).to_le_bytes());
-    boot[32..36].copy_from_slice(&(TOTAL as u32).to_le_bytes());
-    boot[36..40].copy_from_slice(&(FAT_LEN as u32).to_le_bytes());
-    boot[44..48].copy_from_slice(&2u32.to_le_bytes());
-    boot[64] = 0x80;
-    boot[66] = 0x29;
-    boot[67..71].copy_from_slice(&42u32.to_le_bytes());
-    boot[71..82].copy_from_slice(b"NO NAME    ");
-    boot[82..90].copy_from_slice(b"FAT32   ");
-    boot[510..512].copy_from_slice(&[0x55, 0xaa]);
-    for table in [START + RESERVED, START + RESERVED + FAT_LEN] {
-        for (index, value) in [0x0fff_fff8u32, 0x0fff_ffff, 0x0fff_ffff, 0x0fff_ffff]
-            .into_iter()
-            .enumerate()
-        {
-            sector_mut(&mut image, table)[index * 4..index * 4 + 4]
-                .copy_from_slice(&value.to_le_bytes());
-        }
+    for sector in 0..PROBE_DATA_SECTOR {
+        let metadata = probe_metadata_sector(START as u32, SERIAL, sector).unwrap();
+        sector_mut(&mut image, START + sector as usize).copy_from_slice(&metadata);
     }
-    let root = sector_mut(&mut image, START + DATA);
-    root[..11].copy_from_slice(b"PROBE   TXT");
-    root[11] = 0x20;
-    root[26..28].copy_from_slice(&3u16.to_le_bytes());
-    root[28..32].copy_from_slice(&3u32.to_le_bytes());
     let data = sector_mut(&mut image, FILE_SECTOR);
     data.fill(0xa5);
     data[..3].copy_from_slice(b"old");
@@ -743,19 +716,6 @@ impl<T: mrml_storage_usb::BulkTransport> VerifiedSectorDevice for TestPartition<
     }
 }
 
-impl<T: mrml_storage_usb::BulkTransport> Fat32EntryReader for TestPartition<'_, T> {
-    fn read_entry(&mut self, fat_index: u8, cluster: u32) -> Result<u32, ()> {
-        assert!(fat_index < 2 && matches!(cluster, 2 | 3));
-        let table = RESERVED + usize::from(fat_index) * FAT_LEN;
-        let mut bytes = [0; SECTOR];
-        self.read_sector(table as u32, &mut bytes).map_err(|_| ())?;
-        let offset = cluster as usize * 4;
-        Ok(u32::from_le_bytes(
-            bytes[offset..offset + 4].try_into().unwrap(),
-        ))
-    }
-}
-
 fn exercise_fat32<T>(disk: &mut mrml_storage_usb::UsbDisk<T>)
 where
     T: mrml_storage_usb::BulkTransport,
@@ -775,45 +735,24 @@ where
     );
 
     let mut partition = TestPartition(disk);
-    let mut boot = [0; SECTOR];
-    partition.read_sector(0, &mut boot).unwrap();
-    let geometry = parse_fat32_boot_sector(&boot).unwrap();
-    assert_eq!(geometry.total_sectors, TOTAL as u32);
-    assert_eq!(geometry.data_start_sector, DATA as u32);
-    assert_eq!(geometry.root_cluster, 2);
-
-    let root =
-        read_fat32_cluster_chain::<1, _>(geometry, geometry.root_cluster, &mut partition).unwrap();
-    assert_eq!(root.clusters(), &[2]);
-    let mut directory = [0; SECTOR];
-    partition
-        .read_sector(geometry.data_start_sector, &mut directory)
-        .unwrap();
-    let entries = parse_fat32_short_directory::<2>(geometry, &directory).unwrap();
-    let [entry] = entries.entries() else {
-        panic!("expected exactly one fixture file");
-    };
-    assert_eq!(entry.short_name, *b"PROBE   TXT");
-    let chain =
-        read_fat32_cluster_chain::<1, _>(geometry, entry.first_cluster, &mut partition).unwrap();
-    assert_eq!(chain.clusters(), &[3]);
+    let mut probe = ProvisionedProbe::verify(
+        &mut partition,
+        START as u32,
+        PROBE_PARTITION_SECTORS,
+        SERIAL,
+    )
+    .unwrap();
     assert!(matches!(
-        overwrite_fixed_file(&mut partition, geometry, *entry, &chain, b"bad", b"new"),
-        Err(FixedFileWriteError::StaleContents)
+        probe.update(b"bad", b"new"),
+        Err(ProbeError::Update(FixedFileWriteError::StaleContents))
     ));
-    let mut contents = [0; SECTOR];
-    partition
-        .read_sector((DATA + 1) as u32, &mut contents)
-        .unwrap();
-    assert_eq!(&contents[..3], b"old");
-    assert_eq!(&contents[3..], &[0xa5; SECTOR - 3]);
-    // Cross multiple bulk and event ring wraps without changing any other byte
-    // in the image. Each readback must see the newly written payload.
+    // Cross multiple bulk and event ring wraps. The host compares the
+    // whole persisted image, not just the driver's readback.
     let mut previous = *b"old";
     for byte in b'A'..=b'K' {
         let next = [byte; 3];
-        overwrite_fixed_file(&mut partition, geometry, *entry, &chain, &previous, &next).unwrap();
+        probe.update(&previous, &next).unwrap();
         previous = next;
     }
-    overwrite_fixed_file(&mut partition, geometry, *entry, &chain, &previous, b"new").unwrap();
+    probe.update(&previous, b"new").unwrap();
 }

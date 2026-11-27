@@ -35,6 +35,21 @@ again. This tests firmware handoff, framebuffer and the service on one machine,
 not MRML USB drive access, installation, or a physical storage driver. The
 internal system disk is not a target.
 
+### Future Chromebook USB write check
+
+The target is a separate expendable USB data stick with a preallocated
+`PROBE.TXT`, on an owner-approved controller assignment. Two ports can share
+one xHCI controller: a second stick does not by itself establish separate
+controller ownership. Do not use the internal disk or a partition still owned
+by the boot path. The isolated
+storage stack must identify the exact media generation, update the test file,
+flush it, and read it back. An independent read of the stick after shutdown
+must see the new bytes. A firmware file write, an embedded FAT32 pass, or
+matching data in guest memory alone is not a pass. The [QEMU write fixture](../storage/STORAGE_AND_OPTICAL.md#native-usb-mass-storage-bring-up)
+exercises the file operation on an emulated device; the physical controller
+handoff and executing service path are not yet verified. This is not a
+hardware test procedure until those gates are in place.
+
 ### Recorded bare-metal result
 
 On 2026-11-27 (UTC), an HP Chromebook x360 14c (Dragonair), with an Intel
