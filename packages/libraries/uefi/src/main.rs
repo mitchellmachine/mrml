@@ -382,6 +382,8 @@ pub unsafe extern "efiapi" fn efi_main(image: Handle, table: *mut SystemTable) -
                 "MRML: FAILED at {} (EFI status {status:#018x})",
                 trace.stage
             ));
+            #[cfg(feature = "fat32-restart-probe")]
+            trace.save_report(image, Some(status));
             status
         }
     }
@@ -421,6 +423,8 @@ struct ConsoleTrace {
     error: *mut FirmwareTextOutput,
     stage: &'static str,
     active: bool,
+    #[cfg(feature = "fat32-restart-probe")]
+    services: *mut BootServices,
 }
 
 impl ConsoleTrace {
@@ -430,6 +434,45 @@ impl ConsoleTrace {
             error: core::ptr::null_mut(),
             stage: "system table",
             active: true,
+            #[cfg(feature = "fat32-restart-probe")]
+            services: core::ptr::null_mut(),
+        }
+    }
+
+    #[cfg(feature = "fat32-restart-probe")]
+    fn save_report(&self, image: Handle, failure: Option<Status>) {
+        if !self.active || self.services.is_null() {
+            return;
+        }
+        let mut report = [0; BOOT_REPORT_BYTES];
+        // SAFETY: this is the original live boot-services pointer. The trace
+        // is deactivated before the first ExitBootServices attempt. Only the
+        // BSP accesses MEMORY_MAP and no map key from this call is reused.
+        let saved = unsafe {
+            let services = &*self.services;
+            let mut size = MAP_BYTES;
+            let mut key = 0;
+            let mut stride = 0;
+            let mut version = 0;
+            let buffer = MEMORY_MAP.0.get().cast::<MemoryDescriptor>();
+            let status =
+                (services.get_memory_map)(&mut size, buffer, &mut key, &mut stride, &mut version);
+            let map = if status == SUCCESS && size <= MAP_BYTES {
+                Ok((
+                    core::slice::from_raw_parts(buffer.cast(), size),
+                    stride,
+                    version,
+                ))
+            } else {
+                Err(status)
+            };
+            encode_boot_report(&mut report, self.stage, failure, map).is_ok()
+                && write_existing_boot_report(image, services, &report).is_ok()
+        };
+        if saved {
+            self.line(format_args!("MRML: saved MRMLBOOT.TXT on the boot USB"));
+        } else {
+            self.line(format_args!("MRML: could not save MRMLBOOT.TXT"));
         }
     }
 
@@ -700,6 +743,10 @@ unsafe fn boot(
     trace.line(format_args!("MRML: UEFI loader started"));
     trace.at("boot services");
     let services = unsafe { system.boot_services.as_mut() }.ok_or(LOAD_ERROR)?;
+    #[cfg(feature = "fat32-restart-probe")]
+    {
+        trace.services = services;
+    }
     trace.at("loaded-image protocol and boot options");
     let isolation_selection = unsafe { loaded_boot_isolation_selection(image, services) }?;
     trace.at("Secure Boot state and policy");
@@ -1074,6 +1121,8 @@ unsafe fn boot(
         "If MRML MAP fails, reboot to EFI Shell. On USB FS0: run memmap >a FS0:\\MRML-MAP.TXT"
     ));
     trace.at("final memory map; console ends at ExitBootServices");
+    #[cfg(feature = "fat32-restart-probe")]
+    trace.save_report(image, None);
     paint_boot_stage(framebuffer, b"MRML EFI END START");
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services, trace) }?;
     paint_boot_stage(framebuffer, b"MRML EFI END PASS");
@@ -1797,6 +1846,87 @@ unsafe fn load_release_package(
         address,
         length: payload.raw_len,
     })
+}
+
+/// Update only the boot image's reserved report slot, never create arbitrary
+/// files or enumerate other volumes. The short name needs no LFN support.
+#[cfg(feature = "fat32-restart-probe")]
+fn write_existing_boot_report(
+    image: Handle,
+    services: &BootServices,
+    report: &[u8; BOOT_REPORT_BYTES],
+) -> Result<(), Status> {
+    const PATH: &[u16] = &[92, 77, 82, 77, 76, 66, 79, 79, 84, 46, 84, 88, 84, 0];
+    fn admitted<T>(ptr: *mut T) -> Result<*mut T, Status> {
+        if ptr.is_null() || !ptr.is_aligned() {
+            Err(LOAD_ERROR)
+        } else {
+            Ok(ptr)
+        }
+    }
+    // SAFETY: called only with live boot services on the BSP, before any exit
+    // attempt. Check every returned pointer before use; caller buffers remain
+    // valid for each synchronous call. Both successfully opened handles close.
+    unsafe {
+        let mut loaded = core::ptr::null_mut();
+        check((services.handle_protocol)(
+            image,
+            &LOADED_IMAGE_GUID,
+            &mut loaded,
+        ))?;
+        let loaded = admitted(loaded.cast::<LoadedImageProtocol>())?;
+        let device = admitted((*loaded).device_handle)?;
+        let mut fs = core::ptr::null_mut();
+        check((services.handle_protocol)(
+            device,
+            &SIMPLE_FILE_SYSTEM_GUID,
+            &mut fs,
+        ))?;
+        let fs = admitted(fs.cast::<SimpleFileSystemProtocol>())?;
+        let mut root = core::ptr::null_mut();
+        check(((*fs).open_volume)(fs, &mut root))?;
+        let root = admitted(root)?;
+        let mut file = core::ptr::null_mut();
+        let open = ((*root).open)(root, &mut file, PATH.as_ptr(), 3, 0);
+        let root_close = ((*root).close)(root);
+        check(open)?;
+        let file = admitted(file)?;
+        let result = (|| {
+            check(root_close)?;
+            let mut info = [0u64; 64];
+            let mut size = core::mem::size_of_val(&info);
+            check(((*file).get_info)(
+                file,
+                &FILE_INFO_GUID,
+                &mut size,
+                info.as_mut_ptr().cast(),
+            ))?;
+            if !(80..=core::mem::size_of_val(&info)).contains(&size)
+                || info[1] != BOOT_REPORT_BYTES as u64
+                || info[9] & 0x10 != 0
+            {
+                return Err(LOAD_ERROR);
+            }
+            let mut magic = [0; BOOT_REPORT_MAGIC.len()];
+            let mut size = magic.len();
+            check(((*file).read)(file, &mut size, magic.as_mut_ptr().cast()))?;
+            if size != magic.len() || magic != *BOOT_REPORT_MAGIC {
+                return Err(LOAD_ERROR);
+            }
+            let seek = (*file).set_position.ok_or(LOAD_ERROR)?;
+            let write = (*file).write.ok_or(LOAD_ERROR)?;
+            let flush = (*file).flush.ok_or(LOAD_ERROR)?;
+            check(seek(file, 0))?;
+            let mut size = report.len();
+            check(write(file, &mut size, report.as_ptr().cast()))?;
+            if size != report.len() {
+                return Err(LOAD_ERROR);
+            }
+            check(flush(file))
+        })();
+        let close = ((*file).close)(file);
+        result.and_then(|()| check(close))
+    }
 }
 
 unsafe fn load_file(

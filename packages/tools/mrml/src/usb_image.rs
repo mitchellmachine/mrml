@@ -9,6 +9,10 @@ const RESERVED: usize = 32;
 const FAT: usize = (VOLUME - RESERVED + 2).div_ceil(130);
 const DATA: usize = RESERVED + FAT * 2;
 const END: u32 = 0x0fff_ffff;
+// Matches the UEFI loader's reserved diagnostic slot (not a boot artifact).
+const REPORT_BYTES: usize = 16 * 1024;
+const REPORT_HEADER: &[u8] =
+    b"MRML BOOT LOG V1\r\nNo boot report has been recorded.\r\nEND MRML BOOT LOG\r\n";
 const LABEL: &[u8; 11] = b"MRMLBOOT   ";
 pub(super) const BYTES: usize = (PARTITION + VOLUME) * SECTOR;
 
@@ -203,9 +207,20 @@ fn serialize(files: [&[u8]; 6]) -> io::Result<Vec<u8>> {
         return Err(io::Error::other("ESP directory overflow"));
     }
 
+    let report_cluster = writer.allocate(REPORT_BYTES / SECTOR)?;
+    let mut report = [b' '; REPORT_BYTES];
+    report[..REPORT_HEADER.len()].copy_from_slice(REPORT_HEADER);
+    writer.write(report_cluster, &report);
+
     let mut entries = Vec::new();
     entries.extend(short(LABEL, 0x08, 0, 0));
     entries.extend(short(b"EFI        ", 0x10, efi, 0));
+    entries.extend(short(
+        b"MRMLBOOTTXT",
+        0x20,
+        report_cluster,
+        REPORT_BYTES as u32,
+    ));
     writer.write(root, &entries);
     entries.clear();
     entries.extend(short(b".          ", 0x10, efi, 0));
@@ -239,7 +254,7 @@ pub(super) fn read_regular(path: &Path, maximum: usize) -> io::Result<Vec<u8>> {
 
 pub(super) fn compose(paths: [&Path; 6]) -> io::Result<Vec<u8>> {
     let mut slots: [Vec<u8>; 6] = std::array::from_fn(|_| Vec::new());
-    let mut remaining = (VOLUME - DATA - 5) * SECTOR;
+    let mut remaining = (VOLUME - DATA - 5) * SECTOR - REPORT_BYTES;
     for (slot, path) in slots.iter_mut().zip(paths) {
         *slot = read_regular(path, remaining)?;
         remaining -= slot.len().div_ceil(SECTOR) * SECTOR;
@@ -274,6 +289,19 @@ mod tests {
         assert_eq!(
             &image[first + 5 * 4..first + 7 * 4],
             &[6, 0, 0, 0, 255, 255, 255, 15]
+        );
+        let root = (PARTITION + DATA) * SECTOR;
+        let entry = &image[root + 64..root + 96];
+        assert_eq!(&entry[..11], b"MRMLBOOTTXT");
+        assert_eq!(
+            u32::from_le_bytes(entry[28..32].try_into().unwrap()),
+            REPORT_BYTES as u32
+        );
+        let report_cluster = u16::from_le_bytes(entry[26..28].try_into().unwrap()) as usize;
+        let report_offset = root + (report_cluster - 2) * SECTOR;
+        assert_eq!(
+            &image[report_offset..][..REPORT_HEADER.len()],
+            REPORT_HEADER
         );
         image[450] = 0xef ^ 1;
         assert!(check_image(&image).is_err());

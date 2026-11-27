@@ -47,6 +47,80 @@ pub mod boot_random {
 
 pub mod tpm;
 
+pub const BOOT_REPORT_BYTES: usize = 16 * 1024;
+pub const BOOT_REPORT_MAGIC: &[u8; 16] = b"MRML BOOT LOG V1";
+
+struct ReportText<'a>(&'a mut [u8], usize);
+
+impl core::fmt::Write for ReportText<'_> {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        let end = self.1.checked_add(text.len()).ok_or(core::fmt::Error)?;
+        self.0
+            .get_mut(self.1..end)
+            .ok_or(core::fmt::Error)?
+            .copy_from_slice(text.as_bytes());
+        self.1 = end;
+        Ok(())
+    }
+}
+
+/// Encodes only operation metadata and selected fields from the firmware map.
+/// Never includes raw descriptor padding, mapped contents, or RNG output.
+pub fn encode_boot_report(
+    output: &mut [u8; BOOT_REPORT_BYTES],
+    stage: &'static str,
+    failure: Option<Status>,
+    map: Result<(&[u8], usize, u32), Status>,
+) -> core::fmt::Result {
+    use core::fmt::Write;
+    const REPORTED_DESCRIPTORS: usize = 192;
+    output.fill(b' ');
+    output[..BOOT_REPORT_MAGIC.len()].copy_from_slice(BOOT_REPORT_MAGIC);
+    let mut out = ReportText(output, BOOT_REPORT_MAGIC.len());
+    write!(out, "\r\nStage: {stage}\r\n")?;
+    match failure {
+        Some(status) => write!(
+            out,
+            "Result: pre-exit failure (EFI status {status:#018x})\r\n"
+        )?,
+        None => write!(out, "Result: pre-exit checkpoint; not a boot result\r\n")?,
+    }
+    match map {
+        Ok((bytes, stride, version))
+            if stride >= 40
+                && !bytes.is_empty()
+                && bytes.len() <= MAX_MEMORY_MAP_BYTES
+                && bytes.len().is_multiple_of(stride) =>
+        {
+            let count = bytes.len() / stride;
+            write!(
+                out,
+                "Map: pre-exit snapshot; entries={count} stride={stride} version={version}\r\n"
+            )?;
+            write!(
+                out,
+                "Type     PhysicalStart    Pages            Attributes\r\n"
+            )?;
+            for row in bytes.chunks_exact(stride).take(REPORTED_DESCRIPTORS) {
+                let kind = u32::from_le_bytes(row[..4].try_into().unwrap());
+                let start = u64::from_le_bytes(row[8..16].try_into().unwrap());
+                let pages = u64::from_le_bytes(row[24..32].try_into().unwrap());
+                let attrs = u64::from_le_bytes(row[32..40].try_into().unwrap());
+                write!(out, "{kind:08x} {start:016x} {pages:016x} {attrs:016x}\r\n")?;
+            }
+            if count > REPORTED_DESCRIPTORS {
+                write!(
+                    out,
+                    "Map truncated: showing first {REPORTED_DESCRIPTORS} entries\r\n"
+                )?;
+            }
+        }
+        Ok(_) => write!(out, "Map unavailable: invalid returned geometry\r\n")?,
+        Err(status) => write!(out, "Map unavailable: EFI status {status:#018x}\r\n")?,
+    }
+    write!(out, "END MRML BOOT LOG\r\n")
+}
+
 use core::ffi::c_void;
 use mrml_storage::{
     BlockDeviceDescriptor, BlockDeviceId, BlockVolume, BlockVolumeError,
@@ -1596,6 +1670,10 @@ pub type FileOpen = unsafe extern "efiapi" fn(
 ) -> Status;
 pub type FileClose = unsafe extern "efiapi" fn(*mut FileProtocol) -> Status;
 pub type FileRead = unsafe extern "efiapi" fn(*mut FileProtocol, *mut usize, *mut c_void) -> Status;
+pub type FileWrite =
+    unsafe extern "efiapi" fn(*mut FileProtocol, *mut usize, *const c_void) -> Status;
+pub type FileFlush = unsafe extern "efiapi" fn(*mut FileProtocol) -> Status;
+pub type FileSetPosition = unsafe extern "efiapi" fn(*mut FileProtocol, u64) -> Status;
 pub type FileGetInfo =
     unsafe extern "efiapi" fn(*mut FileProtocol, *const Guid, *mut usize, *mut c_void) -> Status;
 #[repr(C)]
@@ -1605,12 +1683,12 @@ pub struct FileProtocol {
     pub close: FileClose,
     pub delete: usize,
     pub read: FileRead,
-    pub write: usize,
+    pub write: Option<FileWrite>,
     pub get_position: usize,
-    pub set_position: usize,
+    pub set_position: Option<FileSetPosition>,
     pub get_info: FileGetInfo,
     pub set_info: usize,
-    pub flush: usize,
+    pub flush: Option<FileFlush>,
 }
 
 #[repr(C)]
@@ -2771,7 +2849,10 @@ mod tests {
             24
         );
         assert_eq!(core::mem::offset_of!(FileProtocol, read), 32);
+        assert_eq!(core::mem::offset_of!(FileProtocol, write), 40);
+        assert_eq!(core::mem::offset_of!(FileProtocol, set_position), 56);
         assert_eq!(core::mem::offset_of!(FileProtocol, get_info), 64);
+        assert_eq!(core::mem::offset_of!(FileProtocol, flush), 80);
         assert_eq!(core::mem::size_of::<BlockIoMedia>(), 48);
         assert_eq!(core::mem::offset_of!(BlockIoMedia, block_size), 12);
         assert_eq!(core::mem::offset_of!(BlockIoMedia, last_block), 24);
@@ -3854,6 +3935,36 @@ mod tests {
         bytes[8..16].copy_from_slice(&start.to_le_bytes());
         bytes[24..32].copy_from_slice(&pages.to_le_bytes());
         bytes
+    }
+
+    #[test]
+    fn boot_report_bounds_rows_and_omits_descriptor_padding() {
+        let mut map = [0; 200 * 48];
+        for row in map.chunks_exact_mut(48) {
+            row[..40].copy_from_slice(&descriptor(7, 0x1000, 2));
+            row[40..].copy_from_slice(b"SECRET!!");
+        }
+        let mut report = [0xff; BOOT_REPORT_BYTES];
+        encode_boot_report(
+            &mut report,
+            "test stage",
+            Some(LOAD_ERROR),
+            Ok((&map, 48, 1)),
+        )
+        .unwrap();
+        let text = core::str::from_utf8(&report).unwrap();
+        assert!(text.starts_with("MRML BOOT LOG V1\r\nStage: test stage"));
+        assert!(text.contains("pre-exit failure"));
+        assert!(text.contains("entries=200 stride=48 version=1"));
+        assert_eq!(text.matches("00000007 0000000000001000").count(), 192);
+        assert!(text.contains("Map truncated"));
+        assert!(!text.contains("SECRET"));
+        assert!(text.trim_end().ends_with("END MRML BOOT LOG"));
+        encode_boot_report(&mut report, "new stage", None, Ok((&map, 0, 1))).unwrap();
+        let text = core::str::from_utf8(&report).unwrap();
+        assert!(text.contains("invalid returned geometry"));
+        assert!(!text.contains("test stage"));
+        assert!(!text.contains("00000007"));
     }
 
     #[test]

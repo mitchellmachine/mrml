@@ -76,6 +76,25 @@ share the file and the exact label. The shell dump is an earlier snapshot,
 not the rejected map itself. The loader sorts descriptors by physical start
 before checking for overlaps and emits only a bounded canonical map.
 
+### Collect the automatic boot report
+
+The diagnostic USB has a reserved `MRMLBOOT.TXT` at its root. The loader
+updates it on a reportable pre-exit failure or at the pre-exit checkpoint.
+It records the stage, EFI error status if available, and up to 192 memory
+descriptors (type, physical start, page count, and attributes). It does not
+copy RAM contents, descriptor padding, credentials, or random bytes. It
+never creates the file on other media and does not write without the reserved
+slot. The normal non-diagnostic loader does not use this report.
+
+For failures after `ExitBootServices`, send both the last screen label and
+`MRMLBOOT.TXT`. That file is a snapshot, not a record of the final map or a
+claim that the kernel started. Firmware file I/O has already ended, and the
+loader takes a fresh map after closing the report so the write cannot
+invalidate the key used for firmware exit. Copy the report before another
+attempt or reflash. On read-only media or if the file write fails, use the
+screen label and the manual shell dump. A report without the
+`END MRML BOOT LOG` line may be incomplete.
+
 ### Create and write the diagnostic USB image
 
 In a trusted checkout with the [MRML toolchain](../human/GETTING_STARTED.md)
