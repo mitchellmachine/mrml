@@ -231,7 +231,8 @@ pub use isolation_total_runtime::{
     TotalMicrovmInventoryEntry, TotalMicrovmRuntimeError, TotalMicrovmRuntimeProof,
 };
 pub use memory::{
-    FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,
+    BootDmaReservation, FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion,
+    PAGE_SIZE, PhysAddr,
 };
 pub use memory_resource::{
     MemoryBackingBackendRequest, MemoryBackingKind, MemoryBackingOperationError, MemoryMapping,

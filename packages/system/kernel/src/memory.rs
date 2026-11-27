@@ -94,6 +94,31 @@ impl<'a> MemoryMap<'a> {
     }
 }
 
+/// Physically contiguous backing reserved for bounded early-boot DMA. The
+/// monotonic allocator never reuses this range, including after the handle
+/// is dropped. No CPU mapping, device mapping, zeroing or DMA authority is
+/// implied by this handle.
+#[must_use]
+#[derive(Debug, Eq, PartialEq)]
+pub struct BootDmaReservation {
+    physical_base: PhysAddr,
+    pages: u16,
+}
+
+impl BootDmaReservation {
+    pub const fn physical_base(&self) -> PhysAddr {
+        self.physical_base
+    }
+
+    pub const fn pages(&self) -> u16 {
+        self.pages
+    }
+
+    pub const fn bytes(&self) -> u64 {
+        self.pages as u64 * PAGE_SIZE
+    }
+}
+
 /// Initial monotonic allocator. Early boot never frees frames, eliminating
 /// reuse ambiguity while page tables and core services are established.
 pub struct FrameAllocator<'a> {
@@ -132,6 +157,26 @@ impl<'a> FrameAllocator<'a> {
         Err(MemoryError::OutOfMemory)
     }
 
+    /// Reserves from ordinary firmware-classified free RAM. The null page is
+    /// never used and the entire range must fit the VT-d physical address
+    /// field and the caller-supplied, verified host address width. The
+    /// platform remains responsible for zeroing and proving installed mappings.
+    pub fn reserve_boot_dma(
+        &mut self,
+        pages: u16,
+        physical_bits: u8,
+    ) -> Result<BootDmaReservation, MemoryError> {
+        if !(1..=256).contains(&pages) || !(32..=52).contains(&physical_bits) {
+            return Err(MemoryError::InvalidLength);
+        }
+        let physical_base =
+            self.allocate_contiguous_in(u64::from(pages), 1, PAGE_SIZE, 1 << physical_bits)?;
+        Ok(BootDmaReservation {
+            physical_base,
+            pages,
+        })
+    }
+
     /// Allocates one physically contiguous run without crossing a normalized
     /// firmware region. Skipped alignment padding is intentionally consumed:
     /// early boot never frees or reuses frames, preventing alias ambiguity.
@@ -140,35 +185,44 @@ impl<'a> FrameAllocator<'a> {
         pages: u64,
         alignment_pages: u64,
     ) -> Result<PhysAddr, MemoryError> {
+        self.allocate_contiguous_in(pages, alignment_pages, 0, u64::MAX)
+    }
+
+    fn allocate_contiguous_in(
+        &mut self,
+        pages: u64,
+        alignment_pages: u64,
+        minimum: u64,
+        limit: u64,
+    ) -> Result<PhysAddr, MemoryError> {
         if pages == 0 {
             return Err(MemoryError::InvalidLength);
         }
         if alignment_pages == 0 || !alignment_pages.is_power_of_two() {
             return Err(MemoryError::Unaligned);
         }
+        let alignment = alignment_pages
+            .checked_mul(PAGE_SIZE)
+            .ok_or(MemoryError::Overflow)?;
+        let bytes = pages.checked_mul(PAGE_SIZE).ok_or(MemoryError::Overflow)?;
         while let Some(region) = self.map.regions.get(self.region_index).copied() {
-            if region.kind != MemoryKind::Free {
-                self.region_index += 1;
-                self.page_index = 0;
-                continue;
+            let cursor = region.start.get() + self.page_index * PAGE_SIZE;
+            if cursor >= limit {
+                return Err(MemoryError::OutOfMemory);
             }
-            let aligned = self
-                .page_index
-                .checked_add(alignment_pages - 1)
-                .map(|value| value & !(alignment_pages - 1))
-                .ok_or(MemoryError::Overflow)?;
-            let end = aligned.checked_add(pages).ok_or(MemoryError::Overflow)?;
-            if end <= region.pages {
-                let offset = aligned
-                    .checked_mul(PAGE_SIZE)
-                    .ok_or(MemoryError::Overflow)?;
-                let address = region
-                    .start
-                    .get()
-                    .checked_add(offset)
-                    .ok_or(MemoryError::Overflow)?;
-                self.page_index = end;
-                return PhysAddr::new(address);
+            if region.kind == MemoryKind::Free {
+                let aligned = cursor
+                    .max(minimum)
+                    .checked_add(alignment - 1)
+                    .map(|value| value & !(alignment - 1));
+                if let Some((start, end)) =
+                    aligned.and_then(|start| start.checked_add(bytes).map(|end| (start, end)))
+                {
+                    if end <= region.end() && end <= limit {
+                        self.page_index = (end - region.start.get()) / PAGE_SIZE;
+                        return PhysAddr::new(start);
+                    }
+                }
             }
             self.region_index += 1;
             self.page_index = 0;
@@ -220,6 +274,68 @@ mod tests {
         assert_eq!(allocator.allocate().unwrap().get(), 0x3000);
         assert_eq!(allocator.allocate().unwrap().get(), 0x5000);
         assert_eq!(allocator.allocate(), Err(MemoryError::OutOfMemory));
+    }
+
+    #[test]
+    fn boot_dma_excludes_page_zero_and_cannot_be_reused_after_drop() {
+        let regions = [
+            region(0, 5, MemoryKind::Free),
+            region(0x5000, 4, MemoryKind::Mmio),
+            region((1 << 52) - PAGE_SIZE, 4, MemoryKind::Free),
+        ];
+        let mut allocator = FrameAllocator::new(MemoryMap::new(&regions).unwrap());
+        assert_eq!(
+            allocator.reserve_boot_dma(257, 52),
+            Err(MemoryError::InvalidLength)
+        );
+        {
+            let lease = allocator.reserve_boot_dma(3, 52).unwrap();
+            assert_eq!(lease.physical_base().get(), PAGE_SIZE);
+            assert_eq!(lease.bytes(), PAGE_SIZE * 3);
+        }
+        assert_eq!(allocator.allocate().unwrap().get(), 0x4000);
+        assert_eq!(
+            allocator
+                .reserve_boot_dma(1, 52)
+                .unwrap()
+                .physical_base()
+                .get(),
+            (1 << 52) - PAGE_SIZE
+        );
+        assert_eq!(
+            allocator.reserve_boot_dma(1, 52),
+            Err(MemoryError::OutOfMemory)
+        );
+    }
+
+    #[test]
+    fn boot_dma_respects_host_width_without_consuming_high_ram() {
+        let regions = [region((1 << 32) - PAGE_SIZE, 3, MemoryKind::Free)];
+        let mut allocator = FrameAllocator::new(MemoryMap::new(&regions).unwrap());
+        assert_eq!(
+            allocator.reserve_boot_dma(1, 64),
+            Err(MemoryError::InvalidLength)
+        );
+        assert_eq!(
+            allocator
+                .reserve_boot_dma(1, 32)
+                .unwrap()
+                .physical_base()
+                .get(),
+            (1 << 32) - PAGE_SIZE
+        );
+        assert_eq!(
+            allocator.reserve_boot_dma(1, 32),
+            Err(MemoryError::OutOfMemory)
+        );
+        assert_eq!(allocator.allocate().unwrap().get(), 1 << 32);
+    }
+
+    #[test]
+    fn contiguous_alignment_is_physical_not_region_relative() {
+        let regions = [region(0x3000, 8, MemoryKind::Free)];
+        let mut allocator = FrameAllocator::new(MemoryMap::new(&regions).unwrap());
+        assert_eq!(allocator.allocate_contiguous(1, 4).unwrap().get(), 0x4000);
     }
 
     #[test]

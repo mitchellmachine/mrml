@@ -3020,6 +3020,14 @@ is untouched. The native kernel still has to issue and retain that pinned
 backing and ECAM mapping through boot, shutdown and hot removal. No
 physical ECAM was accessed by the tests.
 
+The early kernel allocator can reserve up to 256 physically contiguous DMA
+pages from validated free RAM, excluding physical page zero and honoring the
+verified host address width supplied by the caller. The allocator is
+monotonic: dropping the reservation does not put pages back into circulation.
+This is a boot-lifetime reservation, not a runtime pin or a device mapping.
+The supervisor still needs to zero and map the backing, issue resource
+capabilities, and connect them to native xHCI startup and teardown.
+
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain
 unimplemented. The
