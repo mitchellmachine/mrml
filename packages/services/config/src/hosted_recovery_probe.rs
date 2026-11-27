@@ -13,7 +13,8 @@ use super::{
     RecoveredDeploymentTotalControlPlane, RecoveredInstalledStableTotalSystemSelection,
     RuntimeDomainPolicyBinding, SettingId, SettingSchema, StableConfigurationRecoveryValidator,
     StableServiceRecoveryValidator, reacquire_handoff_installed_recovery_device,
-    recover_selected_runtime_assignment, recover_serviced_stable_total_system_selection,
+    recover_selected_runtime_assignment_shared_backend,
+    recover_serviced_stable_total_system_selection,
 };
 use mrml_crypto::Sha3_256;
 use mrml_deployment::{
@@ -26,7 +27,7 @@ use mrml_kernel::InstalledRecoverySource;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     BootHandoff, BootRecoveryEnvelope, CapabilitySpace, InstalledRecoveryBootIdentity, ObjectId,
-    Priority, Rights, ServiceSupervisor, TaskRuntime,
+    Priority, Rights, ServiceSupervisor, TaskRuntime, TrustRoot, VerifiedExecutable,
 };
 use mrml_package_format::MAX_SYSTEM_RELEASE_BYTES;
 use mrml_storage::{
@@ -44,8 +45,12 @@ use mrml_storage::{
 
 const BLOCK_BYTES: usize = 4096;
 const MAX_HOSTED_RELEASE_BYTES: usize = 512 * 1024;
-const MAX_RELEASE_BLOCKS: usize = MAX_HOSTED_RELEASE_BYTES.div_ceil(BLOCK_BYTES);
 const RELEASE_BLOCK_BASE: u64 = 33;
+const MAX_HOSTED_SERVICE_BLOCKS: usize = 32;
+
+/// Geometry of the synthetic recovery volume in the hosted runners.
+pub const HOSTED_RECOVERY_BLOCK_COUNT: u64 =
+    RELEASE_BLOCK_BASE + (MAX_HOSTED_RELEASE_BYTES.div_ceil(BLOCK_BYTES) + 2 * MAX_HOSTED_SERVICE_BLOCKS) as u64;
 const CONFIGURATION_GENERATION: u64 = 2;
 const ROOT_GENERATION: u64 = 14;
 const POLICY_GENERATION: u64 = 1;
@@ -69,12 +74,20 @@ pub enum HostedRecoveryProbeError {
     StorageLayout,
     InstalledDevice,
     StableSelection,
+    ServiceExecutable,
     ReleaseLayout,
     AllocationLayout,
     AuthorityCheckpoint,
     Recovery,
     ServicePublication,
     Deployment,
+    DeploymentRead(
+        mrml_deployment::RecoveredRuntimeAssignmentError<
+            mrml_storage::BlockVolumeError<mrml_storage::BlockServiceError<()>>,
+            mrml_storage::BlockVolumeError<mrml_storage::BlockServiceError<()>>,
+            (),
+        >,
+    ),
     Admission,
 }
 
@@ -93,73 +106,6 @@ impl<E> From<HostedRecoveryProbeError> for HostedRecoveryProbeBuildError<E> {
 struct CheckpointBackend {
     object: StorageObjectId,
     bytes: [u8; BLOCK_BYTES],
-}
-
-struct DeploymentFileBackend {
-    object: StorageObjectId,
-    generation: u64,
-    bytes: [u8; BLOCK_BYTES],
-}
-
-struct DeploymentReleaseBackend<'a> {
-    object: StorageObjectId,
-    generation: u64,
-    bytes: &'a [u8],
-}
-
-unsafe impl FileReadBackend for DeploymentReleaseBackend<'_> {
-    type Error = ();
-
-    fn read_verified_extent(
-        &mut self,
-        record: ExtentRecord,
-        byte_offset: u64,
-        output: &mut [u8],
-    ) -> Result<(), Self::Error> {
-        let physical_block = record.physical_block().ok_or(())?;
-        let block_count = usize::try_from(record.block_count()).map_err(|_| ())?;
-        if record.file() != self.object
-            || record.metadata_generation() != self.generation
-            || physical_block != RELEASE_BLOCK_BASE
-            || block_count == 0
-            || block_count > MAX_RELEASE_BLOCKS
-        {
-            return Err(());
-        }
-        let extent_bytes = block_count.checked_mul(BLOCK_BYTES).ok_or(())?;
-        if self.bytes.len() > extent_bytes || extent_bytes > MAX_HOSTED_RELEASE_BYTES {
-            return Err(());
-        }
-        if record.content_digest() != padded_extent_digest(self.bytes, extent_bytes).ok_or(())? {
-            return Err(());
-        }
-        let within = usize::try_from(byte_offset).map_err(|_| ())?;
-        let end = within.checked_add(output.len()).ok_or(())?;
-        output.copy_from_slice(self.bytes.get(within..end).ok_or(())?);
-        Ok(())
-    }
-}
-
-unsafe impl FileReadBackend for DeploymentFileBackend {
-    type Error = ();
-
-    fn read_verified_extent(
-        &mut self,
-        record: ExtentRecord,
-        byte_offset: u64,
-        output: &mut [u8],
-    ) -> Result<(), Self::Error> {
-        if record.file() != self.object
-            || record.metadata_generation() != self.generation
-            || record.content_digest() != digest(&self.bytes)
-        {
-            return Err(());
-        }
-        let start = usize::try_from(byte_offset).map_err(|_| ())?;
-        let end = start.checked_add(output.len()).ok_or(())?;
-        output.copy_from_slice(self.bytes.get(start..end).ok_or(())?);
-        Ok(())
-    }
 }
 
 struct DeploymentStateStore {
@@ -229,10 +175,12 @@ struct ReachableMetadataBackend<'data> {
     release_extents: [u8; BLOCK_BYTES],
     allocation: [u8; BLOCK_BYTES],
     object_ids: [u8; BLOCK_BYTES],
-    service: [u8; BLOCK_BYTES],
-    service_extents: [u8; BLOCK_BYTES],
-    service_data_start: u64,
-    service_data: &'data [u8],
+    services: [[u8; BLOCK_BYTES]; 2],
+    service_extents: [[u8; BLOCK_BYTES]; 2],
+    service_data_start: [u64; 2],
+    service_data: [&'data [u8]; 2],
+    release_data: &'data [u8],
+    deployment_data: [u8; BLOCK_BYTES],
 }
 
 unsafe impl BlockServiceBackend for ReachableMetadataBackend<'_> {
@@ -247,15 +195,23 @@ unsafe impl BlockServiceBackend for ReachableMetadataBackend<'_> {
         if device != recovery_device() || self.fail_block == Some(block) {
             return Err(());
         }
-        if (self.service_data_start..header().block_count()).contains(&block)
-            && output.len() == BLOCK_BYTES
+        for (base, data) in self
+            .service_data_start
+            .into_iter()
+            .zip(self.service_data)
+            .chain(core::iter::once((RELEASE_BLOCK_BASE, self.release_data)))
         {
-            let start = usize::try_from(block - self.service_data_start).map_err(|_| ())? * BLOCK_BYTES;
-            let end = (start + BLOCK_BYTES).min(self.service_data.len());
-            let bytes = self.service_data.get(start..end).ok_or(())?;
-            output.fill(0);
-            output[..bytes.len()].copy_from_slice(bytes);
-            return Ok(());
+            if (base..base + data.len().div_ceil(BLOCK_BYTES) as u64).contains(&block) {
+                if output.len() != BLOCK_BYTES {
+                    return Err(());
+                }
+                let start = (block - base) as usize * BLOCK_BYTES;
+                let end = (start + BLOCK_BYTES).min(data.len());
+                let bytes = &data[start..end];
+                output.fill(0);
+                output[..bytes.len()].copy_from_slice(bytes);
+                return Ok(());
+            }
         }
         let source = match block {
             0 => &self.header,
@@ -273,8 +229,11 @@ unsafe impl BlockServiceBackend for ReachableMetadataBackend<'_> {
             19 => &self.release_extents,
             20 => &self.allocation,
             21 => &self.object_ids,
-            22 => &self.service,
-            23 => &self.service_extents,
+            22 => &self.services[0],
+            23 => &self.service_extents[0],
+            24 => &self.services[1],
+            25 => &self.service_extents[1],
+            32 => &self.deployment_data,
             _ => return Err(()),
         };
         if output.len() != source.len() {
@@ -357,7 +316,7 @@ fn volume() -> VolumeId {
 }
 
 fn header() -> VolumeHeader {
-    VolumeHeader::new(volume(), BLOCK_BYTES as u32, 100, 1, 2).unwrap()
+    VolumeHeader::new(volume(), BLOCK_BYTES as u32, HOSTED_RECOVERY_BLOCK_COUNT, 1, 2).unwrap()
 }
 
 fn recovery_device() -> BlockDeviceId {
@@ -437,8 +396,8 @@ fn build_reachable_total_device<'data>(
     authority_bytes: &[u8; BLOCK_BYTES],
     deployment_length: usize,
     deployment_bytes: &[u8; BLOCK_BYTES],
-    release_bytes: &[u8],
-    service_data: &'data [u8],
+    release_bytes: &'data [u8],
+    service_data: [&'data [u8]; 2],
     fail_block: Option<u64>,
 ) -> Result<ReachableMetadataBackend<'data>, HostedRecoveryProbeError> {
     if deployment_length == 0
@@ -454,8 +413,7 @@ fn build_reachable_total_device<'data>(
     let authority = object(10);
     let deployment = object(11);
     let release = object(12);
-    let service = object(13);
-    let service_extents_pointer = MetadataPointer::new(23, 1).unwrap();
+    let services = [object(13), object(14)];
     let root_pointer = MetadataPointer::new(10, 1).unwrap();
     let entries_pointer = MetadataPointer::new(11, 1).unwrap();
     let configuration_extents_pointer = MetadataPointer::new(13, 1).unwrap();
@@ -477,7 +435,7 @@ fn build_reachable_total_device<'data>(
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
 
     let mut root_bytes = [0; BLOCK_BYTES];
-    DirectoryMetadata::new(header(), root, 2, None, 5, entries_pointer)
+    DirectoryMetadata::new(header(), root, 2, None, 6, entries_pointer)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
         .encode(
             (&mut root_bytes[..mrml_storage::DIRECTORY_METADATA_BYTES])
@@ -515,14 +473,21 @@ fn build_reachable_total_device<'data>(
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
         DirectoryEntry::new(
             StorageName::new("service-probe").unwrap(),
-            service,
+            services[0],
+            StorageObjectKind::File,
+            CONFIGURATION_GENERATION,
+        )
+        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
+        DirectoryEntry::new(
+            StorageName::new("service-secondary").unwrap(),
+            services[1],
             StorageObjectKind::File,
             CONFIGURATION_GENERATION,
         )
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
     ];
     let mut entry_bytes = [0; BLOCK_BYTES];
-    DirectoryImage::<5>::build(header(), root, 2, entries_pointer, &entries)
+    DirectoryImage::<6>::build(header(), root, 2, entries_pointer, &entries)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
         .encode(&mut entry_bytes)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
@@ -641,18 +606,19 @@ fn build_reachable_total_device<'data>(
     .encode(&mut deployment_extents)
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
 
-    let service_blocks = service_data.len().div_ceil(BLOCK_BYTES);
-    if service_blocks == 0 || service_blocks > 32 {
+    let service_blocks = service_data.map(|bytes| bytes.len().div_ceil(BLOCK_BYTES));
+    if service_blocks.iter().any(|count| !(1..=MAX_HOSTED_SERVICE_BLOCKS).contains(count)) {
         return Err(HostedRecoveryProbeError::StorageLayout);
     }
-    let service_data_start = header().block_count() - service_blocks as u64;
+    let second_start = header().block_count() - service_blocks[1] as u64;
+    let service_data_start = [second_start - service_blocks[0] as u64, second_start];
     let release_block_count = release_bytes.len().div_ceil(BLOCK_BYTES);
     if RELEASE_BLOCK_BASE
         .checked_add(
             u64::try_from(release_block_count)
                 .map_err(|_| HostedRecoveryProbeError::ReleaseLayout)?,
         )
-        .is_none_or(|end| end > service_data_start)
+        .is_none_or(|end| end > service_data_start[0])
     {
         return Err(HostedRecoveryProbeError::ReleaseLayout);
     }
@@ -698,28 +664,50 @@ fn build_reachable_total_device<'data>(
     .encode(&mut release_extents)
     .map_err(|_| HostedRecoveryProbeError::ReleaseLayout)?;
 
-    // A distinct service file in this controlled recovery graph.
-    let mut service_metadata = [0; BLOCK_BYTES];
-    FileMetadata::new(
-        header(), service, CONFIGURATION_GENERATION, service_data.len() as u64, 1,
-        service_extents_pointer, digest(service_data),
-    )
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
-    .encode(
-        (&mut service_metadata[..mrml_storage::FILE_METADATA_BYTES]).try_into().unwrap(),
-    );
-    let service_extent = ExtentRecord::data(
-        service, CONFIGURATION_GENERATION, 0, service_blocks as u32, service_data_start,
-        padded_extent_digest(service_data, service_blocks * BLOCK_BYTES).unwrap(),
-    )
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
-    let mut service_extents = [0; BLOCK_BYTES];
-    ExtentImage::<1>::build(
-        header(), service, CONFIGURATION_GENERATION, service_data.len() as u64, service_extents_pointer, &[service_extent],
-    )
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
-    .encode(&mut service_extents)
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    let mut service_metadata = [[0; BLOCK_BYTES]; 2];
+    let mut service_extents = [[0; BLOCK_BYTES]; 2];
+    let service_metadata_blocks = [22, 24];
+    for i in 0..2 {
+        let service = services[i];
+        let data = service_data[i];
+        let count = service_blocks[i];
+        let ptr = MetadataPointer::new(service_metadata_blocks[i] + 1, 1).unwrap();
+        FileMetadata::new(
+            header(),
+            service,
+            CONFIGURATION_GENERATION,
+            data.len() as u64,
+            1,
+            ptr,
+            digest(data),
+        )
+        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
+        .encode(
+            (&mut service_metadata[i][..mrml_storage::FILE_METADATA_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        let extent = ExtentRecord::data(
+            service,
+            CONFIGURATION_GENERATION,
+            0,
+            count as u32,
+            service_data_start[i],
+            padded_extent_digest(data, count * BLOCK_BYTES).unwrap(),
+        )
+        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+        ExtentImage::<1>::build(
+            header(),
+            service,
+            CONFIGURATION_GENERATION,
+            data.len() as u64,
+            ptr,
+            &[extent],
+        )
+        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
+        .encode(&mut service_extents[i])
+        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    }
 
     let records = [
         AllocationRecord::new(root, 2, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
@@ -804,8 +792,38 @@ fn build_reachable_total_device<'data>(
             AllocationKind::ObjectIdAllocatorMetadata,
         )
         .unwrap(),
-        AllocationRecord::new(service, CONFIGURATION_GENERATION, 22, 1, AllocationKind::ObjectMetadata).unwrap(),
-        AllocationRecord::new(service, CONFIGURATION_GENERATION, 23, 1, AllocationKind::FileExtents).unwrap(),
+        AllocationRecord::new(
+            services[0],
+            CONFIGURATION_GENERATION,
+            22,
+            1,
+            AllocationKind::ObjectMetadata,
+        )
+        .unwrap(),
+        AllocationRecord::new(
+            services[0],
+            CONFIGURATION_GENERATION,
+            23,
+            1,
+            AllocationKind::FileExtents,
+        )
+        .unwrap(),
+        AllocationRecord::new(
+            services[1],
+            CONFIGURATION_GENERATION,
+            24,
+            1,
+            AllocationKind::ObjectMetadata,
+        )
+        .unwrap(),
+        AllocationRecord::new(
+            services[1],
+            CONFIGURATION_GENERATION,
+            25,
+            1,
+            AllocationKind::FileExtents,
+        )
+        .unwrap(),
         AllocationRecord::new(
             configuration,
             CONFIGURATION_GENERATION,
@@ -839,15 +857,30 @@ fn build_reachable_total_device<'data>(
             AllocationKind::FileData,
         )
         .unwrap(),
-        AllocationRecord::new(service, CONFIGURATION_GENERATION, service_data_start, service_blocks as u32, AllocationKind::FileData).unwrap(),
+        AllocationRecord::new(
+            services[0],
+            CONFIGURATION_GENERATION,
+            service_data_start[0],
+            service_blocks[0] as u32,
+            AllocationKind::FileData,
+        )
+        .unwrap(),
+        AllocationRecord::new(
+            services[1],
+            CONFIGURATION_GENERATION,
+            service_data_start[1],
+            service_blocks[1] as u32,
+            AllocationKind::FileData,
+        )
+        .unwrap(),
     ];
     let mut allocation = [0; BLOCK_BYTES];
-    AllocationImage::<20>::build(header(), root_generation, allocation_pointer, &records)
+    AllocationImage::<24>::build(header(), root_generation, allocation_pointer, &records)
         .map_err(|_| HostedRecoveryProbeError::AllocationLayout)?
         .encode(&mut allocation)
         .map_err(|_| HostedRecoveryProbeError::AllocationLayout)?;
     let mut object_ids = [0; BLOCK_BYTES];
-    ObjectIdAllocatorImage::build(header(), root_generation, Some(14), object_ids_pointer)
+    ObjectIdAllocatorImage::build(header(), root_generation, Some(15), object_ids_pointer)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
         .encode(&mut object_ids)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
@@ -879,10 +912,12 @@ fn build_reachable_total_device<'data>(
         release_extents,
         allocation,
         object_ids,
-        service: service_metadata,
+        services: service_metadata,
         service_extents,
         service_data_start,
         service_data,
+        release_data: release_bytes,
+        deployment_data: *deployment_bytes,
     })
 }
 
@@ -905,7 +940,7 @@ fn build_reachable_device(
         1,
         &deployment,
         &[0x52],
-        &[0x53],
+        [&[0x53], &[0x54]],
         fail_block,
     )
 }
@@ -916,7 +951,7 @@ fn recover_reachable_files<'a, 'data>(
     boot: InstalledRecoveryBootIdentity,
     volume_scratch: &'a mut [u8],
 ) -> Result<
-    RecoveredInstalledStableTotalSystemSelection<'a, ReachableMetadataBackend<'data>, 1, 1, 1, 6>,
+    RecoveredInstalledStableTotalSystemSelection<'a, ReachableMetadataBackend<'data>, 1, 1, 1, 7>,
     HostedRecoveryProbeError,
 > {
     let installed = reacquire_handoff_installed_recovery_device(
@@ -930,7 +965,7 @@ fn recover_reachable_files<'a, 'data>(
     let mut primary_read = [0; BLOCK_BYTES];
     let mut secondary_read = [0; BLOCK_BYTES];
     let mut metadata_scratch = [0; BLOCK_BYTES];
-    let recovered = recover_serviced_stable_total_system_selection::<_, 1, 1, 20, 5, 1, 6>(
+    let recovered = recover_serviced_stable_total_system_selection::<_, 1, 1, 24, 6, 1, 7>(
         service,
         backend,
         installed,
@@ -969,15 +1004,9 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
     RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, DOMAINS>,
     HostedRecoveryProbeBuildError<()>,
 > {
-    unsafe {
-        recover_total_control_plane_with_domain_policy::<DOMAINS>(
-            handoff,
-            release_bytes,
-            expected_release_key,
-            release_output,
-            false,
-        )
-    }
+    recover_total_control_plane_with_domain_policy::<DOMAINS>(
+        handoff, release_bytes, expected_release_key, release_output, false, None,
+    ).map(|(owner, _)| owner)
 }
 
 /// Builds the same retained hosted recovery owner while requiring the two
@@ -996,25 +1025,61 @@ pub unsafe fn recover_distinct_total_control_plane(
     release_output: &mut [u8],
 ) -> Result<RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>, HostedRecoveryProbeBuildError<()>>
 {
-    unsafe {
-        recover_total_control_plane_with_domain_policy::<2>(
-            handoff,
-            release_bytes,
-            expected_release_key,
-            release_output,
-            true,
-        )
-    }
+    recover_total_control_plane_with_domain_policy::<2>(
+        handoff, release_bytes, expected_release_key, release_output, true, None,
+    ).map(|(owner, _)| owner)
 }
 
-unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
+/// One installed service in the controlled probe. The trust root is supplied
+/// from outside the recovery volume, not derived from the signed container.
+pub struct HostedInstalledService<'src, 'out> {
+    pub signed_bytes: &'src [u8],
+    pub root: &'src TrustRoot,
+    pub output: &'out mut [u8],
+}
+
+/// Recovers the distinct-domain owner and two independently authenticated
+/// service executables from the same selected block volume. Release
+/// executable-set preflight and live launch remain the caller's responsibility.
+///
+/// # Safety
+///
+/// Only for the controlled hosted fixture documented by
+/// [`recover_total_control_plane`], not an owner approval or boot boundary.
+pub unsafe fn recover_distinct_total_control_plane_with_installed_services<'out>(
+    handoff: &BootHandoff,
+    release_bytes: &[u8],
+    expected_release_key: &[u8; 64],
+    release_output: &mut [u8],
+    services: [HostedInstalledService<'_, 'out>; 2],
+) -> Result<
+    (
+        RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>,
+        [VerifiedExecutable<'out>; 2],
+    ),
+    HostedRecoveryProbeBuildError<()>,
+> {
+    let (owner, executables) = recover_total_control_plane_with_domain_policy::<2>(
+        handoff, release_bytes, expected_release_key, release_output, true, Some(services),
+    )?;
+    Ok((
+        owner,
+        executables.ok_or(HostedRecoveryProbeError::ServiceExecutable)?,
+    ))
+}
+
+fn recover_total_control_plane_with_domain_policy<'out, const DOMAINS: usize>(
     handoff: &BootHandoff,
     release_bytes: &[u8],
     expected_release_key: &[u8; 64],
     release_output: &mut [u8],
     distinct_domains: bool,
+    services: Option<[HostedInstalledService<'_, 'out>; 2]>,
 ) -> Result<
-    RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, DOMAINS>,
+    (
+        RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, DOMAINS>,
+        Option<[VerifiedExecutable<'out>; 2]>,
+    ),
     HostedRecoveryProbeBuildError<()>,
 > {
     if DOMAINS == 0 || DOMAINS > 2 {
@@ -1093,17 +1158,8 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
         )
         .map_err(|_| HostedRecoveryProbeError::Deployment)?,
     };
-    let mut checkpoint_backend = DeploymentFileBackend {
-        object: checkpoint_object,
-        generation: CONFIGURATION_GENERATION,
-        bytes: [0; BLOCK_BYTES],
-    };
-    checkpoint_backend.bytes[..deployment_checkpoint.len()].copy_from_slice(&deployment_checkpoint);
-    let mut release_backend = DeploymentReleaseBackend {
-        object: release_object,
-        generation: CONFIGURATION_GENERATION,
-        bytes: release_bytes,
-    };
+    let mut checkpoint_block = [0; BLOCK_BYTES];
+    checkpoint_block[..deployment_checkpoint.len()].copy_from_slice(&deployment_checkpoint);
     let root_object = ObjectId(0x4852_5052_4f42_0001);
     let setting_object = ObjectId(0x4852_5052_4f42_0002);
     let service_object = ObjectId(0x4852_5052_4f42_0003);
@@ -1184,7 +1240,11 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
         ))
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     system
-        .stage(&mut update, system_write, OwnerIsolationSelection::TotalMicrovm)
+        .stage(
+            &mut update,
+            system_write,
+            OwnerIsolationSelection::TotalMicrovm,
+        )
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     component
         .stage(
@@ -1251,6 +1311,11 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
     };
     authority_backend.bytes[..authority_length]
         .copy_from_slice(&authority_bytes[..authority_length]);
+    let service_data = services
+        .as_ref()
+        .map_or([&[0x53][..], &[0x54][..]], |pair| {
+            [pair[0].signed_bytes, pair[1].signed_bytes]
+        });
     let mut recovery_device_backend = build_reachable_total_device(
         ROOT_GENERATION,
         checkpoint.length,
@@ -1258,20 +1323,59 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
         authority_length,
         &authority_backend.bytes,
         deployment_checkpoint.len(),
-        &checkpoint_backend.bytes,
+        &checkpoint_block,
         release_bytes,
-        &[0x53],
+        service_data,
         None,
     )?;
     let mut recovery_block_service = recovery_block_service()?;
     let mut volume_scratch = [0; BLOCK_BYTES];
-    let reachable = recover_reachable_files(
+    let mut reachable = recover_reachable_files(
         &mut recovery_block_service,
         &mut recovery_device_backend,
         installed,
         &mut volume_scratch,
     )?;
-    let selected = reachable.selected();
+    let executables = if let Some([first, second]) = services {
+        let requests = [
+            (object(13), CONFIGURATION_GENERATION),
+            (object(14), CONFIGURATION_GENERATION),
+        ];
+        reachable
+            .select_service_files(requests)
+            .map_err(|_| HostedRecoveryProbeError::ServiceExecutable)?;
+        let mut reads = StorageAuthorityTable::<2>::new();
+        let mut recover_service =
+            |request: (StorageObjectId, u64), service: HostedInstalledService<'_, 'out>| {
+                let handle = reads
+                    .insert(
+                        request.0,
+                        StorageObjectKind::File,
+                        StorageRights::READ,
+                        principal(),
+                    )
+                    .map_err(|_| HostedRecoveryProbeError::ServiceExecutable)?;
+                reachable
+                    .read_verified_service_executable(
+                        request,
+                        &reads,
+                        handle,
+                        principal(),
+                        service.root,
+                        service.output,
+                    )
+                    .map_err(|_| HostedRecoveryProbeError::ServiceExecutable)
+            };
+        Some([
+            recover_service(requests[0], first)?,
+            recover_service(requests[1], second)?,
+        ])
+    } else {
+        None
+    };
+    let (installed_selection, recovered_blocks) = reachable.into_parts();
+    let (selected_root, mut block_volume) = recovered_blocks.into_parts();
+    let selected = selected_root.selected();
     let mut bootstrap = StorageAuthorityTable::<1>::new();
     let bootstrap_file = bootstrap
         .insert(
@@ -1373,23 +1477,23 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
             principal(),
         )
         .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    let deployment = recover_selected_runtime_assignment::<1, DOMAINS, 2, 1, 1, 1, _, _, _>(
-        deployment_root,
-        selected,
-        &checkpoint_authority,
-        checkpoint_handle,
-        &release_authority,
-        release_handle,
-        principal(),
-        &deployment_state_store,
-        &mut checkpoint_backend,
-        &mut release_backend,
-        &deployment_capabilities,
-        inspect,
-        release_output,
-        POLICY_GENERATION,
-    )
-    .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let deployment =
+        recover_selected_runtime_assignment_shared_backend::<1, DOMAINS, 2, 1, 1, 1, _, _>(
+            deployment_root,
+            selected,
+            &checkpoint_authority,
+            checkpoint_handle,
+            &release_authority,
+            release_handle,
+            principal(),
+            &deployment_state_store,
+            &mut block_volume,
+            &deployment_capabilities,
+            inspect,
+            release_output,
+            POLICY_GENERATION,
+        )
+        .map_err(HostedRecoveryProbeError::DeploymentRead)?;
     if deployment.assignment().expected_len() != DOMAINS {
         return Err(HostedRecoveryProbeError::Deployment.into());
     }
@@ -1411,7 +1515,7 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
     });
     let total = recovered
         .build_recovered_deployment_total_control_plane(
-            reachable.installed(),
+            installed_selection,
             &capabilities,
             system,
             system_read,
@@ -1434,7 +1538,7 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
             return Err(HostedRecoveryProbeError::Admission.into());
         }
     }
-    Ok(total)
+    Ok((total, executables))
 }
 
 #[cfg(test)]
@@ -1518,50 +1622,120 @@ mod tests {
         let (signed, key) = signed_recovery_service_fixture(0x71);
         let data = [0x42; BLOCK_BYTES];
         let mut backend = build_reachable_total_device(
-            14, 1, &data, 1, &data, 1, &data, &[0x52], &signed, None,
-        ).unwrap();
+            14,
+            1,
+            &data,
+            1,
+            &data,
+            1,
+            &data,
+            &[0x52],
+            [&signed, &[0x54]],
+            None,
+        )
+        .unwrap();
         let mut scratch = [0; BLOCK_BYTES];
         let mut block = recovery_block_service().unwrap();
         let mut recovered = recover_reachable_files(
-            &mut block, &mut backend, installed_boot_identity(14).unwrap(), &mut scratch,
-        ).unwrap();
+            &mut block,
+            &mut backend,
+            installed_boot_identity(14).unwrap(),
+            &mut scratch,
+        )
+        .unwrap();
         let mut table = StorageAuthorityTable::<2>::new();
         let requested = (object(13), CONFIGURATION_GENERATION);
-        let handle = table.insert(requested.0, StorageObjectKind::File, StorageRights::READ, principal()).unwrap();
-        let wrong = table.insert(object(12), StorageObjectKind::File, StorageRights::READ, principal()).unwrap();
+        let handle = table
+            .insert(
+                requested.0,
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal(),
+            )
+            .unwrap();
+        let wrong = table
+            .insert(
+                object(12),
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal(),
+            )
+            .unwrap();
         let mut buffer = std::vec![0xff; signed.len() + 1];
         assert!(matches!(
-            recovered.read_verified_service_executable(requested, &table, handle, principal(), &key, &mut buffer[..signed.len() - 1]),
+            recovered.read_verified_service_executable(
+                requested,
+                &table,
+                handle,
+                principal(),
+                &key,
+                &mut buffer[..signed.len() - 1]
+            ),
             Err(Error::BufferTooSmall)
         ));
         assert!(matches!(
-            recovered.read_verified_service_executable(requested, &table, wrong, principal(), &key, &mut buffer),
-            Err(Error::File(crate::InstalledServiceFileReadError::Read(mrml_storage::FileReadError::WrongFile)))
+            recovered.read_verified_service_executable(
+                requested,
+                &table,
+                wrong,
+                principal(),
+                &key,
+                &mut buffer
+            ),
+            Err(Error::File(crate::InstalledServiceFileReadError::Read(
+                mrml_storage::FileReadError::WrongFile
+            )))
         ));
         let wrong_key = TrustRoot::new(ArtifactKind::ServiceImage, [0x20; 64], 1);
         assert!(matches!(
-            recovered.read_verified_service_executable(requested, &table, handle, principal(), &wrong_key, &mut buffer),
-            Err(Error::Executable(mrml_kernel::ExecutableArtifactError::Signature(
-                mrml_kernel::ArtifactError::UntrustedPublicKey
-            )))
+            recovered.read_verified_service_executable(
+                requested,
+                &table,
+                handle,
+                principal(),
+                &wrong_key,
+                &mut buffer
+            ),
+            Err(Error::Executable(
+                mrml_kernel::ExecutableArtifactError::Signature(
+                    mrml_kernel::ArtifactError::UntrustedPublicKey
+                )
+            ))
         ));
         let newer_floor = TrustRoot::new(
             ArtifactKind::ServiceImage,
-            Sha3_512::digest(&signed[mrml_kernel::SIGNED_ARTIFACT_HEADER_BYTES
-                ..mrml_kernel::SIGNED_ARTIFACT_HEADER_BYTES + mrml_crypto::LAMPORT_PUBLIC_KEY_BYTES]),
+            Sha3_512::digest(
+                &signed[mrml_kernel::SIGNED_ARTIFACT_HEADER_BYTES
+                    ..mrml_kernel::SIGNED_ARTIFACT_HEADER_BYTES
+                        + mrml_crypto::LAMPORT_PUBLIC_KEY_BYTES],
+            ),
             2,
         );
         assert!(matches!(
             recovered.read_verified_service_executable(
-                requested, &table, handle, principal(), &newer_floor, &mut buffer,
+                requested,
+                &table,
+                handle,
+                principal(),
+                &newer_floor,
+                &mut buffer,
             ),
-            Err(Error::Executable(mrml_kernel::ExecutableArtifactError::Signature(
-                mrml_kernel::ArtifactError::RollbackDetected
-            )))
+            Err(Error::Executable(
+                mrml_kernel::ExecutableArtifactError::Signature(
+                    mrml_kernel::ArtifactError::RollbackDetected
+                )
+            ))
         ));
-        let executable = recovered.read_verified_service_executable(
-            requested, &table, handle, principal(), &key, &mut buffer,
-        ).unwrap();
+        let executable = recovered
+            .read_verified_service_executable(
+                requested,
+                &table,
+                handle,
+                principal(),
+                &key,
+                &mut buffer,
+            )
+            .unwrap();
         assert_eq!(executable.artifact().kind(), ArtifactKind::ServiceImage);
         assert_eq!(executable.artifact().version(), 1);
         assert_eq!(
@@ -1629,8 +1803,13 @@ mod tests {
         let configuration_selection = selected.configuration();
         let cloned_selection = cloned.selected();
         assert_eq!(selected.volume(), cloned_selection.volume());
-        assert_eq!(selected.root_generation(), cloned_selection.root_generation());
-        assert!(!configuration_selection.same_recovered_root(&cloned_selection.authority_checkpoint()));
+        assert_eq!(
+            selected.root_generation(),
+            cloned_selection.root_generation()
+        );
+        assert!(
+            !configuration_selection.same_recovered_root(&cloned_selection.authority_checkpoint())
+        );
         assert!(matches!(
             SelectedStableSystemRecovery::new(
                 configuration_selection,
@@ -1680,12 +1859,27 @@ mod tests {
         assert_eq!(file.object(), object(13));
         assert_eq!(file.generation(), CONFIGURATION_GENERATION);
         assert!(file.same_recovered_root(&total.system_release()));
-        assert!(matches!(current.select_service_files([]), Err(ServiceError::Empty)));
-        assert!(matches!(current.select_service_files([request, request]), Err(ServiceError::DuplicateFile)));
-        assert!(matches!(current.select_service_files([request, (object(14), CONFIGURATION_GENERATION)]), Err(ServiceError::MissingFile)));
-        assert!(matches!(current.select_service_files([(object(13), CONFIGURATION_GENERATION + 1)]), Err(ServiceError::StaleFileGeneration)));
+        assert!(matches!(
+            current.select_service_files([]),
+            Err(ServiceError::Empty)
+        ));
+        assert!(matches!(
+            current.select_service_files([request, request]),
+            Err(ServiceError::DuplicateFile)
+        ));
+        assert!(matches!(
+            current.select_service_files([request, (object(15), CONFIGURATION_GENERATION)]),
+            Err(ServiceError::MissingFile)
+        ));
+        assert!(matches!(
+            current.select_service_files([(object(13), CONFIGURATION_GENERATION + 1)]),
+            Err(ServiceError::StaleFileGeneration)
+        ));
         for id in 9..=12 {
-            assert!(matches!(current.select_service_files([(object(id), CONFIGURATION_GENERATION)]), Err(ServiceError::ControlFile)));
+            assert!(matches!(
+                current.select_service_files([(object(id), CONFIGURATION_GENERATION)]),
+                Err(ServiceError::ControlFile)
+            ));
         }
         assert!(matches!(
             SelectedStableTotalSystemRecovery::new(
@@ -1716,16 +1910,41 @@ mod tests {
         ));
         use crate::InstalledServiceFileReadError;
         let mut file_authority = StorageAuthorityTable::<2>::new();
-        let handle = file_authority.insert(object(13), StorageObjectKind::File, StorageRights::READ, principal()).unwrap();
-        let wrong_file = file_authority.insert(object(12), StorageObjectKind::File, StorageRights::READ, principal()).unwrap();
+        let handle = file_authority
+            .insert(
+                object(13),
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal(),
+            )
+            .unwrap();
+        let wrong_file = file_authority
+            .insert(
+                object(12),
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal(),
+            )
+            .unwrap();
         let mut bytes = [0xffu8; 1];
         assert!(matches!(
-            current.read_service_file(request, &file_authority, wrong_file, principal(), 0, &mut bytes),
-            Err(InstalledServiceFileReadError::Read(mrml_storage::FileReadError::WrongFile))
+            current.read_service_file(
+                request,
+                &file_authority,
+                wrong_file,
+                principal(),
+                0,
+                &mut bytes
+            ),
+            Err(InstalledServiceFileReadError::Read(
+                mrml_storage::FileReadError::WrongFile
+            ))
         ));
         assert_eq!(bytes, [0xff]);
         assert_eq!(
-            current.read_service_file(request, &file_authority, handle, principal(), 0, &mut bytes).unwrap(),
+            current
+                .read_service_file(request, &file_authority, handle, principal(), 0, &mut bytes)
+                .unwrap(),
             1
         );
         assert_eq!(bytes, [0x53]);

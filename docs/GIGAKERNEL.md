@@ -117,8 +117,19 @@ root, and release assignment remain separate checks. A controlled block
 fixture recovered an independently signed multi-block executable and checked
 its payload digest; wrong file authority, insufficient output, wrong key,
 and an artifact below the pinned version floor were rejected. The returned
-executable can enter release preflight, but this test does not launch it or
-boot from installed media.
+executable can enter release preflight, but this reader test does not launch it.
+
+The hosted two-domain KVM startup test now reads both signed diagnostic
+executables, the deployment checkpoint, and the signed SystemRelease through
+the same selected block volume. It independently verifies both service
+signers, requires the complete executable set to match the admitted release,
+and uses the recovered executable buffers to start the two KVM MicroVMs.
+The test rejects a wrong signer and incomplete or substituted executable
+sets, observes both guests execute, verifies separate guest memory, and checks
+that the second guest still runs after the first is retired. This is hosted
+integration evidence: the block device and owner approval are fixtures. It
+does not verify firmware boot from installed media or production services
+under the normal Gigakernel boot path.
 
 ## Implementation evidence
 

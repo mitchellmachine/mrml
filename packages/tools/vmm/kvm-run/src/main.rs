@@ -597,36 +597,28 @@ where
 }
 
 #[cfg(target_os = "linux")]
-enum KvmHostedRecoveryFixture {
-    Combined,
-    #[cfg(test)]
-    Distinct,
-}
-
-#[cfg(target_os = "linux")]
-fn recover_hosted_component_owner(
-    fixture: KvmHostedRecoveryFixture,
+fn recover_hosted_component_owner<'out>(
     handoff: &BootHandoff,
     release: &[u8],
     release_key: &[u8; 64],
     output: &mut [u8],
-) -> Result<RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>> {
-    // SAFETY: these modes build private, controlled hosted fixtures. Their
-    // synthesized approval is not production recovery or physical evidence.
+    services: Option<[mrml_config::hosted_recovery_probe::HostedInstalledService<'_, 'out>; 2]>,
+) -> core::result::Result<
+    (RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>, Option<[VerifiedExecutable<'out>; 2]>),
+    mrml_config::hosted_recovery_probe::HostedRecoveryProbeBuildError<()>,
+> {
+    // SAFETY: both modes build only controlled hosted fixtures. Their synthesized
+    // approval is not production recovery or physical evidence.
     unsafe {
-        match fixture {
-            KvmHostedRecoveryFixture::Combined => {
-                recover_total_control_plane::<2>(handoff, release, release_key, output)
-            }
-            #[cfg(test)]
-            KvmHostedRecoveryFixture::Distinct => {
-                mrml_config::hosted_recovery_probe::recover_distinct_total_control_plane(
-                    handoff, release, release_key, output,
-                )
-            }
+        if let Some(services) = services {
+            mrml_config::hosted_recovery_probe::recover_distinct_total_control_plane_with_installed_services(
+                handoff, release, release_key, output, services,
+            ).map(|(owner, executables)| (owner, Some(executables)))
+        } else {
+            recover_total_control_plane::<2>(handoff, release, release_key, output)
+                .map(|owner| (owner, None))
         }
     }
-    .map_err(|error| anyhow!("KVM recovered boot Total admission failed: {:?}", error))
 }
 
 #[cfg(target_os = "linux")]
@@ -3156,13 +3148,14 @@ fn application_main() -> Result<()> {
         release_output
             .try_resize(MAX_SYSTEM_RELEASE_BYTES, 0)
             .map_err(|_| anyhow!("KVM release recovery scratch initialization failed"))?;
-        let total = recover_hosted_component_owner(
-            KvmHostedRecoveryFixture::Combined,
+        let (total, _) = recover_hosted_component_owner(
             &decoded_boot_handoff,
             release_bytes,
             expected_release_key,
             &mut release_output,
-        )?;
+            None,
+        )
+        .map_err(|error| anyhow!("KVM recovered boot Total admission failed: {:?}", error))?;
         println!(
             "isolation-recovery|status=PASS|backend=kvm|authority_epoch={}|boot_accepted_epoch={}|recovery_root_generation={}|configuration_revision={}",
             total.policy().authority_epoch(),
@@ -5681,7 +5674,7 @@ fn boot_handoff(
                 1,
                 1,
                 4096,
-                100,
+                mrml_config::hosted_recovery_probe::HOSTED_RECOVERY_BLOCK_COUNT,
                 volume,
                 1,
                 state.accepted_root_generation(),
@@ -5863,7 +5856,7 @@ fn smp_boot_handoff(
             1,
             1,
             4096,
-            100,
+            mrml_config::hosted_recovery_probe::HOSTED_RECOVERY_BLOCK_COUNT,
             recovery_state
                 .accepted_volume()
                 .ok_or_else(|| anyhow!("SMP Total recovery requires an installed volume"))?,
@@ -5999,7 +5992,7 @@ mod tests {
     const RECOVERY_SERVICE_IMAGE_BASE: u64 = 0xffff_8001_4000_0000;
 
     // The signed inventory exercises the real admission transaction; the
-    // tiny guests are test payloads, not installed service artifacts.
+    // two diagnostic executables are recovered from the same hosted block volume.
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "requires a usable /dev/kvm; execute explicitly on a KVM host"]
@@ -6015,7 +6008,10 @@ mod tests {
             encode_system_release_with_runtime_inventory,
         };
 
-        use mrml_config::hosted_recovery_probe::HOSTED_TOTAL_SECONDARY_DOMAIN;
+        use mrml_config::hosted_recovery_probe::{
+            HOSTED_TOTAL_SECONDARY_DOMAIN, HostedInstalledService, HostedRecoveryProbeBuildError,
+            HostedRecoveryProbeError,
+        };
         const DOMAINS: [ObjectId; 2] =
             [HOSTED_TOTAL_COMPONENT_DOMAIN, HOSTED_TOTAL_SECONDARY_DOMAIN];
         const IDS: [&str; 2] = ["org.mrml.test.first", "org.mrml.test.second"];
@@ -6037,7 +6033,7 @@ mod tests {
             signed_recovery_service_fixture(0x51),
             signed_recovery_service_fixture(0x52),
         ];
-        let executables = [0, 1].map(|i| {
+        let manifest_inputs = [0, 1].map(|i| {
             let container = SignedArtifact::decode(&signed[i].0).unwrap();
             assert!(
                 container
@@ -6051,7 +6047,7 @@ mod tests {
         let versions = [0, 1].map(|i| SystemGenerationDigestRecord {
             package_id: IDS[i],
             version: 1,
-            artifact_digest: executables[i].artifact().digest(),
+            artifact_digest: manifest_inputs[i].artifact().digest(),
         });
         let providers = [0, 1].map(|i| {
             ComponentInterfaceProvider::exact(
@@ -6070,7 +6066,7 @@ mod tests {
         let classifications = [0, 1].map(|i| RuntimeInventoryRecord {
             package_id: IDS[i],
             version: 1,
-            artifact_digest: executables[i].artifact().digest(),
+            artifact_digest: manifest_inputs[i].artifact().digest(),
             class: RuntimeIsolationClass::MicrovmEligible,
             must_run: true,
             preferred: RuntimeIsolationPlacement::Microvm,
@@ -6101,17 +6097,55 @@ mod tests {
         .unwrap();
         let release = &release[..bytes];
         let key = Sha3_512::digest(&public);
-        let recover = || {
+        fn recover<'out>(
+            handoff: &BootHandoff,
+            release: &[u8],
+            release_key: &[u8; 64],
+            signed: &[(std::vec::Vec<u8>, TrustRoot); 2],
+            roots: [&TrustRoot; 2],
+            outputs: [&'out mut [u8]; 2],
+        ) -> Result<
+            (
+                RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>,
+                [VerifiedExecutable<'out>; 2],
+            ),
+            HostedRecoveryProbeBuildError<()>,
+        > {
             let mut output = std::vec![0; MAX_SYSTEM_RELEASE_BYTES];
-            recover_hosted_component_owner(
-                KvmHostedRecoveryFixture::Distinct,
-                &handoff,
-                release,
-                &key,
-                &mut output,
-            )
-            .expect("recover the exact two-domain test release")
-        };
+            let [first, second] = outputs;
+            let services = [
+                HostedInstalledService {
+                    signed_bytes: &signed[0].0,
+                    root: roots[0],
+                    output: first,
+                },
+                HostedInstalledService {
+                    signed_bytes: &signed[1].0,
+                    root: roots[1],
+                    output: second,
+                },
+            ];
+            let (owner, executables) = recover_hosted_component_owner(
+                handoff, release, release_key, &mut output, Some(services),
+            )?;
+            Ok((owner, executables.expect("storage fixture must return both executables")))
+        }
+        let roots = [&signed[0].1, &signed[1].1];
+        let mut first_buffer = std::vec![0; signed[0].0.len()];
+        let mut second_buffer = std::vec![0; signed[1].0.len()];
+        let rejected = recover(
+            &handoff,
+            release,
+            &key,
+            &signed,
+            [roots[0], roots[0]],
+            [&mut first_buffer, &mut second_buffer],
+        ).err().expect("an incorrectly pinned service signer must not recover");
+        assert_eq!(
+            rejected,
+            HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::ServiceExecutable)
+        );
+
         let bounds = IsolationServiceBounds::new(
             IsolationPlacement::Microvm,
             IsolationPlacement::Microvm,
@@ -6152,7 +6186,7 @@ mod tests {
         type TestLauncher = PreparedMicrovmConfigurationLauncher<
             AdmittedConfigurationGuestFactory<PreparedKvmGuest<16>>,
         >;
-        let launch = |spec: IsolationServiceSpec| {
+        let launch = |spec: IsolationServiceSpec, executables: &[VerifiedExecutable<'_>; 2]| {
             let i = DOMAINS
                 .iter()
                 .position(|domain| *domain == spec.domain())
@@ -6175,19 +6209,17 @@ mod tests {
             let endpoint = launcher.launch_microvm(spec).unwrap();
             (launcher, endpoint)
         };
-        let prepare = |owner: &mut RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>| {
+        let prepare = |owner: &mut RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>,
+                       executables: &[VerifiedExecutable<'_>; 2]| {
             let prepared = owner.prepare_complete_service_set(&bindings).unwrap();
             let release = owner.installed_admission().release();
-            let entries = [0, 1].map(|i| {
-                (prepared.spec(DOMAINS[i]).unwrap(), IDS[i], &executables[i])
-            });
+            let entries =
+                [0, 1].map(|i| (prepared.spec(DOMAINS[i]).unwrap(), IDS[i], &executables[i]));
             assert!(release.matches_service_executable_set(entries));
             assert!(release.matches_service_executable_set(entries.into_iter().rev()));
             assert!(!release.matches_service_executable_set([entries[0]]));
             assert!(!release.matches_service_executable_set([entries[0], entries[0]]));
-            assert!(!release.matches_service_executable_set([
-                entries[0], entries[1], entries[1],
-            ]));
+            assert!(!release.matches_service_executable_set([entries[0], entries[1], entries[1],]));
             for i in 0..2 {
                 let (spec, _, _) = entries[i];
                 assert!(!release.matches_service_executable_set([
@@ -6202,9 +6234,17 @@ mod tests {
             prepared
         };
         let stale = core::cell::Cell::new(None);
-        let mut owner = recover();
+        let (mut owner, executables) = recover(
+            &handoff,
+            release,
+            &key,
+            &signed,
+            roots,
+            [&mut first_buffer, &mut second_buffer],
+        )
+        .expect("recover the exact two-domain release and its service executables");
         assert_eq!(owner.admission().running().count(), 0);
-        let prepared = prepare(&mut owner);
+        let prepared = prepare(&mut owner, &executables);
         let stops = core::cell::Cell::new(0);
         let mut stop =
             |domain, (mut launcher, endpoint): (TestLauncher, ConfigurationMicrovmEndpoint)| {
@@ -6228,7 +6268,7 @@ mod tests {
                     if spec.domain() == DOMAINS[1] {
                         return Err("second service intentionally not ready");
                     }
-                    let launched = launch(spec);
+                    let launched = launch(spec, &executables);
                     stale.set(Some(launched.1));
                     Ok(launched)
                 },
@@ -6250,12 +6290,20 @@ mod tests {
         assert_eq!(failed.retry_teardown(&mut stop), 0);
         assert_eq!(stops.get(), 2);
 
-        let mut owner = recover();
-        let prepared = prepare(&mut owner);
+        let (mut owner, executables) = recover(
+            &handoff,
+            release,
+            &key,
+            &signed,
+            roots,
+            [&mut first_buffer, &mut second_buffer],
+        )
+        .expect("recover the exact two-domain release and its service executables");
+        let prepared = prepare(&mut owner, &executables);
         let (runtime, mut routed) = owner
             .start_prepared_services(
                 prepared,
-                |spec| Ok::<_, ()>(launch(spec)),
+                |spec| Ok::<_, ()>(launch(spec, &executables)),
                 |_, mut started: (TestLauncher, ConfigurationMicrovmEndpoint)| {
                     started.0.revoke_microvm(&started.1).unwrap();
                     Ok(())
@@ -6282,8 +6330,12 @@ mod tests {
         VmBackend::read_guest(first.active_guest(live).unwrap(), STACK_SAMPLE, &mut sample)
             .unwrap();
         assert_eq!(&sample, b"MRML");
-        VmBackend::read_guest(second.active_guest(other).unwrap(), STACK_SAMPLE, &mut sample)
-            .unwrap();
+        VmBackend::read_guest(
+            second.active_guest(other).unwrap(),
+            STACK_SAMPLE,
+            &mut sample,
+        )
+        .unwrap();
         assert_eq!(sample, [0; 4]);
 
         let stale = stale.get().unwrap();

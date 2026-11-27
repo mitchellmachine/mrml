@@ -311,7 +311,7 @@ mod tests {
                 1,
                 1,
                 4096,
-                100,
+                hosted_recovery_probe::HOSTED_RECOVERY_BLOCK_COUNT,
                 volume,
                 1,
                 accepted_root_generation,

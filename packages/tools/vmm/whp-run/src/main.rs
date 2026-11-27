@@ -5252,7 +5252,7 @@ fn boot_handoff(
                 1,
                 1,
                 4096,
-                100,
+                mrml_config::hosted_recovery_probe::HOSTED_RECOVERY_BLOCK_COUNT,
                 volume,
                 1,
                 state.accepted_root_generation(),
@@ -5434,7 +5434,7 @@ fn smp_boot_handoff(
             1,
             1,
             4096,
-            100,
+            mrml_config::hosted_recovery_probe::HOSTED_RECOVERY_BLOCK_COUNT,
             recovery_state
                 .accepted_volume()
                 .ok_or_else(|| anyhow!("SMP Total recovery requires an installed volume"))?,
