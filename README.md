@@ -4,8 +4,11 @@ MRML (the **Mitchell Renouf Machine Learning Library**) is a research project
 building an operating system, compiler, and machine-learning libraries in
 original Rust without third-party code dependencies. It is AI-led and
 human-directed, with an emphasis on owner control, accessibility, and a small
-trusted code base. The project is dedicated to the public domain under
-[CC0](LICENSE).
+trusted code base.
+
+MRML is a public-benefit project. We dedicate it to the public domain under
+[CC0](LICENSE) to help people use computers securely and to build software
+that treats disabled people with dignity as first-class users.
 
 ## The Gigakernel and Total MicroVM isolation
 
