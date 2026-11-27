@@ -173,3 +173,5 @@ packages/tools/mrml/src/usb_linux.rs	3	0	0	1	0	0	Bounded Linux disk-generation, 
 packages/tools/mrml/src/usb_windows.rs	15	0	0	3	0	0	Bounded Win32 storage and policy queries, volume lock and dismount on verified handles, and native UAC with a scoped writer and owned process handle.
 packages/tools/vmm/kvm-run/src/main.rs	11	0	3	0	0	9	Baseline-admitted KVM runner host ABI boundary; count growth is blocked pending focused file-level invariant review.
 packages/tools/vmm/whp-run/src/main.rs	11	0	3	0	0	10	Baseline-admitted WHP runner host ABI boundary; count growth is blocked pending focused file-level invariant review.
+packages/libraries/storage-usb/src/xhci/ecam_lease.rs	1	1	0	0	0	0	Exclusive pinned PCI requester lease forwards exactly one checked bus-master operation through writable ECAM.
+packages/libraries/storage-usb/src/xhci/tests.rs	2	0	0	0	0	0	Two documented operations construct and exclusively borrow an aligned synthetic ECAM test buffer; no hardware is accessed.

@@ -3,7 +3,9 @@
 
 mod activation;
 mod bulk;
+mod ecam_lease;
 pub use activation::{DmaAssignment, PciActivation, VtdActivation};
+pub use ecam_lease::{EcamLeaseError, EcamPciLease, NativePciBacking};
 mod lifecycle;
 mod managed_vtd;
 mod native_owner;

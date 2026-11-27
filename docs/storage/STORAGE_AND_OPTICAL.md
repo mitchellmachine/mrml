@@ -3012,9 +3012,13 @@ adapter does not implement the allocator or pin/unpin itself. The kernel
 ECAM adapter now provides the 16-bit bus-master toggle with exact command
 readback for a supervisor holding the writable function's exclusive lease.
 Its memory-backed test covers stale command rejection, range checking and
-preservation of adjacent PCI Status. A concrete allocator/lease still
-needs to wire this writer to the xHCI owner and keep the mapping pinned
-through shutdown. No physical ECAM was accessed by the test.
+preservation of adjacent PCI Status. The native xHCI lease composes this
+writer with a pinned backing provider, confines ECAM reads and Command
+changes to the one bound requester, and rejects further access after
+release. Memory-backed tests verify that another populated PCI function
+is untouched. The native kernel still has to issue and retain that pinned
+backing and ECAM mapping through boot, shutdown and hot removal. No
+physical ECAM was accessed by the tests.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

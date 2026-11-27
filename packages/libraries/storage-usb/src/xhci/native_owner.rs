@@ -25,9 +25,14 @@ pub struct NativePciBinding {
 pub trait NativePciLease: Platform + PciConfigSpace {
     fn binding(&self) -> NativePciBinding;
 
-    /// Write only the 16-bit PCI Command register of the bound function.
-    /// This must not write the adjacent PCI Status bits.
-    fn write_command16(&mut self, address: DeviceAddress, value: u16) -> Result<(), Self::Error>;
+    /// Change only Bus Master Enable in the 16-bit PCI Command register.
+    /// Recheck the expected value and never write adjacent PCI Status bits.
+    fn set_bus_master16(
+        &mut self,
+        address: DeviceAddress,
+        before: u16,
+        enabled: bool,
+    ) -> Result<(), Self::Error>;
 
     /// Called only after the exact aperture is withdrawn and drained. Retry
     /// resumes the same release and retains its binding until success.
@@ -204,9 +209,8 @@ impl<L: NativePciLease> VtdPciPlatform for NativePciOwner<L> {
         if live.command != before {
             return Err(NativePciOwnerError::Pci(PciError::CommandMismatch));
         }
-        let command = (before & !4) | if enabled { 4 } else { 0 };
         self.lease
-            .write_command16(self.binding.aperture.route.requester(), command)
+            .set_bus_master16(self.binding.aperture.route.requester(), before, enabled)
             .map_err(NativePciOwnerError::Lease)
     }
 

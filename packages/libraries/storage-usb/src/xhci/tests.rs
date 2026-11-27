@@ -457,28 +457,32 @@ impl NativePciLease for Fake {
         self.native_binding.unwrap()
     }
 
-    fn write_command16(
+    fn set_bus_master16(
         &mut self,
         address: mrml_kernel::DeviceAddress,
-        value: u16,
+        before: u16,
+        enabled: bool,
     ) -> Result<(), ()> {
-        assert_eq!(address, self.binding().aperture.route.requester());
+        assert_eq!(
+            address,
+            NativePciLease::binding(self).aperture.route.requester()
+        );
         self.pci_writes += 1;
-        self.pci_command = value;
+        assert_eq!(self.pci_command, before);
+        self.pci_command = (before & !4) | if enabled { 4 } else { 0 };
         Ok(())
     }
 
     fn release_bound_resources(&mut self, binding: NativePciBinding) -> Result<(), ()> {
-        assert_eq!(binding, self.binding());
+        assert_eq!(binding, NativePciLease::binding(self));
         self.releases += 1;
         Ok(())
     }
 }
 
-#[test]
-fn native_owner_binds_capabilities_generations_and_exact_command_write() {
+fn native_binding() -> NativePciBinding {
     use mrml_kernel::arch::x86_64::{DmarTopology, VtdDmaAperture};
-    use mrml_kernel::{CapabilitySpace, DeviceAddress, ObjectId, PhysAddr, Rights};
+    use mrml_kernel::{DeviceAddress, ObjectId, PhysAddr};
 
     let mut fake = Fake::new();
     let dma = activation_assignment();
@@ -494,7 +498,7 @@ fn native_owner_binds_capabilities_generations_and_exact_command_write() {
         .unwrap()
         .route_for_requester(DeviceAddress::new(0, 0, 3, 0).unwrap(), &mut fake)
         .unwrap();
-    let binding = NativePciBinding {
+    NativePciBinding {
         device: ObjectId(1),
         memory: ObjectId(2),
         bar_generation: 1,
@@ -507,7 +511,16 @@ fn native_owner_binds_capabilities_generations_and_exact_command_write() {
             physical_base: PhysAddr::new(0x20_0000).unwrap(),
             pages: 1,
         },
-    };
+    }
+}
+
+#[test]
+fn native_owner_binds_capabilities_generations_and_exact_command_write() {
+    use mrml_kernel::arch::x86_64::VtdDmaAperture;
+    use mrml_kernel::{CapabilitySpace, PhysAddr, Rights};
+    let binding = native_binding();
+    let dma = binding.dma;
+    let mut fake = Fake::new();
     let mut caps = CapabilitySpace::<3>::new();
     let device = caps.insert(binding.device, Rights::CONTROL).unwrap();
     let read_only = caps.insert(binding.memory, Rights::READ).unwrap();
@@ -573,4 +586,60 @@ fn native_owner_binds_capabilities_generations_and_exact_command_write() {
         changed.set_bus_master(dma, 6, false),
         Err(NativePciOwnerError::Pci(pci::PciError::AssignmentChanged))
     );
+}
+
+impl NativePciBacking for Fake {
+    fn binding(&self) -> NativePciBinding {
+        self.native_binding.unwrap()
+    }
+
+    fn release_after_drain(&mut self, binding: NativePciBinding) -> Result<(), ()> {
+        self.release_bound_resources(binding)
+    }
+}
+
+#[test]
+fn ecam_lease_writes_only_the_bound_function_and_retires_after_release() {
+    extern crate std;
+    use mrml_kernel::DeviceAddress;
+    use mrml_kernel::arch::x86_64::{EcamCommandError, NativeEcamSegment, PciConfigSpace};
+
+    let binding = native_binding();
+    let target = binding.aperture.route.requester();
+    let other = DeviceAddress::new(0, 0, 4, 0).unwrap();
+    let mut fake = Fake::new();
+    fake.native_binding = Some(binding);
+    let mut storage = std::vec![0_u8; (1 << 20) + 4095];
+    let pad = storage.as_ptr().align_offset(4096);
+    let window = &mut storage[pad..pad + (1 << 20)];
+    for function in [3 << 15, 4 << 15] {
+        window[function..function + 4].copy_from_slice(&0x000d_1b36u32.to_le_bytes());
+        window[function + 4..function + 8].copy_from_slice(&0xa5a5_0402u32.to_le_bytes());
+    }
+    let len = window.len();
+    let base = window.as_mut_ptr();
+    // SAFETY: the aligned test buffer stays live and is exclusively accessed here.
+    let mut ecam = unsafe { NativeEcamSegment::new(base, len, 0, 0, 0).unwrap() };
+    // SAFETY: no hardware is involved and no other accessor can access the
+    // bound function while this test lease exclusively borrows its window.
+    let mut lease = unsafe { EcamPciLease::adopt(&mut ecam, fake).unwrap() };
+    assert_eq!(lease.read_u32(other, 4), None);
+    assert_eq!(
+        lease.set_bus_master16(other, 0x402, true),
+        Err(EcamLeaseError::Binding)
+    );
+    assert_eq!(
+        lease.set_bus_master16(target, 2, true),
+        Err(EcamLeaseError::Command(EcamCommandError::CommandChanged))
+    );
+    lease.set_bus_master16(target, 0x402, true).unwrap();
+    assert_eq!(lease.read_u32(target, 4), Some(0xa5a5_0406));
+    lease.set_bus_master16(target, 0x406, false).unwrap();
+    lease.release_bound_resources(binding).unwrap();
+    assert_eq!(lease.read_u32(target, 4), None);
+    assert_eq!(
+        lease.set_bus_master16(target, 0x402, true),
+        Err(EcamLeaseError::Binding)
+    );
+    assert_eq!(ecam.read_u32(other, 4), Some(0xa5a5_0402));
 }
