@@ -4,7 +4,8 @@
 measured-boot plumbing, release/recovery journals, and owner-policy abstractions
 retain their recorded status. No current claim is made for firmware NVRAM writes,
 boot-entry creation, owner-key enrollment, compatibility-trust preservation,
-dbx update, dual boot, or physical-firmware behavior.
+dbx update, dual boot, or broad physical-firmware compatibility. The scoped
+physical diagnostic result is recorded below.
 
 ## Bare-metal USB bring-up
 
@@ -32,7 +33,19 @@ UEFI reads the boot files from USB before handoff. The kernel's test reads
 service without rebooting, rejects stale handles, and compares all 28 bytes
 again. This tests firmware handoff, framebuffer and the service on one machine,
 not MRML USB drive access, installation, or a physical storage driver. The
-internal system disk is not a target. No bare-metal pass has been recorded.
+internal system disk is not a target.
+
+### Recorded bare-metal result
+
+On 2026-11-27 (UTC), an HP Chromebook x360 14c (Dragonair), with an Intel
+Core i3-10110U and 8192 MB of RAM, displayed
+`FAT32 RESTART: PASS - 28 BYTES` on the signed diagnostic USB build from
+`2be893b71b33bc82c5869aee3f318da695fa2351`. Firmware setup showed
+`MrChromebox-2606.1`, dated 2026-07-14. This was the EFI Shell retest;
+direct launch from the one-time boot menu was not separately verified.
+Secure Boot state and exact GOP mode were not recorded. The result verifies
+firmware handoff and the embedded FAT32 service restart on this machine,
+not native USB I/O, an installation, or Secure Boot trust for the image.
 
 ### Diagnose a return to firmware
 
