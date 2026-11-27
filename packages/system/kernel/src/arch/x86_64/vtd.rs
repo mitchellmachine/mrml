@@ -2,12 +2,13 @@ use core::sync::atomic::{Ordering, compiler_fence};
 
 use crate::{DeviceAddress, GranuleHardwareOutcome, PAGE_SIZE, PhysAddr};
 
-use super::DmaIsolation;
+use super::{DmaIsolation, PreparedColdVtdRoot, SINGLE_REQUESTER_VTD_TABLE_PAGES};
 
 const ECAP_OFFSET: usize = 0x10;
 const CAP_OFFSET: usize = 0x08;
 const CCMD_OFFSET: usize = 0x28;
 const FSTS_OFFSET: usize = 0x34;
+const GCMD_OFFSET: usize = 0x18;
 const GSTS_OFFSET: usize = 0x1c;
 const RTADDR_OFFSET: usize = 0x20;
 const GSTS_TRANSLATION_ENABLED: u32 = 1 << 31;
@@ -37,8 +38,17 @@ const MCFG_ALLOCATION_BYTES: usize = 16;
 const MAX_PHYSICAL_EXCLUSIVE: u64 = 1 << 52;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ColdVtdActivationError {
+    Rejected(VtdError),
+    /// The root may be reachable. Quiesce requesters and retain its backing.
+    Uncertain(VtdError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VtdError {
     DrainUnsupported,
+    ColdUnsupported,
+    ColdNotReset,
     ApertureInvalidationUnsupported,
     InvalidRegisterLayout,
     InsufficientRegisterAperture,
@@ -1129,7 +1139,10 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
         self.registers.read64(ECAP_OFFSET) & 1 != 0
     }
 
-    pub(super) fn ready_for_dma_drain(&mut self, explicit_writeback: bool) -> Result<bool, VtdError> {
+    pub(super) fn ready_for_dma_drain(
+        &mut self,
+        explicit_writeback: bool,
+    ) -> Result<bool, VtdError> {
         // The bounded aperture backend requires explicit read/write drain
         // support; other capability profiles are not admitted here.
         let required = (1u64 << 55) | (1u64 << 54);
@@ -1148,6 +1161,92 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
         }
         self.ready()?;
         Ok(needs_writeback)
+    }
+
+    /// Starts only a pristine legacy remapper. Does not enable any requester.
+    ///
+    /// # Safety
+    ///
+    /// The caller exclusively owns the exact verified IO mapping represented
+    /// by this invalidator, independently bound to register_base. Every
+    /// requester in the complete remapping scope must remain quiesced with
+    /// bus mastering off. The prepared root must stay pinned and unchanged
+    /// throughout activation until controlled teardown. On Uncertain, retain
+    /// those guarantees until recovery proves safety. Verify firmware reserved
+    /// ranges and all platform preconditions independently.
+    pub(super) unsafe fn activate_cold_legacy_root(
+        &mut self,
+        register_base: PhysAddr,
+        prepared: PreparedColdVtdRoot,
+    ) -> Result<(), ColdVtdActivationError> {
+        let root = prepared.root().get();
+        let end = root.checked_add(SINGLE_REQUESTER_VTD_TABLE_PAGES as u64 * PAGE_SIZE);
+        if prepared.register_base() != register_base
+            || root == 0
+            || end.is_none_or(|end| end > (1u64 << 32))
+        {
+            return Err(ColdVtdActivationError::Rejected(VtdError::ColdUnsupported));
+        }
+        self.activate_cold_legacy_root_inner(root)
+    }
+
+    fn activate_cold_legacy_root_inner(&mut self, root: u64) -> Result<(), ColdVtdActivationError> {
+        use ColdVtdActivationError::{Rejected, Uncertain};
+        let capability = self.registers.read64(CAP_OFFSET);
+        let revision = (self.registers.read32(0) >> 4) & 0xf;
+        // Admit the 48-bit adjusted guest width used by the prepared image.
+        // Reject remappers that require an unimplemented write-buffer flush.
+        if !(1..6).contains(&revision) || capability & (1 << 10) == 0 || capability & (1 << 4) != 0
+        {
+            return Err(Rejected(VtdError::ColdUnsupported));
+        }
+        if self.registers.read32(GSTS_OFFSET) != 0 || self.registers.read64(RTADDR_OFFSET) != 0 {
+            return Err(Rejected(VtdError::ColdNotReset));
+        }
+        // Use only legacy register invalidation with explicit drain support.
+        // A PreparedColdVtdRoot already proves synchronized table stores.
+        self.ready_for_dma_drain(true).map_err(Rejected)?;
+
+        self.registers.write64(RTADDR_OFFSET, root);
+        if self.registers.read64(RTADDR_OFFSET) != root {
+            return Err(Uncertain(VtdError::InvalidCompletion));
+        }
+        self.registers
+            .write32(GCMD_OFFSET, GSTS_ROOT_POINTER_ACTIVE);
+        self.wait_exact_cold_status(0, GSTS_ROOT_POINTER_ACTIVE)
+            .map_err(Uncertain)?;
+        self.invalidate_global().map_err(Uncertain)?;
+        if self.registers.read64(RTADDR_OFFSET) != root
+            || self.registers.read32(GSTS_OFFSET) != GSTS_ROOT_POINTER_ACTIVE
+        {
+            return Err(Uncertain(VtdError::InvalidCompletion));
+        }
+        self.registers
+            .write32(GCMD_OFFSET, GSTS_TRANSLATION_ENABLED);
+        self.wait_exact_cold_status(
+            GSTS_ROOT_POINTER_ACTIVE,
+            GSTS_ROOT_POINTER_ACTIVE | GSTS_TRANSLATION_ENABLED,
+        )
+        .map_err(Uncertain)?;
+        self.require_healthy().map_err(Uncertain)?;
+        if self.registers.read64(RTADDR_OFFSET) != root {
+            return Err(Uncertain(VtdError::InvalidCompletion));
+        }
+        Ok(())
+    }
+
+    fn wait_exact_cold_status(&mut self, pending: u32, expected: u32) -> Result<(), VtdError> {
+        for _ in 0..self.poll_limit {
+            let status = self.registers.read32(GSTS_OFFSET);
+            if status == expected {
+                return Ok(());
+            }
+            if status != pending {
+                return Err(VtdError::InvalidCompletion);
+            }
+            core::hint::spin_loop();
+        }
+        Err(VtdError::Busy)
     }
 
     pub fn invalidate_global(&mut self) -> Result<(), VtdError> {
@@ -1432,6 +1531,175 @@ impl<R: VtdRegisterIo, const UNITS: usize> DmaIsolation for VtdDmaSet<'_, R, UNI
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ColdRegisters {
+        root: u64,
+        status: u32,
+        cap: u64,
+        ecmd: u64,
+        iotlb: u64,
+        operations: [u8; 5],
+        count: usize,
+        stall: u8,
+    }
+
+    impl ColdRegisters {
+        fn reset() -> Self {
+            Self {
+                root: 0,
+                status: 0,
+                cap: (1 << 10) | (3 << 54),
+                ecmd: 0,
+                iotlb: 0,
+                operations: [0; 5],
+                count: 0,
+                stall: 0,
+            }
+        }
+
+        fn record(&mut self, stage: u8) {
+            self.operations[self.count] = stage;
+            self.count += 1;
+        }
+    }
+
+    impl VtdRegisterIo for ColdRegisters {
+        fn register_bytes(&self) -> usize {
+            0x1000
+        }
+        fn read32(&mut self, offset: usize) -> u32 {
+            match offset {
+                0 => 0x10,
+                GSTS_OFFSET => self.status,
+                FSTS_OFFSET => 0,
+                _ => panic!("unexpected cold read32"),
+            }
+        }
+        fn read64(&mut self, offset: usize) -> u64 {
+            match offset {
+                CAP_OFFSET => self.cap | (0x40 << 24),
+                ECAP_OFFSET => 0x20 << 8,
+                RTADDR_OFFSET => self.root,
+                CCMD_OFFSET => self.ecmd,
+                0x208 => self.iotlb,
+                _ => panic!("unexpected cold read64"),
+            }
+        }
+        fn write32(&mut self, offset: usize, value: u32) {
+            assert_eq!(offset, GCMD_OFFSET);
+            if value == GSTS_ROOT_POINTER_ACTIVE {
+                assert_eq!(self.status, 0);
+                assert_ne!(self.root, 0);
+                self.record(2);
+                if self.stall != 2 {
+                    self.status = GSTS_ROOT_POINTER_ACTIVE;
+                }
+            } else {
+                assert_eq!(value, GSTS_TRANSLATION_ENABLED);
+                assert_eq!(self.status, GSTS_ROOT_POINTER_ACTIVE);
+                assert_eq!(self.operations[..self.count], [1, 2, 3, 4]);
+                self.record(5);
+                if self.stall != 5 {
+                    self.status |= GSTS_TRANSLATION_ENABLED;
+                }
+            }
+        }
+        fn write64(&mut self, offset: usize, value: u64) {
+            match offset {
+                RTADDR_OFFSET => {
+                    self.record(1);
+                    if self.stall != 1 {
+                        self.root = value;
+                    }
+                }
+                CCMD_OFFSET => {
+                    assert_eq!(value, COMMAND_PENDING | CCMD_GLOBAL_GRANULARITY);
+                    self.record(3);
+                    self.ecmd = if self.stall == 3 {
+                        value
+                    } else {
+                        1 << CCMD_ACTUAL_SHIFT
+                    };
+                }
+                0x208 => {
+                    assert_eq!(
+                        value,
+                        COMMAND_PENDING
+                            | IOTLB_GLOBAL_GRANULARITY
+                            | IOTLB_DRAIN_READS
+                            | IOTLB_DRAIN_WRITES
+                    );
+                    self.record(4);
+                    self.iotlb = if self.stall == 4 {
+                        value
+                    } else {
+                        1 << IOTLB_ACTUAL_SHIFT
+                    };
+                }
+                _ => panic!("unexpected cold write64"),
+            }
+        }
+    }
+
+    #[test]
+    fn cold_root_activates_after_acknowledged_pointer_and_draining_invalidation() {
+        let mut unit = VtdInvalidator::new(ColdRegisters::reset(), 3).unwrap();
+        assert_eq!(unit.activate_cold_legacy_root_inner(0x20_0000), Ok(()));
+        let registers = unit.into_registers();
+        assert_eq!(registers.operations, [1, 2, 3, 4, 5]);
+        assert_eq!(registers.root, 0x20_0000);
+        assert_eq!(
+            registers.status,
+            GSTS_ROOT_POINTER_ACTIVE | GSTS_TRANSLATION_ENABLED
+        );
+    }
+
+    #[test]
+    fn cold_root_rejects_unsafe_initial_state_and_quarantines_partial_activation() {
+        use ColdVtdActivationError::{Rejected, Uncertain};
+        for stage in 1u8..=5 {
+            let mut registers = ColdRegisters::reset();
+            registers.stall = stage;
+            let mut unit = VtdInvalidator::new(registers, 3).unwrap();
+            assert_eq!(
+                unit.activate_cold_legacy_root_inner(0x20_0000),
+                Err(Uncertain(if stage == 1 {
+                    VtdError::InvalidCompletion
+                } else {
+                    VtdError::Busy
+                }))
+            );
+            assert_eq!(unit.into_registers().count, usize::from(stage));
+        }
+        for (status, root, cap, expected) in [
+            (
+                GSTS_TRANSLATION_ENABLED,
+                0,
+                (1 << 10) | (3 << 54),
+                VtdError::ColdNotReset,
+            ),
+            (1 << 26, 0, (1 << 10) | (3 << 54), VtdError::ColdNotReset),
+            (0, 0x40_0000, (1 << 10) | (3 << 54), VtdError::ColdNotReset),
+            (
+                0,
+                0,
+                (1 << 10) | (3 << 54) | (1 << 4),
+                VtdError::ColdUnsupported,
+            ),
+            (0, 0, 1 << 10, VtdError::DrainUnsupported),
+        ] {
+            let mut registers = ColdRegisters::reset();
+            registers.status = status;
+            registers.root = root;
+            registers.cap = cap;
+            let mut unit = VtdInvalidator::new(registers, 3).unwrap();
+            assert_eq!(
+                unit.activate_cold_legacy_root_inner(0x20_0000),
+                Err(Rejected(expected))
+            );
+            assert_eq!(unit.into_registers().count, 0);
+        }
+    }
 
     struct Registers {
         values: [u64; 130],

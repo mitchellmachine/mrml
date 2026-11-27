@@ -3181,8 +3181,14 @@ slice (at most six pages). Publication, rollback and revocation flush
 each changed leaf before context/IOTLB invalidation. An uncertain
 writeback is never reported as completed invalidation or released DMA
 memory. The normal direct-table constructor does not opt in implicitly.
-This does not yet install a cold root pointer, enable translation, or
-prove device-data coherency.
+The cold-activation API prepares and writes back the exact six table
+frames before publishing their root pointer. It is limited to an
+exclusively owned, pristine 48-bit legacy unit with drain support. It
+waits for root-pointer acknowledgment, globally invalidates the context
+cache and IOTLB while translation is off, then enables and reads back
+translation. Failing after the first register write retains every page
+and keeps all requesters quiesced. Hosted register-model tests cover
+ordering and timeouts; a live QEMU activation test is still pending.
 
 Native PCI/DMA assignment and revocation, bulk endpoint recovery, writable
 partition admission, and connection to the native FAT32 service remain

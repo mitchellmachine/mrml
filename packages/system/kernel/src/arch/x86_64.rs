@@ -83,16 +83,16 @@ pub use vmx::{
 };
 pub use vtd::{
     CompleteVtdRoutes, DmarDeviceScope, DmarError, DmarReservedRegion, DmarTopology, DmarUnit, EcamCommandError,
-    EcamSegments, McfgAllocation, McfgError, McfgTopology, NativeEcamSegment, NativeVtdMmio,
+    ColdVtdActivationError, EcamSegments, McfgAllocation, McfgError, McfgTopology, NativeEcamSegment, NativeVtdMmio,
     PciConfigSpace, PciPathElement, VtdDmaIsolation, VtdDmaSet, VtdError, VtdFaultSnapshot,
     VtdInvalidator, VtdRegisterIo, VtdRegisterLayout, VtdRequesterRoute,
 };
 pub use vtd_tables::{
     DirectVtdTables, SINGLE_REQUESTER_VTD_TABLE_PAGES, VerifiedVtdUnit, VtdApertureInstallError, VtdApertureRevokeError,
-    VtdAuthorizedDmaSet, VtdAuthorizedRoutes, VtdBindingError, VtdDmaAperture, VtdDomainAuthority,
+    PreparedColdVtdRoot, VtdAuthorizedDmaSet, VtdAuthorizedRoutes, VtdBindingError, VtdDmaAperture, VtdDomainAuthority,
     VtdDomainError, VtdIdentityLeaf, VtdSetBindingError, VtdTableError, VtdTableMemory,
     VtdTableProvenance, bind_legacy_identity_leaf, bind_routed_dma_isolation, bind_routed_dma_set,
-    bind_routed_legacy_identity_leaf, build_single_requester_legacy_root, prepare_direct_vtd_tables, write_back_vtd_table_words,
+    bind_routed_legacy_identity_leaf, build_single_requester_legacy_root, prepare_cold_legacy_vtd_root, prepare_direct_vtd_tables, write_back_vtd_table_words,
 };
 
 /// Dedicated high-half CPU mapping used by the UEFI boot DMA handoff.

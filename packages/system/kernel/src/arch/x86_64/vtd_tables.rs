@@ -5,8 +5,9 @@ use crate::{
 use core::mem::MaybeUninit;
 
 use super::{
-    CompleteVtdRoutes, DmaIsolation, NativeVtdMmio, PlatformMmioPurpose, VerifiedPlatformMmio,
-    VtdDmaIsolation, VtdDmaSet, VtdError, VtdInvalidator, VtdRegisterIo, VtdRequesterRoute,
+    ColdVtdActivationError, CompleteVtdRoutes, DmaIsolation, NativeVtdMmio, PlatformMmioPurpose,
+    VerifiedPlatformMmio, VtdDmaIsolation, VtdDmaSet, VtdError, VtdInvalidator, VtdRegisterIo,
+    VtdRequesterRoute,
 };
 
 const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
@@ -368,6 +369,49 @@ pub fn build_single_requester_legacy_root(
     Ok(())
 }
 
+/// A newly constructed, synchronized legacy hierarchy, not a DMA grant.
+#[must_use]
+#[derive(Debug, Eq, PartialEq)]
+pub struct PreparedColdVtdRoot {
+    root: PhysAddr,
+    route: VtdRequesterRoute,
+}
+
+impl PreparedColdVtdRoot {
+    pub(super) const fn root(&self) -> PhysAddr {
+        self.root
+    }
+    pub(super) const fn register_base(&self) -> PhysAddr {
+        self.route.register_base()
+    }
+}
+
+/// Prepares the exact pinned destination, not a separate image copied later.
+///
+/// # Safety
+///
+/// The table slice must be the verified exclusive WB mapping of the six
+/// consecutive pages beginning at root. No unit may access them yet. Keep
+/// them pinned and unchanged through activation or on uncertain failure.
+/// The caller must meet the CPU and alias requirements of the writeback helper.
+pub unsafe fn prepare_cold_legacy_vtd_root(
+    tables: &mut [[u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES],
+    root: PhysAddr,
+    aperture: VtdDmaAperture,
+) -> Result<PreparedColdVtdRoot, VtdTableError> {
+    if local_clflush_line_bytes().is_none() {
+        return Err(VtdTableError::WritebackUnavailable);
+    }
+    build_single_requester_legacy_root(tables, root, aperture)?;
+    // SAFETY: the caller established an exact pinned WB mapping and CPU
+    // safety. The flushed pages are the ones the remapper will walk.
+    unsafe { write_back_vtd_table_words(tables.as_flattened())? };
+    Ok(PreparedColdVtdRoot {
+        root,
+        route: aperture.route,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VtdApertureInstallError {
     Rejected(VtdBindingError),
@@ -421,6 +465,34 @@ impl VerifiedVtdUnit<NativeVtdMmio> {
 }
 
 impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
+    /// Activate the prepared root only through its verified remapping unit.
+    ///
+    /// # Safety
+    ///
+    /// The caller exclusively owns the complete remapper and its scope. All
+    /// requesters must stay quiesced with BME off. Keep the prepared RAM
+    /// pinned and unchanged through startup, until teardown establishes
+    /// safety. This applies on uncertainty as well as success.
+    pub unsafe fn activate_cold_legacy_root(
+        &mut self,
+        prepared: PreparedColdVtdRoot,
+    ) -> Result<(), ColdVtdActivationError> {
+        let requirement = self.verified.requirement();
+        if !matches!(
+            requirement.purpose(),
+            PlatformMmioPurpose::VtdBootstrap { .. }
+        ) || requirement.pages() < self.invalidator.register_pages()
+        {
+            return Err(ColdVtdActivationError::Rejected(VtdError::ColdUnsupported));
+        }
+        // SAFETY: this unit owns the verified register region; the caller
+        // supplies complete scope ownership and quiescence for this startup.
+        unsafe {
+            self.invalidator
+                .activate_cold_legacy_root(requirement.physical(), prepared)
+        }
+    }
+
     /// Samples the active root through this exact unit and creates the exclusive
     /// direct-map view that coherent binding will independently revalidate.
     ///
