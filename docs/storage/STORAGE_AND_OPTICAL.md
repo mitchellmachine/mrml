@@ -2994,8 +2994,13 @@ and accepts only zero entries; denied entries that retain prior backing are
 not free slots. Success requires a confirmed draining invalidation. A failed
 publication clears only the prefix it wrote and requires a second successful
 invalidation before it reports rollback. If that cannot be confirmed, the
-backing must remain quarantined. This does not allocate the hierarchy, issue
-native PCI assignments, reclaim revoked slots, or arm a controller.
+backing must remain quarantined. This does not issue native PCI assignments,
+reclaim revoked slots, or arm a controller. A separate builder can prepare a
+six-page inactive legacy root for one exact requester and a window within
+one 2 MiB span. Its DMA leaves and all other requester contexts start absent.
+The boot owner still has to allocate/pin these table pages separately from
+device memory, quiesce all requesters using the remapping unit, and establish
+that installing the root is safe before activating it.
 
 The supervisor-side xHCI adapter now composes installation, activation
 verification and withdrawal for a preallocated Intel VT-d assignment. It

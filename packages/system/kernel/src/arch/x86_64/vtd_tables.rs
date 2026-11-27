@@ -1,5 +1,6 @@
 use crate::{
-    DeviceAddress, DomainId, GranuleHardwareOutcome, MonitorError, PhysAddr, ProtectedMonitor,
+    DeviceAddress, DomainId, GranuleHardwareOutcome, MonitorError, PAGE_SIZE, PhysAddr,
+    ProtectedMonitor,
 };
 use core::mem::MaybeUninit;
 
@@ -252,6 +253,52 @@ pub struct VtdDmaAperture {
     pub device_base: u64,
     pub physical_base: PhysAddr,
     pub pages: u16,
+}
+
+pub const SINGLE_REQUESTER_VTD_TABLE_PAGES: usize = 6;
+
+/// Constructs an inactive four-level legacy root/context hierarchy for one
+/// exact requester. No DMA leaves are present on return, including in the
+/// supplied aperture. All other requesters have absent contexts.
+///
+/// The caller must place this image in the six contiguous physical pages at
+/// `root` before publication and separately establish ownership, coherency,
+/// hardware capabilities and safe unit-wide activation. This is an image
+/// builder, not permission to replace an active root.
+pub fn build_single_requester_legacy_root(
+    image: &mut [[u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES],
+    root: PhysAddr,
+    aperture: VtdDmaAperture,
+) -> Result<(), VtdTableError> {
+    let bytes = aperture_bytes(aperture.device_base, aperture.physical_base, aperture.pages)?;
+    let last = aperture.device_base + bytes - 1;
+    if aperture.device_base >> 21 != last >> 21 {
+        return Err(VtdTableError::InvalidAperture);
+    }
+    if aperture.hardware_domain == 0 {
+        return Err(VtdTableError::WrongDomain);
+    }
+    let root_base = checked_table(root.get())?.get();
+    let table_end = root_base
+        .checked_add(SINGLE_REQUESTER_VTD_TABLE_PAGES as u64 * PAGE_SIZE)
+        .filter(|&end| end <= 1 << 52)
+        .ok_or(VtdTableError::InvalidRoot)?;
+    let physical = aperture.physical_base.get();
+    if physical < table_end && root_base < physical + bytes {
+        return Err(VtdTableError::InvalidAperture);
+    }
+    let requester = aperture.route.requester();
+    let index = (usize::from(requester.device()) * 8 + usize::from(requester.function())) * 2;
+    let table = |page: u64| root_base + page * PAGE_SIZE;
+    image.fill([0; 512]);
+    image[0][2 * usize::from(requester.bus())] = table(1) | 1;
+    image[1][index] = table(2) | 1;
+    image[1][index + 1] = (u64::from(aperture.hardware_domain) << 8) | 2;
+    for (page, shift) in [(2usize, 39), (3, 30), (4, 21)] {
+        let index = ((aperture.device_base >> shift) & 0x1ff) as usize;
+        image[page][index] = table(page as u64 + 1) | 3;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1015,6 +1062,66 @@ mod tests {
     const LEVEL3: u64 = 0x13_0000;
     const LEVEL2: u64 = 0x14_0000;
     const LEVEL1: u64 = 0x15_0000;
+
+    #[test]
+    fn isolated_legacy_root_starts_with_one_context_and_no_dma_leaves() {
+        let root = PhysAddr::new(ROOT).unwrap();
+        let requester = DeviceAddress::new(0, 2, 3, 1).unwrap();
+        let aperture = VtdDmaAperture {
+            route: VtdRequesterRoute::for_test(requester, PhysAddr::new(0xfed9_0000).unwrap()),
+            hardware_domain: 9,
+            device_base: 0x4040_4000,
+            physical_base: PhysAddr::new(0x40_0000).unwrap(),
+            pages: 16,
+        };
+        let mut image = [[u64::MAX; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES];
+        build_single_requester_legacy_root(&mut image, root, aperture).unwrap();
+        let entries = [
+            (0, 4, (ROOT + 0x1000) | 1),
+            (1, 50, (ROOT + 0x2000) | 1),
+            (1, 51, 0x902),
+            (2, 0, (ROOT + 0x3000) | 3),
+            (3, 1, (ROOT + 0x4000) | 3),
+            (4, 2, (ROOT + 0x5000) | 3),
+        ];
+        for (page, values) in image.iter().enumerate() {
+            for (index, &value) in values.iter().enumerate() {
+                assert_eq!(
+                    value,
+                    entries
+                        .iter()
+                        .find(|&&(p, i, _)| p == page && i == index)
+                        .map_or(0, |&(_, _, v)| v)
+                );
+            }
+        }
+        let original = image;
+        for bad in [
+            VtdDmaAperture {
+                device_base: 0x401f_f000,
+                ..aperture
+            },
+            VtdDmaAperture {
+                physical_base: PhysAddr::new(ROOT + 0x3000).unwrap(),
+                ..aperture
+            },
+        ] {
+            assert_eq!(
+                build_single_requester_legacy_root(&mut image, root, bad),
+                Err(VtdTableError::InvalidAperture)
+            );
+            assert_eq!(image, original);
+        }
+        assert_eq!(
+            build_single_requester_legacy_root(
+                &mut image,
+                PhysAddr::new((1 << 52) - PAGE_SIZE).unwrap(),
+                aperture,
+            ),
+            Err(VtdTableError::InvalidRoot)
+        );
+        assert_eq!(image, original);
+    }
 
     struct Tables {
         provenance: VtdTableProvenance,
