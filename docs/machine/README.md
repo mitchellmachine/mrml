@@ -51,7 +51,7 @@ environment and operation recorded.
 - [Certificate and ACME service](../ACME.md)
 - [Deployment, installation, and system administration](../DEPLOYMENT.md)
 - [Adaptive isolation placement](../ISOLATION_PLACEMENT.md)
-- [Microkernel design and evidence](../MICROKERNEL.md)
+- [Gigakernel design and evidence](../GIGAKERNEL.md)
 - [Paravirtual-device architecture](../PARAVIRTUAL_DEVICES.md)
 - [Braille interface design](../accessibility/BRAILLE_INTERFACE.md)
 - [Monitor-off accessibility acceptance](../accessibility/MONITOR_OFF_ACCEPTANCE.md)

@@ -13,6 +13,9 @@ existing inference systems. MRML’s only supported operating mode is strict
 applications run in supervised microVMs, without native fallback. Full-system
 Total operation is not yet implemented.
 
+The [MRML Gigakernel](docs/GIGAKERNEL.md) is named after Gigachad. It is the
+capability-based kernel at the center of Total MicroVM isolation.
+
 The project is dedicated to the public domain under [CC0](LICENSE).
 
 ## Documentation

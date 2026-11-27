@@ -1611,7 +1611,7 @@ impl MediatedCudaBinding {
     const EMPTY: Option<Self> = None;
 }
 
-/// Concrete CUDA implementation of the microkernel's trusted GPU backend.
+/// Concrete CUDA implementation of the Gigakernel's trusted GPU backend.
 /// Device addresses never enter the guest ABI and are resolved only from
 /// generational buffer IDs after the kernel has validated every range.
 pub struct MediatedCudaBackend<const N: usize> {

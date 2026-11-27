@@ -1,4 +1,8 @@
-# MRML microkernel design
+# MRML Gigakernel design
+
+The MRML Gigakernel is named after Gigachad. It provides the privileged
+mechanisms for Total MicroVM isolation; ordinary apps and services belong in
+admitted microVMs. The name does not imply that full-system operation is ready.
 
 This file is the detailed implementation and dated evidence ledger. Stable
 project direction is in [ARCHITECTURE.md](ARCHITECTURE.md), normative boundaries
@@ -177,7 +181,7 @@ establishes confidentiality, integrity, verified boot, or correct GPU execution
 against that host.
 
 The production architecture is therefore a bare-metal type-1
-microkernel/monitor launched by measured UEFI. The kernel contains only
+Gigakernel launched by measured UEFI. The kernel contains only
 mechanisms: address spaces, scheduling, interrupt/IOMMU control, capabilities,
 IPC, and VM entry/exit. A small, networkless management service owns policy and
 domain lifecycle but receives no direct memory authority over ordinary service
@@ -2031,7 +2035,7 @@ zeroed, and returns the checked preferred-base entry address. A separate load
 plan describes read-only NX headers and the final W^X permission of every
 section. Platform code must populate pages while NX is active and install the
 final permissions only after copying completes. Mapped image size is capped by
-artifact type: 64 MiB for the microkernel, 128 MiB for a service, and 512 MiB
+artifact type: 64 MiB for the Gigakernel, 128 MiB for a service, and 512 MiB
 for a VM boot image. Both the signer and verified runtime admission enforce the
 same quota before allocation. Optional PE base relocation tables are fully
 validated before loading, capped at 65,536 entries, and accept only padding and
@@ -2087,7 +2091,7 @@ out-of-range pixels and rectangles are rejected and row padding is never used
 as visible storage. Serial remains an optional developer diagnostic path.
 
 The native artifact chain uses an original SHA3-512 Lamport signature verifier.
-Production policy requires separately typed signatures for the microkernel, VM
+Production policy requires separately typed signatures for the Gigakernel, VM
 images, service images, launch policy, and embedded CUDA-kernel bundle. Each
 trust root pins the SHA3-512 digest of its public key and minimum artifact
 version. Signed statements bind artifact type, version, byte length, and content
@@ -2386,7 +2390,7 @@ RFLAGS bit 1 is set, and long mode enables paging, protected mode, PAE, NX, and
 supervisor write protection with explicit 64-bit code and data segments. The
 bootstrap adapter deliberately omits KVM's in-kernel IRQ chip until interrupt
 delivery is configured. Guest page-table construction and
-the backing store for it are now shared with the microkernel's page-table
+the backing store for it are now shared with the Gigakernel's page-table
 builder. A fixed guest-RAM arena returns only freshly zeroed frames and rejects
 reads or writes to unallocated tables, out-of-range entries, read-only RAM, and
 arena exhaustion. KVM therefore inherits the same hardware W^X, NX, user-bit,

@@ -28,7 +28,7 @@ must also follow the [Engineering Constitution](../ENGINEERING_CONSTITUTION.md).
 ## What exists today
 
 The repository contains experimental local inference, a capability-oriented
-microkernel, KVM and WHP backends, a Rust compiler subset, media codecs, storage
+Gigakernel, KVM and WHP backends, a Rust compiler subset, media codecs, storage
 providers, and native build tools. It also contains a separate protected SHA-256
 Git stack and certificate/ACME services with hosted Linux and Docker evidence.
 The GitHub repository uses SSH-signed source history; Gitd is a separate project
@@ -36,7 +36,7 @@ component, not the host for that source.
 
 Read [Project status](../PROJECT_STATUS.md) for implementation and test coverage
 across these areas. For implementation evidence and remaining
-kernel milestones, read [Microkernel](../MICROKERNEL.md). The
+kernel milestones, read [Gigakernel](../GIGAKERNEL.md). The
 [Roadmap](../ROADMAP.md) gives the dependency order for future work.
 
 ## Security and testing limits

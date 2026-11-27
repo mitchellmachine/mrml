@@ -1,7 +1,7 @@
 # MRML operating-system security model
 
 This document states security boundaries and non-claims. Implementation details
-and dated evidence are in [MICROKERNEL.md](MICROKERNEL.md).
+and dated evidence are in [GIGAKERNEL.md](GIGAKERNEL.md).
 
 ## MRML security principles
 
@@ -841,7 +841,7 @@ not launched natively. Every host-substrate exception is explicitly classified
 and justified. A microVM limits compromise propagation but grants no file,
 network, GPU, device, secret, IPC, or resource authority; capabilities remain
 authoritative. Total mode changes the TCB's shape and does not eliminate trust in
-the microkernel, VMM, device isolation, narrow brokers, or bootstrap path.
+the Gigakernel, VMM, device isolation, narrow brokers, or bootstrap path.
 
 The planned compositor owns trusted identity indicators, secure prompts, focus,
 input routing, capture policy, and final composition. Application pixels cannot

@@ -28,7 +28,7 @@ IPC, device, or security code, read completely:
 7. `docs/ACCESSIBILITY.md`
 8. `docs/ROADMAP.md`
 9. `docs/RECOVERY.md`
-10. `docs/MICROKERNEL.md`
+10. `docs/GIGAKERNEL.md`
 
 Treat `docs/ENGINEERING_CONSTITUTION.md` as normative before introducing major
 architecture. Apply its lightweight complexity score to major subsystem
@@ -91,7 +91,7 @@ Architectural invariants:
   native fallback; do not count unavailability or diagnostic native execution
   as Total satisfaction. Preserve only documented, justified substrate, boot
   and recovery exceptions;
-- keep the privileged microkernel small and mechanism-focused;
+- keep the privileged Gigakernel small and mechanism-focused;
 - put storage, networking, firewall policy, configuration, consent UI,
   monitoring, supervision policy, ordinary drivers, and AI policy in isolated
   services wherever practical;

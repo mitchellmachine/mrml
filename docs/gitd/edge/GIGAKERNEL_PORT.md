@@ -1,4 +1,4 @@
-# Microkernel port boundary
+# MRML Gigakernel port boundary
 
 The reusable protocol, renderer, and in-memory cache are no-std friendly. A
 future service receives explicit UDP, time, randomness, cache, certificate-use,

@@ -32,7 +32,7 @@ and historically Hyper-V/WHP on Windows.
 
 The project began as a native local-LLM runtime and is growing into a sovereign
 software stack: inference, media codecs, development tools, cryptography,
-network protocols, virtualization, verified boot, and an x86_64 microkernel are
+network protocols, virtualization, verified boot, and an x86_64 Gigakernel are
 implemented inside this repository. The objective is not merely to replace
 individual libraries. It is to minimize trusted dependencies from source code
 and signed builds through boot, isolated execution, and accelerated inference.
@@ -69,7 +69,7 @@ reference CPUs are targets, not current physical-hardware support claims.
 | Area | Repository-owned implementation | Current maturity |
 | --- | --- | --- |
 | Local inference | GGUF loading, tokenizer, Gemma-family execution, CPU kernels, Rust-to-PTX CUDA kernels, KV cache, sampling, CLI, JSONL automation, and HTTPS/SSE service | Functional but narrower and less tuned than established runtimes |
-| Microkernel | PE32+ x86_64 kernel, UEFI handoff, page tables, GDT/IDT/TSS, CPL3 tasks, APIC timer, preemption, capabilities, IPC, fault retirement, SMP, and service lifecycle | Booting research kernel with signed QEMU and KVM probes plus historical and CI-scoped WHP evidence; local Windows VMM testing was suspended at the time of the snapshot; not production ready |
+| Gigakernel | PE32+ x86_64 kernel, UEFI handoff, page tables, GDT/IDT/TSS, CPL3 tasks, APIC timer, preemption, capabilities, IPC, fault retirement, SMP, and service lifecycle | Booting research kernel with signed QEMU and KVM probes plus historical and CI-scoped WHP evidence; local Windows VMM testing was suspended at the time of the snapshot; not production ready |
 | Virtualization | Common VM policy plus native KVM and Hyper-V/WHP launchers, signed launch manifests, isolated guest memory, interrupt handling, and authenticated queues | KVM development and benchmark harnesses; Windows VMM/WHP testing is CI-only for now; a compromised host remains authoritative |
 | Mediated GPU | Authenticated rings, signed kernels, capabilities, quotas, watchdogs, reset, CPU fallback, fail-stop EPT/VT-d, checked DMAR/MCFG, complete-route proofs, one-shot MMIO ownership, generation-checked domain authority, root-race-checked direct tables, and fail-closed all-unit assembly | Register and benchmark plumbing exist; physical execution and hardware IOMMU validation, plus near-native in-VM CUDA, remain unfinished |
 | Rust compiler | Original forward-looking Rust lexer, parser, semantic analysis, constant evaluation, code generation, and source-to-object driver for a documented subset | Experimental contemporary/future-Rust subset, not a complete `rustc` replacement |
@@ -79,8 +79,8 @@ reference CPUs are targets, not current physical-hardware support claims.
 | Networking and security | Original HTTP, TLS, SSH, JSON, cryptography, signing, artifact admission, and rollback-policy components | Security-sensitive experimental code requiring independent audit |
 | Data and training | ZIM, Zstandard, Wikipedia streaming, tokenizer training, compact transformer training, and GGUF export | Research pipeline; trainer is not yet a fully trained competitive LLM system |
 
-Detailed microkernel architecture, trust boundaries, probe evidence, and
-remaining milestones live in [docs/MICROKERNEL.md](docs/MICROKERNEL.md). Keeping
+Detailed Gigakernel architecture, trust boundaries, probe evidence, and
+remaining milestones live in [docs/GIGAKERNEL.md](docs/GIGAKERNEL.md). Keeping
 that detail outside this README makes the project overview readable while
 retaining the evidence needed for engineering work.
 
@@ -91,7 +91,7 @@ The durable OS direction is split by purpose: [architecture](docs/ARCHITECTURE.m
 [context-loss recovery](docs/RECOVERY.md). The
 [Engineering Constitution](docs/ENGINEERING_CONSTITUTION.md) is normative for
 complexity, authority, dependencies, compatibility, and major design changes;
-`docs/MICROKERNEL.md` remains the
+`docs/GIGAKERNEL.md` remains the
 detailed implementation and evidence ledger. Architecture goals in those files
 are not completion claims.
 
@@ -247,7 +247,7 @@ broker memory; exact request, policy, sequence, receipt, and attestation checks
 inside VTL1 are what reject those attempts. Broker wiping is residual-state
 hygiene, not a confidentiality guarantee against the host.
 Reports are policy inputs, not attestation, until authenticated by the
-corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
+corresponding hardware-backed launch authority. See `docs/GIGAKERNEL.md` for
 the layered design.
 The bare-metal monitor derives a nonzero receipt key internally exactly once
 before any domain or granule exists, mixing an opaque full-signed-chain boot
@@ -290,7 +290,7 @@ remain unfinished.
 ## Workspace layout
 
 - `mrml-kernel`, `mrml-kernel-image`, `mrml-uefi`, `mrml-service-image`:
-  microkernel, boot, and isolated-service execution.
+  Gigakernel, boot, and isolated-service execution.
 - `mrml-config`: fixed-capacity typed configuration state and versioned
   configuration/supervision service protocols.
 - `mrml-storage`: capability-native stable storage identities, attenuated
@@ -418,7 +418,7 @@ the repository or undoing its invariants.
 
 1. Read `AGENTS.md`, this README, the architecture, security, application
    platform, roadmap, recovery, and
-   [microkernel evidence](docs/MICROKERNEL.md) documents before changing kernel,
+   [Gigakernel evidence](docs/GIGAKERNEL.md) documents before changing kernel,
    VMM, signing, GPU, application, browser, GUI, or trust-boundary code.
 2. Treat the mandatory contribution rules above as hard acceptance gates.
 3. Inspect the current worktree before editing. Preserve unrelated staged,

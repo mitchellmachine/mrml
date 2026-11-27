@@ -2,7 +2,7 @@
 
 Strict Total MicroVM is MRML’s only operating mode. Ordinary applications
 and services execute in admitted microVMs or remain unavailable. The loader,
-microkernel, and minimal virtualization substrate are mechanisms, not an
+Gigakernel, and minimal virtualization substrate are mechanisms, not an
 alternate session mode. Recovery and hosted diagnostics remain separate
 from an MRML session. Full-system Total operation is not yet implemented.
 
@@ -576,7 +576,7 @@ reviewed as the architecture evolves. The substrate SHOULD be minimized,
 memory-safe where practical, capability-limited, fuzzed, and inspectable.
 
 Total mode stops at the minimal host substrate; it does not recursively place
-the VMM inside another VMM. Its TCB still includes the relevant microkernel,
+the VMM inside another VMM. Its TCB still includes the relevant Gigakernel,
 virtualization core, IOMMU/device isolation, minimum capability/resource/device
 brokers, and microVM bootstrap path. Shared brokers are explicit common-mode
 dependencies and expose narrow typed interfaces rather than ambient proxies.

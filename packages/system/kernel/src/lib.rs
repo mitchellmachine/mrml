@@ -1,6 +1,6 @@
 #![no_std]
 
-//! Security primitives shared by the MRML microkernel and its host VMMs.
+//! Security primitives shared by the MRML Gigakernel and its host VMMs.
 //! This crate deliberately contains policy data structures, not privileged
 //! machine code. Architecture and hypervisor implementations sit behind these
 //! narrow types so their unsafe boundaries can be reviewed independently.

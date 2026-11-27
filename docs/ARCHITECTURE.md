@@ -1,7 +1,7 @@
 # MRML operating-system architecture
 
 This is the durable architectural overview. Detailed implementation history and
-probe evidence remain in [MICROKERNEL.md](MICROKERNEL.md); security boundaries
+probe evidence remain in [GIGAKERNEL.md](GIGAKERNEL.md); security boundaries
 are normative in [SECURITY.md](SECURITY.md); dependency order is in
 [ROADMAP.md](ROADMAP.md); the application contract is in
 [APPLICATION_PLATFORM.md](APPLICATION_PLATFORM.md); context-loss recovery is in
@@ -39,9 +39,9 @@ MRML is the **Mitchell Renouf Machine Learning Library**. It began as local
 machine-learning and inference work and is evolving into a broader experimental
 computing stack, including an operating system built from first principles.
 The OS direction is experimental, security-oriented, capability-based,
-microkernel-oriented, Rust-first, local-first, dependency-minimized, designed
-for user sovereignty, and intended to make local AI a first-class system
-capability. MRML is not currently a production operating system.
+and centered on Total MicroVM isolation. It is Rust-first, local-first,
+minimizes dependencies, and is designed for user sovereignty and first-class
+local AI. MRML is not currently a production operating system.
 
 ## Current architecture
 
@@ -169,13 +169,13 @@ quantitative CPU authority, power, telemetry, and thermal policy are canonical
 in [platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md). Those mechanisms are
 **PLANNED** unless the implementation/evidence ledger below says otherwise.
 
-**IMPLEMENTED:** an experimental x86_64 PE32+ microkernel, original UEFI loader,
+**IMPLEMENTED:** an experimental x86_64 PE32+ Gigakernel, original UEFI loader,
 bounded firmware handoff and allocator, W^X page tables, GDT/IDT/TSS, guarded
 privilege stacks, CPL3 domains, APIC timer preemption, SMP startup, IPIs,
 scheduling and migration, fixed-capacity generational capabilities and tasks,
 bounded IPC, fault retirement, service restart policy, guest-memory policy, and
 native KVM and Windows WHP launch backends. Signed controlled probes exercise
-subsets of these mechanisms. See the evidence ledger in MICROKERNEL.md.
+subsets of these mechanisms. See the evidence ledger in GIGAKERNEL.md.
 
 **PARTIALLY IMPLEMENTED:** blocking receive and scheduler wakeup, bounded
 backpressure, attenuated capability transfer with bounded transitive IPC-handle
@@ -397,9 +397,11 @@ separate from the stricter admission profile planned for ordinary native
 applications. The detailed feature matrix, prerequisites, priority policy, and
 oracle procedure are normative in [COMPILER.md](COMPILER.md).
 
-## The microkernel boundary
+## The Gigakernel boundary
 
-The microkernel contains only mechanisms that fundamentally require privileged
+The MRML Gigakernel is the privileged core of Total MicroVM isolation.
+
+The Gigakernel contains only mechanisms that fundamentally require privileged
 execution: address-space isolation, scheduling, IPC primitives, capability
 enforcement and transfer/revocation primitives, interrupt routing, fundamental
 memory ownership, minimal hardware isolation, and mechanisms needed to prevent
@@ -1534,7 +1536,7 @@ The existing semantic system monitor is the single **PLANNED** observer for
 authorized task, resource, integrity, device, platform-security, and recovery
 state. Its canonical model is in
 [monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md); monitoring does not join
-the microkernel or replace supervision, policy, or owning services.
+the Gigakernel or replace supervision, policy, or owning services.
 
 The capability-native authority broker will evaluate narrow requests and may
 deny, allow, request trusted user consent, grant once, grant until process exit,
