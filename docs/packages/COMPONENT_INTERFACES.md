@@ -768,9 +768,14 @@ path names. Invalid state, identity substitution, stale authority, replay,
 oversized payload, undersized output, and sequence exhaustion fail before
 publication. Request and response publication now each produce a non-forgeable
 typed notification carrying the exact binding identity, operation, and sequence;
-the opposite endpoint must present it before consuming payload bytes. Nested KVM
-transports that bounded ZIM-like request and Zstd-like response across two live
-VM mappings. Release fences precede request, response, and idle publication;
+the opposite endpoint must present it before consuming payload bytes. The hosted peer-page test now transports an exact canonical block-provider READ
+and its 512-byte result across two live VM mappings. The shared wire holds only
+the existing request, canonical status, and exact-length data on success. The
+adapter rejects stale sessions before backend dispatch and requires exact
+response length before publishing bytes to the caller. The retirement simulation
+checks that stale request and completion notifications do not reach the
+replacement provider or change the caller's buffer. This reuses the existing
+slot and adds no mapping or service authority. Release fences precede request, response, and idle publication;
 matching acquire fences follow state observation before consuming metadata or
 payload. Backend interrupt/event delivery, a race-tested atomic shared-state
 representation, signed component execution, and recovery integration remain

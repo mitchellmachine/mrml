@@ -26,6 +26,7 @@ mod filesystem_provider_launch;
 mod format;
 mod identity;
 mod kernel_transport;
+mod microvm_block_read;
 mod object_id_allocator;
 mod read_only_block_image;
 mod recovery;
@@ -179,6 +180,10 @@ pub use format::{
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
 pub use kernel_transport::{BlockKernelTransport, BlockKernelTransportError};
+pub use microvm_block_read::{
+    MICROVM_BLOCK_READ_BYTES, MicrovmBlockReadConsumer, MicrovmBlockReadError,
+    MicrovmBlockReadProvider, bind_microvm_block_read,
+};
 pub use object_id_allocator::{
     OBJECT_ID_ALLOCATOR_HEADER_BYTES, ObjectIdAllocatorError, ObjectIdAllocatorImage,
     ObjectIdAllocatorUpdateError, ObjectIdAllocatorWriteBackend, PreparedObjectIdReservation,

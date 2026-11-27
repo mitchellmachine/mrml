@@ -4051,17 +4051,15 @@ mod tests {
             Err(WhpError::UnmappedMemory)
         );
         first.withdraw_peer_page(peer_virtual, 0x20_0000).unwrap();
-        let queue_identity =
-            mrml_kernel::MicrovmInterfaceQueueIdentity::new([0x5a; 32], 3, 14, 9, 7, 11).unwrap();
-        let queue_pair = mrml_kernel::MicrovmInterfaceQueuePair::bind(
-            queue_identity,
-            &projection,
-            first_target,
-            second_target,
-            &capabilities,
-        )
-        .unwrap();
-        let (mut consumer_queue, mut provider_queue) = queue_pair.split();
+        use mrml_interface_storage_block_provider_v1::OpaqueHandle;
+        use mrml_storage::{ReadOnlyBlockImage, bind_microvm_block_read};
+
+        let session = OpaqueHandle::new(1, 14).unwrap();
+        let (queue_identity, mut consumer_queue, mut provider_queue) =
+            bind_microvm_block_read(
+                14, 9, 7, 11, session, &projection, first_target, second_target, &capabilities,
+            )
+            .unwrap();
         let request_interrupt_object = ObjectId(0x774);
         let response_interrupt_object = ObjectId(0x775);
         let request_interrupt = capabilities
@@ -4112,7 +4110,7 @@ mod tests {
             .initialize(&mut consumer_page, &projection, &capabilities)
             .unwrap();
         let request_notification = consumer_queue
-            .submit(&mut consumer_page, &projection, &capabilities, 1, b"zim")
+            .submit(1, &mut consumer_page, &projection, &capabilities)
             .unwrap();
         request_route.publish(request_notification).unwrap();
         peer.write_first(&consumer_page).unwrap();
@@ -4128,27 +4126,16 @@ mod tests {
             .unwrap();
         let mut provider_page = [0_u8; PAGE_SIZE as usize];
         peer.read_second(&mut provider_page).unwrap();
-        let mut request = [0_u8; 8];
-        assert_eq!(
-            provider_queue
-                .receive_request(
-                    &provider_page,
-                    &projection,
-                    &capabilities,
-                    request_notification,
-                    &mut request,
-                )
-                .unwrap(),
-            (1, 1, 3)
-        );
+        let mut sectors = [0x37; 1024];
+        sectors[512..].fill(0xa6);
+        let mut storage = ReadOnlyBlockImage::new(&sectors, 512, session).unwrap();
         let response_notification = provider_queue
-            .respond(
+            .serve(
                 &mut provider_page,
                 &projection,
                 &capabilities,
-                1,
-                1,
-                b"zstd",
+                request_notification,
+                &mut storage,
             )
             .unwrap();
         response_route.publish(response_notification).unwrap();
@@ -4164,20 +4151,11 @@ mod tests {
             .unwrap()
             .unwrap();
         peer.read_first(&mut consumer_page).unwrap();
-        let mut response = [0_u8; 8];
-        assert_eq!(
-            consumer_queue
-                .consume_response(
-                    &mut consumer_page,
-                    &projection,
-                    &capabilities,
-                    response_notification,
-                    &mut response,
-                )
-                .unwrap(),
-            (1, 4)
-        );
-        assert_eq!(&response[..4], b"zstd");
+        let mut response = [0_u8; 512];
+        consumer_queue
+            .complete(&mut consumer_page, &projection, &capabilities, response_notification, &mut response)
+            .unwrap();
+        assert_eq!(response, [0xa6; 512]);
         let mut observed = [0; 4];
         peer.retire()
             .unwrap_or_else(|(error, _)| panic!("WHP peer retirement failed: {error:?}"));

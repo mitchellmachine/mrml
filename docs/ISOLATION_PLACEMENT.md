@@ -41,7 +41,12 @@ blocker until its installed guest and runtime transport exist. The separately si
 RAM-backed block-service probe exercises a supervised Total MicroVM guest. Its
 client and service are separate CPL3 tasks within that one diagnostic guest;
 the fixture does not establish production inter-VM transport or physical I/O.
-The former direct FAT32 provider
+The next transport slice carries a canonical 512-byte READ over the existing
+peer-page call queue between distinct hosted guest mappings. The hosted tests
+execute the queue endpoints on the host, not inside the guest workloads. The
+provider retirement/rebind simulation rejects old notifications and sessions
+before backend I/O. Wiring the installed service, guest interrupt consumers,
+and real block providers remains open. The former direct FAT32 provider
 launcher is available only for hosted regression and is not an OS launch path.
 The standalone
 service-image package is an optional diagnostic blocker, not a production

@@ -4,7 +4,7 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 223
+compile_edges = 227
 build_tool_edges = 0
 runtime_interface_edges = 5
 package_edges = 200
@@ -784,7 +784,7 @@ isolation_default = "platform"
 isolation_minimum = "platform"
 isolation_maximum = "platform"
 isolation_supported = ["platform"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
 boot_bound = []
@@ -797,7 +797,7 @@ isolation_default = "platform"
 isolation_minimum = "platform"
 isolation_maximum = "platform"
 isolation_supported = ["platform"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
 boot_bound = []

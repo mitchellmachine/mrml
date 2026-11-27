@@ -42,6 +42,20 @@ compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_interface_storage_block_provider_v1"
+compile_name = "mrml-interface-storage-block-provider-v1"
+package = "org.mrml.interface.storage.block-provider"
+scope = "compile"
+test_only = true
+
+[[dependency]]
+alias = "mrml_storage"
+compile_name = "mrml-storage"
+package = "org.mrml.service.storage"
+scope = "compile"
+test_only = true
+
 [[build_input]]
 fingerprint = "fnv1a64:07cfb9d8b9ec012a"
 id = "native-link.native.c"
