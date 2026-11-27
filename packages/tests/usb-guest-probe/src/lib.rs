@@ -7,7 +7,11 @@ use mrml_storage_fat32::provisioned_probe::{
 };
 pub use mrml_storage_usb::{
     BulkTransport,
-    xhci::{Platform, inspect_legacy_ownership},
+    xhci::{
+        Controller, DmaAssignment, DmaLayout, PciActivation, Platform, RevocablePlatform,
+        inspect_legacy_ownership,
+        pci::{PciController, PciLocation, PciSnapshot},
+    },
 };
 use mrml_storage_usb::{Error as UsbError, SECTOR_BYTES, UsbDisk};
 

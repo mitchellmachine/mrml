@@ -4,6 +4,8 @@
 use core::arch::asm;
 use mrml_usb_guest_probe::{BulkTransport, Platform, inspect_legacy_ownership};
 
+mod command_probe;
+
 // This test fixture is admitted only by the KVM diagnostic. The monitor
 // projects this exact writable, non-executable page for the result.
 const RESULT: *mut u8 = 0xffff_8001_400f_0000 as *mut u8;
@@ -13,6 +15,7 @@ extern "efiapi" fn efi_main() -> ! {
     let passed = match read_byte(0) {
         0x60 => mrml_usb_guest_probe::exercise_transport(Relay),
         0x61 => preflight(),
+        0x62 => command_probe::exercise(),
         _ => mrml_usb_guest_probe::exercise(),
     };
     let result = if passed { 0x51 } else { 0x52 };

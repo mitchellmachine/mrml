@@ -1,0 +1,131 @@
+//! Diagnostic guest transport. Only the test broker can enable or revoke PCI.
+use super::{PAYLOAD, read_byte, request_address, transfer, write_byte};
+use mrml_usb_guest_probe::{
+    Controller, DmaAssignment, DmaLayout, PciActivation, PciController, PciLocation, PciSnapshot,
+    Platform, RevocablePlatform,
+};
+
+const DMA: DmaLayout = DmaLayout {
+    device_contexts: 0x10_0000,
+    command_ring: 0x10_0100,
+    event_segments: 0x10_0200,
+    event_ring: 0x10_0300,
+};
+
+struct Channel;
+
+fn send(op: u8, address: u64, bytes: &[u8]) -> Result<(), ()> {
+    request_address(address);
+    for (index, &byte) in bytes.iter().enumerate() {
+        write_byte(PAYLOAD + index, byte);
+    }
+    transfer(op, bytes.len())
+}
+
+fn receive(op: u8, address: u64, bytes: &mut [u8]) -> Result<(), ()> {
+    request_address(address);
+    transfer(op, bytes.len())?;
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = read_byte(PAYLOAD + index);
+    }
+    Ok(())
+}
+
+impl Platform for Channel {
+    type Error = ();
+
+    fn read32(&mut self, offset: u32) -> Result<u32, ()> {
+        let mut bytes = [0; 4];
+        receive(5, u64::from(offset), &mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn write32(&mut self, offset: u32, value: u32) -> Result<(), ()> {
+        send(8, u64::from(offset), &value.to_le_bytes())
+    }
+
+    fn dma_write(&mut self, address: u64, bytes: &[u8]) -> Result<(), ()> {
+        if bytes.is_empty() || bytes.len() > 256 {
+            return Err(());
+        }
+        send(6, address, bytes)
+    }
+
+    fn dma_read(&mut self, address: u64, bytes: &mut [u8]) -> Result<(), ()> {
+        if bytes.is_empty() || bytes.len() > 256 {
+            return Err(());
+        }
+        receive(7, address, bytes)
+    }
+
+    fn publish_dma(&mut self) -> Result<(), ()> {
+        send(13, 0, &[])
+    }
+    fn acquire_dma(&mut self) -> Result<(), ()> {
+        send(14, 0, &[])
+    }
+    fn wait_tick(&mut self) -> Result<(), ()> {
+        send(12, 0, &[])
+    }
+}
+
+impl PciActivation for Channel {
+    fn activation_state(&mut self) -> Result<(PciSnapshot, DmaAssignment), ()> {
+        let mut data = [0; 40];
+        receive(9, 0, &mut data)?;
+        let snapshot = PciSnapshot {
+            location: PciLocation {
+                segment: u16::from_le_bytes(data[..2].try_into().unwrap()),
+                bus: data[2],
+                device: data[3],
+                function: data[4],
+            },
+            header_type: data[5],
+            command: u16::from_le_bytes(data[6..8].try_into().unwrap()),
+            configuration_generation: u64::from_le_bytes(data[8..16].try_into().unwrap()),
+            vendor_device: u32::from_le_bytes(data[16..20].try_into().unwrap()),
+            class_revision: u32::from_le_bytes(data[20..24].try_into().unwrap()),
+            bar0: u32::from_le_bytes(data[24..28].try_into().unwrap()),
+            bar1: u32::from_le_bytes(data[28..32].try_into().unwrap()),
+            bar0_bytes: u64::from_le_bytes(data[32..40].try_into().unwrap()),
+        };
+        let controller = PciController::discover(snapshot).map_err(|_| ())?;
+        Ok((
+            snapshot,
+            DmaAssignment {
+                controller,
+                mapping_generation: 1,
+                device_base: DMA.device_contexts,
+                bytes: 0x8000,
+            },
+        ))
+    }
+
+    fn enable_bus_master(&mut self, _: DmaAssignment, before: u16) -> Result<(), ()> {
+        // This operation selects no device or mapping. The monitor uses
+        // its own retained assignment and independently checks the command.
+        send(10, 0, &before.to_le_bytes())
+    }
+}
+
+impl RevocablePlatform for Channel {
+    fn revoke_after_halt(&mut self) -> Result<(), ()> {
+        send(11, 0, &[])
+    }
+}
+
+pub(super) fn exercise() -> bool {
+    let mut channel = Channel;
+    let Ok((_, assignment)) = channel.activation_state() else {
+        return false;
+    };
+    let Ok(mut controller) = Controller::start_pci(channel, assignment, DMA, 100) else {
+        return false;
+    };
+    let result = controller.no_op(100);
+    let retired = controller
+        .stop(100)
+        .ok()
+        .is_some_and(|halted| halted.revoke().is_ok());
+    result.is_ok() && retired
+}

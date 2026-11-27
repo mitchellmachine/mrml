@@ -4,4 +4,7 @@
 
 mod tests;
 
-pub use tests::{PreflightIo, with_emulated_probe_disk, with_emulated_probe_preflight};
+pub use tests::{
+    CommandIo, PreflightIo, with_emulated_command_probe, with_emulated_probe_disk,
+    with_emulated_probe_preflight,
+};

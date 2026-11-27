@@ -2990,6 +2990,18 @@ The scratch transaction tests guest access to emulated DMA backing, not a
 device-initiated DMA transfer. This mode cannot reset or start a controller
 and does not authorize writes to physical storage.
 
+Run `--ignored --nocapture live_kvm_guest_commands_and_retires_qemu_xhci`
+to exercise the next stage. The signed MicroVM runs the existing xHCI driver
+to initialize fixed queues, submit one No-op Command, consume the exact
+controller-written completion, and stop. A test-only host broker retains
+the PCI assignment; it checks activation, admits only the required register
+values and queue operations, and verifies halt before disabling bus mastering.
+It independently verifies the completion before scrubbing the queues, denies
+further guest access, and checks that the disposable image was unchanged.
+The QEMU controller performs the DMA in its emulated RAM; this is not
+physical DMA isolation or an installed VMX/VT-d lease. The command diagnostic
+does not address the USB device or issue storage commands.
+
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See
 [review log](../patents/REVIEW_LOG.md).

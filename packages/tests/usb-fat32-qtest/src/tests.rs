@@ -241,7 +241,9 @@ pub fn with_emulated_probe_disk(super_speed: bool, exercise: &mut dyn FnMut(Prob
     exercise_qemu(super_speed, Mode::Bulk(exercise));
 }
 
+mod command_probe;
 mod scoped_pipe;
+pub use command_probe::CommandIo;
 use scoped_pipe::ScopedProbePipe;
 
 pub trait PreflightIo {
@@ -327,6 +329,7 @@ enum Mode<'a> {
     Hosted,
     Bulk(&'a mut dyn FnMut(ProbePipe<'_>)),
     Preflight(&'a mut dyn FnMut(&mut dyn PreflightIo)),
+    Command(&'a mut dyn FnMut(&mut dyn CommandIo)),
 }
 
 pub fn with_emulated_probe_preflight(
@@ -334,6 +337,10 @@ pub fn with_emulated_probe_preflight(
     probe: &mut dyn FnMut(&mut dyn PreflightIo),
 ) {
     exercise_qemu(super_speed, Mode::Preflight(probe));
+}
+
+pub fn with_emulated_command_probe(super_speed: bool, probe: &mut dyn FnMut(&mut dyn CommandIo)) {
+    exercise_qemu(super_speed, Mode::Command(probe));
 }
 
 fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
@@ -538,6 +545,15 @@ fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
                 fs::read(&media).unwrap(),
                 expected,
                 "preflight must not modify media"
+            );
+            return;
+        }
+        Mode::Command(probe) => {
+            command_probe::run(&mut projected, probe);
+            assert_eq!(
+                fs::read(&media).unwrap(),
+                expected,
+                "command probe must not modify media"
             );
             return;
         }

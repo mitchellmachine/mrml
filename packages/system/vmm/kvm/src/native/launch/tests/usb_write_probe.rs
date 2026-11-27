@@ -315,10 +315,68 @@ pub(super) fn exercise_preflight() {
     );
 }
 
+pub(super) fn exercise_command() {
+    for super_speed in [false, true] {
+        mrml_usb_fat32_qtest::with_emulated_command_probe(super_speed, &mut |io| {
+            run_signed_probe(ProbeMode::Command(io));
+        });
+    }
+    mrml_runtime::mrml_println!(
+        "usb-command-guest|status=PASS|backend=kvm|xhci=qemu|speeds=2,3|dma=completion|retired=true"
+    );
+}
+
+fn relay_command(
+    io: &mut dyn mrml_usb_fat32_qtest::CommandIo,
+    opcode: u8,
+    address: u64,
+    request: &[u8],
+    reply: &mut [u8],
+) -> Result<usize, ()> {
+    let size = request.len();
+    match (opcode, size) {
+        (5, 4) => reply.copy_from_slice(
+            &io.read32(u32::try_from(address).map_err(|_| ())?)?
+                .to_le_bytes(),
+        ),
+        (6, 1..=256) => io.dma_write(address, request)?,
+        (7, 1..=256) => io.dma_read(address, reply)?,
+        (8, 4) => io.write32(
+            u32::try_from(address).map_err(|_| ())?,
+            u32::from_le_bytes(request.try_into().unwrap()),
+        )?,
+        (9, 40) if address == 0 => {
+            let p = io.snapshot()?;
+            reply[..2].copy_from_slice(&p.location.segment.to_le_bytes());
+            reply[2..6].copy_from_slice(&[
+                p.location.bus,
+                p.location.device,
+                p.location.function,
+                p.header_type,
+            ]);
+            reply[6..8].copy_from_slice(&p.command.to_le_bytes());
+            reply[8..16].copy_from_slice(&p.configuration_generation.to_le_bytes());
+            reply[16..20].copy_from_slice(&p.vendor_device.to_le_bytes());
+            reply[20..24].copy_from_slice(&p.class_revision.to_le_bytes());
+            reply[24..28].copy_from_slice(&p.bar0.to_le_bytes());
+            reply[28..32].copy_from_slice(&p.bar1.to_le_bytes());
+            reply[32..40].copy_from_slice(&p.bar0_bytes.to_le_bytes());
+        }
+        (10, 2) if address == 0 => io.activate(u16::from_le_bytes(request.try_into().unwrap()))?,
+        (11, 0) if address == 0 => io.revoke()?,
+        (12, 0) if address == 0 => io.wait_tick()?,
+        (13, 0) if address == 0 => io.publish_dma()?,
+        (14, 0) if address == 0 => io.acquire_dma()?,
+        _ => return Err(()),
+    }
+    Ok(size)
+}
+
 enum ProbeMode<'a> {
     Synthetic,
     Bulk(&'a mut dyn BulkTransport<Error = ()>),
     Preflight(&'a mut (dyn mrml_usb_fat32_qtest::PreflightIo + 'a)),
+    Command(&'a mut (dyn mrml_usb_fat32_qtest::CommandIo + 'a)),
 }
 
 fn run_signed_probe(mut mode: ProbeMode<'_>) {
@@ -416,6 +474,7 @@ fn run_signed_probe(mut mode: ProbeMode<'_>) {
         ProbeMode::Synthetic => (false, 1, 0),
         ProbeMode::Bulk(_) => (true, MAX_EXITS, 0x60),
         ProbeMode::Preflight(_) => (true, 72, 0x61),
+        ProbeMode::Command(_) => (true, 1024, 0x62),
     };
     observed[0] = kind;
     peer.write_first(&observed).unwrap();
@@ -455,6 +514,13 @@ fn run_signed_probe(mut mode: ProbeMode<'_>) {
             (ProbeMode::Preflight(io), 7, 4) => io
                 .read_marker(address, &mut reply[PAYLOAD..PAYLOAD + 4])
                 .map(|()| 4),
+            (ProbeMode::Command(io), _, 0..=256) => relay_command(
+                *io,
+                opcode,
+                address,
+                &observed[PAYLOAD..PAYLOAD + size],
+                &mut reply[PAYLOAD..PAYLOAD + size],
+            ),
             _ => Err(()),
         };
         reply[0] = if result == Ok(size) { 3 } else { 4 };

@@ -3180,6 +3180,12 @@ mod tests {
         usb_write_probe::exercise_preflight();
     }
 
+    #[test]
+    #[ignore = "requires live KVM, QEMU and the built USB probe image"]
+    fn live_kvm_guest_commands_and_retires_qemu_xhci() {
+        usb_write_probe::exercise_command();
+    }
+
     mod usb_write_probe;
 
     #[test]
