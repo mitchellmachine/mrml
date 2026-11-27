@@ -231,11 +231,20 @@ impl RevocablePlatform for Qtest {
 #[test]
 #[ignore = "requires qemu-system-x86_64 and an available Unix socket"]
 fn qemu_controller_command_round_trip() {
-    exercise_qemu(false);
-    exercise_qemu(true);
+    exercise_qemu(false, None);
+    exercise_qemu(true, None);
 }
 
-fn exercise_qemu(super_speed: bool) {
+type ProbePipe<'a> = &'a mut dyn mrml_storage_usb::BulkTransport<Error = ()>;
+
+pub fn with_emulated_probe_disk(super_speed: bool, exercise: &mut dyn FnMut(ProbePipe<'_>)) {
+    exercise_qemu(super_speed, Some(exercise));
+}
+
+mod scoped_pipe;
+use scoped_pipe::ScopedProbePipe;
+
+fn exercise_qemu(super_speed: bool, external: Option<&mut dyn FnMut(ProbePipe<'_>)>) {
     let controller_arg = if super_speed {
         "qemu-xhci,id=xhci,addr=03.0"
     } else {
@@ -513,116 +522,130 @@ fn exercise_qemu(super_speed: bool) {
         let pipe = controller
             .configure_bulk(&configuration[..length], bulk_dma, 1000)
             .unwrap();
-        let disk = mrml_storage_usb::UsbDisk::probe(pipe).unwrap();
-        assert_eq!(disk.sectors(), (START + TOTAL) as u64);
-        let session = OpaqueHandle::new(1, 2).unwrap();
-        let mut provider = UsbReadProvider::new(disk, session, 3).unwrap();
-        exercise_fat32(&mut provider, session);
-        let catalog_view = BorrowedWriteView::within(7, 48, 64).unwrap();
-        let enumerate = encode_enumerate_request(catalog_view).unwrap();
-        let mut catalog = [0xa5; 64];
-        let response = provider.enumerate(&enumerate, &mut catalog).unwrap();
-        assert_eq!(decode_enumerate_response(&response, 48), Ok(Ok(48)));
-        assert_eq!(validate_block_device_catalog(&catalog[7..55]), Ok(1));
-        let device = decode_block_device_catalog_record(&catalog[7..55], 0).unwrap();
-        assert_eq!(device.session, session);
-        assert_eq!(device.flags, BLOCK_DEVICE_FLAG_READ_ONLY);
-        assert_eq!(device.logical_block_count, (START + TOTAL) as u64);
-        assert_eq!(device.media_generation, 3);
+        if let Some(exercise) = external {
+            let mut scoped = ScopedProbePipe::new(pipe);
+            exercise(&mut scoped);
+            assert!(
+                scoped.completed(),
+                "guest must write, flush and read back once"
+            );
+            qmp.remove_stick();
+        } else {
+            let disk = mrml_storage_usb::UsbDisk::probe(pipe).unwrap();
+            assert_eq!(disk.sectors(), (START + TOTAL) as u64);
+            let session = OpaqueHandle::new(1, 2).unwrap();
+            let mut provider = UsbReadProvider::new(disk, session, 3).unwrap();
+            exercise_fat32(&mut provider, session);
+            let catalog_view = BorrowedWriteView::within(7, 48, 64).unwrap();
+            let enumerate = encode_enumerate_request(catalog_view).unwrap();
+            let mut catalog = [0xa5; 64];
+            let response = provider.enumerate(&enumerate, &mut catalog).unwrap();
+            assert_eq!(decode_enumerate_response(&response, 48), Ok(Ok(48)));
+            assert_eq!(validate_block_device_catalog(&catalog[7..55]), Ok(1));
+            let device = decode_block_device_catalog_record(&catalog[7..55], 0).unwrap();
+            assert_eq!(device.session, session);
+            assert_eq!(device.flags, BLOCK_DEVICE_FLAG_READ_ONLY);
+            assert_eq!(device.logical_block_count, (START + TOTAL) as u64);
+            assert_eq!(device.media_generation, 3);
 
-        // Drive the same capability-checked queue a service uses, with
-        // the USB adapter attached to QEMU's live xHCI controller.
-        let mut caps = CapabilitySpace::<8>::new();
-        let mut memory = MemoryPoolTable::<1, 2, 4>::new(0x91).unwrap();
-        let (pool, quota) = memory
-            .create_root(
-                2,
-                4,
-                0,
-                Rights::ALLOCATE
-                    .union(Rights::CONTROL)
-                    .union(Rights::INSPECT),
+            // Drive the same capability-checked queue a service uses, with
+            // the USB adapter attached to QEMU's live xHCI controller.
+            let mut caps = CapabilitySpace::<8>::new();
+            let mut memory = MemoryPoolTable::<1, 2, 4>::new(0x91).unwrap();
+            let (pool, quota) = memory
+                .create_root(
+                    2,
+                    4,
+                    0,
+                    Rights::ALLOCATE
+                        .union(Rights::CONTROL)
+                        .union(Rights::INSPECT),
+                    &mut caps,
+                )
+                .unwrap();
+            let target = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+            let client = caps.insert(ObjectId(0x92), target).unwrap();
+            let server = caps.insert(ObjectId(0x93), target).unwrap();
+            let (projection, _) = reserve_microvm_peer_page_projection(
+                &mut memory,
+                pool,
+                quota,
+                client,
+                server,
+                0x700,
+                0x800,
                 &mut caps,
             )
             .unwrap();
-        let target = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
-        let client = caps.insert(ObjectId(0x92), target).unwrap();
-        let server = caps.insert(ObjectId(0x93), target).unwrap();
-        let (projection, _) = reserve_microvm_peer_page_projection(
-            &mut memory,
-            pool,
-            quota,
-            client,
-            server,
-            0x700,
-            0x800,
-            &mut caps,
-        )
-        .unwrap();
-        let (_, mut consumer, mut endpoint) =
-            bind_microvm_block_read(3, 1, 1, 1, session, &projection, client, server, &caps)
-                .unwrap();
-        let mut page = [0; PAGE_SIZE as usize];
-        consumer.initialize(&mut page, &projection, &caps).unwrap();
-        let mut sector = [0x5c; 512];
-        let request = consumer
-            .submit(FILE_SECTOR as u64, &mut page, &projection, &caps)
-            .unwrap();
-        let response = endpoint
-            .serve(&mut page, &projection, &caps, request, &mut provider)
-            .unwrap();
-        consumer
-            .complete(&mut page, &projection, &caps, response, &mut sector)
-            .unwrap();
-        assert_eq!(&sector[..3], b"new");
-        assert_eq!(&sector[3..], &[0xa5; 509]);
-
-        let expected_errors: &[ReadError] = if super_speed {
-            let cap = caps
-                .insert(ObjectId(0xa1), Rights::READ.union(Rights::WRITE))
-                .unwrap();
-            let mut view =
-                DiagnosticPartition::open(&mut provider, test_assignment(session), cap, &caps)
+            let (_, mut consumer, mut endpoint) =
+                bind_microvm_block_read(3, 1, 1, 1, session, &projection, client, server, &caps)
                     .unwrap();
-            qmp.remove_stick();
-            let wire_view = BorrowedReadView::within(0, SECTOR as u64, SECTOR as u64).unwrap();
-            let wire =
-                encode_write_request(probe_session(), u64::from(PROBE_DATA_SECTOR), 1, wire_view)
-                    .unwrap();
-            for error in [WriteError::IoFailure, WriteError::StaleObject] {
-                let response = view.write(&caps, &wire, &[0x3c; SECTOR]).unwrap();
-                assert_eq!(
-                    decode_write_response(&response, SECTOR as u64),
-                    Ok(Err(error))
-                );
-            }
-            &[ReadError::StaleObject]
-        } else {
-            qmp.remove_stick();
-            &[ReadError::IoFailure, ReadError::StaleObject]
-        };
-        for &error in expected_errors {
-            sector.fill(0xc3);
+            let mut page = [0; PAGE_SIZE as usize];
+            consumer.initialize(&mut page, &projection, &caps).unwrap();
+            let mut sector = [0x5c; 512];
             let request = consumer
                 .submit(FILE_SECTOR as u64, &mut page, &projection, &caps)
                 .unwrap();
             let response = endpoint
                 .serve(&mut page, &projection, &caps, request, &mut provider)
                 .unwrap();
-            assert_eq!(
-                consumer.complete(&mut page, &projection, &caps, response, &mut sector),
-                Err(MicrovmBlockReadError::Provider(error))
-            );
-            assert_eq!(sector, [0xc3; 512]);
+            consumer
+                .complete(&mut page, &projection, &caps, response, &mut sector)
+                .unwrap();
+            assert_eq!(&sector[..3], b"new");
+            assert_eq!(&sector[3..], &[0xa5; 509]);
+
+            let expected_errors: &[ReadError] = if super_speed {
+                let cap = caps
+                    .insert(ObjectId(0xa1), Rights::READ.union(Rights::WRITE))
+                    .unwrap();
+                let mut view =
+                    DiagnosticPartition::open(&mut provider, test_assignment(session), cap, &caps)
+                        .unwrap();
+                qmp.remove_stick();
+                let wire_view = BorrowedReadView::within(0, SECTOR as u64, SECTOR as u64).unwrap();
+                let wire = encode_write_request(
+                    probe_session(),
+                    u64::from(PROBE_DATA_SECTOR),
+                    1,
+                    wire_view,
+                )
+                .unwrap();
+                for error in [WriteError::IoFailure, WriteError::StaleObject] {
+                    let response = view.write(&caps, &wire, &[0x3c; SECTOR]).unwrap();
+                    assert_eq!(
+                        decode_write_response(&response, SECTOR as u64),
+                        Ok(Err(error))
+                    );
+                }
+                &[ReadError::StaleObject]
+            } else {
+                qmp.remove_stick();
+                &[ReadError::IoFailure, ReadError::StaleObject]
+            };
+            for &error in expected_errors {
+                sector.fill(0xc3);
+                let request = consumer
+                    .submit(FILE_SECTOR as u64, &mut page, &projection, &caps)
+                    .unwrap();
+                let response = endpoint
+                    .serve(&mut page, &projection, &caps, request, &mut provider)
+                    .unwrap();
+                assert_eq!(
+                    consumer.complete(&mut page, &projection, &caps, response, &mut sector),
+                    Err(MicrovmBlockReadError::Provider(error))
+                );
+                assert_eq!(sector, [0xc3; 512]);
+            }
+            let response = provider.enumerate(&enumerate, &mut catalog).unwrap();
+            assert_eq!(decode_enumerate_response(&response, 48), Ok(Ok(16)));
+            assert_eq!(validate_block_device_catalog(&catalog[7..23]), Ok(0));
+            let mut disk = provider.into_disk();
+            assert!(matches!(
+                disk.write_sector_verified(4, &[0x3c; 512]),
+                Err(mrml_storage_usb::Error::Faulted)
+            ));
         }
-        let response = provider.enumerate(&enumerate, &mut catalog).unwrap();
-        assert_eq!(decode_enumerate_response(&response, 48), Ok(Ok(16)));
-        assert_eq!(validate_block_device_catalog(&catalog[7..23]), Ok(0));
-        let mut disk = provider.into_disk();
-        assert!(matches!(
-            disk.write_sector_verified(4, &[0x3c; 512]),
-            Err(mrml_storage_usb::Error::Faulted)
-        ));
     }
     let mut retirement = ControllerRetirement::new(controller);
     retirement.withdraw(100).unwrap();

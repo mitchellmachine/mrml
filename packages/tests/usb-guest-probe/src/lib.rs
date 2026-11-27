@@ -5,7 +5,8 @@ use mrml_storage_fat32::VerifiedSectorDevice;
 use mrml_storage_fat32::provisioned_probe::{
     PROBE_DATA_SECTOR, PROBE_PARTITION_SECTORS, ProvisionedProbe, probe_metadata_sector,
 };
-use mrml_storage_usb::{BulkTransport, Error as UsbError, SECTOR_BYTES, UsbDisk};
+pub use mrml_storage_usb::BulkTransport;
+use mrml_storage_usb::{Error as UsbError, SECTOR_BYTES, UsbDisk};
 
 const START: u32 = 32;
 const SERIAL: u32 = 42;
@@ -76,10 +77,10 @@ impl BulkTransport for Disk {
     }
 }
 
-struct Partition(UsbDisk<Disk>);
+struct Partition<T: BulkTransport>(UsbDisk<T>);
 
-impl VerifiedSectorDevice for Partition {
-    type Error = UsbError<()>;
+impl<T: BulkTransport> VerifiedSectorDevice for Partition<T> {
+    type Error = UsbError<T::Error>;
 
     fn read_sector(
         &mut self,
@@ -108,12 +109,16 @@ impl VerifiedSectorDevice for Partition {
 pub fn exercise() -> bool {
     let mut original = [0xa5; SECTOR_BYTES];
     original[..3].copy_from_slice(b"old");
-    let Ok(disk) = UsbDisk::probe(Disk {
+    exercise_transport(Disk {
         command: None,
         sector: original,
         writes: 0,
         flushed: false,
-    }) else {
+    })
+}
+
+pub fn exercise_transport<T: BulkTransport>(transport: T) -> bool {
+    let Ok(disk) = UsbDisk::probe(transport) else {
         return false;
     };
     let mut partition = Partition(disk);
@@ -130,5 +135,5 @@ pub fn exercise() -> bool {
         .read_sector(PROBE_DATA_SECTOR, &mut observed)
         .is_ok()
         && observed[..3] == *b"new"
-        && observed[3..] == original[3..]
+        && observed[3..].iter().all(|&value| value == 0xa5)
 }

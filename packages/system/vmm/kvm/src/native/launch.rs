@@ -3168,6 +3168,12 @@ mod tests {
         usb_write_probe::exercise_in_guest();
     }
 
+    #[test]
+    #[ignore = "requires live KVM, QEMU and the built USB probe image"]
+    fn live_kvm_guest_writes_qemu_usb_disk() {
+        usb_write_probe::exercise_external();
+    }
+
     mod usb_write_probe;
 
     #[test]

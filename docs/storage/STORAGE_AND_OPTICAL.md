@@ -2965,8 +2965,19 @@ launcher retires after the test. To reproduce this guest-only test, run
 to the resulting `mrml-usb-guest-probe.efi` under
 `target/mrml-native/mrml_native-x86_64-unknown-uefi/release/` and invoke the
 same test binary with `--ignored --nocapture live_kvm_guest_executes_usb_write_probe`.
-The medium is entirely synthetic and resides in guest memory. This does not
-verify a live xHCI assignment, hardware DMA, or a persistent USB write.
+That mode uses a synthetic medium in guest memory.
+
+For external persistence, use the same image and run
+`--ignored --nocapture live_kvm_guest_writes_qemu_usb_disk` instead. A second
+mode of the signed MicroVM runs the same BOT/SCSI and FAT32 code over a
+one-page test mailbox. The host forwards bounded, phase-checked bulk transfers
+to QEMU's xHCI USB 2 and USB 3 endpoints. Only the declared fixture sector and
+the exact three-byte update are admitted. The test observes successful cache
+flush and readback, removes the disk, revokes the emulated controller, and
+compares the entire raw image against the expected bytes. The xHCI register
+and DMA transport still resides in the hosted QEMU fixture, not inside the
+MicroVM. Neither mode verifies an installed VMX/VT-d device assignment or a
+physical Chromebook write.
 
 Patent review: NOT_TRIGGERED; this is exact fixture comparison and scoped
 dispatch using the existing FAT32, capability and USB mechanisms. See

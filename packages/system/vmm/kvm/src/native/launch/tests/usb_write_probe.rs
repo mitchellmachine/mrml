@@ -290,6 +290,24 @@ pub(super) fn exercise() {
 }
 
 pub(super) fn exercise_in_guest() {
+    run_signed_probe(None);
+}
+
+pub(super) fn exercise_external() {
+    for super_speed in [false, true] {
+        mrml_usb_fat32_qtest::with_emulated_probe_disk(super_speed, &mut |pipe| {
+            run_signed_probe(Some(pipe));
+        });
+    }
+    mrml_runtime::mrml_println!(
+        "usb-write-guest|status=PASS|backend=kvm|bot=guest|xhci=qemu|speeds=2,3|file=PROBE.TXT"
+    );
+}
+
+fn run_signed_probe(mut external: Option<&mut dyn BulkTransport<Error = ()>>) {
+    const PAYLOAD: usize = 16;
+    // Three BOT transfers for every metadata sector, plus probe and readback.
+    const MAX_EXITS: usize = 3_400;
     let path = mrml_runtime::environment_variable("MRML_USB_GUEST_PROBE")
         .expect("set MRML_USB_GUEST_PROBE to the release EFI diagnostic path");
     let image = mrml_runtime::read_file_bounded(path.as_str(), 1024 * 1024).unwrap();
@@ -377,24 +395,59 @@ pub(super) fn exercise_in_guest() {
     )
     .unwrap_or_else(|failed| panic!("guest result mapping: {:?}", failed.error()));
     let mut observed = [0; PAGE_SIZE as usize];
+    let bridged = external.is_some();
+    if bridged {
+        observed[0] = 0x60;
+    }
     peer.write_first(&observed).unwrap();
-    let outcome = DeadlineVmBackend::run_with_deadline(peer.first, 0, 1_000_000).unwrap();
-    peer.read_second(&mut observed).unwrap();
+    let mut completed = false;
+    for _ in 0..MAX_EXITS {
+        let outcome = DeadlineVmBackend::run_with_deadline(peer.first, 0, 1_000_000).unwrap();
+        assert_eq!(outcome, VmDeadlineOutcome::Exit(VmExit::Halted));
+        peer.read_second(&mut observed).unwrap();
+        let Some(pipe) = external.as_deref_mut() else {
+            completed = true;
+            break;
+        };
+        let opcode = observed[0];
+        if matches!(opcode, 0x51 | 0x52) {
+            completed = true;
+            break;
+        }
+        assert!(observed[3..PAYLOAD].iter().all(|&byte| byte == 0));
+        assert!(observed[PAYLOAD + 512..].iter().all(|&byte| byte == 0));
+        let size = usize::from(u16::from_le_bytes([observed[1], observed[2]]));
+        let mut reply = [0; PAGE_SIZE as usize];
+        let result = match (opcode, size) {
+            (1, 31 | 512) => pipe.bulk_out(&observed[PAYLOAD..PAYLOAD + size]),
+            (2, 8 | 13 | 18 | 512) => pipe.bulk_in(&mut reply[PAYLOAD..PAYLOAD + size]),
+            _ => Err(()),
+        };
+        reply[0] = if result == Ok(size) { 3 } else { 4 };
+        peer.write_second(&reply).unwrap();
+    }
     peer.retire()
         .unwrap_or_else(|(error, _)| panic!("guest result page retirement: {error:?}"));
-    assert_eq!(outcome, VmDeadlineOutcome::Exit(VmExit::Halted));
+    assert!(
+        completed,
+        "guest exceeded its bounded diagnostic exit budget"
+    );
     assert_eq!(
         observed[0], 0x51,
         "0x52 means a verified write failed; zero means no report"
     );
-    assert!(observed[1..].iter().all(|&byte| byte == 0));
+    if !bridged {
+        assert!(observed[1..].iter().all(|&byte| byte == 0));
+    }
     for guest in [&first, &second] {
         assert_eq!(
             guest.page_walk(VIRTUAL).unwrap().physical_address(VIRTUAL),
             None
         );
     }
-    mrml_runtime::mrml_println!(
-        "usb-write-guest|status=PASS|backend=kvm|driver=guest|bot=synthetic|file=PROBE.TXT"
-    );
+    if !bridged {
+        mrml_runtime::mrml_println!(
+            "usb-write-guest|status=PASS|backend=kvm|driver=guest|bot=synthetic|file=PROBE.TXT"
+        );
+    }
 }
