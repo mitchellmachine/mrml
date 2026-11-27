@@ -19,6 +19,49 @@ kernel is new, original Rust intended for CC0 dedication. Research informs
 requirements and trade-offs; no third-party implementation is copied or
 adapted.
 
+## How the Gigakernel compares
+
+These names describe different design choices: what belongs in the privileged
+core, how workloads are isolated, and how kernel correctness is established.
+They are not mutually exclusive categories.
+
+- **A conventional microkernel** keeps a small privileged core for mechanisms
+  such as scheduling, address spaces, and interprocess communication. Higher
+  level services run outside the kernel, usually in isolated user-space
+  processes. Microkernels can also support virtual machines. For example,
+  [seL4's white paper](https://sel4.systems/About/whitepaper.html) describes
+  capability-controlled systems that mix native components and virtual
+  machines. MRML shares the small-core and capability principles, but it
+  does not offer native user-space execution as an alternative for ordinary
+  apps or services.
+- **Hyperkernel** here means the specific
+  [2017 SOSP research kernel](https://syslab.cs.washington.edu/papers/nelson-hyperkernel.pdf),
+  not a generic name for a kernel that uses virtualization. Hyperkernel used
+  hardware virtualization to separate kernel and user address spaces and
+  hypercalls to enter the kernel. Its defining goal was automated formal
+  verification of a bounded, xv6-derived trap interface using Z3. It also
+  ran a filesystem and a network stack as separate user-space servers
+  ([§4.3](https://syslab.cs.washington.edu/papers/nelson-hyperkernel.pdf#page=11)),
+  so neither hardware virtualization nor moving those services out of the
+  kernel is unique to MRML.
+- **The MRML Gigakernel** enforces an operating-system placement rule:
+  [Total MicroVM isolation](ISOLATION_PLACEMENT.md) is the only ordinary
+  operating mode. Apps and services use admitted, supervised microVMs or remain
+  unavailable. The privileged core supplies launch, memory, and communication
+  mechanisms. Cross-VM access requires explicit, scoped, revocable capabilities;
+  merely running a guest or knowing another guest's identity grants no access.
+  The loader and virtualization substrate are required mechanisms, not another
+  way to run ordinary workloads.
+
+For example, the hosted storage probe exercises a read across two signed guests
+using one authorized page and verifies its retirement. It does not establish
+that an installed storage service or full-system Total MicroVM operation is
+ready. "Gigakernel" is MRML's name for this combination of design choices,
+not a claim of architectural priority or of formal verification equivalent to
+Hyperkernel's or seL4's.
+
+## Implementation evidence
+
 The current UEFI filesystem calls load boot artifacts and the current GOP
 renderer supplies bounded bring-up diagnostics. They are not the planned native
 filesystem, compositor, surface/buffer protocol, or desktop graphics stack. The

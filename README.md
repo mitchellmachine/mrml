@@ -14,7 +14,11 @@ applications run in supervised microVMs, without native fallback. Full-system
 Total operation is not yet implemented.
 
 The [MRML Gigakernel](docs/GIGAKERNEL.md) is named after Gigachad. It is the
-capability-based kernel at the center of Total MicroVM isolation.
+capability-based kernel at the center of Total MicroVM isolation. It shares a
+microkernel's small privileged core and Hyperkernel's use of hardware
+virtualization, but MRML's defining rule is to require admitted microVMs for
+ordinary apps and services, with no native fallback. See the
+[architecture comparison](docs/GIGAKERNEL.md#how-the-gigakernel-compares).
 
 The project is dedicated to the public domain under [CC0](LICENSE).
 
