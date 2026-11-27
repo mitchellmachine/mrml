@@ -301,7 +301,10 @@ release through the test UART; it does not write PCI configuration in
 the guest case. A denied release writes no command and stops. The allow
 case continues from RAM only after the host verifies the exact change.
 This diagnostic is not in the normal boot profile and does not claim
-legacy semaphore transfer or enable DMA.
+legacy semaphore transfer or enable DMA. An independent software model
+checks the retained lease, blocked DMA, quiescent boot source, and exact
+capability again at the OS-semaphore write boundary. If any changed since
+observation, it records no write. This is not a real firmware handshake.
 
 ### Diagnose a return to firmware
 

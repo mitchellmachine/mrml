@@ -62,6 +62,7 @@ struct Script<'a> {
     samples: &'a [Sample],
     observed: usize,
     request: Option<(u32, u8)>,
+    at_request: Option<(Prerequisites, Sample)>,
 }
 
 impl<'a> Script<'a> {
@@ -71,12 +72,17 @@ impl<'a> Script<'a> {
             samples,
             observed: 0,
             request: None,
+            at_request: None,
         }
     }
 
     fn observe(&mut self) -> Result<(u64, LegacySample), Failure> {
         let support = self.samples[self.observed.min(self.samples.len() - 1)];
         self.observed += 1;
+        Self::decode(support)
+    }
+
+    fn decode(support: Sample) -> Result<(u64, LegacySample), Failure> {
         sample_legacy_ownership(0x200, |offset| match offset {
             0x10 => Ok(support.hcc1),
             offset if offset == support.offset => Ok(support.raw),
@@ -86,12 +92,33 @@ impl<'a> Script<'a> {
         .map_err(|_| Failure::ChangedCapability)
     }
 
-    fn request_os_byte(&mut self, offset: u32, value: u8) {
+    fn compare_and_request(
+        &mut self,
+        generation: u64,
+        initial: LegacySample,
+    ) -> Result<(), Failure> {
+        // Model the compare and byte write under the same retained lease,
+        // not another unlocked poll in the requester's loop.
+        let (live_ready, sample) = self
+            .at_request
+            .unwrap_or((Prerequisites::READY, self.samples[0]));
+        if !live_ready.permit_request() {
+            return Err(Failure::Prerequisite);
+        }
+        let (live_generation, live) = Self::decode(sample)?;
+        if live_generation != generation {
+            return Err(Failure::ChangedLease);
+        }
+        if live != initial {
+            return Err(Failure::ChangedCapability);
+        }
         assert_eq!(
             self.request, None,
             "one request, with no retries or forced clear"
         );
-        self.request = Some((offset, value));
+        let (offset, _) = live.capability.ok_or(Failure::ChangedCapability)?;
+        self.request = Some((offset + 3, 1));
+        Ok(())
     }
 }
 
@@ -109,7 +136,7 @@ fn simulate(script: &mut Script<'_>, ready: Prerequisites) -> Result<(), Failure
     let (offset, raw) = initial.capability.ok_or(Failure::InitialOwner)?;
     // The only modeled write is one byte to the OS-owned semaphore. In
     // particular, it cannot clear firmware's byte or touch the next dword.
-    script.request_os_byte(offset + 3, 1);
+    script.compare_and_request(generation, initial)?;
     let mut acknowledged = false;
     for _ in 0..OBSERVATIONS {
         let (live_generation, current) = script.observe()?;
@@ -248,6 +275,62 @@ fn model_rejects_absent_changed_or_reclaimed_capability_after_request() {
         assert_eq!(simulate(&mut script, Prerequisites::READY), Err(failure));
         assert_eq!(script.request, Some((0x93, 1)));
         assert!(script.observed <= 3);
+    }
+}
+
+#[test]
+fn compare_and_request_denies_changes_at_the_write_boundary_without_writing() {
+    let firmware = Sample::firmware(FIRMWARE);
+    let samples = [firmware, Sample::firmware(OS), Sample::firmware(OS)];
+    for (ready, replacement, expected) in [
+        (
+            Prerequisites::READY,
+            Sample {
+                lease_generation: 2,
+                ..firmware
+            },
+            Failure::ChangedLease,
+        ),
+        (
+            Prerequisites::READY,
+            Sample::firmware(OS),
+            Failure::ChangedCapability,
+        ),
+        (
+            Prerequisites::READY,
+            Sample::firmware(SEMAPHORES),
+            Failure::ChangedCapability,
+        ),
+        (
+            Prerequisites::READY,
+            Sample {
+                hcc1: 0,
+                ..firmware
+            },
+            Failure::ChangedCapability,
+        ),
+        (
+            Prerequisites {
+                source_closed: false,
+                ..Prerequisites::READY
+            },
+            firmware,
+            Failure::Prerequisite,
+        ),
+        (
+            Prerequisites {
+                dma_blocked: false,
+                ..Prerequisites::READY
+            },
+            firmware,
+            Failure::Prerequisite,
+        ),
+    ] {
+        let mut script = Script::new(&samples);
+        script.at_request = Some((ready, replacement));
+        assert_eq!(simulate(&mut script, Prerequisites::READY), Err(expected));
+        assert_eq!(script.request, None);
+        assert_eq!(script.observed, 1);
     }
 }
 
