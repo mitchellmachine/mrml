@@ -97,6 +97,16 @@ with zero completed writes. With no sealed QEMU fixture marker the loader
 rejects native activation; the host never releases the native probe. This
 tests refusal, not a successful transition from firmware-owned USB.
 
+The separate `mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU`
+regression uses a different sealed loader profile. Once UEFI has exited
+Boot Services, that profile stops at a QEMU-only checkpoint. On the positive
+path the host confirms the virtual boot disk was read without completed
+writes, detaches only that disk (not the controller), confirms its absence,
+then releases the guest. The kernel completes the signed embedded FAT32
+service restart without the boot disk. Missing-marker and denied-release
+controls halt. This demonstrates boot can continue from RAM; it does not
+exercise native xHCI ownership transfer, reset, or storage I/O.
+
 ### Diagnose a return to firmware
 
 Boot the UEFI Shell and run `map -r`, then use the USB filesystem mapping

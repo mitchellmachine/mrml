@@ -92,6 +92,9 @@ pub(super) fn run_qemu_with_q35_evidence(args: &[String]) -> Result<(), String> 
 pub(super) enum Q35FixtureCase {
     NoMarker,
     SharedBootNoMarker,
+    SharedPreloadUnmarked,
+    SharedPreloadDenied,
+    SharedPreload,
     WrongRelease,
     ValidRelease,
     IsolatedWrongRelease,
@@ -323,7 +326,15 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         map_only_marker,
     } = options;
     let isolated = map_only_marker.is_some_and(Q35FixtureCase::isolated);
-    let shared_boot = map_only_marker == Some(Q35FixtureCase::SharedBootNoMarker);
+    let shared_boot = matches!(
+        map_only_marker,
+        Some(
+            Q35FixtureCase::SharedBootNoMarker
+                | Q35FixtureCase::SharedPreloadUnmarked
+                | Q35FixtureCase::SharedPreloadDenied
+                | Q35FixtureCase::SharedPreload
+        )
+    );
     let machine = if isolated {
         format!("q35,accel={accelerator},default-bus-bypass-iommu=on,sata=off")
     } else {
@@ -387,7 +398,9 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         }
         if !matches!(
             case,
-            Q35FixtureCase::NoMarker | Q35FixtureCase::SharedBootNoMarker
+            Q35FixtureCase::NoMarker
+                | Q35FixtureCase::SharedBootNoMarker
+                | Q35FixtureCase::SharedPreloadUnmarked
         ) {
             command.args([
                 "-smp",
@@ -468,6 +481,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     let release = map_only_marker.and_then(|case| match case {
         Q35FixtureCase::NoMarker
         | Q35FixtureCase::SharedBootNoMarker
+        | Q35FixtureCase::SharedPreloadUnmarked
         | Q35FixtureCase::StorageNoRemapper => None,
         Q35FixtureCase::WrongRelease
         | Q35FixtureCase::IsolatedWrongRelease
@@ -482,6 +496,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::CommandDenied | Q35FixtureCase::CommandCompleted => Some(0xaa),
         Q35FixtureCase::StorageDenied | Q35FixtureCase::StorageRead => Some(0xab),
         Q35FixtureCase::StorageWriteDenied | Q35FixtureCase::StorageWrite => Some(0xac),
+        Q35FixtureCase::SharedPreload => Some(0xad),
+        Q35FixtureCase::SharedPreloadDenied => Some(0xae),
     });
     let cold = map_only_marker.and_then(Q35FixtureCase::cold);
     let mut released = false;
@@ -489,7 +505,15 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     loop {
         if let Ok(bytes) = fs::read(trace) {
             if let Some(valid) = release {
-                let ready = &expected[..expected.len() - 1];
+                let ready = if matches!(valid, 0xad | 0xae) {
+                    let index = expected
+                        .iter()
+                        .position(|&byte| byte == 0xe7)
+                        .ok_or("missing shared preload rendezvous")?;
+                    &expected[..=index]
+                } else {
+                    &expected[..expected.len() - 1]
+                };
                 if !released && bytes == ready {
                     fixture_bar = match crate::qemu_mmio::release_q35_fixture(
                         &mut child,

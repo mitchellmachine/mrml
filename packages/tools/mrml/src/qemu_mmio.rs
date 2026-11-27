@@ -111,6 +111,9 @@ fn inspect_qmp(
         if !isolated {
             validate(&map)?;
             verify_shared_boot(stdin, reader)?;
+            println!(
+                "q35-usb-shared-boot|status=PASS|firmware_disk_read=true|loader_rejected=true|native_release=false|boot_backend_writes=0"
+            );
             return Ok(None);
         }
         validate_resources(&map, false)?;
@@ -121,6 +124,38 @@ fn inspect_qmp(
         return Ok(None);
     }
     validate(&map)?;
+    if matches!(release, Some(0xad | 0xae)) {
+        validate_scratch_uart(&map)?;
+        verify_shared_boot(stdin, reader)?;
+        if release == Some(0xad) {
+            qmp_write(
+                stdin,
+                "{\"execute\":\"device_del\",\"arguments\":{\"id\":\"mrml_shared_boot\"},\"id\":152}\n",
+            )?;
+            ack(reader, "{\"return\": {}, \"id\": 152}")?;
+            qmp_write(
+                stdin,
+                "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info qtree\"},\"id\":153}\n",
+            )?;
+            let tree = read_monitor(&mut *reader, 153)?;
+            if tree.contains("mrml_shared_boot")
+                || !tree
+                    .lines()
+                    .any(|line| line.trim() == "bus: mrml_probe_xhci.0")
+            {
+                return Err(
+                    "shared boot disk did not detach while the controller stayed present".into(),
+                );
+            }
+            println!(
+                "q35-usb-preload|status=PASS|efi_exited=true|virtual_boot_disk_detached=true|boot_backend_writes=0"
+            );
+        } else {
+            println!(
+                "q35-usb-preload|status=PASS|efi_exited=true|virtual_boot_disk_detached=false|denied=true"
+            );
+        }
+    }
     let bar = if matches!(release, Some(0xa6..=0xac)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
@@ -180,7 +215,7 @@ fn inspect_qmp(
     }
     if let Some(byte) = release {
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xac | 0x5a) {
+        if !matches!(byte, 0xa6..=0xae | 0x5a) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -745,9 +780,6 @@ fn verify_shared_boot(
             "unexpected shared boot disk counters: {read_bytes}/{reads} reads, {write_bytes}/{writes} writes"
         ));
     }
-    println!(
-        "q35-usb-shared-boot|status=PASS|firmware_disk_read=true|loader_rejected=true|native_release=false|boot_backend_writes=0"
-    );
     Ok(())
 }
 

@@ -1344,6 +1344,8 @@ unsafe fn launch_after_exit(
     let mut acpi_memory = FirmwareAcpiMemory {
         regions: &regions[..region_count],
     };
+    #[cfg(feature = "usb-preload-probe")]
+    usb_preload_rendezvous(&mut acpi_memory, acpi_root);
     let madt_storage = unsafe { &mut *MADT.0.get() };
     let madt_length = match copy_madt(&mut acpi_memory, acpi_root, madt_storage) {
         Ok(length) => length,
@@ -2862,6 +2864,41 @@ fn loader_trace(stage: u8) {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") 0xe9u16, in("al") stage, options(nomem, nostack))
     };
+}
+
+#[cfg(feature = "usb-preload-probe")]
+fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
+    use mrml_kernel::arch::x86_64::q35_fixture_marker;
+    if !matches!(q35_fixture_marker(memory, acpi_root), Ok(marker) if marker[32] == 1) {
+        loader_trace(0xeb);
+        halt();
+    }
+    // Both this opt-in image and the exact emulator table are required.
+    // No controller registers, DMA, or firmware services are used here.
+    let scratch = || {
+        let byte: u8;
+        // SAFETY: the sealed emulator fixture uses only its dedicated
+        // read-only ISA UART scratch input; Boot Services have exited.
+        unsafe { core::arch::asm!("in al, dx", in("dx") 0x2ffu16, out("al") byte, options(nomem, nostack)) };
+        byte
+    };
+    if scratch() != 0 {
+        loader_trace(0xeb);
+        halt();
+    }
+    loader_trace(0xe7);
+    for _ in 0..100_000_000 {
+        match scratch() {
+            0 => core::hint::spin_loop(),
+            0xad => {
+                loader_trace(0xea);
+                return;
+            }
+            _ => break,
+        }
+    }
+    loader_trace(0xeb);
+    halt();
 }
 
 fn halt() -> ! {

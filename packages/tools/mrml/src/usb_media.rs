@@ -19,7 +19,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
 
 #[path = "usb_xhci_inventory.rs"]
 mod xhci_inventory;
@@ -29,6 +29,7 @@ enum DiagnosticImage {
     Fat32,
     Dma,
     Q35Mmio,
+    SharedPreload,
 }
 
 pub(super) fn command(args: &[String]) -> Result<(), String> {
@@ -41,6 +42,27 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             create(&load_workspace()?, Path::new(file), DiagnosticImage::Fat32)
         }
         [mode, code, vars, qemu] if mode == "test-dma-map" => test_dma_map(code, vars, qemu),
+        [mode, code, vars, qemu] if mode == "test-shared-preload" => {
+            let scratch = Scratch::new().map_err(|e| e.to_string())?;
+            let image = scratch.path("shared-preload.img");
+            create(&load_workspace()?, &image, DiagnosticImage::SharedPreload)?;
+            let absolute = |input: &str| std::path::absolute(input).map(|path| string(&path)).map_err(|e| e.to_string());
+            let executable = if Path::new(qemu).components().count() > 1 { absolute(qemu)? } else { qemu.to_owned() };
+            for (case, trace, expected) in [
+                (crate::qemu_boot::Q35FixtureCase::SharedPreloadUnmarked, "unmarked.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1eb"),
+                (crate::qemu_boot::Q35FixtureCase::SharedPreloadDenied, "denied.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1e7eb"),
+                (crate::qemu_boot::Q35FixtureCase::SharedPreload, "removed.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1e7eab2b3d0d1d2d3"),
+            ] {
+                let fixture = Scratch::new().map_err(|e| e.to_string())?;
+                let args = words(&[
+                    &string(&image), &absolute(code)?, &absolute(vars)?, &executable,
+                    &string(&fixture.path(trace)), "--expect-hex", expected,
+                    "--timeout-seconds", "45", "--iommu", "intel",
+                ]);
+                crate::qemu_boot::run_q35_map_only_fixture(&args, case)?;
+            }
+            Ok(())
+        }
         [mode, code, vars, qemu] if mode == "test-xhci-inventory" => {
             xhci_inventory::test(&load_workspace()?, code, vars, qemu)
         }
@@ -689,6 +711,7 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
             "--feature-profile",
             match profile {
                 DiagnosticImage::Fat32 => "fat32_restart_boot",
+                DiagnosticImage::SharedPreload => "usb_preload_probe",
                 DiagnosticImage::Dma => "boot_dma_probe",
                 DiagnosticImage::Q35Mmio => "q35_mmio_probe",
             },

@@ -42,6 +42,9 @@ name = "package-boot"
 name = "fat32-restart-probe"
 
 [[feature]]
+name = "usb-preload-probe"
+
+[[feature]]
 name = "boot-dma-probe"
 
 [[feature]]
@@ -128,6 +131,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["uefi-image", "package-boot", "fat32-restart-probe"]
 name = "fat32_restart_boot"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["uefi-image", "package-boot", "fat32-restart-probe", "usb-preload-probe"]
+name = "usb_preload_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]
