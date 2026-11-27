@@ -552,13 +552,25 @@ pub(super) unsafe fn run(
             let timer_marker = !LONG_MARKER;
             // SAFETY: the prior guest exited and cannot resume; rewrite only
             // its own fixture code page before VMCLEAR and INVEPT. Change the
-            // MOV immediate, then replace the OUT with JMP -2.
+            // MOV immediate, then replace the OUT with a loop that waits
+            // on an initially clear byte in its own stack page. No instruction
+            // is changed after launch; the host supplies only that data byte.
             unsafe {
                 let code = page(LONG_RAM + 4);
                 code.add(2)
                     .copy_from_nonoverlapping(timer_marker.to_le_bytes().as_ptr(), 8);
+                let tail = [
+                    0x80, 0x7c, 0x24, 0xf0, 0, // cmp byte [rsp - 16], 0
+                    0x74, 0xf9, // je back to cmp
+                    0x48, 0xff, 0xc0, // inc rax
+                    0x48, 0x89, 0x44, 0x24, 0xf8, // mov [rsp - 8], rax
+                    0xe6, 0xe9, // out 0xe9, al (trapped)
+                ];
                 code.add(15)
-                    .copy_from_nonoverlapping([0xeb, 0xfe].as_ptr(), 2);
+                    .copy_from_nonoverlapping(tail.as_ptr(), tail.len());
+                page(LONG_RAM + 5)
+                    .add(PAGE_SIZE as usize - 16)
+                    .write_volatile(0);
             }
             controller
                 .clear_vmcs(pages[LONG_VMCS])
@@ -576,13 +588,11 @@ pub(super) unsafe fn run(
                 .arm_boot_probe_timer(controls, ticks(1 << 23))
                 .map_err(|_| ProbeFault::Timer)?;
             controller.launch().map_err(|_| ProbeFault::Timer)?;
-            if controller
-                .record_vm_exit_snapshot()
-                .map_err(|_| ProbeFault::Timer)?
-                .reason()
-                != 52
-                || observed_long_stack_marker() != timer_marker
-            {
+            let cmp = HIGH + 0x5000 + 15;
+            controller
+                .park_boot_timer_probe([cmp, cmp + 5])
+                .map_err(|_| ProbeFault::Timer)?;
+            if observed_long_stack_marker() != timer_marker {
                 return Err(ProbeFault::Timer);
             }
             trace(0xc4);
@@ -590,6 +600,31 @@ pub(super) unsafe fn run(
                 .run(&mut controller, controls, ticks(1 << 32))
                 .ok_or(ProbeFault::KernelExit)?;
             trace(0xc3);
+            // SAFETY: the exact timer-exited VMCS is parked, the other guest
+            // has stopped, and this byte is in only the timer guest's stack.
+            unsafe {
+                page(LONG_RAM + 5)
+                    .add(PAGE_SIZE as usize - 16)
+                    .write_volatile(1);
+            }
+            controller
+                .reload_boot_probe_guest(pages[LONG_VMCS], long_ept)
+                .map_err(|_| ProbeFault::Timer)?;
+            controller
+                .arm_boot_probe_timer(controls, ticks(1 << 23))
+                .map_err(|_| ProbeFault::Timer)?;
+            controller.resume().map_err(|_| ProbeFault::Timer)?;
+            let exit = controller
+                .record_vm_exit_snapshot()
+                .map_err(|_| ProbeFault::Timer)?;
+            if exit.reason() != IO_EXIT
+                || exit.qualification() != EXACT_OUT_BYTE
+                || observed_long_stack_marker() != timer_marker.wrapping_add(1)
+                || observed_private_bytes() != expected
+            {
+                return Err(ProbeFault::Timer);
+            }
+            trace(0xc5);
         }
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;
         Ok(())

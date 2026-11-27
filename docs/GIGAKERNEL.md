@@ -2393,7 +2393,9 @@ request/reply with the expected sender and sequence. Only then does the
 monitor observe the designated completion exit. This verifies in-kernel
 runtime APIs inside L2, not user-space task execution or installed services.
 A separate non-yielding fixture returns control through the VMX preemption
-timer; that does not yet establish preemptive task scheduling. The native
+timer, stays parked while the signed Gigakernel runs, then resumes its
+interrupted VMCS and uses its own retained integer state to complete. That
+does not yet establish preemptive runtime scheduling. The native
 entry trampoline starts each freshly launched guest with zeroed general-purpose
 registers (RSP is VMCS-owned). The cooperative switch test now requires each
 of two guests to resume with its own register value, not merely with its

@@ -1280,16 +1280,15 @@ impl<I: VmxInstructions> VmxController<I> {
         Ok(())
     }
 
-    /// Arm the current boot probe with a nonzero VMX timer value, in the
-    /// timer ticks exposed by the CPU. No generic guest time policy is implied.
+    /// Arm or rearm the current boot probe with a nonzero VMX timer value,
+    /// in the timer ticks exposed by the CPU. No generic guest time policy is implied.
     pub fn arm_boot_probe_timer(
         &mut self,
         controls: VmxControlPolicy,
         ticks: u32,
     ) -> Result<(), VmxError> {
         const ACTIVATE_TIMER: u32 = 1 << 6;
-        if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() || self.probe_resume_only
-        {
+        if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() {
             return Err(VmxError::InvalidState);
         }
         if ticks == 0
@@ -1331,18 +1330,10 @@ impl<I: VmxInstructions> VmxController<I> {
     /// Park an opt-in boot fixture only after its exact three-byte VMCALL.
     /// Keep the VMCS launched in this root session; no arbitrary RIP or EPT can be supplied.
     pub fn park_boot_probe_guest(&mut self, expected_rip: u16) -> Result<(), VmxError> {
-        let vmcs = self.active_vmcs.ok_or(VmxError::InvalidState)?;
-        let ept = self.active_ept.ok_or(VmxError::InvalidState)?;
-        let slot = self
-            .suspended_probe_guests
-            .iter()
-            .position(Option::is_none)
-            .ok_or(VmxError::InvalidState)?;
         let next_rip = expected_rip.checked_add(3).ok_or(VmxError::InvalidVmExit)?;
-        self.record_vm_exit()?;
-        let result = (|| {
+        self.park_probe_after_exit(|instructions, ept| {
             let mut read = |field| {
-                self.instructions
+                instructions
                     .vmread(field)
                     .map_err(|_| VmxError::InstructionFailed)
             };
@@ -1353,13 +1344,46 @@ impl<I: VmxInstructions> VmxController<I> {
             {
                 return Err(VmxError::InvalidVmExit);
             }
-            self.instructions
+            instructions
                 .vmwrite(VmcsField::GUEST_RIP, u64::from(next_rip))
                 .map_err(|_| VmxError::InstructionFailed)
-        })();
-        if result.is_err() {
+        })
+    }
+
+    /// Park an opt-in timer fixture without changing its interrupted RIP,
+    /// RFLAGS, or other VMCS state. The caller names its exact loop boundaries.
+    pub fn park_boot_timer_probe(&mut self, loop_rips: [u64; 2]) -> Result<(), VmxError> {
+        self.park_probe_after_exit(|instructions, ept| {
+            let mut read = |field| {
+                instructions
+                    .vmread(field)
+                    .map_err(|_| VmxError::InstructionFailed)
+            };
+            if read(VmcsField::EXIT_REASON)? != 52
+                || !loop_rips.contains(&read(VmcsField::GUEST_RIP)?)
+                || read(VmcsField::EPT_POINTER)? != ept.bits()
+            {
+                return Err(VmxError::InvalidVmExit);
+            }
+            Ok(())
+        })
+    }
+
+    fn park_probe_after_exit(
+        &mut self,
+        validate: impl FnOnce(&mut I, EptPointer) -> Result<(), VmxError>,
+    ) -> Result<(), VmxError> {
+        let vmcs = self.active_vmcs.ok_or(VmxError::InvalidState)?;
+        let ept = self.active_ept.ok_or(VmxError::InvalidState)?;
+        let slot = self
+            .suspended_probe_guests
+            .iter()
+            .position(Option::is_none)
+            .ok_or(VmxError::InvalidState)?;
+        self.record_vm_exit()?;
+        if let Err(error) = validate(&mut self.instructions, ept) {
             self.state = VmxState::Poisoned;
-            return result;
+            return Err(error);
         }
         self.suspended_probe_guests[slot] = Some(SuspendedProbeGuest {
             vmcs,
@@ -1658,6 +1682,51 @@ mod tests {
             controller.reload_boot_probe_guest(vmcs, ept),
             Err(VmxError::InvalidState)
         );
+    }
+
+    #[test]
+    fn timer_probe_parks_only_exact_exit_and_interrupted_pc() {
+        const CMP: u64 = 0xffff_8000_0000_500f;
+        const BRANCH: u64 = CMP + 5;
+        for (reason, rip, should_park) in [
+            (52, CMP, true),
+            (52, BRANCH, true),
+            (52, CMP + 1, false),
+            (18, CMP, false),
+            ((1 << 31) | 52, CMP, false),
+        ] {
+            let vmxon = PhysAddr::new(0x1000).unwrap();
+            let vmcs = PhysAddr::new(0x2000).unwrap();
+            let ept = EptPointer::new(PhysAddr::new(0x3000).unwrap(), true).unwrap();
+            let instructions = EmulatedVmx {
+                exit_reason: reason,
+                exit_on_launch: true,
+                probe_rip: rip,
+                probe_ept: ept.bits(),
+                ..EmulatedVmx::default()
+            };
+            let mut controller = VmxController::new(instructions, capabilities());
+            controller.enter_root(vmxon).unwrap();
+            controller.clear_vmcs(vmcs).unwrap();
+            controller.load_vmcs(vmcs, ept).unwrap();
+            controller.launch().unwrap();
+            if should_park {
+                controller.park_boot_timer_probe([CMP, BRANCH]).unwrap();
+                assert_eq!(controller.instructions.trace & 0xff, 9); // VMREAD, not VMWRITE.
+                controller.reload_boot_probe_guest(vmcs, ept).unwrap();
+                controller
+                    .arm_boot_probe_timer(permissive_control_policy(), 40)
+                    .unwrap();
+                controller.resume().unwrap();
+            } else {
+                assert_eq!(
+                    controller.park_boot_timer_probe([CMP, BRANCH]),
+                    Err(VmxError::InvalidVmExit)
+                );
+                assert_eq!(controller.state(), VmxState::Poisoned);
+                assert_eq!(controller.resume(), Err(VmxError::InvalidState));
+            }
+        }
     }
 
     #[test]

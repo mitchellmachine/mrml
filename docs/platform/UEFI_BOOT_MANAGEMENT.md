@@ -134,7 +134,7 @@ version, and last visible label:
   | `17` | IA-32e guest did not exit with its expected 64-bit marker |
   | `18` | signed nested kernel admission or preparation failed |
   | `19` | expected signed kernel completion exit not observed |
-  | `1A` | VMX preemption timer rejected or its exact exit was not observed |
+  | `1A` | VMX timer exit, suspended-guest reload, or post-resume result did not match |
 
   Dragonair reported `07` in the first run with stage codes. The updated
   probe reports four hex masks: `CR0 ADD`, `CR0 CLEAR`, `CR4 ADD`, and
@@ -165,14 +165,19 @@ enters the real kernel through the EFI ABI. It reports `VMX KERNEL PASS`
 only after the guest's early handoff validation, two-task scheduler check,
 and capability-checked, scheduler-driven IPC request/reply. The wrong
 endpoint must fail before the authorized request gets sequence 1.
-Nested KVM reaches `c0 c1 c2 c4 c3 df d6`: the timer forces an exit from
-a guest that only spins, then the signed Gigakernel runs with its own timer
-budget. Without VMX the artifact does not try to enter the guest. The L2 topology is synthetic and no device is
-forwarded. This does not establish installed-service readiness, hardware
-preemption, general guest register sanitization, or bare-metal support.
+In the nested KVM trace `c0 c1 c2 c4 c3 c5 df d6`, `c4` is the exact timer
+expiry at the spinning fixture's comparison or branch; `c3` is the separate
+signed Gigakernel's completion. The monitor changes only the stopped timer
+fixture's readiness byte, reloads its own VMCS/EPT pair, re-arms the timer,
+and resumes at the interrupted instruction. `c5` requires the resumed guest
+to update its marker from its preserved RAX and reach the expected I/O exit.
+Without VMX the artifact does not try to enter a guest. The L2 topology is
+synthetic and no device is forwarded. This test does not establish installed
+services, preemptive runtime scheduling, floating-point/vector isolation, or
+bare-metal support.
 
 When recording a failure, also collect the reserved boot report described
-below if present. This test is scoped to the physical VMX/EPT mechanism. A pass
+below if present. This diagnostic is scoped to the tested VMX/EPT mechanism. A pass
 does not qualify Total MicroVM, native USB I/O, persistent storage, or Secure
 Boot trust.
 
