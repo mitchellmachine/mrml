@@ -50,6 +50,7 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             create(&load_workspace()?, &image, DiagnosticImage::NormalBootPolicy)?;
             let expected = concat!(
                 "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3",
+                "4d524d4c3a424f4f543a48414e444f46463a454e56454c4f50450a",
                 "4d524d4c3a424f4f543a504f4c4943593a5345435552452d424f4f540a",
             );
             crate::qemu_boot::run_qemu(&words(&[
@@ -930,7 +931,7 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
         words(&[
             "--feature-profile",
             match profile {
-                DiagnosticImage::NormalBootPolicy => "package_boot",
+                DiagnosticImage::NormalBootPolicy => "package_boot_normal",
                 DiagnosticImage::Fat32 | DiagnosticImage::Vmx | DiagnosticImage::VmxKernel | DiagnosticImage::VmxDesktop(_) => "fat32_restart_boot",
                 DiagnosticImage::I8042Inventory => "i8042_inventory_probe",
                 DiagnosticImage::SharedPreload => "usb_preload_probe",

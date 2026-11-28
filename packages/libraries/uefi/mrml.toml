@@ -53,6 +53,9 @@ name = "i8042-inventory-probe"
 [[feature]]
 name = "q35-mmio-probe"
 
+[[feature]]
+name = "retained-envelope-boot"
+
 [[artifact]]
 kind = "lib"
 name = "mrml_uefi"
@@ -129,6 +132,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["uefi-image", "package-boot"]
 name = "package_boot"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["uefi-image", "package-boot", "retained-envelope-boot"]
+name = "package_boot_normal"
 targets = ["UEFI"]
 
 [[feature_profile]]

@@ -151,7 +151,7 @@ pub use handoff::{
     ServiceLaunch,
     BOOT_USB_PCI_RECORD_BYTES, PASSIVE_DXE_RECORD_BYTES, append_boot_dma_acpi,
     append_boot_dxe_diagnostic, append_boot_supervisor_selection, append_boot_usb_pci_record,
-    encode_handoff,
+    encode_handoff, encode_normal_boot_handoff,
     encode_handoff_with_application, encode_handoff_with_madt, encode_handoff_with_recovery,
     encode_handoff_with_recovery_and_isolation,
     encode_handoff_with_recovery_isolation_and_installed,

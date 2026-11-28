@@ -17,6 +17,8 @@ pub const PASSIVE_DXE_RECORD_BYTES: usize = 200;
 const BOOT_DXE_DIAGNOSTIC_BYTES: usize = 8 + PASSIVE_DXE_RECORD_BYTES;
 const SUPERVISOR_TRAILER_BYTES: usize = BOOT_SUPERVISOR_SELECTION_BYTES + 64;
 const SUPERVISOR_HANDOFF_MAGIC: &[u8; 16] = b"MRML-HANDOFF-v2\0";
+const ENVELOPE_HANDOFF_MAGIC: &[u8; 16] = b"MRML-HANDOFF-v3\0";
+const HANDOFF_ENVELOPE_BYTES: usize = 80;
 pub const HANDOFF_SERVICE_BYTES: usize = 160;
 pub const HANDOFF_APPLICATION_BYTES: usize = 160;
 pub const HANDOFF_RECOVERY_STATE_BYTES: usize = 40;
@@ -149,6 +151,22 @@ pub struct RetainedBootEnvelope {
 }
 
 impl RetainedBootEnvelope {
+    pub fn new(
+        artifact_physical: PhysAddr,
+        artifact_length: u64,
+        version: u64,
+        measurement: [u8; 64],
+    ) -> Result<Self, HandoffError> {
+        if artifact_physical.get() == 0
+            || artifact_length <= crate::SIGNED_ARTIFACT_OVERHEAD_BYTES as u64
+        {
+            return Err(HandoffError::NonCanonical);
+        }
+        Self::new_bounded(
+            artifact_physical, artifact_length, version, measurement, crate::MAX_SERVICE_IMAGE_BYTES,
+        )
+    }
+
     fn new_bounded(
         artifact_physical: PhysAddr,
         artifact_length: u64,
@@ -494,6 +512,7 @@ pub struct BootHandoff {
     ap_trampoline: Option<u64>,
     ap_stack_arena: Option<u64>,
     service: Option<ServiceLaunch>,
+    envelope: Option<RetainedBootEnvelope>,
     application: Option<ApplicationLaunch>,
     recovery_state: Option<RecoveryStateMetadata>,
     installed_recovery: Option<InstalledRecoveryBootIdentity>,
@@ -564,6 +583,20 @@ impl BootHandoff {
         self.service
     }
 
+    pub const fn retained_envelope(&self) -> Option<RetainedBootEnvelope> {
+        if let Some(envelope) = self.envelope {
+            Some(envelope)
+        } else if let Some(service) = self.service {
+            Some(service.envelope())
+        } else {
+            None
+        }
+    }
+
+    pub const fn is_envelope_only(&self) -> bool {
+        self.envelope.is_some()
+    }
+
     pub const fn application(&self) -> Option<ApplicationLaunch> {
         self.application
     }
@@ -620,22 +653,26 @@ impl BootHandoff {
         if input.len() < HANDOFF_HEADER_BYTES {
             return Err(HandoffError::Truncated);
         }
-        let has_supervisor = &input[..16] == SUPERVISOR_HANDOFF_MAGIC;
-        if !has_supervisor && &input[..16] != b"MRML-HANDOFF-v1\0" {
+        let legacy_supervisor = &input[..16] == SUPERVISOR_HANDOFF_MAGIC;
+        let envelope_only = !DIAGNOSTICS && &input[..16] == ENVELOPE_HANDOFF_MAGIC;
+        if !legacy_supervisor && !envelope_only && &input[..16] != b"MRML-HANDOFF-v1\0" {
             return Err(HandoffError::BadMagic);
         }
         let encoded_length = read_u32(input, 16) as usize;
         let region_count = read_u16(input, 20) as usize;
         let flags = read_u16(input, 22);
+        let has_supervisor = flags & FLAG_SUPERVISOR_SELECTION != 0;
         if !DIAGNOSTICS && flags & (FLAG_USB_PCI_DIAGNOSTIC | FLAG_DXE_DIAGNOSTIC) != 0 {
             return Err(HandoffError::UnknownFlags);
         }
-        if flags & !(KNOWN_FLAGS | if has_supervisor { FLAG_SUPERVISOR_SELECTION } else { 0 })
+        if flags & !(KNOWN_FLAGS | if legacy_supervisor || envelope_only { FLAG_SUPERVISOR_SELECTION } else { 0 })
             != 0
         {
             return Err(HandoffError::UnknownFlags);
         }
-        if has_supervisor && flags & FLAG_SUPERVISOR_SELECTION == 0 {
+        if (legacy_supervisor && !has_supervisor)
+            || (envelope_only && (flags & FLAG_SERVICE_IMAGE == 0 || flags & FLAG_APPLICATION_IMAGE != 0))
+        {
             return Err(HandoffError::NonCanonical);
         }
         let supervisor_bytes = usize::from(has_supervisor) * SUPERVISOR_TRAILER_BYTES;
@@ -660,7 +697,8 @@ impl BootHandoff {
         }
         // SMP resources are one indivisible pair: a low SIPI page followed by
         // the base of the bounded per-CPU privilege-stack arena.
-        let service_bytes = usize::from(flags & FLAG_SERVICE_IMAGE != 0) * HANDOFF_SERVICE_BYTES;
+        let service_bytes = usize::from(flags & FLAG_SERVICE_IMAGE != 0)
+            * if envelope_only { HANDOFF_ENVELOPE_BYTES } else { HANDOFF_SERVICE_BYTES };
         let service_offset = regions_end;
         let application_offset = service_offset
             .checked_add(service_bytes)
@@ -788,8 +826,13 @@ impl BootHandoff {
         } else {
             (None, None)
         };
-        let service = if service_bytes != 0 {
+        let service = if service_bytes != 0 && !envelope_only {
             Some(decode_service(input, service_offset)?)
+        } else {
+            None
+        };
+        let envelope = if envelope_only {
+            Some(decode_retained_envelope(&input[service_offset..application_offset], image_version)?)
         } else {
             None
         };
@@ -797,7 +840,9 @@ impl BootHandoff {
             let (record, recorded_digest) = input[diagnostic_end..].split_at(BOOT_SUPERVISOR_SELECTION_BYTES);
             let selection = BootSupervisorSelection::decode(record)
                 .map_err(|_| HandoffError::NonCanonical)?;
-            validate_supervisor_selection(selection, flags, image_version, service)?;
+            validate_supervisor_selection(
+                selection, flags, image_version, envelope.or(service.map(ServiceLaunch::envelope)),
+            )?;
             if mrml_crypto::Sha3_512::digest(record).as_slice() != recorded_digest {
                 return Err(HandoffError::NonCanonical);
             }
@@ -902,6 +947,13 @@ impl BootHandoff {
         if dma_acpi_lengths.is_some() && boot_dma.is_none() {
             return Err(HandoffError::NonCanonical);
         }
+        if let Some(envelope) = envelope {
+            if envelope.version() != image_version || !(0..region_count).any(|index| {
+                decode_region(input, index).is_ok_and(|region| envelope_in_region(envelope, region))
+            }) {
+                return Err(HandoffError::NonCanonical);
+            }
+        }
         if let Some(service) = service {
             for (start, pages) in [
                 (
@@ -977,6 +1029,7 @@ impl BootHandoff {
             ap_trampoline,
             ap_stack_arena,
             service,
+            envelope,
             application,
             recovery_state,
             installed_recovery,
@@ -1012,7 +1065,7 @@ pub fn append_boot_dma_acpi(
         .checked_add(DMA_ACPI_LENGTH_BYTES + dmar.len() + mcfg.len())
         .filter(|&total| total <= output.len() && total <= MAX_HANDOFF_BYTES)
         .ok_or(HandoffError::NonCanonical)?;
-    let handoff = BootHandoff::decode(&output[..length], |_| {})?;
+    let handoff = decode_for_append(&output[..length])?;
     if handoff.supervisor_selection().is_some()
         || handoff.boot_dma().is_none()
         || handoff.dma_acpi_lengths.is_some()
@@ -1138,14 +1191,22 @@ fn validate_supervisor_selection(
     selection: BootSupervisorSelection,
     flags: u16,
     release: u64,
-    service: Option<ServiceLaunch>,
+    envelope: Option<RetainedBootEnvelope>,
 ) -> Result<(), HandoffError> {
     if flags & SUPERVISOR_EVIDENCE_FLAGS != SUPERVISOR_EVIDENCE_FLAGS
-        || !service.is_some_and(|launch| selection.matches_envelope(release, launch.envelope()))
+        || !envelope.is_some_and(|envelope| selection.matches_envelope(release, envelope))
     {
         return Err(HandoffError::NonCanonical);
     }
     Ok(())
+}
+
+fn decode_for_append(encoded: &[u8]) -> Result<BootHandoff, HandoffError> {
+    if encoded.starts_with(ENVELOPE_HANDOFF_MAGIC) {
+        BootHandoff::decode_normal(encoded)
+    } else {
+        BootHandoff::decode(encoded, |_| {})
+    }
 }
 
 /// Transport the selection already matched against the enrolled loader's pin.
@@ -1160,17 +1221,21 @@ pub fn append_boot_supervisor_selection(
         .checked_add(SUPERVISOR_TRAILER_BYTES)
         .filter(|&size| size <= output.len() && size <= MAX_HANDOFF_BYTES)
         .ok_or(HandoffError::NonCanonical)?;
-    let handoff = BootHandoff::decode(&output[..length], |_| {})?;
+    let handoff = decode_for_append(&output[..length])?;
     if handoff.supervisor_selection().is_some() {
         return Err(HandoffError::NonCanonical);
     }
     let flags = read_u16(output, 22);
-    validate_supervisor_selection(selection, flags, handoff.evidence().image_version(), handoff.service())?;
+    validate_supervisor_selection(
+        selection, flags, handoff.evidence().image_version(), handoff.retained_envelope(),
+    )?;
     let record = selection.encode();
     let recorded_digest = mrml_crypto::Sha3_512::digest(&record);
     output[length..length + record.len()].copy_from_slice(&record);
     output[length + record.len()..total].copy_from_slice(&recorded_digest);
-    output[..16].copy_from_slice(SUPERVISOR_HANDOFF_MAGIC);
+    if !output.starts_with(ENVELOPE_HANDOFF_MAGIC) {
+        output[..16].copy_from_slice(SUPERVISOR_HANDOFF_MAGIC);
+    }
     output[22..24].copy_from_slice(&(flags | FLAG_SUPERVISOR_SELECTION).to_le_bytes());
     output[16..20].copy_from_slice(&(total as u32).to_le_bytes());
     Ok(total)
@@ -2239,6 +2304,96 @@ fn encode_handoff_inner(
     Ok(length)
 }
 
+/// Encode a normal kernel handoff with no native service launch storage.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_normal_boot_handoff(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    coherent_release: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    ap_trampoline: u64,
+    ap_stack_arena: u64,
+    envelope: RetainedBootEnvelope,
+    recovery_state: Option<RecoveryStateMetadata>,
+    installed_recovery: Option<InstalledRecoveryBootIdentity>,
+    route: Option<InstalledRecoverySataRoute>,
+    isolation_override: Option<BootIsolationOverride>,
+    madt: &[u8],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    if envelope.version() != image_version
+        || envelope.artifact_physical().get() == 0
+        || envelope.artifact_length() <= crate::SIGNED_ARTIFACT_OVERHEAD_BYTES as u64
+        || !regions.iter().any(|&region| envelope_in_region(envelope, region))
+        || !(44..=MAX_HANDOFF_MADT_BYTES).contains(&madt.len())
+    {
+        return Err(HandoffError::NonCanonical);
+    }
+    if let Some(installed) = installed_recovery {
+        validate_installed_recovery(recovery_state.ok_or(HandoffError::NonCanonical)?, installed)?;
+    }
+    match (installed_recovery, route) {
+        (Some(installed), Some(route)) => validate_installed_recovery_route(installed, route)?,
+        (Some(installed), None) if installed.source() == InstalledRecoverySource::Uefi => {
+            return Err(HandoffError::NonCanonical);
+        }
+        (None, Some(_)) => return Err(HandoffError::NonCanonical),
+        _ => {}
+    }
+    let mut length = encode_handoff_inner(
+        image_version, entropy, image_measurement, secure_boot, measured_boot,
+        rollback_protected, coherent_release, acpi_root, framebuffer, regions, Some(madt),
+        Some((ap_trampoline, ap_stack_arena)), None, None, recovery_state, output,
+    )?;
+    let offset = HANDOFF_HEADER_BYTES + regions.len() * HANDOFF_REGION_BYTES;
+    let installed_offset =
+        offset + usize::from(recovery_state.is_some()) * HANDOFF_RECOVERY_STATE_BYTES;
+    if let Some(installed) = installed_recovery {
+        length = append_installed_recovery(length, installed_offset, installed, output)?;
+    }
+    if let Some(route) = route {
+        length = append_installed_recovery_sata_route(
+            length, installed_offset + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES, route, output,
+        )?;
+    }
+    let total = length.checked_add(HANDOFF_ENVELOPE_BYTES)
+        .filter(|&total| total <= output.len() && total <= MAX_HANDOFF_BYTES)
+        .ok_or(HandoffError::NonCanonical)?;
+    output.copy_within(offset..length, offset + HANDOFF_ENVELOPE_BYTES);
+    output[offset..offset + 8].copy_from_slice(&envelope.artifact_physical().get().to_le_bytes());
+    output[offset + 8..offset + 16].copy_from_slice(&envelope.artifact_length().to_le_bytes());
+    output[offset + 16..offset + HANDOFF_ENVELOPE_BYTES].copy_from_slice(&envelope.measurement());
+    output[..16].copy_from_slice(ENVELOPE_HANDOFF_MAGIC);
+    output[16..20].copy_from_slice(&(total as u32).to_le_bytes());
+    let flags = read_u16(output, 22) | FLAG_SERVICE_IMAGE;
+    output[22..24].copy_from_slice(&flags.to_le_bytes());
+    apply_isolation_override(isolation_override, output);
+    BootHandoff::decode_normal(&output[..total])?;
+    Ok(total)
+}
+
+fn decode_retained_envelope(bytes: &[u8], release: u64) -> Result<RetainedBootEnvelope, HandoffError> {
+    RetainedBootEnvelope::new(
+        PhysAddr::new(read_u64(bytes, 0)).map_err(HandoffError::InvalidMemoryMap)?,
+        read_u64(bytes, 8), release,
+        bytes[16..].try_into().map_err(|_| HandoffError::NonCanonical)?,
+    )
+}
+
+fn envelope_in_region(envelope: RetainedBootEnvelope, region: MemoryRegion) -> bool {
+    let start = envelope.artifact_physical().get();
+    let end = start + envelope.artifact_length().div_ceil(crate::PAGE_SIZE) * crate::PAGE_SIZE;
+    matches!(region.kind(), MemoryKind::Kernel | MemoryKind::Reserved)
+        && region.start().get() <= start
+        && region.end() >= end
+}
+
 fn encode_service(service: ServiceLaunch, output: &mut [u8]) {
     let fields = [
         service.artifact_physical().get(),
@@ -3082,6 +3237,82 @@ mod tests {
             ),
             Err(HandoffError::NonCanonical)
         );
+    }
+
+    #[test]
+    fn normal_handoff_has_retained_envelope_without_native_service_layout() {
+        let regions = [
+            MemoryRegion::new(PhysAddr::new(0xa0000).unwrap(), 1, MemoryKind::Mmio).unwrap(),
+            MemoryRegion::new(PhysAddr::new(0x10_0000).unwrap(), 64, MemoryKind::Reserved).unwrap(),
+        ];
+        let framebuffer = FramebufferInfo::new(
+            0xa0000, 0x1000, 16, 16, 16, PixelFormat::BlueGreenRedReserved,
+        ).unwrap();
+        let envelope = RetainedBootEnvelope::new(
+            regions[1].start(), crate::SIGNED_ARTIFACT_OVERHEAD_BYTES as u64 + 1024, 11, [9; 64],
+        ).unwrap();
+        let mut madt = [0u8; 44];
+        madt[..4].copy_from_slice(b"APIC");
+        madt[4..8].copy_from_slice(&44u32.to_le_bytes());
+        madt[9] = 0u8.wrapping_sub(madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let mut encoded = [0; 1024];
+        let length = encode_normal_boot_handoff(
+            11, [1; 32], [2; 64], true, true, true, true, 0x9000, framebuffer, &regions,
+            0x8000, 0x40_0000, envelope, None, None, None,
+            Some(BootIsolationOverride::TotalMicrovmOnce), &madt, &mut encoded,
+        ).unwrap();
+        assert_eq!(length, HANDOFF_HEADER_BYTES + 2 * HANDOFF_REGION_BYTES + 80 + 16 + 44);
+        let decoded = BootHandoff::decode_normal(&encoded[..length]).unwrap();
+        assert_eq!(decoded.retained_envelope(), Some(envelope));
+        assert_eq!(decoded.service(), None);
+        assert_eq!(decoded.supervisor_selection(), None);
+        assert_eq!(decoded.madt(&encoded), Some(madt.as_slice()));
+        assert_eq!(decoded.isolation_override(), Some(BootIsolationOverride::TotalMicrovmOnce));
+        assert_eq!(
+            BootHandoff::decode(&encoded[..length], |_| panic!("must not emit")).err(),
+            Some(HandoffError::BadMagic)
+        );
+        let before = encoded;
+        let wrong = BootSupervisorSelection::new(11, [5; 64], [8; 64]).unwrap();
+        assert_eq!(append_boot_supervisor_selection(length, wrong, &mut encoded),
+            Err(HandoffError::NonCanonical));
+        assert_eq!(encoded, before);
+        let selection = BootSupervisorSelection::new(11, [5; 64], [9; 64]).unwrap();
+        let end = append_boot_supervisor_selection(length, selection, &mut encoded).unwrap();
+        assert_eq!(&encoded[..16], ENVELOPE_HANDOFF_MAGIC);
+        let decoded = BootHandoff::decode_normal(&encoded[..end]).unwrap();
+        assert_eq!(decoded.supervisor_selection(), Some(selection));
+        assert_eq!(decoded.retained_envelope(), Some(envelope));
+        assert_eq!(decoded.service(), None);
+        let mut bad = encoded;
+        bad[HANDOFF_HEADER_BYTES + HANDOFF_REGION_BYTES + 16] = MemoryKind::Free as u8;
+        assert_eq!(BootHandoff::decode_normal(&bad[..end]).err(), Some(HandoffError::NonCanonical));
+        bad = encoded;
+        bad[end - 1] ^= 1;
+        assert_eq!(BootHandoff::decode_normal(&bad[..end]).err(), Some(HandoffError::NonCanonical));
+
+        let recovery = RecoveryStateMetadata::new(12, 7, Some([0x6a; 16]), 19).unwrap();
+        let installed = InstalledRecoveryBootIdentity::new(
+            InstalledRecoverySource::Uefi, [0x51; 32], 3, 9, 4096, 128, [0x6a; 16], 2, 19,
+        ).unwrap();
+        let hops = [crate::InstalledRecoveryPciHop::new(5, 0).unwrap()];
+        let media =
+            crate::InstalledRecoveryHardDriveMedia::new(2, 2048, 4096, [0x6a; 16], 2, 2).unwrap();
+        let route = InstalledRecoverySataRoute::new(
+            0x0a03_41d0, 0, &hops, 3, u16::MAX, 0, Some(media), installed.stable_id(),
+        ).unwrap();
+        let encode_recovery = |route, output: &mut [u8]| encode_normal_boot_handoff(
+            11, [1; 32], [2; 64], true, true, true, true, 0x9000, framebuffer, &regions,
+            0x8000, 0x40_0000, envelope, Some(recovery), Some(installed), route,
+            None, &madt, output,
+        );
+        assert_eq!(encode_recovery(None, &mut encoded), Err(HandoffError::NonCanonical));
+        let length = encode_recovery(Some(route), &mut encoded).unwrap();
+        let decoded = BootHandoff::decode_normal(&encoded[..length]).unwrap();
+        assert_eq!(decoded.recovery_state(), Some(recovery));
+        assert_eq!(decoded.installed_recovery(), Some(installed));
+        assert_eq!(decoded.installed_recovery_sata_route(), Some(route));
+        assert_eq!(decoded.madt(&encoded), Some(madt.as_slice()));
     }
 
     #[test]

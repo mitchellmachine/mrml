@@ -1,6 +1,19 @@
 #![no_std]
 #![no_main]
 
+#[cfg(all(
+    feature = "retained-envelope-boot",
+    any(
+        not(feature = "package-boot"),
+        feature = "fat32-restart-probe",
+        feature = "boot-dma-probe",
+        feature = "q35-mmio-probe",
+        feature = "usb-preload-probe",
+        feature = "i8042-inventory-probe",
+    )
+))]
+compile_error!("retained-envelope-boot requires normal package boot without native probes");
+
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
 use core::fmt::{self, Write as _};
@@ -16,15 +29,18 @@ use mrml_kernel::{
     MAX_HANDOFF_DMA_ACPI_TABLE_BYTES, MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES,
     MAX_LAUNCH_POLICY_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MemoryKind, MemoryRegion,
     MonotonicStateStore, PeImage, PendingBootRelease, PhysAddr, PixelFormat,
-    RELEASE_MANIFEST_BYTES, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch,
+    RELEASE_MANIFEST_BYTES, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES,
     SignedArtifact, TrustRoot, append_boot_dma_acpi,
     arch::x86_64::{
         AcpiMemory, BOOT_DMA_VIRTUAL_START, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES,
         PagePermissions, PageTableBuildError, PageTableBuilder, PageTableStore,
         PerCpuPrivilegeStacks, VirtAddr, copy_madt,
     },
-    encode_handoff_with_smp_service_recovery_isolation_installed_and_sata_route,
 };
+#[cfg(not(feature = "retained-envelope-boot"))]
+use mrml_kernel::{ServiceLaunch, encode_handoff_with_smp_service_recovery_isolation_installed_and_sata_route};
+#[cfg(feature = "retained-envelope-boot")]
+use mrml_kernel::{RetainedBootEnvelope, encode_normal_boot_handoff};
 #[cfg(feature = "package-boot")]
 use mrml_package_format::{
     BootPackageRecord, BootPackageRole, MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES,
@@ -163,12 +179,15 @@ const RELEASE_PUBLIC_KEY_PATH: &[u16] = &[
 const RELEASE_SIGNATURE_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 82, 69, 76, 69, 65, 83, 69, 46, 83, 73, 71, 0,
 ];
+#[cfg(not(feature = "retained-envelope-boot"))]
 const SERVICE_SLOTS: usize = if cfg!(feature = "fat32-restart-probe") {
     2
 } else {
     1
 };
+#[cfg(not(feature = "retained-envelope-boot"))]
 const SERVICE_STACK_PAGES: usize = if SERVICE_SLOTS == 2 { 128 } else { 16 };
+#[cfg(not(feature = "retained-envelope-boot"))]
 const SERVICE_TABLE_PAGES: usize = SERVICE_SLOTS * 64;
 
 #[derive(Clone, Copy)]
@@ -198,7 +217,19 @@ struct Transition {
 
 #[derive(Clone, Copy)]
 struct PreparedService {
+    #[cfg(not(feature = "retained-envelope-boot"))]
     launch: ServiceLaunch,
+    #[cfg(feature = "retained-envelope-boot")]
+    envelope: RetainedBootEnvelope,
+}
+
+impl PreparedService {
+    fn envelope(self) -> mrml_kernel::RetainedBootEnvelope {
+        #[cfg(feature = "retained-envelope-boot")]
+        { self.envelope }
+        #[cfg(not(feature = "retained-envelope-boot"))]
+        { self.launch.envelope() }
+    }
 }
 
 struct FirmwarePageTables {
@@ -1072,79 +1103,95 @@ unsafe fn boot(
             .publish(&mut release.journal)
             .map_err(|_| LOAD_ERROR)?;
     }
-    trace.at("allocate and materialize service");
-    let service_image_size = service_verified.image().image_size() as usize;
-    let service_slot_pages = service_image_size.div_ceil(PAGE_BYTES);
-    let service_image_pages = service_slot_pages
-        .checked_mul(SERVICE_SLOTS)
-        .ok_or(LOAD_ERROR)?;
-    let service_allocation_bytes = service_image_pages
-        .checked_mul(PAGE_BYTES)
-        .ok_or(LOAD_ERROR)?;
-    let mut service_image_physical = 0u64;
-    check(unsafe {
-        (services.allocate_pages)(0, 2, service_image_pages, &mut service_image_physical)
-    })?;
-    let service_image = unsafe {
-        core::slice::from_raw_parts_mut(service_image_physical as *mut u8, service_allocation_bytes)
-    };
-    service_image.fill(0);
-    let mut service_entry = 0;
-    for slot in service_image.chunks_exact_mut(service_slot_pages * PAGE_BYTES) {
-        service_entry = service_verified
-            .image()
-            .materialize(&mut slot[..service_image_size])
-            .map_err(|_| LOAD_ERROR)?;
-    }
-    loader_trace(0xa5);
-    let mut service_stack_physical = 0u64;
-    check(unsafe {
-        (services.allocate_pages)(0, 2, SERVICE_STACK_PAGES, &mut service_stack_physical)
-    })?;
-    let mut service_table_physical = 0u64;
-    check(unsafe {
-        (services.allocate_pages)(0, 2, SERVICE_TABLE_PAGES, &mut service_table_physical)
-    })?;
-    if [
-        service_image_physical,
-        service_stack_physical,
-        service_table_physical,
-    ]
-    .into_iter()
-    .any(|address| address == 0 || !address.is_multiple_of(PAGE_BYTES as u64))
-    {
-        return Err(LOAD_ERROR);
-    }
-    unsafe {
-        core::ptr::write_bytes(
-            service_stack_physical as *mut u8,
-            0,
-            SERVICE_STACK_PAGES * PAGE_BYTES,
-        );
-        core::ptr::write_bytes(
-            service_table_physical as *mut u8,
-            0,
-            SERVICE_TABLE_PAGES * PAGE_BYTES,
-        );
-    }
-    let service_stack_top = 0x0000_0002_0000_0000u64;
-    let prepared_service = PreparedService {
-        launch: ServiceLaunch::new(
+    #[cfg(feature = "retained-envelope-boot")]
+    let prepared_service = {
+        trace.at("retain signed service envelope");
+        let envelope = RetainedBootEnvelope::new(
             PhysAddr::new(service_file.address).map_err(|_| LOAD_ERROR)?,
             service_file.length as u64,
-            PhysAddr::new(service_image_physical).map_err(|_| LOAD_ERROR)?,
-            service_image_pages as u64,
-            service_verified.image().image_base(),
-            service_entry,
-            PhysAddr::new(service_stack_physical).map_err(|_| LOAD_ERROR)?,
-            SERVICE_STACK_PAGES as u64,
-            service_stack_top,
-            PhysAddr::new(service_table_physical).map_err(|_| LOAD_ERROR)?,
-            SERVICE_TABLE_PAGES as u64,
             service_verified.artifact().version(),
             *service_verified.artifact().digest(),
         )
-        .map_err(|_| LOAD_ERROR)?,
+        .map_err(|_| LOAD_ERROR)?;
+        loader_trace(0xa5);
+        PreparedService { envelope }
+    };
+    #[cfg(not(feature = "retained-envelope-boot"))]
+    let prepared_service = {
+        trace.at("allocate and materialize service");
+        let service_image_size = service_verified.image().image_size() as usize;
+        let service_slot_pages = service_image_size.div_ceil(PAGE_BYTES);
+        let service_image_pages = service_slot_pages
+            .checked_mul(SERVICE_SLOTS)
+            .ok_or(LOAD_ERROR)?;
+        let service_allocation_bytes = service_image_pages
+            .checked_mul(PAGE_BYTES)
+            .ok_or(LOAD_ERROR)?;
+        let mut service_image_physical = 0u64;
+        check(unsafe {
+            (services.allocate_pages)(0, 2, service_image_pages, &mut service_image_physical)
+        })?;
+        let service_image = unsafe {
+            core::slice::from_raw_parts_mut(service_image_physical as *mut u8, service_allocation_bytes)
+        };
+        service_image.fill(0);
+        let mut service_entry = 0;
+        for slot in service_image.chunks_exact_mut(service_slot_pages * PAGE_BYTES) {
+            service_entry = service_verified
+                .image()
+                .materialize(&mut slot[..service_image_size])
+                .map_err(|_| LOAD_ERROR)?;
+        }
+        loader_trace(0xa5);
+        let mut service_stack_physical = 0u64;
+        check(unsafe {
+            (services.allocate_pages)(0, 2, SERVICE_STACK_PAGES, &mut service_stack_physical)
+        })?;
+        let mut service_table_physical = 0u64;
+        check(unsafe {
+            (services.allocate_pages)(0, 2, SERVICE_TABLE_PAGES, &mut service_table_physical)
+        })?;
+        if [
+            service_image_physical,
+            service_stack_physical,
+            service_table_physical,
+        ]
+        .into_iter()
+        .any(|address| address == 0 || !address.is_multiple_of(PAGE_BYTES as u64))
+        {
+            return Err(LOAD_ERROR);
+        }
+        unsafe {
+            core::ptr::write_bytes(
+                service_stack_physical as *mut u8,
+                0,
+                SERVICE_STACK_PAGES * PAGE_BYTES,
+            );
+            core::ptr::write_bytes(
+                service_table_physical as *mut u8,
+                0,
+                SERVICE_TABLE_PAGES * PAGE_BYTES,
+            );
+        }
+        let service_stack_top = 0x0000_0002_0000_0000u64;
+        PreparedService {
+            launch: ServiceLaunch::new(
+                PhysAddr::new(service_file.address).map_err(|_| LOAD_ERROR)?,
+                service_file.length as u64,
+                PhysAddr::new(service_image_physical).map_err(|_| LOAD_ERROR)?,
+                service_image_pages as u64,
+                service_verified.image().image_base(),
+                service_entry,
+                PhysAddr::new(service_stack_physical).map_err(|_| LOAD_ERROR)?,
+                SERVICE_STACK_PAGES as u64,
+                service_stack_top,
+                PhysAddr::new(service_table_physical).map_err(|_| LOAD_ERROR)?,
+                SERVICE_TABLE_PAGES as u64,
+                service_verified.artifact().version(),
+                *service_verified.artifact().digest(),
+            )
+            .map_err(|_| LOAD_ERROR)?,
+        }
     };
     loader_trace(0xa6);
     trace.at("ACPI root table");
@@ -2471,6 +2518,7 @@ fn enter_kernel(
     let installed_recovery_identity = installed_recovery.map(|installed| installed.identity);
     let installed_recovery_sata_route =
         installed_recovery.and_then(|installed| installed.sata_route);
+    #[cfg(not(feature = "retained-envelope-boot"))]
     let handoff_length =
         encode_handoff_with_smp_service_recovery_isolation_installed_and_sata_route(
             kernel_version,
@@ -2494,6 +2542,15 @@ fn enter_kernel(
             handoff,
         )
         .map_err(|_| LOAD_ERROR)?;
+    #[cfg(feature = "retained-envelope-boot")]
+    let handoff_length = encode_normal_boot_handoff(
+        kernel_version, entropy, kernel_measurement, secure_boot, measured_boot,
+        rollback_protected, coherent_release, acpi_root, framebuffer_info,
+        &kernel_regions[..regions.len()], transition.ap_trampoline, transition.ap_stack_arena,
+        service.envelope(), recovery_state, installed_recovery_identity,
+        installed_recovery_sata_route, isolation_override, madt, handoff,
+    )
+    .map_err(|_| LOAD_ERROR)?;
     let handoff_length = if let Some((dmar, mcfg)) = dma_acpi {
         append_boot_dma_acpi(handoff_length, dmar, mcfg, handoff).map_err(|_| LOAD_ERROR)?
     } else {
@@ -2675,28 +2732,31 @@ fn prepare_transition(
     )?;
     map_identity(
         &mut tables,
-        service.launch.artifact_physical().get(),
-        service.launch.artifact_length().div_ceil(PAGE_BYTES as u64),
+        service.envelope().artifact_physical().get(),
+        service.envelope().artifact_length().div_ceil(PAGE_BYTES as u64),
         PagePermissions::KERNEL_READ,
     )?;
-    map_identity(
-        &mut tables,
-        service.launch.image_physical().get(),
-        service.launch.image_pages(),
-        PagePermissions::KERNEL_READ,
-    )?;
-    map_identity(
-        &mut tables,
-        service.launch.stack_physical().get(),
-        service.launch.stack_pages(),
-        PagePermissions::KERNEL_READ_WRITE,
-    )?;
-    map_identity(
-        &mut tables,
-        service.launch.table_physical().get(),
-        service.launch.table_pages(),
-        PagePermissions::KERNEL_READ_WRITE,
-    )?;
+    #[cfg(not(feature = "retained-envelope-boot"))]
+    {
+        map_identity(
+            &mut tables,
+            service.launch.image_physical().get(),
+            service.launch.image_pages(),
+            PagePermissions::KERNEL_READ,
+        )?;
+        map_identity(
+            &mut tables,
+            service.launch.stack_physical().get(),
+            service.launch.stack_pages(),
+            PagePermissions::KERNEL_READ_WRITE,
+        )?;
+        map_identity(
+            &mut tables,
+            service.launch.table_physical().get(),
+            service.launch.table_pages(),
+            PagePermissions::KERNEL_READ_WRITE,
+        )?;
+    }
     let boot_dma = if cfg!(feature = "boot-dma-probe") {
         let limit = 1u64 << BOOT_DMA_PROBE_PHYSICAL_BITS;
         let mut base = limit - 1;

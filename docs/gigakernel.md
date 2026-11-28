@@ -231,13 +231,23 @@ the release signature, name a supervisor, or start a guest.
 The envelope identity and bounds now have their own type, independent of
 the loader's native image, stack and page-table addresses. The envelope
 checker validates length, kind, release, measured digest and PE32+ source.
-The legacy handoff still also checks the source against its native layout
-descriptor. This change does not alter handoff bytes or remove the loader
-allocations. A later normal handoff can carry just the envelope and preserve
-recovery metadata separately. The diagnostic paths that consume the native
-layout still need that descriptor.
-The same Windows-hosted release measurement after this refactor was 30,541
-executable bytes and a 41,984-byte PE, with 8,192 virtual bytes of writable data.
+The legacy handoff still checks the source against its native layout
+descriptor. The `package_boot_normal` loader profile instead emits a
+version-3 handoff with an 80-byte envelope descriptor. It retains the
+original signed file in a supervisor-only, read-only, non-executable
+mapping, without allocating or mapping a native service image, stack or
+page tables. This avoids the old one-slot stack and table allocations
+(320 KiB) plus the materialized service image. The checked handoff
+preserves recovery metadata independently and requires the envelope range
+to be wholly reserved. It can carry the same owner-selected supervisor
+record when the production policy gates pass. Legacy loader and probe
+profiles keep their existing format. This is a boot handoff, not guest
+entry or evidence of runtime service isolation.
+The envelope-type refactor measured 30,541 executable bytes and a 41,984-byte
+PE. Reading both the old and new formats during the transition adds code:
+the version-3-capable Windows-hosted release measures 31,853 executable bytes
+and a 43,520-byte PE, with 8,192 virtual bytes of writable data. This is
+separate from the loader's avoided allocations.
 
 The next boundary now has a tested owner selection record for exactly one
 release manifest and one measured service image. Its fixed 152-byte format
