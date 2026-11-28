@@ -255,7 +255,7 @@ unsafe fn scan(
                         firmware_owned: matches!(ownership, Ok(LegacyOwnership::Firmware)),
                         geometry,
                         mcfg_covered,
-                        dmar,
+                        dmar: dmar.map(|(units, route)| (units, route.register_base().get())),
                     });
                 }
                 if ownership.is_err() || geometry.is_none() {
@@ -281,7 +281,7 @@ unsafe fn scan(
                         }
                         let plan = match &tables {
                             Ok(tables) => tables.passive_pci_plan(
-                                requester, base, bytes, dmar.map(|(_, address)| address),
+                                requester, base, bytes, dmar.map(|(_, route)| route),
                                 |detail| line(output, detail),
                             )?,
                             Err(_) => "firmware tables unavailable",

@@ -295,8 +295,11 @@ mapping and do not change the production or physical diagnostic policy.
 A fixed 200-byte version-one diagnostic record can carry the scalar layout
 without retaining firmware pointers or indexing from record-supplied counts.
 Validation compares the entire copy with an independent reconstruction before
-checking the final map. This format has model tests but is not wired into
-the live boot handoff, and canonical equality does not authenticate origin.
+checking the final map. The standalone inventory also attempts this copy
+from genuine firmware classifications and reports refusal or agreement with
+its pre-exit snapshot. It returns to firmware either way; this does not run
+`ExitBootServices` and is not wired into the live boot handoff. Canonical
+equality does not authenticate origin.
 For a future passive post-exit diagnostic, the planner derives one 4 KiB PCI
 configuration page from the exact MCFG segment, bus, device and function. It
 requires explicit coverage by a normalized firmware MMIO range and rejects

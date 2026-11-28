@@ -1,7 +1,8 @@
 use super::{TextOutput, check, line};
 use mrml_kernel::arch::x86_64::{
     AcpiError, AcpiMemory, DmarError, DmarTopology, McfgError, McfgTopology, PciConfigSpace,
-    PlatformMmioError, PlatformMmioManifest, copy_dmar, copy_mcfg,
+    DxeObservationError, PassiveDxeObservation, PlatformMmioError, PlatformMmioManifest,
+    VtdRequesterRoute, copy_dmar, copy_mcfg,
 };
 use mrml_kernel::{DeviceAddress, MAX_HANDOFF_DMA_ACPI_TABLE_BYTES, MemoryKind, MemoryMap, MemoryRegion, PhysAddr};
 use mrml_uefi::{
@@ -26,6 +27,7 @@ type DxeResult = Result<(), DxeMmioError>;
 
 #[derive(Default)]
 struct DxeEvidence {
+    requester: Option<DeviceAddress>,
     ecam: Option<DxeResult>,
     page: Option<DxeResult>,
     drhd: [Option<DxeResult>; 8],
@@ -77,12 +79,16 @@ impl Tables {
         requester: DeviceAddress,
         bar_base: u64,
         bar_bytes: u32,
-        routed_drhd: Option<u64>,
+        route: Option<VtdRequesterRoute>,
         mut report: impl FnMut(core::fmt::Arguments<'_>) -> Result<(), Status>,
     ) -> Result<&'static str, Status> {
-        let (Ok(mcfg), Ok(dmar), Some(drhd)) = (&self.mcfg, &self.dmar, routed_drhd) else {
+        let (Ok(mcfg), Ok(dmar), Some(route)) = (&self.mcfg, &self.dmar, route) else {
             return Ok("MCFG or DMAR route unproven");
         };
+        if route.requester() != requester {
+            return Ok("DMAR route does not match requester");
+        }
+        let drhd = route.register_base().get();
         let Some(count) = self.region_count else {
             return Ok("firmware map invalid");
         };
@@ -134,6 +140,36 @@ impl Tables {
         }) || !dmar.units().any(|unit| unit.register_base.get() == drhd) {
             return Ok("BAR and remapper ranges conflict");
         }
+        let observation = PassiveDxeObservation::capture(route, dmar, mcfg, bar, |base, pages| {
+            if self.dxe.requester != Some(requester) {
+                return false;
+            }
+            let base = base.get();
+            for entry in mcfg.allocations() {
+                if let Some(page) = ecam_page(entry, requester) {
+                    if base == entry.physical_start() && pages == entry.bytes() as u64 / PAGE as u64 {
+                        return self.dxe.ecam == Some(Ok(()));
+                    }
+                    if base == page && pages == 1 {
+                        return self.dxe.page == Some(Ok(()));
+                    }
+                }
+            }
+            pages == 1 && dmar.units().zip(self.dxe.drhd.iter()).any(|(unit, result)| {
+                unit.register_base.get() == base && *result == Some(Ok(()))
+            })
+        });
+        let diagnostic = match observation {
+            Ok(observation) => match PassiveDxeObservation::check_diagnostic_record(
+                &observation.diagnostic_record(), route, dmar, mcfg, bar, &map,
+            ) {
+                Ok(()) => "copy matched pre-exit snapshot only",
+                Err(_) => "refused; pre-exit map conflict",
+            },
+            Err(DxeObservationError::IncompleteDxe) => "refused; incomplete firmware classification",
+            Err(_) => "refused; resource layout unverified",
+        };
+        report(format_args!("xhci DXE copy: {diagnostic}"))?;
         let manifest = match PlatformMmioManifest::<16>::from_topology(dmar, mcfg, map.regions()) {
             Ok(manifest) => manifest,
             Err(PlatformMmioError::Overlap) => return Ok("ACPI resource ranges overlap"),
@@ -152,7 +188,7 @@ impl Tables {
         output: *mut TextOutput,
         requester: DeviceAddress,
         config: &mut impl PciConfigSpace,
-    ) -> Result<(bool, Option<(usize, u64)>), Status> {
+    ) -> Result<(bool, Option<(usize, VtdRequesterRoute)>), Status> {
         // SAFETY: the caller supplies the live console and the read-only tables are local.
         unsafe {
             let covered = match &self.mcfg {
@@ -184,7 +220,7 @@ impl Tables {
                             output,
                             format_args!("xhci DMAR: valid, units={units}, DRHD={base:#x}"),
                         )?;
-                        Some((units, base))
+                        Some((units, route))
                     }
                     Err(err) => {
                         line(output, format_args!("xhci DMAR: no validated route ({err:?})"))?;
@@ -358,6 +394,7 @@ unsafe fn copy_tables(
                 })
             }
         };
+        dxe.requester = Some(requester);
         dxe.ecam = Some(observe(entry.physical_start(), entry.bytes() as u64));
         dxe.page = Some(observe(page, PAGE as u64));
         for (slot, unit) in dxe.drhd.iter_mut().zip(dmar.units()) {

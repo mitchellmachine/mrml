@@ -13,6 +13,7 @@ const GEOMETRY: &str = "xhci DMA: scratchpads=0 page-mask=0x0001";
 const START: &str = "MRML xhci-inventory: read-only";
 const BOOT_EVIDENCE: &str = "xhci boot evidence: ";
 const BOOT_WIRE: &str = "xhci boot wire ";
+const DXE_COPY: &str = "xhci DXE copy: ";
 
 fn exact_usb_boot_evidence(report: &str) -> bool {
     if report.lines().filter(|line| line.starts_with(BOOT_EVIDENCE)).count() != 1 {
@@ -60,6 +61,25 @@ fn exact_usb_boot_evidence(report: &str) -> bool {
         && lines.next() == Some(format!("xhci boot wire 1: {tail}").as_str())
 }
 
+fn dxe_copy_verdict(report: &str) -> Option<&'static str> {
+    let mut records = report.lines().filter_map(|line| line.strip_prefix(DXE_COPY));
+    let verdict = records.next()?;
+    if records.next().is_some() {
+        return None;
+    }
+    let positive = report.lines().any(|line| {
+        line == "xhci DXE ECAM window=mmio-uc-capable page=mmio-uc-capable"
+    }) && report.lines().any(|line| {
+        line == "xhci DXE DRHD routed 0xfed90000: mmio-uc-capable"
+    });
+    match (positive, verdict) {
+        (true, "copy matched pre-exit snapshot only") => Some("matched-pre-exit"),
+        (true, "refused; pre-exit map conflict") => Some("refused-map-conflict"),
+        (false, "refused; incomplete firmware classification") => Some("refused-incomplete-dxe"),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Case {
     NoController,
@@ -87,7 +107,9 @@ impl Case {
             return false;
         }
         if !matches!(self, Self::UsbBoot)
-            && report.lines().any(|line| line.starts_with(BOOT_EVIDENCE) || line.starts_with(BOOT_WIRE))
+            && report.lines().any(|line| {
+                line.starts_with(BOOT_EVIDENCE) || line.starts_with(BOOT_WIRE) || line.starts_with(DXE_COPY)
+            })
         {
             return false;
         }
@@ -98,6 +120,7 @@ impl Case {
         if matches!(self, Self::UsbBoot) {
             return reported("xhci-inventory: controllers=2 incomplete=0")
                 && exact_usb_boot_evidence(report)
+                && dxe_copy_verdict(report).is_some()
                 && report.lines().filter(|line| line.starts_with("xhci passive PCI plan: ")).count() == 1
                 && reported("xhci passive PCI plan: explicit firmware MMIO coverage missing")
                 && report.lines().any(|line| line.starts_with("xhci map ECAM seg=0000 0xe0000000..0xf0000000: "))
@@ -271,7 +294,8 @@ pub(super) fn test(
         if fs::read(image).map_err(|e| e.to_string())? != bytes {
             return Err("QEMU altered the inventory image".into());
         }
-        println!("q35-xhci-inventory|status=PASS|case={case:?}|returned_to_firmware=true");
+        let dxe = dxe_copy_verdict(&bounded(&serial)).unwrap_or("not-requested");
+        println!("q35-xhci-inventory|status=PASS|case={case:?}|returned_to_firmware=true|dxe={dxe}");
     }
     Ok(())
 }
@@ -306,6 +330,20 @@ mod tests {
         assert!(!exact_usb_boot_evidence(&report.replace("wire 0:", "wire 1:")));
         assert!(!exact_usb_boot_evidence(&report.replace("0130030c", "0131030c")));
         assert!(!exact_usb_boot_evidence(&report.replace("wire 1: 0130030c000000f1", "wire 1: 0130030c000000f2")));
+    }
+
+    #[test]
+    fn dxe_copy_verdict_cannot_promote_incomplete_classification() {
+        let matched = "xhci DXE copy: copy matched pre-exit snapshot only";
+        let refused = "xhci DXE copy: refused; incomplete firmware classification";
+        let classes = "xhci DXE ECAM window=mmio-uc-capable page=mmio-uc-capable\nxhci DXE DRHD routed 0xfed90000: mmio-uc-capable";
+        assert_eq!(dxe_copy_verdict(matched), None);
+        assert_eq!(dxe_copy_verdict(refused), Some("refused-incomplete-dxe"));
+        assert_eq!(dxe_copy_verdict(&format!("{classes}\n{matched}")), Some("matched-pre-exit"));
+        assert_eq!(dxe_copy_verdict(&format!("{classes}\n{matched}\n{matched}")), None);
+        assert_eq!(dxe_copy_verdict(&format!("{classes}\n{refused}")), None);
+        let wrong = classes.replace("0xfed90000", "0xfed91000");
+        assert_eq!(dxe_copy_verdict(&format!("{wrong}\n{matched}")), None);
     }
 
     #[test]
