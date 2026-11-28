@@ -332,7 +332,11 @@ with a fixture. An opt-in QEMU test also feeds emulated PS/2 keyboard
 and mouse reports through the i8042 broker into the hosted desktop and
 checks the echo, pointer position and diagnostic counts. Normal boot,
 physical touchscreen input, and a full
-cross-VM Semantic Scene Graph transport are not yet connected.
+cross-VM Semantic Scene Graph transport are not yet connected. A signed KVM
+diagnostic image exercises the desktop state machine and its same-guest echo
+fixture via a bounded synthetic input mailbox. The host verifies diagnostic
+state and mailbox withdrawal; this is not a desktop scanout or an independently
+launched terminal app.
 
 ### MicroVM task manager prototype
 

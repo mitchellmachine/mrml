@@ -101,6 +101,7 @@ packages/services/certificate/src/native_service.rs	8	2	1	0	1	8	Native certifica
 packages/services/certificate/src/service_main.rs	8	1	1	2	0	8	Native certificate service entry and syscall adapter; exact carry-forward baseline authorized to restore regression tracking, not a completed safety review.
 packages/services/config/src/config/implementation.rs	0	1	2	0	0	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/services/config/src/config/tests.rs	9	0	5	0	0	7	Configuration service test backends; exact carry-forward baseline authorized to restore regression tracking, not a completed safety review.
+packages/services/desktop/src/guest_probe.rs	3	0	0	0	0	0	Opt-in desktop diagnostic, bounded access to a private mapped fixture mailbox and HLT to synchronize with the test VMM.
 packages/services/compositor/src/scanout_probe_main.rs	3	0	0	0	0	0	Single-task private raster storage, bounded MRML syscall entry, and task-local terminal fault; no firmware or hardware operation.
 packages/services/config/src/hosted_recovery_probe.rs	3	3	4	0	0	2	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.
 packages/services/deployment/src/lib.rs	0	0	5	0	0	0	Baseline-admitted low-level repository boundary; count growth is blocked pending focused file-level invariant review.

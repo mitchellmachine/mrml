@@ -49,6 +49,21 @@ self_extern = true
 source = "packages/services/desktop/src/preview.rs"
 targets = ["WINDOWS", "LINUX"]
 
+[[artifact]]
+kind = "bin"
+name = "mrml-desktop-guest-probe"
+
+[[binary]]
+crate_name = "mrml_desktop_guest_probe"
+output = "mrml-desktop-guest-probe"
+self_extern = true
+source = "packages/services/desktop/src/guest_probe.rs"
+targets = ["MRML_NATIVE"]
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"
+
 [[dependency]]
 alias = "mrml_terminal_probe"
 compile_name = "mrml-terminal-probe"

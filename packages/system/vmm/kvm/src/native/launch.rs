@@ -3212,6 +3212,7 @@ mod tests {
 
     mod usb_write_probe;
     mod xhci_lifecycle;
+    mod desktop_guest;
 
     #[test]
     fn live_two_vm_peer_page_shares_and_retires_exact_backing() {
