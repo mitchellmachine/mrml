@@ -200,6 +200,7 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
     mappings: [Option<mrml_kernel::arch::x86_64::Mapping>; 4],
     shutdown: bool,
     bar_preflight: bool,
+    boot_bar: Option<u64>,
     cold: Option<(
         &ActivePageTables,
         &mrml_kernel::arch::x86_64::InitializedBootDma,
@@ -245,6 +246,7 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
                 return;
             };
             if sample.bar0 & 0xf != 4
+                || boot_bar.is_some_and(|expected| expected != sample.bar_base())
                 || (bridge.is_some() && (sample.bar0 != 0x8120_0004 || sample.bar1 != 0))
             {
                 trace(0xdb);

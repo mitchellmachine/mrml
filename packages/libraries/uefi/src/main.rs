@@ -41,16 +41,18 @@ use mrml_uefi::tpm::{
 };
 use mrml_uefi::*;
 
-#[cfg(feature = "usb-preload-probe")]
+#[cfg(any(feature = "usb-preload-probe", feature = "q35-mmio-probe"))]
 #[path = "xhci_inventory_pci.rs"]
 mod usb_pci;
-#[cfg(feature = "usb-preload-probe")]
+#[cfg(any(feature = "usb-preload-probe", feature = "q35-mmio-probe"))]
 use usb_pci::PCI_IO;
-#[cfg(feature = "usb-preload-probe")]
+#[cfg(any(feature = "usb-preload-probe", feature = "q35-mmio-probe"))]
 #[path = "xhci_inventory_source.rs"]
 mod usb_source;
 #[cfg(feature = "usb-preload-probe")]
-use mrml_uefi::xhci_inventory::boot_observation::{BOOT_XHCI_RECORD_BYTES, DecodedBootXhci, XhciFunction};
+use mrml_uefi::xhci_inventory::boot_observation::DecodedBootXhci;
+#[cfg(any(feature = "usb-preload-probe", feature = "q35-mmio-probe"))]
+use mrml_uefi::xhci_inventory::boot_observation::{BOOT_XHCI_RECORD_BYTES, XhciFunction};
 
 const MAP_BYTES: usize = MAX_MEMORY_MAP_BYTES;
 
@@ -185,6 +187,8 @@ struct Transition {
     boot_dma: Option<u64>,
     #[cfg(feature = "q35-mmio-probe")]
     q35_snapshot: [u8; 64],
+    #[cfg(feature = "q35-mmio-probe")]
+    q35_profile: u8,
     stack_top: u64,
     entry_stack_top: u64,
     double_fault_stack_top: u64,
@@ -1155,7 +1159,23 @@ unsafe fn boot(
     trace.save_report(image, None);
     paint_boot_stage(framebuffer, b"MRML EFI END START");
     #[cfg(feature = "usb-preload-probe")]
-    let usb_boot_record = capture_fixture_usb_record(image, services);
+    let usb_boot_record = capture_fixture_usb_record(image, services, PRELOAD_BOOT_CONTROLLER);
+    #[cfg(feature = "q35-mmio-probe")]
+    let q35_usb_record = if transition.q35_profile == 8 {
+        let expected = mrml_kernel::arch::x86_64::Q35_SHARED_BOOT_USB_RECORD;
+        let record = capture_fixture_usb_record(image, services, XhciFunction {
+            requester: 0x4100,
+            vendor_device: 0x000d_1b36,
+            class_revision: 0x0c03_3001,
+        });
+        if record.as_ref() != Some(expected) {
+            loader_trace(0xee);
+            halt();
+        }
+        record
+    } else {
+        None
+    };
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services, trace) }?;
     paint_boot_stage(framebuffer, b"MRML EFI END PASS");
     unsafe {
@@ -1179,6 +1199,8 @@ unsafe fn boot(
             isolation_selection,
             #[cfg(feature = "usb-preload-probe")]
             usb_boot_record,
+            #[cfg(feature = "q35-mmio-probe")]
+            q35_usb_record,
         )
     }
 }
@@ -1321,6 +1343,8 @@ unsafe fn launch_after_exit(
     isolation_selection: BootIsolationSelection,
     #[cfg(feature = "usb-preload-probe")]
     usb_boot_record: Option<[u8; BOOT_XHCI_RECORD_BYTES]>,
+    #[cfg(feature = "q35-mmio-probe")]
+    q35_usb_record: Option<[u8; BOOT_XHCI_RECORD_BYTES]>,
 ) -> ! {
     let map_bytes = unsafe { core::slice::from_raw_parts(MEMORY_MAP.0.get().cast(), map_size) };
     if let Some(base) = transition.boot_dma {
@@ -1421,6 +1445,8 @@ unsafe fn launch_after_exit(
         &regions[..region_count],
         &madt_storage[..madt_length],
         dma_acpi,
+        #[cfg(feature = "q35-mmio-probe")]
+        q35_usb_record.as_ref(),
         service,
         recovery_state,
         installed_recovery,
@@ -2268,6 +2294,8 @@ fn enter_kernel(
     regions: &[NormalizedRegion],
     madt: &[u8],
     dma_acpi: Option<(&[u8], &[u8])>,
+    #[cfg(feature = "q35-mmio-probe")]
+    q35_usb_record: Option<&[u8; BOOT_XHCI_RECORD_BYTES]>,
     service: PreparedService,
     recovery_state: Option<RecoveryStateMetadata>,
     installed_recovery: Option<InstalledRecoveryHandoff>,
@@ -2346,6 +2374,13 @@ fn enter_kernel(
         .map_err(|_| LOAD_ERROR)?;
     let handoff_length = if let Some((dmar, mcfg)) = dma_acpi {
         append_boot_dma_acpi(handoff_length, dmar, mcfg, handoff).map_err(|_| LOAD_ERROR)?
+    } else {
+        handoff_length
+    };
+    #[cfg(feature = "q35-mmio-probe")]
+    let handoff_length = if let Some(record) = q35_usb_record {
+        mrml_kernel::append_boot_usb_pci_record(handoff_length, record, handoff)
+            .map_err(|_| LOAD_ERROR)?
     } else {
         handoff_length
     };
@@ -2567,8 +2602,8 @@ fn prepare_transition(
         None
     };
     #[cfg(feature = "q35-mmio-probe")]
-    let q35_snapshot = {
-        let (snapshot, mappings) = prepare_q35_mmio_snapshot(services, acpi_root, framebuffer)
+    let (q35_snapshot, q35_profile) = {
+        let (snapshot, mappings, profile) = prepare_q35_mmio_snapshot(services, acpi_root, framebuffer)
             .unwrap_or_else(|| {
                 loader_trace(0xed);
                 halt();
@@ -2577,7 +2612,7 @@ fn prepare_transition(
             tables.map(mapping).map_err(|_| LOAD_ERROR)?;
         }
         loader_trace(0xea);
-        snapshot
+        (snapshot, profile)
     };
     let mut frame_index = 0usize;
     while frame_index < tables.store().count {
@@ -2595,6 +2630,8 @@ fn prepare_transition(
         boot_dma,
         #[cfg(feature = "q35-mmio-probe")]
         q35_snapshot,
+        #[cfg(feature = "q35-mmio-probe")]
+        q35_profile,
         stack_top,
         entry_stack_top: stack_layout.entry_top().map_err(|_| LOAD_ERROR)?,
         double_fault_stack_top: stack_layout.double_fault_top().map_err(|_| LOAD_ERROR)?,
@@ -2608,7 +2645,7 @@ fn prepare_q35_mmio_snapshot(
     services: &BootServices,
     acpi_root: u64,
     framebuffer: Framebuffer,
-) -> Option<([u8; 64], [Option<Mapping>; 4])> {
+) -> Option<([u8; 64], [Option<Mapping>; 4], u8)> {
     use mrml_kernel::arch::x86_64::{AcpiError, copy_dmar, copy_mcfg, q35_fixture_marker};
     // SAFETY: Boot Services are live on the BSP. The static scratch buffers
     // have no other users here and references do not escape this function.
@@ -2654,7 +2691,7 @@ fn prepare_q35_mmio_snapshot(
             raw,
             stride,
             framebuffer,
-        )
+        ).map(|(digest, mappings)| (digest, mappings, marker[32]))
     }
 }
 
@@ -2680,6 +2717,10 @@ fn q35_mmio_snapshot(
         || allocation.end_bus != 255
         || allocation.physical_start() != 0xe000_0000
     {
+        loader_trace(0xe6);
+        return None;
+    }
+    if marker[32] == 8 && topology != Q35FixtureTopology::Isolated {
         loader_trace(0xe6);
         return None;
     }
@@ -2877,10 +2918,11 @@ fn loader_trace(stage: u8) {
     };
 }
 
-#[cfg(feature = "usb-preload-probe")]
+#[cfg(any(feature = "usb-preload-probe", feature = "q35-mmio-probe"))]
 fn capture_fixture_usb_record(
     image: Handle,
     services: &BootServices,
+    expected: XhciFunction,
 ) -> Option<[u8; BOOT_XHCI_RECORD_BYTES]> {
     // SAFETY: opt-in loader passes its live image and services before the
     // final memory map. All pointers are discarded; only copied bytes escape.
@@ -2896,7 +2938,7 @@ fn capture_fixture_usb_record(
             vendor_device: usb_pci::cfg(io, 0).ok()?,
             class_revision: usb_pci::cfg(io, 8).ok()?,
         };
-        if function != PRELOAD_BOOT_CONTROLLER {
+        if function != expected {
             return None;
         }
         let command = usb_pci::cfg(io, 4).ok()? as u16;

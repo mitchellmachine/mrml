@@ -94,6 +94,7 @@ pub(super) enum Q35FixtureCase {
     SharedBootNoMarker,
     IsolatedSharedBootNoMarker,
     IsolatedSharedBootObserve,
+    IsolatedSharedBootRecordMissing,
     SharedPreloadUnmarked,
     SharedPreloadDenied,
     SharedPreload,
@@ -130,6 +131,7 @@ impl Q35FixtureCase {
                 | Self::IsolatedValidRelease
                 | Self::IsolatedSharedBootNoMarker
                 | Self::IsolatedSharedBootObserve
+                | Self::IsolatedSharedBootRecordMissing
                 | Self::ShutdownWrongRelease
                 | Self::ShutdownValidRelease
                 | Self::ColdWrongRelease
@@ -148,6 +150,7 @@ impl Q35FixtureCase {
             Self::ShutdownWrongRelease | Self::ShutdownValidRelease => 2,
             Self::BarWrongRelease | Self::BarValidRelease => 4,
             Self::RetiredPrivileged(profile) => profile,
+            Self::IsolatedSharedBootObserve | Self::IsolatedSharedBootRecordMissing => 8,
             Self::SharedGuestBme | Self::SharedGuestBmeDenied => 2,
             Self::SharedGuestRemappingUnproven => 3,
             Self::SharedBootRecord | Self::SharedBootRecordCompare | Self::SharedBootRecordWrongRelease | Self::SharedBootRecordMissing => 4,
@@ -471,6 +474,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::NoMarker
         | Q35FixtureCase::SharedBootNoMarker
         | Q35FixtureCase::IsolatedSharedBootNoMarker
+        | Q35FixtureCase::IsolatedSharedBootRecordMissing
         | Q35FixtureCase::SharedPreloadUnmarked
         | Q35FixtureCase::RetiredPrivileged(_)
         | Q35FixtureCase::NoRemapper => None,

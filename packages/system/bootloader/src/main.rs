@@ -4332,12 +4332,23 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 halt();
             }
         }
+        let boot_bar = handoff.usb_pci_record().map(|record| {
+            use mrml_kernel::arch::x86_64::Q35_SHARED_BOOT_USB_RECORD;
+            if release != 0xa6
+                || topology != Q35FixtureTopology::Isolated
+                || record != Q35_SHARED_BOOT_USB_RECORD
+            {
+                halt();
+            }
+            native_fat32_probe::trace(0xca);
+            u64::from_le_bytes(record[24..32].try_into().unwrap_or_else(|_| halt()))
+        });
         if let Some(accepted) = native_fat32_probe::dma_fixture_rendezvous(release) {
             // SAFETY: the exact UC/NX leaves, signed model and release all
             // matched. Only shutdown/cold modes permit PCI command writes.
             unsafe {
                 native_fat32_probe::dma_fixture_register_snapshot(
-                    mappings, matches!(release, 0xa7 | 0xa8), release == 0xa9,
+                    mappings, matches!(release, 0xa7 | 0xa8), release == 0xa9, boot_bar,
                     (release == 0xa8).then_some((&active, dma, dmar, accepted)),
                 )
             };

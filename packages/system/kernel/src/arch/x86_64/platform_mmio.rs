@@ -76,6 +76,11 @@ pub fn sample_stable_xhci_pci_header(
     Ok(first)
 }
 
+/// Exact expected wire value for the read-only shared Q35 boot. The loader
+/// must capture these bytes from UEFI, never synthesize them as evidence.
+pub const Q35_SHARED_BOOT_USB_RECORD: &[u8; crate::BOOT_USB_PCI_RECORD_BYTES] =
+    b"MRMLXHCI\x01\x00\x28\x00\x00\x41\x00\x00\x36\x1b\x0d\x00\x01\x30\x03\x0c\x00\x00\x20\x81\x00\x00\x00\x00\x00\x40\x00\x00\x00\x00\x00\x00";
+
 /// Exact accepted layouts for the signed, emulator-only q35 fixture.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Q35FixtureTopology {

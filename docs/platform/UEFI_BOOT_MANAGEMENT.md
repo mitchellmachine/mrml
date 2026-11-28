@@ -290,8 +290,12 @@ emulated device independently. This is not a physical ECAM test.
 The boot handoff codec can carry one optional, canonical 40-byte version-1
 USB observation after the validated DMAR and MCFG pair. It rejects malformed
 or duplicate records and records without the table pair. The record grants no
-access. Normal boot emits no such record, and the sealed Q35 producer and
-consumer are not yet wired to this extension.
+access. Only sealed Q35 profile 8 emits a record, taken from the actual
+firmware USB boot path immediately before exit. A separate boot source stops
+without releasing the diagnostic. The kernel requires the exact isolated
+endpoint record and corroborates the BAR against the live read-only sample.
+QMP independently checks the emulated device and attached boot media.
+Normal boot emits no record and no physical hardware is tested.
 
 The signed QEMU/OVMF negative control boots the same sealed test release
 from a read-only virtual disk attached directly to the sole xHCI candidate.
