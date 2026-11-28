@@ -369,7 +369,16 @@ Both roots are returned together only after the complete build succeeds.
 Late allocation or build failure is terminal for the one-shot bootstrap:
 no root is published, and partially reserved or initialized frames are
 not reused in that boot. Hosted tests check both translations and late
-exhaustion. Real host mappings and VM entry are still separate work.
+exhaustion.
+
+The host mapping plan now specifies four exact high-half, supervisor-only,
+writable and non-executable ranges for the reserved frames. Its preflight
+checks every page and rejects a different root, missing/wrong permissions,
+or another mapping to the same physical frame in that root. It does not
+read or write the backing ranges. These are structural checks only:
+normal boot still needs to install the mappings and prove live translation,
+write-back cache policy, exclusive access and DMA containment before
+initializing them. VM entry is still separate work.
 
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real

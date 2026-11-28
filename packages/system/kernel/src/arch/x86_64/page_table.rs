@@ -1343,6 +1343,22 @@ impl ActivePageTables {
         )
     }
 
+    /// Verify the exact boot-private CPU mappings as one preflight. This
+    /// reads page-table entries only. It does not prove cache type, stale
+    /// translation retirement, exclusive Rust references, or DMA exclusion.
+    pub(crate) fn verify_boot_private_mappings(
+        &self,
+        expected_root: PhysAddr,
+        mappings: [Mapping; 4],
+    ) -> Result<(), PageTableBuildError> {
+        verify_boot_private_mappings_from_store(
+            &IdentityMappedPageTables,
+            self.root,
+            expected_root,
+            mappings,
+        )
+    }
+
     /// Verifies a supervisor RO/NX device mapping has no second physical
     /// mapping in this four-level hierarchy. Does not inspect CPU PAT, old
     /// translations in the TLB, or any other root. It does not access MMIO.
@@ -1722,6 +1738,24 @@ fn verify_exclusive_mapping_from_store<S: PageTableStore>(
 ) -> Result<(), PageTableBuildError> {
     verify_physical_coverage_from_store(store, root, mapping.physical_start(), mapping.pages(), Some(mapping))?;
     verify_active_mapping_from_store(store, root, root, mapping)
+}
+
+fn verify_boot_private_mappings_from_store<S: PageTableStore>(
+    store: &S,
+    root: PhysAddr,
+    expected_root: PhysAddr,
+    mappings: [Mapping; 4],
+) -> Result<(), PageTableBuildError> {
+    if root != expected_root {
+        return Err(PageTableBuildError::MappingMismatch);
+    }
+    for mapping in mappings {
+        if mapping.permissions() != PagePermissions::KERNEL_READ_WRITE {
+            return Err(PageTableBuildError::MappingMismatch);
+        }
+        verify_exclusive_mapping_from_store(store, root, mapping)?;
+    }
+    Ok(())
 }
 
 fn verify_physical_coverage_from_store<S: PageTableStore>(
@@ -2756,6 +2790,66 @@ mod tests {
         assert_eq!(
             verify_active_mapping_from_store(builder.store(), root, root, substituted),
             Err(PageTableBuildError::MappingMismatch)
+        );
+    }
+
+    #[test]
+    fn supervisor_host_preflight_rejects_missing_writable_nx_or_unique_backing() {
+        let mut builder = PageTableBuilder::new(Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        })
+        .unwrap();
+        let base = 0xffff_9000_0000_0000;
+        let make = |slot, pages, permissions| {
+            Mapping::new(
+                VirtAddr::new(base + slot * 2 * PAGE_SIZE).unwrap(),
+                PhysAddr::new(0x400000 + slot * 2 * PAGE_SIZE).unwrap(),
+                pages,
+                permissions,
+            )
+            .unwrap()
+        };
+        let rw = PagePermissions::KERNEL_READ_WRITE;
+        let plan = core::array::from_fn(|slot| make(slot as u64, 2, rw));
+        let root = builder.root();
+        for mapping in &plan[..3] {
+            builder.map(*mapping).unwrap();
+        }
+        builder.map(make(3, 1, rw)).unwrap();
+        assert_eq!(
+            verify_boot_private_mappings_from_store(builder.store(), root, root, plan),
+            Err(PageTableBuildError::MappingMismatch),
+        );
+        builder.map_page(
+            VirtAddr::new(base + 7 * PAGE_SIZE).unwrap(),
+            PhysAddr::new(0x400000 + 7 * PAGE_SIZE).unwrap(),
+            rw,
+        ).unwrap();
+        assert_eq!(
+            verify_boot_private_mappings_from_store(builder.store(), root, root, plan),
+            Ok(()),
+        );
+        let wrong_root = PhysAddr::new(root.get() + PAGE_SIZE).unwrap();
+        assert_eq!(
+            verify_boot_private_mappings_from_store(builder.store(), root, wrong_root, plan),
+            Err(PageTableBuildError::MappingMismatch),
+        );
+        builder.protect(plan[3], PagePermissions::KERNEL_READ_EXECUTE).unwrap();
+        assert_eq!(
+            verify_boot_private_mappings_from_store(builder.store(), root, root, plan),
+            Err(PageTableBuildError::MappingMismatch),
+        );
+        let rx = make(3, 2, PagePermissions::KERNEL_READ_EXECUTE);
+        builder.protect(rx, rw).unwrap();
+        builder.map_page(
+            VirtAddr::new(base + 8 * PAGE_SIZE).unwrap(),
+            plan[3].physical_start(),
+            PagePermissions::KERNEL_READ,
+        ).unwrap();
+        assert_eq!(
+            verify_boot_private_mappings_from_store(builder.store(), root, root, plan),
+            Err(PageTableBuildError::PhysicalAlias),
         );
     }
 

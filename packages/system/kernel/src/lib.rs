@@ -83,7 +83,7 @@ pub use boot_service::{
     ReservedBootSupervisorImage,
     InactiveSupervisorMemory, ReservedSupervisorBootstrap, ReservedSupervisorMemory,
     SelectedBootSupervisor, StagedBootSupervisor, SupervisorBackingViews,
-    SupervisorBootstrapError, SupervisorLinearState,
+    SupervisorBootstrapError, SupervisorHostMappings, SupervisorLinearState,
 };
 pub use boot_recovery::{
     BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryDelivery, BootRecoveryDeliveryError,

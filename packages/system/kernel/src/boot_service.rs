@@ -615,6 +615,27 @@ pub struct ReservedSupervisorMemory<'image> {
     ept_pages: u64,
 }
 
+/// Expected supervisor-only RW/NX host maps, in image, stack, guest linear
+/// tables and EPT order. These describe mappings rather than grant access.
+pub struct SupervisorHostMappings([crate::arch::x86_64::Mapping; 4]);
+
+impl SupervisorHostMappings {
+    pub const fn mappings(&self) -> &[crate::arch::x86_64::Mapping; 4] {
+        &self.0
+    }
+
+    /// Verify the four mappings against the trusted boot root the caller
+    /// installed, not a root inferred from this snapshot. Only page tables
+    /// are read; no backing bytes are read or written.
+    pub fn verify(
+        &self,
+        active: &crate::arch::x86_64::ActivePageTables,
+        expected_root: crate::PhysAddr,
+    ) -> Result<(), crate::arch::x86_64::PageTableBuildError> {
+        active.verify_boot_private_mappings(expected_root, self.0)
+    }
+}
+
 /// Exclusive, writable, non-executable views supplied by the platform.
 /// A hosted test can use stand-ins; hardware entry must independently
 /// establish that each view actually aliases its reserved frames.
@@ -650,6 +671,40 @@ impl InactiveSupervisorMemory<'_, '_> {
 }
 
 impl<'image> ReservedSupervisorMemory<'image> {
+    /// Lay out four adjacent, checked high-half ranges. The installer must
+    /// reserve the window and create these exact mappings, with no aliases.
+    pub fn host_mappings(
+        &self,
+        start: crate::arch::x86_64::VirtAddr,
+    ) -> Result<SupervisorHostMappings, SupervisorBootstrapError> {
+        use crate::arch::x86_64::{Mapping, PagePermissions, VirtAddr};
+        let (image, image_bytes) = self.image_backing();
+        let stack = self.stack_region();
+        let linear = self.linear_region();
+        let (ept, ept_pages) = self.ept_backing();
+        let mut start = start.get();
+        let mut map = |base, pages| {
+            let invalid = SupervisorBootstrapError::InvalidLayout;
+            let mapping = Mapping::new(
+                VirtAddr::new(start).map_err(|_| invalid)?,
+                base,
+                pages,
+                PagePermissions::KERNEL_READ_WRITE,
+            )
+            .map_err(|_| invalid)?;
+            start = start
+                .checked_add(pages.checked_mul(PAGE_SIZE).ok_or(invalid)?)
+                .ok_or(invalid)?;
+            Ok(mapping)
+        };
+        Ok(SupervisorHostMappings([
+            map(image, u64::from(image_bytes).div_ceil(PAGE_SIZE))?,
+            map(stack.host_start(), stack.pages())?,
+            map(linear.host_start(), linear.pages())?,
+            map(ept, ept_pages)?,
+        ]))
+    }
+
     pub const fn image_backing(&self) -> (crate::PhysAddr, u32) {
         (
             self.bootstrap.image.physical_base(),
@@ -1226,6 +1281,27 @@ mod tests {
         let stack_region = reservation.stack_region();
         let linear_region = reservation.linear_region();
         let (ept_base, _) = reservation.ept_backing();
+        let va = crate::arch::x86_64::VirtAddr::new;
+        let window = 0xffff_9000_0000_0000;
+        let host = reservation.host_mappings(va(window).unwrap()).unwrap();
+        let mut next_va = window;
+        for (mapping, expected) in host.mappings().iter().zip([
+            (image_base, 3),
+            (stack_region.host_start(), 2),
+            (linear_region.host_start(), 8),
+            (ept_base, 8),
+        ]) {
+            assert_eq!(mapping.virtual_start().get(), next_va);
+            assert_eq!((mapping.physical_start(), mapping.pages()), expected);
+            assert_eq!(mapping.permissions(), crate::arch::x86_64::PagePermissions::KERNEL_READ_WRITE);
+            next_va += mapping.pages() * PAGE_SIZE;
+        }
+        for invalid in [0x900000, u64::MAX & !(PAGE_SIZE - 1)] {
+            assert_eq!(
+                reservation.host_mappings(va(invalid).unwrap()).err(),
+                Some(SupervisorBootstrapError::InvalidLayout),
+            );
+        }
         let mut image = [0xa5; 12288];
         let mut stack = [0xa5; 8192];
         let mut linear = [[u64::MAX; 512]; 8];
