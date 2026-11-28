@@ -304,10 +304,12 @@ models explicit incomplete status or a copied record bound to the checked
 USB requester and BAR. It requires the ACPI pair and USB observation and
 rejects partial, orphaned or mixed payloads before yielding memory regions.
 In Q35 fixture profile 9, the signed loader uses the firmware query on the
-exact emulated resources, carries only a genuine incomplete status across
-firmware exit, and the kernel stops without a device mapping or host release.
-Complete classification is not accepted by this fixture yet. The positive
-copy and post-exit topology comparison are not connected to live boot.
+exact emulated resources and transports incomplete status or a complete
+copy across firmware exit. The kernel independently reconstructs the layout
+from the checked ACPI pair and USB record and tests the final map for
+conflicts. It stops without device mappings or host release regardless of
+the verdict. Installed OVMF has exercised only the live incomplete case;
+complete and conflicting copies are covered by synthetic data-only tests.
 
 The [Linux PCI/ACPI notes](https://docs.kernel.org/PCI/acpi-info.html) explain
 why a missing EFI map descriptor does not by itself diagnose a firmware bug:

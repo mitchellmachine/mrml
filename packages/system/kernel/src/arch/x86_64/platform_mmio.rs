@@ -235,6 +235,63 @@ mod q35_fixture_tests {
     }
 
     #[test]
+    fn q35_dxe_copies_compare_with_independent_acpi_and_final_map() {
+        use DxeObservationError::*;
+        let dmar = fixture();
+        let mut mcfg = [0u8; 60];
+        mcfg[..4].copy_from_slice(b"MCFG");
+        mcfg[4..8].copy_from_slice(&60u32.to_le_bytes());
+        mcfg[44..52].copy_from_slice(&0xe000_0000u64.to_le_bytes());
+        mcfg[55] = 255;
+        checksum(&mut mcfg);
+        let usb = Q35_SHARED_BOOT_USB_RECORD;
+        let expected = [(0xe000_0000, 65536), (0xe410_0000, 1), (0xfed9_0000, 1)];
+        let mut queries = 0;
+        // Synthetic classification for data-only branch coverage.
+        let copied = capture_q35_dxe_diagnostic(&dmar, &mcfg, usb, |base, pages| {
+            assert_eq!((base.get(), pages), expected[queries]);
+            queries += 1;
+            true
+        }).unwrap();
+        assert_eq!(queries, expected.len());
+        let region = |base, pages, kind| {
+            MemoryRegion::new(PhysAddr::new(base).unwrap(), pages, kind).unwrap()
+        };
+        let final_map = [region(0x1000, 1, MemoryKind::Free)];
+        let map = MemoryMap::new(&final_map).unwrap();
+        assert_eq!(check_q35_dxe_diagnostic(&copied, &dmar, &mcfg, usb, &map), Ok(()));
+        let incomplete = capture_q35_dxe_diagnostic(&dmar, &mcfg, usb, |base, _| base.get() != 0xe410_0000).unwrap();
+        assert_eq!(check_q35_dxe_diagnostic(&incomplete, &dmar, &mcfg, usb, &map), Err(IncompleteDxe));
+        let crate::BootDxeDiagnostic::Copied(mut record) = copied else { panic!("expected copied vector") };
+        record[48] ^= 1;
+        assert_eq!(check_q35_dxe_diagnostic(&crate::BootDxeDiagnostic::Copied(record),
+            &dmar, &mcfg, usb, &map), Err(InvalidRecord));
+        for (address, kind) in [
+            (0xe410_0000, MemoryKind::Free),
+            (0xe410_0000, MemoryKind::Mmio),
+            (0xfed9_0000, MemoryKind::Reserved),
+            (0x8120_0000, MemoryKind::Kernel),
+        ] {
+            let conflicts = [region(address, 1, kind)];
+            let conflict_map = MemoryMap::new(&conflicts).unwrap();
+            assert_eq!(check_q35_dxe_diagnostic(&copied, &dmar, &mcfg, usb, &conflict_map), Err(FinalMapConflict));
+        }
+        let mut wrong_usb = *usb;
+        wrong_usb[13] ^= 1;
+        assert_eq!(capture_q35_dxe_diagnostic(&dmar, &mcfg, &wrong_usb, |_, _| {
+            panic!("wrong requester must refuse before any firmware query")
+        }), Err(InvalidLayout));
+        let mut changed_mcfg = mcfg;
+        changed_mcfg[44..52].copy_from_slice(&0xd000_0000u64.to_le_bytes());
+        checksum(&mut changed_mcfg);
+        assert_eq!(check_q35_dxe_diagnostic(&copied, &dmar, &changed_mcfg, usb, &map), Err(InvalidLayout));
+        let mut changed_dmar = dmar;
+        changed_dmar[77] ^= 1;
+        checksum(&mut changed_dmar);
+        assert_eq!(check_q35_dxe_diagnostic(&copied, &changed_dmar, &mcfg, usb, &map), Err(InvalidLayout));
+    }
+
+    #[test]
     fn cold_profile_extends_only_drhd_write_permission() {
         let cold = q35_fixture_activation_mappings().unwrap();
         let shutdown = q35_fixture_shutdown_mappings().unwrap();
@@ -529,7 +586,8 @@ pub struct PassiveDxeObservation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PassiveDxeLayout {
-    route: VtdRequesterRoute,
+    requester: DeviceAddress,
+    remapper: PhysAddr,
     window: MemoryRegion,
     page: MemoryRegion,
     bar: MemoryRegion,
@@ -543,8 +601,17 @@ impl PassiveDxeLayout {
         mcfg: &McfgTopology<A>,
         bar: MemoryRegion,
     ) -> Result<Self, DxeObservationError> {
+        Self::from_coordinates(route.requester(), route.register_base(), dmar, mcfg, bar)
+    }
+
+    fn from_coordinates<const U: usize, const S: usize, const A: usize>(
+        requester: DeviceAddress,
+        remapper: PhysAddr,
+        dmar: &DmarTopology<U, S>,
+        mcfg: &McfgTopology<A>,
+        bar: MemoryRegion,
+    ) -> Result<Self, DxeObservationError> {
         use DxeObservationError::*;
-        let requester = route.requester();
         let entry = mcfg.allocations().find(|entry| {
             entry.segment == requester.segment()
                 && (entry.start_bus..=entry.end_bus).contains(&requester.bus())
@@ -582,13 +649,13 @@ impl PassiveDxeLayout {
                 return Err(ResourceOverlap);
             }
             route_found |= unit.segment == requester.segment()
-                && unit.register_base == route.register_base();
+                && unit.register_base == remapper;
             *remappers.get_mut(index).ok_or(InvalidLayout)? = Some((unit.segment, frame));
         }
         if !route_found {
             return Err(InconsistentRoute);
         }
-        Ok(Self { route, window, page, bar, remappers })
+        Ok(Self { requester, remapper, window, page, bar, remappers })
     }
 
     fn diagnostic_record(&self) -> [u8; PASSIVE_DXE_RECORD_BYTES] {
@@ -597,13 +664,13 @@ impl PassiveDxeLayout {
         record[8..10].copy_from_slice(&1u16.to_le_bytes());
         record[10..12].copy_from_slice(&(PASSIVE_DXE_RECORD_BYTES as u16).to_le_bytes());
         record[12] = self.remappers.iter().flatten().count() as u8;
-        let requester = self.route.requester();
+        let requester = self.requester;
         record[16..18].copy_from_slice(&requester.segment().to_le_bytes());
         record[18] = requester.bus();
         record[19] = requester.device();
         record[20] = requester.function();
         for (offset, value) in [
-            (24, self.route.register_base().get()),
+            (24, self.remapper.get()),
             (32, self.window.start().get()),
             (40, self.window.pages()),
             (48, self.page.start().get()),
@@ -618,6 +685,14 @@ impl PassiveDxeLayout {
             record[offset + 8..offset + 10].copy_from_slice(&segment.to_le_bytes());
         }
         record
+    }
+
+    fn check_record(&self, record: &[u8], memory: &MemoryMap<'_>) -> Result<(), DxeObservationError> {
+        // No wire address or count is used for a read, a lookup or a loop bound.
+        if record != self.diagnostic_record() {
+            return Err(DxeObservationError::InvalidRecord);
+        }
+        self.check_map(memory)
     }
 
     fn check_map(&self, memory: &MemoryMap<'_>) -> Result<(), DxeObservationError> {
@@ -684,12 +759,7 @@ impl PassiveDxeObservation {
             return Err(DxeObservationError::InvalidRecord);
         }
         let current = PassiveDxeLayout::from_acpi(route, dmar, mcfg, bar)?;
-        // No wire address or count is used for a read, a lookup, or a loop bound.
-        // Exact canonical equality also rejects unknown versions and extra data.
-        if record != current.diagnostic_record() {
-            return Err(DxeObservationError::InvalidRecord);
-        }
-        current.check_map(memory)
+        current.check_record(record, memory)
     }
 
     /// Compare independently re-derived coordinates and validate that no
@@ -710,6 +780,67 @@ impl PassiveDxeObservation {
         }
         current.check_map(memory)
     }
+}
+
+// Reconstruct only the known emulated layout. Never fabricate a VtdRequesterRoute
+// or consult registers to validate this diagnostic.
+fn q35_dxe_layout(
+    dmar_bytes: &[u8],
+    mcfg_bytes: &[u8],
+    usb: &[u8; crate::BOOT_USB_PCI_RECORD_BYTES],
+) -> Result<PassiveDxeLayout, DxeObservationError> {
+    use DxeObservationError::InvalidLayout;
+    if usb != Q35_SHARED_BOOT_USB_RECORD
+        || Q35FixtureTopology::from_dmar(dmar_bytes) != Some(Q35FixtureTopology::Isolated)
+    {
+        return Err(InvalidLayout);
+    }
+    let dmar = DmarTopology::<1, 64>::parse(dmar_bytes).map_err(|_| InvalidLayout)?;
+    let mcfg = McfgTopology::<1>::parse(mcfg_bytes).map_err(|_| InvalidLayout)?;
+    let entry = mcfg.allocations().next().ok_or(InvalidLayout)?;
+    if entry.segment != 0 || entry.start_bus != 0 || entry.end_bus != 255
+        || entry.physical_start() != 0xe000_0000
+    {
+        return Err(InvalidLayout);
+    }
+    let requester = DeviceAddress::new(0, 0x41, 0, 0).map_err(|_| InvalidLayout)?;
+    let remapper = dmar.units().next().ok_or(InvalidLayout)?.register_base;
+    let base = PhysAddr::new(0x8120_0000).map_err(|_| InvalidLayout)?;
+    let bar = MemoryRegion::new(base, 4, MemoryKind::Mmio).map_err(|_| InvalidLayout)?;
+    PassiveDxeLayout::from_coordinates(requester, remapper, &dmar, &mcfg, bar)
+}
+
+/// Data-only classification for the isolated Q35 fixture. The caller must
+/// source query results from its live, validated firmware service.
+pub fn capture_q35_dxe_diagnostic(
+    dmar: &[u8],
+    mcfg: &[u8],
+    usb: &[u8; crate::BOOT_USB_PCI_RECORD_BYTES],
+    mut query: impl FnMut(PhysAddr, u64) -> bool,
+) -> Result<crate::BootDxeDiagnostic, DxeObservationError> {
+    let layout = q35_dxe_layout(dmar, mcfg, usb)?;
+    let complete = layout.firmware_ranges().all(|range| query(range.start(), range.pages()));
+    Ok(if complete {
+        crate::BootDxeDiagnostic::Copied(layout.diagnostic_record())
+    } else {
+        crate::BootDxeDiagnostic::Incomplete
+    })
+}
+
+/// Rebuild the exact fixture using copied boot ACPI data and the receiver's
+/// final normalized memory map. Validation supplies no mapping or capability.
+pub fn check_q35_dxe_diagnostic(
+    diagnostic: &crate::BootDxeDiagnostic,
+    dmar: &[u8],
+    mcfg: &[u8],
+    usb: &[u8; crate::BOOT_USB_PCI_RECORD_BYTES],
+    memory: &MemoryMap<'_>,
+) -> Result<(), DxeObservationError> {
+    let layout = q35_dxe_layout(dmar, mcfg, usb)?;
+    let crate::BootDxeDiagnostic::Copied(record) = diagnostic else {
+        return Err(DxeObservationError::IncompleteDxe);
+    };
+    layout.check_record(record, memory)
 }
 
 /// A physical-page candidate for a later independently verified kernel-only,

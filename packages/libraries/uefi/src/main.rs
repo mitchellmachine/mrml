@@ -1177,13 +1177,20 @@ unsafe fn boot(
         None
     };
     #[cfg(feature = "q35-mmio-probe")]
-    if transition.q35_profile == 9 {
-        if q35_dxe_is_incomplete(system, services) != Some(true) {
+    let q35_dxe = if transition.q35_profile == 9 {
+        let usb = q35_usb_record.as_ref().unwrap_or_else(|| halt());
+        let Some(diagnostic) = capture_q35_dxe(system, services, acpi_root, framebuffer, usb) else {
             loader_trace(0xef);
             halt();
-        }
-        loader_trace(0xf9);
-    }
+        };
+        loader_trace(match diagnostic {
+            mrml_kernel::BootDxeDiagnostic::Incomplete => 0xf9,
+            mrml_kernel::BootDxeDiagnostic::Copied(_) => 0xfa,
+        });
+        Some(diagnostic)
+    } else {
+        None
+    };
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services, trace) }?;
     paint_boot_stage(framebuffer, b"MRML EFI END PASS");
     unsafe {
@@ -1209,12 +1216,21 @@ unsafe fn boot(
             usb_boot_record,
             #[cfg(feature = "q35-mmio-probe")]
             q35_usb_record,
+            #[cfg(feature = "q35-mmio-probe")]
+            q35_dxe,
         )
     }
 }
 
 #[cfg(feature = "q35-mmio-probe")]
-fn q35_dxe_is_incomplete(system: &SystemTable, services: &BootServices) -> Option<bool> {
+fn capture_q35_dxe(
+    system: &SystemTable,
+    services: &BootServices,
+    acpi_root: u64,
+    framebuffer: Framebuffer,
+    usb: &[u8; BOOT_XHCI_RECORD_BYTES],
+) -> Option<mrml_kernel::BootDxeDiagnostic> {
+    use mrml_kernel::arch::x86_64::{capture_q35_dxe_diagnostic, copy_dmar, copy_mcfg};
     use mrml_uefi::dxe_mmio::{dxe_boot_services_contains, inspect_dxe_mmio};
 
     // SAFETY: only the sealed fixture on the BSP calls this before the first
@@ -1236,20 +1252,23 @@ fn q35_dxe_is_incomplete(system: &SystemTable, services: &BootServices) -> Optio
             return None;
         }
         let raw = core::slice::from_raw_parts(buffer.cast::<u8>(), size);
-        // The earlier fixture snapshot proved the exact MCFG/DMAR layout and
-        // firmware PCI I/O established the exact shared USB controller.
-        let ranges = [
-            (0xe000_0000, 0x1000_0000),
-            (0xe410_0000, 0x1000),
-            (0xfed9_0000, 0x1000),
-        ];
-        let mut complete = true;
-        for (base, bytes) in ranges {
-            complete &= inspect_dxe_mmio(system, base, bytes, |access, address, bytes| {
+        let regions = &mut *REGIONS.0.get();
+        let count = normalize_memory_map(
+            raw, stride, framebuffer.base, framebuffer.size as u64, regions,
+        ).ok()?;
+        let mut memory = FirmwareAcpiMemory { regions: &regions[..count] };
+        let mut dmar = [0; MAX_HANDOFF_DMA_ACPI_TABLE_BYTES];
+        let mut mcfg = [0; MAX_HANDOFF_DMA_ACPI_TABLE_BYTES];
+        let dmar_len = copy_dmar(&mut memory, acpi_root, &mut dmar).ok()?;
+        let mcfg_len = copy_mcfg(&mut memory, acpi_root, &mut mcfg).ok()?;
+        capture_q35_dxe_diagnostic(&dmar[..dmar_len], &mcfg[..mcfg_len], usb, |base, pages| {
+            let Some(bytes) = pages.checked_mul(mrml_kernel::PAGE_SIZE) else {
+                return false;
+            };
+            inspect_dxe_mmio(system, base.get(), bytes, |access, address, bytes| {
                 dxe_boot_services_contains(raw, stride, access, address, bytes)
-            }).is_ok();
-        }
-        Some(!complete)
+            }).is_ok()
+        }).ok()
     }
 }
 
@@ -1393,6 +1412,8 @@ unsafe fn launch_after_exit(
     usb_boot_record: Option<[u8; BOOT_XHCI_RECORD_BYTES]>,
     #[cfg(feature = "q35-mmio-probe")]
     q35_usb_record: Option<[u8; BOOT_XHCI_RECORD_BYTES]>,
+    #[cfg(feature = "q35-mmio-probe")]
+    q35_dxe: Option<mrml_kernel::BootDxeDiagnostic>,
 ) -> ! {
     let map_bytes = unsafe { core::slice::from_raw_parts(MEMORY_MAP.0.get().cast(), map_size) };
     if let Some(base) = transition.boot_dma {
@@ -1495,6 +1516,8 @@ unsafe fn launch_after_exit(
         dma_acpi,
         #[cfg(feature = "q35-mmio-probe")]
         q35_usb_record.as_ref(),
+        #[cfg(feature = "q35-mmio-probe")]
+        q35_dxe.as_ref(),
         service,
         recovery_state,
         installed_recovery,
@@ -2344,6 +2367,8 @@ fn enter_kernel(
     dma_acpi: Option<(&[u8], &[u8])>,
     #[cfg(feature = "q35-mmio-probe")]
     q35_usb_record: Option<&[u8; BOOT_XHCI_RECORD_BYTES]>,
+    #[cfg(feature = "q35-mmio-probe")]
+    q35_dxe: Option<&mrml_kernel::BootDxeDiagnostic>,
     service: PreparedService,
     recovery_state: Option<RecoveryStateMetadata>,
     installed_recovery: Option<InstalledRecoveryHandoff>,
@@ -2434,9 +2459,9 @@ fn enter_kernel(
     };
     #[cfg(feature = "q35-mmio-probe")]
     let handoff_length = if transition.q35_profile == 9 {
-        mrml_kernel::append_boot_dxe_diagnostic(
-            handoff_length, &mrml_kernel::BootDxeDiagnostic::Incomplete, handoff,
-        ).map_err(|_| LOAD_ERROR)?
+        let diagnostic = q35_dxe.ok_or(LOAD_ERROR)?;
+        mrml_kernel::append_boot_dxe_diagnostic(handoff_length, diagnostic, handoff)
+            .map_err(|_| LOAD_ERROR)?
     } else {
         handoff_length
     };

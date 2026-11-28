@@ -4278,8 +4278,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         // SAFETY: this is the signed fixture's BSP and no secondary CPU has
         // started. Loader tables are identity-mapped and not mutated here.
         let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
-        let (dmar, _) = handoff.dma_acpi(encoded).unwrap_or_else(|| halt());
-        use mrml_kernel::arch::x86_64::Q35FixtureTopology;
+        let (dmar, mcfg) = handoff.dma_acpi(encoded).unwrap_or_else(|| halt());
+        use mrml_kernel::arch::x86_64::{DxeObservationError, Q35FixtureTopology, check_q35_dxe_diagnostic};
         let topology = Q35FixtureTopology::from_dmar(dmar).unwrap_or_else(|| halt());
         if let Some(diagnostic) = handoff.boot_dxe_diagnostic() {
             let fixture_unmapped = mrml_kernel::arch::x86_64::q35_fixture_probe_mappings(topology)
@@ -4291,13 +4291,17 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                             .is_some_and(|address| matches!(active.leaf(address), Ok(None)))
                     })
                 }));
-            if topology == Q35FixtureTopology::Isolated
-                && handoff.usb_pci_record() == Some(mrml_kernel::arch::x86_64::Q35_SHARED_BOOT_USB_RECORD)
-                && matches!(diagnostic, mrml_kernel::BootDxeDiagnostic::Incomplete)
-                && fixture_unmapped
-            {
-                native_fat32_probe::trace(0xcb);
+            if !fixture_unmapped {
+                halt();
             }
+            let usb = handoff.usb_pci_record().unwrap_or_else(|| halt());
+            let map = mrml_kernel::MemoryMap::new(&regions[..region_count]).unwrap_or_else(|_| halt());
+            let verdict = check_q35_dxe_diagnostic(diagnostic, dmar, mcfg, usb, &map);
+            native_fat32_probe::trace(match verdict {
+                Err(DxeObservationError::IncompleteDxe) => 0xcb,
+                Ok(()) => 0xcc,
+                Err(_) => 0xcd,
+            });
             // This diagnostic never reaches the QMP release or device code.
             halt();
         }
