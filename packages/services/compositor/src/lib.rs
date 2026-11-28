@@ -4,9 +4,7 @@ mod boot_scanout;
 mod scanout_probe;
 mod transport;
 
-pub use boot_scanout::{
-    BootScanoutError, paint_boot_ready, publish_total_guest_scanout, render_private_boot_frame,
-};
+pub use boot_scanout::{BootScanoutError, publish_total_guest_scanout, render_private_boot_frame};
 
 pub use scanout_probe::{
     BOOT_SCANOUT_PROBE_BYTES, BOOT_SCANOUT_PROBE_HEIGHT, BOOT_SCANOUT_PROBE_READY,

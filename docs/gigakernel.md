@@ -55,6 +55,23 @@ guest entry points, and routing into the Semantic Scene Graph are not yet
 wired. Device reports cannot directly interact with a trusted prompt;
 the existing [accessibility and authority rules](ACCESSIBILITY.md) apply.
 
+## Boot display and compositor service
+
+UEFI GOP mode selection stays in the loader: GOP is a firmware boot
+protocol, not a runtime display service. After boot, the compositor
+microVM renders into private memory. A trusted output owner must authorize
+presentation separately; the guest receives no physical framebuffer
+address, firmware interface, or raw device mapping. The compositor has no
+direct native-paint entry point.
+
+The signed hosted compositor probe already proves a private raster capture.
+Hosted projection tests now take a captured frame from a live admitted
+route and copy it into a bounded output, including different source and
+output strides and RGB/BGR ordering. The copy preserves pixels outside
+its rectangle and refuses retired routes, unauthorized or replaced outputs,
+and incompatible geometry. Normal boot still does not launch a compositor
+or present its frame on real hardware. See [the reported fixture scope](ISOLATION_PLACEMENT.md).
+
 ## How the Gigakernel compares
 
 Gigakernel, named after Gigachad, is MRML's name for its experimental

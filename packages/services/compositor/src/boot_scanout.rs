@@ -14,23 +14,6 @@ pub enum BootScanoutError {
     Framebuffer(FramebufferError),
 }
 
-/// Paint the marker into one scanout slice lent to the compositor.
-///
-/// The trusted caller must provide the current output identity and its exact
-/// bounded slice. Neither the identity nor the geometry authorizes a mapping.
-/// The output control capability must be checked again on every call.
-pub fn paint_boot_ready<const N: usize>(
-    capabilities: &CapabilitySpace<N>,
-    control: Capability,
-    binding: DisplayOutputIdentity,
-    current: DisplayOutputIdentity,
-    layout: FramebufferLayout,
-    pixels: &mut [u8],
-) -> Result<(), BootScanoutError> {
-    validate_output(capabilities, control, binding, current)?;
-    render_private_boot_frame(layout, pixels)
-}
-
 /// Draw into compositor-private RAM. This grants no display authority.
 pub fn render_private_boot_frame(
     layout: FramebufferLayout,
@@ -65,6 +48,9 @@ pub fn render_private_boot_frame(
 /// The trusted supervisor supplies the original admission table, the current
 /// route specification, and a capture operation bound to the concrete endpoint.
 /// The capture must return a stable frame snapshot, not mutable guest memory.
+/// The trusted transport supplies the negotiated source layout and the output
+/// owner supplies the current GOP-derived layout. This performs no firmware call
+/// or mapping and never gives the guest access to the output aperture.
 #[allow(clippy::too_many_arguments)]
 pub fn publish_total_guest_scanout<'frame, E, const N: usize, const DOMAINS: usize>(
     admission: &IsolationAdmissionTable<DOMAINS>,
@@ -74,7 +60,8 @@ pub fn publish_total_guest_scanout<'frame, E, const N: usize, const DOMAINS: usi
     control: Capability,
     binding: DisplayOutputIdentity,
     current: DisplayOutputIdentity,
-    layout: FramebufferLayout,
+    source_layout: FramebufferLayout,
+    output_layout: FramebufferLayout,
     capture: impl FnOnce(&E) -> Option<&'frame [u8]>,
     scanout: &mut [u8],
 ) -> Result<(), BootScanoutError> {
@@ -95,49 +82,53 @@ pub fn publish_total_guest_scanout<'frame, E, const N: usize, const DOMAINS: usi
     }
     validate_output(capabilities, control, binding, current)?;
     let frame = capture(route.endpoint()).ok_or(BootScanoutError::CaptureUnavailable)?;
-    copy_visible_pixels(layout, frame, scanout)
-}
-
-/// Publish a compositor-rendered microVM frame into a host-owned scanout.
-///
-/// The projection owner supplies the captured guest image and lends the
-/// exact output slice and geometry. No physical address or scanout slice is
-/// passed into the guest. Copy only visible pixels, leaving scanout padding
-/// and allocation tail private. This is a copy primitive, not guest launch.
-#[cfg(test)]
-fn publish_guest_scanout<const N: usize>(
-    capabilities: &CapabilitySpace<N>,
-    control: Capability,
-    binding: DisplayOutputIdentity,
-    current: DisplayOutputIdentity,
-    layout: FramebufferLayout,
-    guest_frame: &[u8],
-    scanout: &mut [u8],
-) -> Result<(), BootScanoutError> {
-    validate_output(capabilities, control, binding, current)?;
-    copy_visible_pixels(layout, guest_frame, scanout)
+    copy_visible_pixels(source_layout, frame, output_layout, scanout)
 }
 
 fn copy_visible_pixels(
-    layout: FramebufferLayout,
+    source: FramebufferLayout,
     guest_frame: &[u8],
+    output: FramebufferLayout,
     scanout: &mut [u8],
 ) -> Result<(), BootScanoutError> {
-    let declared = layout.byte_length() as usize;
-    if guest_frame.len() != declared || scanout.len() < declared {
+    if guest_frame.len() != source.byte_length() as usize {
         return Err(BootScanoutError::Framebuffer(
             FramebufferError::InvalidLength,
         ));
     }
-    // FramebufferLayout validates these products and the full stride extent.
-    let stride = layout.stride() as usize * 4;
-    let row_pixels = layout.width() as usize * 4;
-    let frame_bytes = stride * layout.height() as usize;
-    for (guest, hardware) in guest_frame[..frame_bytes]
-        .chunks_exact(stride)
-        .zip(scanout[..frame_bytes].chunks_exact_mut(stride))
+    if scanout.len() < output.byte_length() as usize {
+        return Err(BootScanoutError::Framebuffer(
+            FramebufferError::BufferTooSmall,
+        ));
+    }
+    if source.width() > output.width() || source.height() > output.height() {
+        return Err(BootScanoutError::Framebuffer(FramebufferError::OutOfBounds));
+    }
+
+    // Layout construction validates the stride and its full extent. All
+    // validation precedes the first write. An exact, top-left rectangle is
+    // enough for the boot marker; no scaling, clipping or mode switching.
+    let source_stride = source.stride() as usize * 4;
+    let output_stride = output.stride() as usize * 4;
+    let visible = source.width() as usize * 4;
+    let rows = source.height() as usize;
+    let swap = source.format() != output.format();
+    for (src, dst) in guest_frame
+        .chunks_exact(source_stride)
+        .zip(scanout.chunks_exact_mut(output_stride))
+        .take(rows)
     {
-        hardware[..row_pixels].copy_from_slice(&guest[..row_pixels]);
+        for (pixel, out) in src[..visible]
+            .chunks_exact(4)
+            .zip(dst[..visible].chunks_exact_mut(4))
+        {
+            let (first, third) = if swap {
+                (pixel[2], pixel[0])
+            } else {
+                (pixel[0], pixel[2])
+            };
+            out.copy_from_slice(&[first, pixel[1], third, 0]);
+        }
     }
     Ok(())
 }
@@ -160,80 +151,36 @@ fn validate_output<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mrml_kernel::{ObjectId, PixelFormat};
+    use mrml_kernel::PixelFormat;
 
     #[test]
-    fn paint_preserves_padding_and_bytes_outside_scanout() {
-        let mut caps = CapabilitySpace::<2>::new();
-        let output = DisplayOutputIdentity::new(ObjectId(5), 1).unwrap();
-        let control = caps.insert(output.object(), Rights::CONTROL).unwrap();
-        let layout = FramebufferLayout::new(
-            1440 * 48 + 8,
-            352,
-            48,
-            360,
+    fn private_raster_projects_to_both_gop_formats_without_touching_other_pixels() {
+        let source = FramebufferLayout::new(
+            132 * 32 * 4 + 4,
+            128,
+            32,
+            132,
             PixelFormat::BlueGreenRedReserved,
         )
         .unwrap();
-        let mut pixels = [0xa7; 1440 * 48 + 16];
-        paint_boot_ready(&caps, control, output, output, layout, &mut pixels).unwrap();
-        assert_eq!(&pixels[..4], &[0x5a, 0x3b, 0x0b, 0]);
-        assert_eq!(&pixels[24 * 1440 + 16 * 4..][..4], &[255, 255, 255, 0]);
-        for row in pixels[..1440 * 48].chunks_exact(1440) {
-            assert_eq!(&row[352 * 4..], &[0xa7; 32]);
+        let mut frame = [0xEE; 132 * 32 * 4 + 4];
+        render_private_boot_frame(source, &mut frame).unwrap();
+        assert_eq!(&frame[128 * 4..132 * 4], &[0xEE; 16]);
+        frame[3] = 0xEE;
+        for (format, pixel) in [
+            (PixelFormat::RedGreenBlueReserved, [0x0b, 0x3b, 0x5a, 0]),
+            (PixelFormat::BlueGreenRedReserved, [0x5a, 0x3b, 0x0b, 0]),
+        ] {
+            let output = FramebufferLayout::new(160 * 40 * 4 + 8, 144, 40, 160, format).unwrap();
+            let mut screen = [0xa7; 160 * 40 * 4 + 16];
+            copy_visible_pixels(source, &frame, output, &mut screen).unwrap();
+            assert_eq!(&screen[..4], &pixel);
+            assert_eq!(&screen[(24 * 160 + 16) * 4..][..4], &[255, 255, 255, 0]);
+            for row in screen[..160 * 32 * 4].chunks_exact(160 * 4) {
+                assert!(row[128 * 4..].iter().all(|&byte| byte == 0xa7));
+            }
+            assert!(screen[160 * 32 * 4..].iter().all(|&byte| byte == 0xa7));
         }
-        assert_eq!(&pixels[1440 * 48..], &[0xa7; 16]);
-    }
-
-    #[test]
-    fn microvm_frame_copy_never_exposes_scanout_padding_and_fails_closed() {
-        let mut caps = CapabilitySpace::<2>::new();
-        let output = DisplayOutputIdentity::new(ObjectId(5), 1).unwrap();
-        let replacement = DisplayOutputIdentity::new(ObjectId(5), 2).unwrap();
-        let control = caps.insert(output.object(), Rights::CONTROL).unwrap();
-        let layout =
-            FramebufferLayout::new(26, 2, 2, 3, PixelFormat::RedGreenBlueReserved).unwrap();
-        let mut guest = [0x55; 26];
-        let mut scanout = [0xa7; 28];
-        paint_boot_ready(&caps, control, output, output, layout, &mut guest).unwrap();
-        assert_eq!(
-            publish_guest_scanout(
-                &caps,
-                control,
-                output,
-                replacement,
-                layout,
-                &guest,
-                &mut scanout
-            ),
-            Err(BootScanoutError::StaleOutput)
-        );
-        assert_eq!(
-            publish_guest_scanout(
-                &caps,
-                control,
-                output,
-                output,
-                layout,
-                &guest[..25],
-                &mut scanout
-            ),
-            Err(BootScanoutError::Framebuffer(
-                FramebufferError::InvalidLength
-            ))
-        );
-        assert_eq!(scanout, [0xa7; 28]);
-        publish_guest_scanout(&caps, control, output, output, layout, &guest, &mut scanout)
-            .unwrap();
-        assert_eq!(&scanout[0..8], &guest[0..8]);
-        assert_eq!(&scanout[12..20], &guest[12..20]);
-        assert_eq!(&scanout[8..12], &[0xa7; 4]);
-        assert_eq!(&scanout[20..28], &[0xa7; 8]);
-        caps.revoke(control).unwrap();
-        assert_eq!(
-            publish_guest_scanout(&caps, control, output, output, layout, &guest, &mut scanout),
-            Err(BootScanoutError::WrongAuthority)
-        );
     }
 
     #[test]
@@ -261,11 +208,45 @@ mod tests {
             .commit(&mut admission, 7u64)
             .unwrap();
         let output = DisplayOutputIdentity::new(ObjectId(6), 1).unwrap();
-        let mut caps = CapabilitySpace::<1>::new();
+        let mut caps = CapabilitySpace::<5>::new();
         let grant = caps.insert(output.object(), Rights::CONTROL).unwrap();
+        let revoked = caps.insert(output.object(), Rights::CONTROL).unwrap();
+        caps.revoke(revoked).unwrap();
+        let wrong_output = caps.insert(ObjectId(7), Rights::CONTROL).unwrap();
+        let inspect = caps.insert(output.object(), Rights::INSPECT).unwrap();
+        let broad = caps
+            .insert(output.object(), Rights::CONTROL.union(Rights::DELEGATE))
+            .unwrap();
+        let replaced_output = DisplayOutputIdentity::new(output.object(), 2).unwrap();
         let layout = FramebufferLayout::new(4, 1, 1, 1, PixelFormat::BlueGreenRedReserved).unwrap();
         let frame = [5, 6, 7, 0];
         let mut screen = [0xa7; 4];
+
+        for (capability, current, error) in [
+            (grant, replaced_output, BootScanoutError::StaleOutput),
+            (revoked, output, BootScanoutError::WrongAuthority),
+            (wrong_output, output, BootScanoutError::WrongAuthority),
+            (inspect, output, BootScanoutError::WrongAuthority),
+            (broad, output, BootScanoutError::WrongAuthority),
+        ] {
+            assert_eq!(
+                publish_total_guest_scanout(
+                    &admission,
+                    &route,
+                    microvm,
+                    &caps,
+                    capability,
+                    output,
+                    current,
+                    layout,
+                    layout,
+                    |_| panic!("invalid output authority captured"),
+                    &mut screen
+                ),
+                Err(error)
+            );
+            assert_eq!(screen, [0xa7; 4]);
+        }
 
         let wrong_provider = spec(6, IsolationPlacement::Microvm);
         assert_eq!(
@@ -277,6 +258,7 @@ mod tests {
                 grant,
                 output,
                 output,
+                layout,
                 layout,
                 |_| panic!("wrong provider captured"),
                 &mut screen,
@@ -292,6 +274,7 @@ mod tests {
             grant,
             output,
             output,
+            layout,
             layout,
             |endpoint| {
                 assert_eq!(*endpoint, 7);
@@ -317,6 +300,7 @@ mod tests {
                 output,
                 output,
                 layout,
+                layout,
                 |_| panic!("retired guest captured"),
                 &mut screen,
             ),
@@ -331,6 +315,7 @@ mod tests {
                 grant,
                 output,
                 output,
+                layout,
                 layout,
                 |endpoint| {
                     assert_eq!(*endpoint, 8);
@@ -358,6 +343,7 @@ mod tests {
                 output,
                 output,
                 layout,
+                layout,
                 |_| panic!("native fallback captured"),
                 &mut screen,
             ),
@@ -367,40 +353,28 @@ mod tests {
     }
 
     #[test]
-    fn rejected_calls_cannot_write_pixels() {
-        let mut caps = CapabilitySpace::<4>::new();
-        let output = DisplayOutputIdentity::new(ObjectId(5), 1).unwrap();
-        let replacement = DisplayOutputIdentity::new(ObjectId(5), 2).unwrap();
-        let control = caps.insert(output.object(), Rights::CONTROL).unwrap();
-        let inspect = caps.insert(output.object(), Rights::INSPECT).unwrap();
-        let other = caps.insert(ObjectId(6), Rights::CONTROL).unwrap();
-        let broad = caps
-            .insert(output.object(), Rights::CONTROL.union(Rights::DELEGATE))
-            .unwrap();
+    fn invalid_geometry_and_lengths_never_partially_publish() {
         let layout =
             FramebufferLayout::new(16, 2, 2, 2, PixelFormat::RedGreenBlueReserved).unwrap();
-        let mut pixels = [0xa7; 16];
+        let small = FramebufferLayout::new(8, 1, 2, 1, PixelFormat::RedGreenBlueReserved).unwrap();
+        let guest = [1; 16];
+        let mut sink = [0xa7; 16];
         assert_eq!(
-            paint_boot_ready(&caps, control, output, replacement, layout, &mut pixels),
-            Err(BootScanoutError::StaleOutput)
+            copy_visible_pixels(layout, &guest[..15], layout, &mut sink),
+            Err(BootScanoutError::Framebuffer(
+                FramebufferError::InvalidLength
+            ))
         );
-        for cap in [inspect, other, broad] {
-            assert_eq!(
-                paint_boot_ready(&caps, cap, output, output, layout, &mut pixels),
-                Err(BootScanoutError::WrongAuthority)
-            );
-        }
         assert_eq!(
-            paint_boot_ready(&caps, control, output, output, layout, &mut pixels[..15]),
+            copy_visible_pixels(layout, &guest, layout, &mut sink[..15]),
             Err(BootScanoutError::Framebuffer(
                 FramebufferError::BufferTooSmall
             ))
         );
-        caps.revoke(control).unwrap();
         assert_eq!(
-            paint_boot_ready(&caps, control, output, output, layout, &mut pixels),
-            Err(BootScanoutError::WrongAuthority)
+            copy_visible_pixels(layout, &guest, small, &mut sink),
+            Err(BootScanoutError::Framebuffer(FramebufferError::OutOfBounds))
         );
-        assert_eq!(pixels, [0xa7; 16]);
+        assert_eq!(sink, [0xa7; 16]);
     }
 }
