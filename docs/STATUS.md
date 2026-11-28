@@ -6,15 +6,15 @@
 
 | Measure | Current value |
 | --- | ---: |
-| Workspace packages | 75 |
-| Package manifests | 75 |
+| Workspace packages | 80 |
+| Package manifests | 80 |
 | Compile edges | 236 |
 | Package edges | 205 |
 | Runtime-interface edges | 5 |
 | Build-tool edges | 0 |
 | System-release edges | 3 |
 | Feature declarations | 108 |
-| Artifact declarations | 119 |
+| Artifact declarations | 124 |
 | Exact build-input declarations | 211 |
 | Declared integration tests | 11 |
 | Declared examples | 8 |
@@ -25,9 +25,9 @@
 
 | Measure | Current value |
 | --- | ---: |
-| Rust source files | 803 |
-| Rust source lines | 695441 |
-| Static `#[test]` annotations | 4894 |
+| Rust source files | 808 |
+| Rust source lines | 696279 |
+| Static `#[test]` annotations | 4905 |
 | Largest Rust source | `packages/compiler/core/src/codegen/tests.rs` (996630 bytes) |
 | Files containing admitted unsafe boundaries | 188 |
 | Unsafe blocks | 2662 |

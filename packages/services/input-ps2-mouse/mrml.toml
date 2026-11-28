@@ -1,0 +1,42 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.service.input-ps2-mouse"
+kind = "service"
+name = "mrml-input-ps2-mouse"
+profile = "system-service"
+
+[isolation]
+default = "microvm"
+minimum = "microvm"
+must_run = false
+reason = "Input decoder core only; guest transport and trusted input routing are not wired"
+runtime_class = "unsupported-blocker"
+supported = ["microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_input_ps2_mouse"
+
+[rust]
+crate_name = "mrml_input_ps2_mouse"
+crate_type = "lib"
+source = "packages/services/input-ps2-mouse/src/lib.rs"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]

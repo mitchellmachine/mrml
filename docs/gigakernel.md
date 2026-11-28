@@ -22,6 +22,25 @@ the platform adapter that binds each launch to independently admitted
 controller, interrupt, and DMA capabilities are not wired yet. Inventory
 data itself never grants those capabilities.
 
+## Input driver services
+
+Input decoding is split into five microVM-only service components: PS/2
+keyboard, PS/2 mouse, USB keyboard, USB mouse, and USB tablet. A shared
+i8042 broker must own the PS/2 ports and route keyboard and auxiliary
+bytes separately. Each USB controller keeps its own driver microVM and
+will route just the admitted HID interface reports to the input service.
+Input services do not receive raw I/O ports, controller mappings, or DMA
+access. This keeps a USB mouse and keyboard separate even if they share
+one controller or are part of one composite device.
+
+The PS/2 cores cover scan set 2 and standard three-byte mouse packets.
+USB keyboard and mouse cover HID boot protocol; the tablet covers the
+bounded QEMU-style absolute pointer profile, not pen pressure or touch.
+The decoder cores have host test coverage. Live controller transports,
+guest entry points, and routing into the Semantic Scene Graph are not yet
+wired. Device reports cannot directly interact with a trusted prompt;
+the existing [accessibility and authority rules](ACCESSIBILITY.md) apply.
+
 ## How the Gigakernel compares
 
 Gigakernel, named after Gigachad, is MRML's name for its experimental

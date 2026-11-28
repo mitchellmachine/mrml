@@ -726,6 +726,71 @@ boot_bound = []
 system_release_bound = []
 
 [[package]]
+id = "org.mrml.service.input-ps2-keyboard"
+path = "packages/services/input-ps2-keyboard"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
+isolation_maximum = "microvm"
+isolation_supported = ["microvm"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.service.input-ps2-mouse"
+path = "packages/services/input-ps2-mouse"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
+isolation_maximum = "microvm"
+isolation_supported = ["microvm"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.service.input-usb-keyboard"
+path = "packages/services/input-usb-keyboard"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
+isolation_maximum = "microvm"
+isolation_supported = ["microvm"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.service.input-usb-mouse"
+path = "packages/services/input-usb-mouse"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
+isolation_maximum = "microvm"
+isolation_supported = ["microvm"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.service.input-usb-tablet"
+path = "packages/services/input-usb-tablet"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
+isolation_maximum = "microvm"
+isolation_supported = ["microvm"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
 id = "org.mrml.service.storage"
 path = "packages/services/storage"
 isolation_default = "native-service"
