@@ -54,3 +54,11 @@ compile_name = "mrml-input-ps2-mouse"
 package = "org.mrml.service.input-ps2-mouse"
 scope = "compile"
 test_only = true
+
+[[build_input]]
+fingerprint = "fnv1a64:22f5798d3dc27e3d"
+id = "external-command.run.qemu-system-x86-64.1"
+kind = "external-command"
+line = 121
+path = "packages/services/input-ps2-broker/src/qemu.rs"
+reason = "Opt-in test sends synthetic input only to a fresh private QEMU i8042 emulator; no host input devices are opened or passed through."

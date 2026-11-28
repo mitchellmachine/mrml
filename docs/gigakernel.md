@@ -30,7 +30,10 @@ i8042 broker must own the PS/2 ports and route keyboard and auxiliary
 bytes separately. The broker's tested routing core separates command
 replies from input, bounds work and queues, and quarantines an affected
 stream after loss until the owner re-establishes its input boundary. It
-contains no live port reads. Each USB controller keeps its own driver microVM and
+contains no production port reads. The opt-in Linux QEMU test runs a
+private emulator and verifies that its actual i8042 output reaches
+only the corresponding keyboard or mouse decoder. Neither decoder
+runs in a guest in that test. Each USB controller keeps its own driver microVM and
 will route just the admitted HID interface reports to the input service.
 Input services do not receive raw I/O ports, controller mappings, or DMA
 access. This keeps a USB mouse and keyboard separate even if they share

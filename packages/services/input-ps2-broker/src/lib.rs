@@ -168,6 +168,12 @@ impl<const N: usize> Ps2Broker<N> {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+extern crate std;
+
+#[cfg(all(test, target_os = "linux"))]
+mod qemu;
+
 #[cfg(test)]
 mod tests {
     use super::*;
