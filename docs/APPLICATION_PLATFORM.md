@@ -382,6 +382,14 @@ and the final screen. The nested-KVM-only transport sends no controller
 commands and gives the guest no keyboard ports. There is no physical input,
 mouse support or general keymap in this boot profile.
 
+The external USB boot-keyboard decoder now tracks validated report edges.
+It waits for an all-released report after attach, a gap, or a malformed
+report and suppresses repeated reports and unordered ordinary-key chords.
+A hosted desktop test routes typed events into the focused `clishell` and
+checks the submitted `echo hi` output. The USB controller transport,
+interface ownership and isolated report delivery are not part of that
+test; external keyboard support on physical hardware remains unverified.
+
 ### MicroVM task manager prototype
 
 The desktop exposes a separate task-manager view for supervisor-projected VM

@@ -274,6 +274,45 @@ fn panel_routes_shell_commands_and_preserves_literal_echo() {
 }
 
 #[cfg(test)]
+#[test]
+fn usb_boot_reports_drive_the_focused_clishell_without_repeating_held_keys() {
+    use mrml_input_usb_keyboard::{BootKeyStream, BootKeyboard, KeyPress};
+    let mut seat = BootKeyStream::new(BootKeyboard::bind(3, 1, 1, true).unwrap());
+    let mut app = BootPanelDesktop::new().unwrap();
+    let mut deliver = |usage: u8| {
+        assert_eq!(seat.ingest(&[0; 8]).unwrap(), None);
+        let report = [0, 0, usage, 0, 0, 0, 0, 0];
+        let press = seat.ingest(&report).unwrap().unwrap();
+        assert_eq!(seat.ingest(&report).unwrap(), None);
+        app.desktop
+            .event(crate::seat::usb_keyboard(press).unwrap(), &mut app.terminal)
+            .unwrap();
+    };
+    // USB keyboard usages for Enter, E C H O, Space, H I, Enter.
+    for usage in [0x28, 0x08, 0x06, 0x0b, 0x12, 0x2c, 0x0b, 0x0c, 0x28] {
+        deliver(usage);
+    }
+    let shell = app.terminal.0.as_ref().unwrap();
+    assert_eq!(shell.input(), []);
+    assert_eq!(shell.output(), ['h', 'i']);
+    assert_eq!(app.desktop.diagnostics().keys_delivered, 8);
+    assert_eq!(
+        crate::seat::usb_keyboard(KeyPress {
+            usage: 0x28,
+            modifiers: 1
+        }),
+        None
+    );
+    assert_eq!(
+        crate::seat::usb_keyboard(KeyPress {
+            usage: 0x04,
+            modifiers: 2
+        }),
+        Some(Event::TerminalKey(Key::Text('A')))
+    );
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

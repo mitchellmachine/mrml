@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 257
+compile_edges = 258
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 215
+package_edges = 216
 system_release_edges = 3
 
 [[package]]
@@ -719,9 +719,9 @@ isolation_default = "microvm"
 isolation_minimum = "microvm"
 isolation_maximum = "microvm"
 isolation_supported = ["microvm"]
-compile_dependencies = ["org.mrml.app.terminal-probe", "org.mrml.library.boot-frame", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.app.terminal-probe", "org.mrml.library.boot-frame", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.service.input-usb-keyboard", "org.mrml.system.kernel"]
 
-static_runtime = ["org.mrml.app.terminal-probe", "org.mrml.library.boot-frame", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.system.kernel"]
+static_runtime = ["org.mrml.app.terminal-probe", "org.mrml.library.boot-frame", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.service.input-usb-keyboard", "org.mrml.system.kernel"]
 boot_bound = []
 system_release_bound = []
 

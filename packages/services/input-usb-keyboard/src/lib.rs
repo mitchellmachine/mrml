@@ -68,9 +68,112 @@ impl BootKeyboard {
     }
 }
 
+/// A single newly pressed keyboard usage on a validated boot-protocol stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KeyPress {
+    pub usage: u8,
+    pub modifiers: u8,
+}
+
+/// Bounded edge tracking for the first interactive keyboard route. The
+/// transport owner must reset this on replacement, a gap or revocation.
+pub struct BootKeyStream {
+    keyboard: BootKeyboard,
+    previous: KeyboardReport,
+    armed: bool,
+}
+
+impl BootKeyStream {
+    pub const fn new(keyboard: BootKeyboard) -> Self {
+        Self {
+            keyboard,
+            previous: KeyboardReport {
+                modifiers: 0,
+                usages: [0; 6],
+            },
+            armed: false,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.armed = false;
+    }
+
+    pub fn ingest(&mut self, bytes: &[u8]) -> Result<Option<KeyPress>, KeyboardError> {
+        let report = match self.keyboard.decode(bytes) {
+            Ok(report) => report,
+            Err(error) => {
+                self.reset();
+                return Err(error);
+            }
+        };
+        if !self.armed {
+            self.armed = report.modifiers == 0 && report.usages == [0; 6];
+            self.previous = report;
+            return Ok(None);
+        }
+        let usage = report.usages[5];
+        // One ordinary key at a time; unordered chords have no text order.
+        // Holding a key or changing modifiers alone cannot manufacture input.
+        let press = (usage != 0 && report.usages[4] == 0 && !self.previous.usages.contains(&usage))
+            .then_some(KeyPress {
+                usage,
+                modifiers: report.modifiers,
+            });
+        self.previous = report;
+        Ok(press)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edges_require_neutral_after_attach_reset_and_malformed_reports() {
+        let mut stream = BootKeyStream::new(BootKeyboard::bind(3, 1, 1, true).unwrap());
+        let a = [0, 0, 4, 0, 0, 0, 0, 0];
+        let shifted_a = [2, 0, 4, 0, 0, 0, 0, 0];
+        assert_eq!(stream.ingest(&a), Ok(None));
+        assert_eq!(stream.ingest(&[0; 8]), Ok(None));
+        assert_eq!(
+            stream.ingest(&a),
+            Ok(Some(KeyPress {
+                usage: 4,
+                modifiers: 0
+            }))
+        );
+        assert_eq!(stream.ingest(&a), Ok(None));
+        assert_eq!(stream.ingest(&shifted_a), Ok(None));
+        assert!(stream.ingest(&[0, 0, 1, 0, 0, 0, 0, 0]).is_err());
+        assert_eq!(stream.ingest(&a), Ok(None));
+        assert_eq!(stream.ingest(&[0; 8]), Ok(None));
+        assert_eq!(
+            stream.ingest(&shifted_a),
+            Ok(Some(KeyPress {
+                usage: 4,
+                modifiers: 2
+            }))
+        );
+        stream.reset();
+        assert_eq!(stream.ingest(&a), Ok(None));
+    }
+
+    #[test]
+    fn chord_and_subsequent_partial_release_do_not_manufacture_text() {
+        let mut stream = BootKeyStream::new(BootKeyboard::bind(3, 1, 1, true).unwrap());
+        assert_eq!(stream.ingest(&[0; 8]), Ok(None));
+        assert_eq!(stream.ingest(&[0, 0, 40, 4, 0, 0, 0, 0]), Ok(None));
+        assert_eq!(stream.ingest(&[0, 0, 40, 0, 0, 0, 0, 0]), Ok(None));
+        assert_eq!(stream.ingest(&[0; 8]), Ok(None));
+        assert_eq!(
+            stream.ingest(&[0, 0, 40, 0, 0, 0, 0, 0]),
+            Ok(Some(KeyPress {
+                usage: 40,
+                modifiers: 0
+            }))
+        );
+    }
 
     #[test]
     fn requires_keyboard_interface_and_successful_boot_selection() {

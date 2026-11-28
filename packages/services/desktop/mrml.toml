@@ -105,5 +105,11 @@ compile_name = "mrml-kernel"
 package = "org.mrml.system.kernel"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_input_usb_keyboard"
+compile_name = "mrml-input-usb-keyboard"
+package = "org.mrml.service.input-usb-keyboard"
+scope = "compile"
+
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]

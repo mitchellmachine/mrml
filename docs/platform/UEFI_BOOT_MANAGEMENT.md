@@ -99,6 +99,11 @@ the test kernel. QEMU checks the advertised and no-controller cases with the
 same image; parser tests cover invalid tables independently. Follow the same
 one-time boot and Secure Boot precautions as for the display check.
 
+The Dragonair boot of the inventory image from `4bb41f25` showed
+`I8042 NOT ADVERTISED`. Do not infer that the laptop physically lacks a
+legacy controller. Leave its raw ports untouched and use external USB HID
+as the next functional input candidate.
+
 ### Future Chromebook USB write check
 
 The target is a separate expendable USB data stick with a preallocated

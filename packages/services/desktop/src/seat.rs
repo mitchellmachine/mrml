@@ -3,6 +3,28 @@ use crate::{Desktop, Event, Key, RouteError, TerminalRoute};
 use mrml_input_ps2_keyboard::KeyboardEvent;
 use mrml_input_ps2_mouse::MouseReport;
 
+/// Map a press from the validated USB keyboard service to desktop policy.
+/// This does not bind a device, acquire USB authority, or bypass seat focus.
+pub fn usb_keyboard(press: mrml_input_usb_keyboard::KeyPress) -> Option<Event> {
+    // Only a Shift modifier belongs to this minimal US keymap.
+    if press.modifiers & !0x22 != 0 {
+        return None;
+    }
+    let shift = press.modifiers != 0;
+    let ch = match press.usage {
+        0x04..=0x1d => (if shift { b'A' } else { b'a' }) + press.usage - 0x04,
+        0x1e..=0x27 => {
+            (if shift { b"!@#$%^&*()" } else { b"1234567890" })[(press.usage - 0x1e) as usize]
+        }
+        0x28 if !shift => return Some(Event::Enter),
+        0x2a if !shift => return Some(Event::TerminalKey(Key::Backspace)),
+        0x2b if !shift => return Some(Event::Tab),
+        0x2c => b' ',
+        _ => return None,
+    };
+    Some(Event::TerminalKey(Key::Text(char::from(ch))))
+}
+
 #[derive(Default)]
 pub struct Ps2Seat {
     modifiers: u8,
