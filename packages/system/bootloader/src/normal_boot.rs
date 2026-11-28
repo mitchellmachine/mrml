@@ -1,8 +1,14 @@
 //! Release-policy entry. This path must never dispatch a bring-up fixture.
 
-use mrml_kernel::{BootHandoff, BootPolicy, EarlyKernelContext};
+use mrml_kernel::{BootHandoff, BootPolicy};
 
-pub(super) fn enter(handoff: &BootHandoff, _early: &EarlyKernelContext<'_>) -> ! {
+pub(super) fn enter(handoff: &BootHandoff) -> ! {
+    // The decoder already checks the evidence, ACPI pointer and memory map.
+    // Preserve the early recovery precondition without building the probe
+    // context or copying memory regions this entry never uses.
+    if handoff.missing_installed_recovery_route() {
+        super::halt();
+    }
     let Some(minimum_version) = embedded_minimum_version() else {
         observe(b"MRML:BOOT:FLOOR:INVALID\n");
         super::halt();

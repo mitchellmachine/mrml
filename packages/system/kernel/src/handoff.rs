@@ -531,6 +531,15 @@ impl BootHandoff {
         self.installed_recovery_sata_route
     }
 
+    /// An installed UEFI recovery identity cannot enter the kernel without
+    /// its matching route. Decoding also serves tooling that inspects a
+    /// partial handoff, so the entry paths enforce this precondition.
+    pub fn missing_installed_recovery_route(&self) -> bool {
+        self.installed_recovery
+            .is_some_and(|identity| identity.source() == InstalledRecoverySource::Uefi)
+            && self.installed_recovery_sata_route.is_none()
+    }
+
     pub const fn isolation_override(&self) -> Option<BootIsolationOverride> {
         self.isolation_override
     }

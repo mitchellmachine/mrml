@@ -107,6 +107,29 @@ See [Architecture](ARCHITECTURE.md), [Security](SECURITY.md),
 [Isolation placement](ISOLATION_PLACEMENT.md), and
 [Application platform](APPLICATION_PLATFORM.md) for the normative design.
 
+### Core to verify
+
+Keep only the mechanisms that must enforce isolation in the normal
+Gigakernel. Everything else should justify its place as either a bounded
+boot/recovery component or a separately admitted microVM.
+
+| Keep in the privileged core | Run outside it |
+| --- | --- |
+| Validate the authenticated handoff and bind the first supervisor to owner policy. | The authenticated loader handles firmware and release assembly. The supervisor service chooses what to run after bootstrap; the kernel checks the authority for each request. |
+| Own CPU and guest entry/exit, physical frame ownership, second-stage mappings, IOMMU containment and interrupt delivery. | An inventory service interprets platform discovery, and individual driver microVMs own protocol and device policy. Hardware access is scoped to the assigned device. |
+| Enforce capability derivation, bounded communication, scheduling and safe retirement. | Service management decides when to launch, restart or stop guests. Filesystems, network and firewall policy, input decoding, the compositor, accessibility and user interfaces stay in services. |
+
+For eventual formal verification, start with the actual normal release
+profile, not every source file in the kernel library. Record reachable
+privileged code and dependencies by commit and build profile, including
+assembly and unsafe Rust; executable section size is a trend, not a proof
+or a complete trusted-code inventory. Specify and check frame ownership,
+mapping and permission invariants, capability non-amplification, and safe
+revocation at the small kernel interfaces. Track boot-chain, toolchain,
+CPU and IOMMU assumptions separately. Moving code out is only a security
+improvement if it loses ambient privilege and cannot bypass those
+interfaces. This is a verification plan, not a verification claim.
+
 ## What has been verified
 
 | Area | Evidence | Limit |
@@ -125,16 +148,20 @@ service microVMs.
 ## Current work
 
 The kernel PE has a separate `normal_boot` build profile. It uses the same
-bounded loader-handoff validation as the bring-up builds, checks the release
+bounded loader-handoff decoder as the bring-up builds, checks the release
 boot policy on the bootstrap CPU, and then parks without launching anything.
+It validates the memory map without materializing the unused region array
+or constructing the bring-up context. It still rejects an installed UEFI
+recovery identity without its matching route.
 This profile rejects diagnostic features at compile time. The existing
 default and opt-in probe builds are unchanged in purpose; they are not
 alternate operating modes. Selecting `normal_boot` builds a kernel PE, not a
-complete boot image or a working installed system. In the Windows-hosted
-x86-64 release build, the PE's executable section was 26,765 virtual bytes
-and its writable data section was 8,192 virtual bytes. The diagnostic build
-still owns its secondary-CPU descriptor arena. These are section sizes for
-this bootstrap, not a full-runtime or trusted-code-base measurement.
+complete boot image or a working installed system. In the November 28, 2026
+Windows-hosted x86-64 release build with release floor 1, removing the unused
+context reduced executable bytes from 34,253 at `d14abc95` to 32,669. The
+whole PE went from 46,592 to 44,032 bytes; writable data stayed at 8,192
+virtual bytes. These are bootstrap sizes, not full-runtime or trusted-code
+measurements.
 
 The separate `normal_boot_observed` fixture uses the same policy entry and
 emits fixed, non-authoritative QEMU trace records for invalid configuration,

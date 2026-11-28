@@ -211,9 +211,10 @@ use mrml_kernel::{
     SharedMemoryBindings, TaskProtocolViolation, VmId, VmTable, decode_capability_transfers,
 };
 #[cfg(not(feature = "fault-probe"))]
+use mrml_kernel::{BootHandoff, HANDOFF_HEADER_BYTES, MAX_HANDOFF_BYTES};
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 use mrml_kernel::{
-    BootHandoff, EarlyKernelContext, HANDOFF_HEADER_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_REGIONS,
-    MemoryKind, MemoryRegion, PhysAddr,
+    EarlyKernelContext, MAX_HANDOFF_REGIONS, MemoryKind, MemoryRegion, PhysAddr,
 };
 #[cfg(all(not(feature = "fault-probe"), feature = "gpu-benchmark"))]
 use mrml_kernel::{Color, FramebufferSurface};
@@ -3286,17 +3287,15 @@ pub unsafe extern "efiapi" fn kernel_entry(
         }
         // SAFETY: the entry contract supplies the readable handoff mapping.
         let encoded = unsafe { core::slice::from_raw_parts(bytes, length) };
+        #[cfg(feature = "production-policy")]
+        {
+            let handoff = BootHandoff::decode(encoded, |_| ()).unwrap_or_else(|_| halt());
+            normal_boot::enter(&handoff)
+        }
+        #[cfg(not(feature = "production-policy"))]
         with_early_context(encoded, |handoff, regions, early| {
-            #[cfg(feature = "production-policy")]
-            {
-                let _ = regions;
-                normal_boot::enter(handoff, early)
-            }
-            #[cfg(not(feature = "production-policy"))]
-            {
-                // SAFETY: this is the BSP at the original boot entry.
-                unsafe { run_bringup(encoded, handoff, regions, early) }
-            }
+            // SAFETY: this is the BSP at the original boot entry.
+            unsafe { run_bringup(encoded, handoff, regions, early) }
         })
     }
 }
@@ -4273,7 +4272,7 @@ unsafe fn run_pci_configuration_probe() -> ! {
     halt()
 }
 
-#[cfg(not(feature = "fault-probe"))]
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 fn with_early_context<R>(
     encoded: &[u8],
     enter: impl FnOnce(&BootHandoff, &[MemoryRegion], &EarlyKernelContext<'_>) -> R,

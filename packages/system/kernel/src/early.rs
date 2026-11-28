@@ -1,7 +1,6 @@
 use crate::{
     BootHandoff, BootIsolationOverride, FramebufferInfo, InstalledRecoveryBootIdentity,
-    InstalledRecoverySataRoute,
-    InstalledRecoverySource, MemoryError, MemoryKind, MemoryMap, MemoryRegion,
+    InstalledRecoverySataRoute, MemoryError, MemoryKind, MemoryMap, MemoryRegion,
     RecoveryStateMetadata,
 };
 
@@ -74,10 +73,7 @@ impl<'a> EarlyKernelContext<'a> {
         )?;
         let installed_recovery = handoff.installed_recovery();
         let installed_recovery_sata_route = handoff.installed_recovery_sata_route();
-        if installed_recovery
-            .is_some_and(|identity| identity.source() == InstalledRecoverySource::Uefi)
-            && installed_recovery_sata_route.is_none()
-        {
+        if handoff.missing_installed_recovery_route() {
             return Err(EarlyKernelError::MissingInstalledRecoveryRoute);
         }
         context.isolation_override = handoff.isolation_override();
