@@ -20,7 +20,7 @@ mod trap;
 mod vmx;
 mod vtd;
 mod vtd_tables;
-pub use acpi::{AcpiError, AcpiMemory, copy_dmar, copy_madt, copy_mcfg, q35_fixture_marker};
+pub use acpi::{AcpiError, AcpiMemory, I8042Inventory, copy_dmar, copy_madt, copy_mcfg, i8042_inventory, q35_fixture_marker};
 pub use active_user_copy::{
     ActiveTaskUserCopy, ActiveTaskUserCopyError, ActiveUserMemory, DirectActiveUserMemory,
 };

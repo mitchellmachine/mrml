@@ -254,6 +254,12 @@ fn run_qemu_config(
         Some("intel") => true,
         Some(_) => return Err("PackageQemuIommuInvalid".into()),
     };
+    let i8042_disabled = match option(args, "--i8042")? {
+        None => false,
+        Some("off") if accelerator == "tcg" && !intel_iommu && !verify_q35
+            && map_only_marker.is_none() && verify_display.is_none() => true,
+        _ => return Err("--i8042 off requires a plain q35/TCG boot test".into()),
+    };
     if verify_q35 && (!intel_iommu || accelerator != "tcg") {
         return Err("QEMU resource evidence requires q35/TCG with Intel IOMMU".into());
     }
@@ -320,6 +326,7 @@ fn run_qemu_config(
         timeout,
         accelerator,
         intel_iommu,
+        i8042_disabled,
         verify_q35,
         map_only_marker,
         verify_display,
@@ -339,6 +346,7 @@ struct QemuChildOptions<'a> {
     timeout: u64,
     accelerator: &'a str,
     intel_iommu: bool,
+    i8042_disabled: bool,
     verify_q35: bool,
     map_only_marker: Option<Q35FixtureCase>,
     verify_display: Option<BootDisplay>,
@@ -356,6 +364,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         timeout,
         accelerator,
         intel_iommu,
+        i8042_disabled,
         verify_q35,
         map_only_marker,
         verify_display,
@@ -382,11 +391,14 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 | Q35FixtureCase::SharedBootRecordWrongRelease
         )
     );
-    let machine = if isolated {
+    let mut machine = if isolated {
         format!("q35,accel={accelerator},default-bus-bypass-iommu=on,sata=off")
     } else {
         format!("q35,accel={accelerator}")
     };
+    if i8042_disabled {
+        machine.push_str(",i8042=off");
+    }
     let mut command = Command::new(qemu);
     if accelerator == "kvm" {
         command.args(["-cpu", "host"]);
@@ -825,6 +837,7 @@ fn validate_options(args: &[String]) -> Result<(), String> {
             args[index].as_str(),
             "--accelerator"
                 | "--iommu"
+                | "--i8042"
                 | "--timeout-seconds"
                 | "--expect-hex"
                 | "--expect-rejection-hex"

@@ -48,6 +48,9 @@ name = "usb-preload-probe"
 name = "boot-dma-probe"
 
 [[feature]]
+name = "i8042-inventory-probe"
+
+[[feature]]
 name = "q35-mmio-probe"
 
 [[artifact]]
@@ -126,6 +129,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["uefi-image", "package-boot"]
 name = "package_boot"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["uefi-image", "package-boot", "fat32-restart-probe", "i8042-inventory-probe"]
+name = "i8042_inventory_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]

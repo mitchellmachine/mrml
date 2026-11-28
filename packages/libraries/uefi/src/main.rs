@@ -1454,6 +1454,19 @@ unsafe fn launch_after_exit(
     let mut acpi_memory = FirmwareAcpiMemory {
         regions: &regions[..region_count],
     };
+    if cfg!(feature = "i8042-inventory-probe") {
+        use mrml_kernel::arch::x86_64::{I8042Inventory, i8042_inventory};
+        let (label, marker): (&[u8], u8) = match i8042_inventory(&mut acpi_memory, acpi_root) {
+            Ok(I8042Inventory::Advertised) => (b"I8042 ADVERTISED", 0x43),
+            Ok(I8042Inventory::NotAdvertised) => (b"I8042 NOT ADVERTISED", 0x44),
+            Err(_) => (b"I8042 UNVERIFIED", 0x45),
+        };
+        paint_boot_stage(framebuffer, label);
+        loader_trace(marker);
+        // Firmware metadata is not device ownership. No PS/2 ports are
+        // accessed, no hardware is enabled, and no guest is launched here.
+        halt();
+    }
     #[cfg(feature = "usb-preload-probe")]
     usb_preload_rendezvous(&mut acpi_memory, acpi_root, usb_boot_record);
     let madt_storage = unsafe { &mut *MADT.0.get() };

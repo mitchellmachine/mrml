@@ -22,6 +22,9 @@ pub enum AcpiError {
     MissingDmar,
     DuplicateDmar,
     DmarTooLarge,
+    MissingFadt,
+    DuplicateFadt,
+    FadtTooLarge,
     MissingMcfg,
     DuplicateMcfg,
     McfgTooLarge,
@@ -91,6 +94,47 @@ pub fn copy_mcfg<M: AcpiMemory>(
         AcpiError::DuplicateMcfg,
         AcpiError::McfgTooLarge,
     )
+}
+
+/// A firmware inventory observation, not proof of a working keyboard,
+/// exclusive port ownership, or authority to touch the controller.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum I8042Inventory {
+    Advertised,
+    NotAdvertised,
+}
+
+/// Inspect the unique, checksummed FADT reachable from the firmware root.
+/// Legacy FADTs without a boot-architecture field fail closed.
+pub fn i8042_inventory<M: AcpiMemory>(
+    memory: &mut M,
+    rsdp_physical: u64,
+) -> Result<I8042Inventory, AcpiError> {
+    let mut fadt = [0; 512];
+    let len = copy_unique_sdt(
+        memory,
+        rsdp_physical,
+        &mut fadt,
+        *b"FACP",
+        AcpiError::MissingFadt,
+        AcpiError::DuplicateFadt,
+        AcpiError::FadtTooLarge,
+    )?;
+    if fadt[8] < 3 {
+        return Err(AcpiError::UnsupportedRevision);
+    }
+    if len < 116 {
+        return Err(AcpiError::InvalidLength);
+    }
+    // ACPI §5.2.9: IAPC_BOOT_ARCH is at 109, bit 1 denotes 8042.
+    // Do not qualify a legacy I/O path on hardware-reduced firmware.
+    let hardware_reduced = read_u32(&fadt, 112) & (1 << 20) != 0;
+    let flag = u16::from_le_bytes([fadt[109], fadt[110]]) & 2 != 0;
+    Ok(if flag && !hardware_reduced {
+        I8042Inventory::Advertised
+    } else {
+        I8042Inventory::NotAdvertised
+    })
 }
 
 /// Test-only transport observation; this table is not platform MMIO authority.
@@ -350,6 +394,65 @@ mod tests {
         madt[44..52].copy_from_slice(&[0, 8, 0, 1, 1, 0, 0, 0]);
         finalize(madt, 9);
         memory
+    }
+
+    fn with_fadt(revision: u8, declared: usize, flags: u16, reduced: bool) -> Memory {
+        let mut image = memory();
+        image.0[0x204..0x208].copy_from_slice(&52u32.to_le_bytes());
+        image.0[0x22c..0x234].copy_from_slice(&0x380u64.to_le_bytes());
+        finalize(&mut image.0[0x200..0x234], 9);
+        let fadt = &mut image.0[0x380..0x380 + 512];
+        fadt[..4].copy_from_slice(b"FACP");
+        fadt[4..8].copy_from_slice(&(declared as u32).to_le_bytes());
+        fadt[8] = revision;
+        fadt[109..111].copy_from_slice(&flags.to_le_bytes());
+        fadt[112..116].copy_from_slice(&(u32::from(reduced) << 20).to_le_bytes());
+        finalize(&mut fadt[..declared], 9);
+        image
+    }
+
+    #[test]
+    fn i8042_requires_explicit_non_reduced_firmware_advertisement() {
+        for (flags, reduced, result) in [
+            (0, false, I8042Inventory::NotAdvertised),
+            (1, false, I8042Inventory::NotAdvertised),
+            (2, false, I8042Inventory::Advertised),
+            (2, true, I8042Inventory::NotAdvertised),
+        ] {
+            assert_eq!(
+                i8042_inventory(&mut with_fadt(6, 276, flags, reduced), 0x100),
+                Ok(result)
+            );
+        }
+    }
+
+    #[test]
+    fn i8042_rejects_missing_old_short_corrupt_and_duplicate_fadt() {
+        assert_eq!(
+            i8042_inventory(&mut memory(), 0x100),
+            Err(AcpiError::MissingFadt)
+        );
+        assert_eq!(
+            i8042_inventory(&mut with_fadt(1, 116, 2, false), 0x100),
+            Err(AcpiError::UnsupportedRevision)
+        );
+        assert_eq!(
+            i8042_inventory(&mut with_fadt(6, 110, 2, false), 0x100),
+            Err(AcpiError::InvalidLength)
+        );
+        let mut corrupt = with_fadt(6, 276, 2, false);
+        corrupt.0[0x380 + 109] ^= 2;
+        assert_eq!(
+            i8042_inventory(&mut corrupt, 0x100),
+            Err(AcpiError::BadChecksum)
+        );
+        let mut duplicate = with_fadt(6, 276, 2, false);
+        duplicate.0[0x224..0x22c].copy_from_slice(&0x380u64.to_le_bytes());
+        finalize(&mut duplicate.0[0x200..0x234], 9);
+        assert_eq!(
+            i8042_inventory(&mut duplicate, 0x100),
+            Err(AcpiError::DuplicateFadt)
+        );
     }
 
     #[test]

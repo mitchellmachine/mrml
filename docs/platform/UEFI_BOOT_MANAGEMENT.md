@@ -77,6 +77,28 @@ physical scaling, but the active mode and EDID match are still unknown. Host uni
 1080p, 4K, portrait, and undersized framebuffers.
 
 
+### Read-only Chromebook keyboard inventory
+
+Before choosing a physical keyboard transport, inspect the ACPI controller
+advertisement without accessing any controller registers:
+
+```text
+mrml usb image-i8042-inventory mrml-i8042-inventory.img
+mrml usb test-i8042-inventory mrml-i8042-inventory.img OVMF_CODE OVMF_VARS QEMU
+```
+
+The opt-in UEFI image checks the unique, checksummed [ACPI FADT](https://uefi.org/specs/ACPI/6.6/05_ACPI_Software_Programming_Model.html#fixed-acpi-description-table-fadt)
+on the firmware memory map. A valid, non-hardware-reduced FADT with the 8042 bit set shows
+`I8042 ADVERTISED`. A clear bit or hardware-reduced configuration shows
+`I8042 NOT ADVERTISED`; missing, old, ambiguous or malformed data shows
+`I8042 UNVERIFIED`. These are observations only: even a positive result
+does not prove the built-in keyboard is wired to the controller, establish
+exclusive ownership, or enable keyboard input. The image does not read
+or write any keyboard port and halts after reporting; it never launches
+the test kernel. QEMU checks the advertised and no-controller cases with the
+same image; parser tests cover invalid tables independently. Follow the same
+one-time boot and Secure Boot precautions as for the display check.
+
 ### Future Chromebook USB write check
 
 The target is a separate expendable USB data stick with a preallocated
