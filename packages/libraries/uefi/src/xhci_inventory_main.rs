@@ -8,11 +8,11 @@ use core::fmt::{self, Write};
 mod source;
 use mrml_kernel::DeviceAddress;
 use mrml_kernel::arch::x86_64::PciConfigSpace;
-use mrml_storage_usb::xhci::inspect_legacy_ownership;
+use mrml_storage_usb::xhci::{LegacyOwnership, inspect_legacy_ownership};
 #[path = "xhci_inventory_acpi.rs"]
 mod acpi;
 use mrml_uefi::xhci_inventory::boot_observation::XhciFunction;
-use mrml_uefi::xhci_inventory::inspect_dma_geometry;
+use mrml_uefi::xhci_inventory::{DragonairInventory, inspect_dma_geometry};
 use mrml_uefi::{
     BootServices, Handle, LOAD_ERROR, LOCATE_BY_PROTOCOL, NOT_FOUND, SUCCESS, Status,
     SystemTable,
@@ -168,6 +168,7 @@ unsafe fn scan(
     let mut config = InventoryConfig(&records[..count]);
     let mut found = 0;
     let mut incomplete = 0;
+    let mut dragonair = None;
     for (requester, io) in records[..count].iter().copied().flatten() {
         // SAFETY: class/revision is a standard read-only dword on this live protocol.
         let class = unsafe { cfg(io, 8)? };
@@ -211,12 +212,15 @@ unsafe fn scan(
         // SAFETY: the console is live; the relationship is a static label.
         unsafe { line(output, format_args!("xhci boot source: {relationship}"))? };
         // SAFETY: the console and the bounded inventory config remain live.
-        unsafe {
+        let (mcfg_covered, dmar) = unsafe {
             match &tables {
                 Ok(tables) => tables.report(output, requester, &mut config)?,
-                Err(reason) => line(output, format_args!("xhci ACPI unavailable: {reason}"))?,
+                Err(reason) => {
+                    line(output, format_args!("xhci ACPI unavailable: {reason}"))?;
+                    (false, None)
+                }
             }
-        }
+        };
         let function = XhciFunction {
             requester: packed_requester(requester),
             vendor_device: id,
@@ -244,6 +248,16 @@ unsafe fn scan(
                 };
                 let ownership = inspect_legacy_ownership(bytes, read);
                 let geometry = inspect_dma_geometry(bytes, read);
+                if function.requester == DragonairInventory::REQUESTER {
+                    dragonair = Some(DragonairInventory {
+                        boot: boot_evidence,
+                        pci_command: command,
+                        firmware_owned: matches!(ownership, Ok(LegacyOwnership::Firmware)),
+                        geometry,
+                        mcfg_covered,
+                        dmar,
+                    });
+                }
                 if ownership.is_err() || geometry.is_none() {
                     incomplete += 1;
                 }
@@ -289,6 +303,10 @@ unsafe fn scan(
     }
     // SAFETY: the console remains live until the application returns.
     unsafe {
+        let reference = dragonair.map_or("reference requester unavailable", |sample| {
+            sample.compare(found, incomplete)
+        });
+        line(output, format_args!("xhci Dragonair reference: {reference}"))?;
         line(
             output,
             format_args!("xhci-inventory: controllers={found} incomplete={incomplete}"),

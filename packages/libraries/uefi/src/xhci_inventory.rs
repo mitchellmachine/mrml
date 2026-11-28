@@ -1,6 +1,52 @@
 #[path = "xhci_boot_observation.rs"]
 pub mod boot_observation;
 
+/// Reference comparison for the first Dragonair USB inventory. The result
+/// describes a recorded configuration, not board identity, ownership transfer,
+/// safe MMIO coverage, or active DMA isolation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DragonairInventory {
+    pub boot: Option<boot_observation::RetainedBootXhci>,
+    pub pci_command: u16,
+    pub firmware_owned: bool,
+    pub geometry: Option<(u16, u16)>,
+    pub mcfg_covered: bool,
+    pub dmar: Option<(usize, u64)>,
+}
+
+impl DragonairInventory {
+    pub const REQUESTER: u32 = 0x00a0;
+
+    pub fn compare(self, controllers: usize, incomplete: usize) -> &'static str {
+        if (controllers, incomplete) != (1, 0) {
+            return "controller inventory differs";
+        }
+        let Some(boot) = self.boot else {
+            return "exact shared USB origin or BAR unavailable";
+        };
+        let (function, base, size) = boot.diagnostic_fields();
+        if function.requester != Self::REQUESTER
+            || function.vendor_device != 0x02ed_8086
+            || function.class_revision != 0x0c03_3000
+        {
+            return "PCI identity differs";
+        }
+        if (base, size) != (0xceef_0000, 0x1_0000) {
+            return "BAR allocation differs";
+        }
+        if self.pci_command != 6 || !self.firmware_owned {
+            return "firmware ownership or command differs";
+        }
+        if self.geometry != Some((34, 1)) {
+            return "scratchpad or page geometry differs";
+        }
+        if !self.mcfg_covered || self.dmar != Some((2, 0xfed9_1000)) {
+            return "MCFG coverage or DMAR route differs";
+        }
+        "matches recorded inventory; no handoff"
+    }
+}
+
 /// UEFI PCI I/O supplies a single QWord Address Space descriptor for BAR0
 /// followed by the ACPI End Tag. Other resource encodings are not accepted.
 pub const BAR_RESOURCE_BYTES: usize = 48;
@@ -117,6 +163,66 @@ pub fn source_transport(path: &[u8], remaining: usize) -> Option<SourceTransport
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reference_boot(requester: u32, vendor_device: u32, revision: u8, base: u64) -> Option<boot_observation::RetainedBootXhci> {
+        let mut descriptor = [0; BAR_RESOURCE_BYTES];
+        descriptor[..3].copy_from_slice(&BAR_RESOURCE_HEADER);
+        descriptor[6..14].copy_from_slice(&64u64.to_le_bytes());
+        descriptor[14..22].copy_from_slice(&base.to_le_bytes());
+        descriptor[38..46].copy_from_slice(&0x1_0000u64.to_le_bytes());
+        descriptor[46] = 0x79;
+        boot_observation::RetainedBootXhci::from_firmware(
+            Some(requester),
+            boot_observation::XhciFunction {
+                requester,
+                vendor_device,
+                class_revision: 0x0c03_3000 | u32::from(revision),
+            },
+            6,
+            0,
+            u32::try_from(base).unwrap() | 4,
+            0,
+            &descriptor,
+        )
+    }
+
+    #[test]
+    fn dragonair_reference_requires_complete_same_controller_firmware_evidence() {
+        const MATCH: &str = "matches recorded inventory; no handoff";
+        let reference = DragonairInventory {
+            boot: reference_boot(0xa0, 0x02ed_8086, 0, 0xceef_0000),
+            pci_command: 6,
+            firmware_owned: true,
+            geometry: Some((34, 1)),
+            mcfg_covered: true,
+            dmar: Some((2, 0xfed9_1000)),
+        };
+        assert_eq!(reference.compare(1, 0), MATCH);
+        for (controllers, incomplete) in [(0, 0), (2, 0), (1, 1)] {
+            assert_eq!(reference.compare(controllers, incomplete), "controller inventory differs");
+        }
+        for (boot, reason) in [
+            (None, "exact shared USB origin or BAR unavailable"),
+            (reference_boot(0xa1, 0x02ed_8086, 0, 0xceef_0000), "PCI identity differs"),
+            (reference_boot(0x1_00a0, 0x02ed_8086, 0, 0xceef_0000), "PCI identity differs"),
+            (reference_boot(0xa0, 0x000d_1b36, 0, 0xceef_0000), "PCI identity differs"),
+            (reference_boot(0xa0, 0x02ed_8086, 1, 0xceef_0000), "PCI identity differs"),
+            (reference_boot(0xa0, 0x02ed_8086, 0, 0xcef0_0000), "BAR allocation differs"),
+        ] {
+            assert_eq!(DragonairInventory { boot, ..reference }.compare(1, 0), reason);
+        }
+        for command in [2, 7, u16::MAX] {
+            assert_ne!(DragonairInventory { pci_command: command, ..reference }.compare(1, 0), MATCH);
+        }
+        assert_ne!(DragonairInventory { firmware_owned: false, ..reference }.compare(1, 0), MATCH);
+        for geometry in [None, Some((0, 1)), Some((34, 3))] {
+            assert_ne!(DragonairInventory { geometry, ..reference }.compare(1, 0), MATCH);
+        }
+        assert_ne!(DragonairInventory { mcfg_covered: false, ..reference }.compare(1, 0), MATCH);
+        for dmar in [None, Some((1, 0xfed9_1000)), Some((2, 0xfed9_0000))] {
+            assert_ne!(DragonairInventory { dmar, ..reference }.compare(1, 0), MATCH);
+        }
+    }
 
     #[test]
     fn reports_split_scratchpad_count_and_page_mask_including_non_4k() {

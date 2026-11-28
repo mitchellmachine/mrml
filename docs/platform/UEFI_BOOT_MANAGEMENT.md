@@ -259,6 +259,12 @@ The 2026-11-27 read-only follow-up (`87b78e16`, `XHCI87B.EFI`) confirmed
 buffers before the pointer array and other DMA objects. The controller was
 still firmware-owned and shared with the USB boot source. The diagnostic
 reported zero incomplete controllers and returned to EFI Shell without handoff.
+The inventory now compares the current shared-boot observation with those
+recorded values in one `xhci Dragonair reference:` line. Missing or changed
+identity, BAR, geometry, ownership, MCFG coverage, or DMAR route cannot match.
+The comparison runs before firmware exit and performs no extra device reads;
+a match is not verification of board identity or permission to access hardware.
+Any change is a reason to record the full output, not to attempt a handoff.
 
 The signed QEMU/OVMF negative control boots the same sealed test release
 from a read-only virtual disk attached directly to the sole xHCI candidate.

@@ -38,10 +38,10 @@ impl Tables {
         output: *mut TextOutput,
         requester: DeviceAddress,
         config: &mut impl PciConfigSpace,
-    ) -> Result<(), Status> {
+    ) -> Result<(bool, Option<(usize, u64)>), Status> {
         // SAFETY: the caller supplies the live console and the read-only tables are local.
         unsafe {
-            match &self.mcfg {
+            let covered = match &self.mcfg {
                 Ok(mcfg) => {
                     let covered = mcfg.allocations().any(|entry| {
                         entry.segment == requester.segment()
@@ -54,26 +54,35 @@ impl Tables {
                             mcfg.allocations().count()
                         ),
                     )?;
+                    covered
                 }
-                Err(err) => line(output, format_args!("xhci MCFG: {err}"))?,
-            }
-            match &self.dmar {
+                Err(err) => {
+                    line(output, format_args!("xhci MCFG: {err}"))?;
+                    false
+                }
+            };
+            let route = match &self.dmar {
                 Ok(dmar) => match dmar.route_for_requester(requester, config) {
-                    Ok(route) => line(
-                        output,
-                        format_args!(
-                            "xhci DMAR: valid, units={}, DRHD={:#x}",
-                            dmar.units().count(),
-                            route.register_base().get()
-                        ),
-                    ),
-                    Err(err) => line(
-                        output,
-                        format_args!("xhci DMAR: no validated route ({err:?})"),
-                    ),
+                    Ok(route) => {
+                        let units = dmar.units().count();
+                        let base = route.register_base().get();
+                        line(
+                            output,
+                            format_args!("xhci DMAR: valid, units={units}, DRHD={base:#x}"),
+                        )?;
+                        Some((units, base))
+                    }
+                    Err(err) => {
+                        line(output, format_args!("xhci DMAR: no validated route ({err:?})"))?;
+                        None
+                    }
                 },
-                Err(err) => line(output, format_args!("xhci DMAR: {err}")),
-            }
+                Err(err) => {
+                    line(output, format_args!("xhci DMAR: {err}"))?;
+                    None
+                }
+            };
+            Ok((covered, route))
         }
     }
 }

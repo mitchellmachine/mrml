@@ -80,6 +80,12 @@ impl Case {
             return false;
         }
         let reported = |expected: &str| report.lines().any(|line| line == expected);
+        let mut reference = report.lines().filter(|line| line.starts_with("xhci Dragonair reference: "));
+        if reference.next() != Some("xhci Dragonair reference: reference requester unavailable")
+            || reference.next().is_some()
+        {
+            return false;
+        }
         if !matches!(self, Self::UsbBoot)
             && report.lines().any(|line| line.starts_with(BOOT_EVIDENCE) || line.starts_with(BOOT_WIRE))
         {
@@ -294,9 +300,11 @@ mod tests {
     #[test]
     fn requires_exact_report_then_real_return_to_firmware() {
         let log = format!(
-            "{START}\r\nxhci-inventory: controllers=0 incomplete=0\r\n{RETURN}\r\n{MENU}\r\n"
+            "{START}\r\nxhci Dragonair reference: reference requester unavailable\r\nxhci-inventory: controllers=0 incomplete=0\r\n{RETURN}\r\n{MENU}\r\n"
         );
         assert!(Case::NoController.observed(&log));
+        assert!(!Case::NoController.observed(&log.replace("reference requester unavailable", "matches recorded inventory; no handoff")));
+        assert!(!Case::NoController.observed(&log.replace("reference requester unavailable", "reference requester unavailable\nxhci Dragonair reference: reference requester unavailable")));
         assert!(!Case::NoController.observed(&log.replace(MENU, "")));
         assert!(!Case::NoController.observed(&log.replace(RETURN, "")));
         assert!(!Case::NoController.observed(&log.replace("incomplete=0", "incomplete=1")));
