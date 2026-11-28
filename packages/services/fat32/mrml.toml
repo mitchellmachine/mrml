@@ -1,0 +1,51 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.service.fat32"
+kind = "service"
+name = "mrml-fat32-service"
+profile = "system-service"
+
+[isolation]
+default = "microvm"
+minimum = "microvm"
+must_run = false
+reason = "Existing FAT32 guest and filesystem code; this package owns its hosted service contract tests and is not a new installed runtime route"
+runtime_class = "unsupported-blocker"
+supported = ["microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_fat32_service_contract"
+
+[rust]
+crate_name = "mrml_fat32_service_contract"
+crate_type = "lib"
+source = "packages/services/fat32/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_storage_fat32"
+compile_name = "mrml-storage-fat32"
+package = "org.mrml.library.storage.fat32"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_usb_fat32_qtest"
+compile_name = "mrml-usb-fat32-qtest"
+package = "org.mrml.test.usb-fat32-qtest"
+scope = "compile"
+test_only = true
+
+[[host_test]]
+targets = ["LINUX"]

@@ -10,9 +10,9 @@ use mrml_kernel::{
 };
 use mrml_storage::{MicrovmBlockReadError, bind_microvm_block_read};
 use mrml_storage_fat32::provisioned_probe::{
-    PROBE_DATA_SECTOR, PROBE_PARTITION_SECTORS, ProbeError, ProvisionedProbe, probe_metadata_sector,
+    PROBE_DATA_SECTOR, PROBE_PARTITION_SECTORS, probe_metadata_sector,
 };
-use mrml_storage_fat32::{FixedFileWriteError, VerifiedSectorDevice};
+use mrml_storage_fat32::VerifiedSectorDevice;
 use mrml_storage_usb::block_provider::UsbReadProvider;
 use mrml_storage_usb::diagnostic_partition::microvm_queue::{
     ProbeQueueConsumer, ProbeQueueError, ProbeQueueGenerations, ProbeQueueProvider,
@@ -228,11 +228,15 @@ impl RevocablePlatform for Qtest {
     }
 }
 
-#[test]
-#[ignore = "requires qemu-system-x86_64 and an available Unix socket"]
-fn qemu_controller_command_round_trip() {
-    exercise_qemu(false, Mode::Hosted);
-    exercise_qemu(true, Mode::Hosted);
+pub type ProbePartition<'a> = dyn VerifiedSectorDevice<Error = DiagnosticPartitionError> + 'a;
+
+/// Run the shared USB fixture and hand the service test a scoped partition.
+/// The fixture independently verifies the whole image and retires the controller.
+pub fn with_emulated_service_partition(
+    super_speed: bool,
+    exercise: &mut dyn FnMut(&mut ProbePartition<'_>),
+) {
+    exercise_qemu(super_speed, Mode::Hosted(exercise));
 }
 
 type ProbePipe<'a> = &'a mut dyn mrml_storage_usb::BulkTransport<Error = ()>;
@@ -326,7 +330,7 @@ where
 }
 
 enum Mode<'a> {
-    Hosted,
+    Hosted(&'a mut dyn FnMut(&mut ProbePartition<'_>)),
     Bulk(&'a mut dyn FnMut(ProbePipe<'_>)),
     Preflight(&'a mut dyn FnMut(&mut dyn PreflightIo)),
     Command(u8, &'a mut dyn FnMut(&mut dyn CommandIo)),
@@ -586,8 +590,8 @@ fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
             );
             return;
         }
-        Mode::Hosted => None,
-        Mode::Bulk(exercise) => Some(exercise),
+        Mode::Hosted(exercise) => (Some(exercise), None),
+        Mode::Bulk(exercise) => (None, Some(exercise)),
     };
     let mut controller = Controller::start_pci(projected, assignment, DMA, 100).unwrap();
     let port = (1..=u8::MAX)
@@ -673,7 +677,7 @@ fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
         let pipe = controller
             .configure_bulk(&configuration[..length], bulk_dma, 1000)
             .unwrap();
-        if let Some(exercise) = external {
+        if let (None, Some(exercise)) = external {
             let mut scoped = ScopedProbePipe::new(pipe);
             exercise(&mut scoped);
             assert!(
@@ -686,7 +690,7 @@ fn exercise_qemu(super_speed: bool, external: Mode<'_>) {
             assert_eq!(disk.sectors(), (START + TOTAL) as u64);
             let session = OpaqueHandle::new(1, 2).unwrap();
             let mut provider = UsbReadProvider::new(disk, session, 3).unwrap();
-            exercise_fat32(&mut provider, session);
+            exercise_partition(&mut provider, session, external.0.unwrap());
             let catalog_view = BorrowedWriteView::within(7, 48, 64).unwrap();
             let enumerate = encode_enumerate_request(catalog_view).unwrap();
             let mut catalog = [0xa5; 64];
@@ -869,6 +873,10 @@ const TOTAL: usize = PROBE_PARTITION_SECTORS as usize;
 const FILE_SECTOR: usize = START + PROBE_DATA_SECTOR as usize;
 const SERIAL: u32 = 42;
 
+pub const FIXTURE_PARTITION_START: u32 = START as u32;
+pub const FIXTURE_VOLUME_SERIAL: u32 = SERIAL;
+pub const FIXTURE_DATA_SECTOR: u32 = PROBE_DATA_SECTOR;
+
 fn synthetic_image() -> Vec<u8> {
     // One known partition; exclusive ownership and no aliases follow from
     // constructing the entire disposable image here, not from its name.
@@ -958,7 +966,11 @@ fn test_assignment(session: OpaqueHandle) -> DiagnosticPartitionAssignment {
     }
 }
 
-fn exercise_fat32<T>(provider: &mut UsbReadProvider<T>, session: OpaqueHandle)
+fn exercise_partition<T>(
+    provider: &mut UsbReadProvider<T>,
+    session: OpaqueHandle,
+    exercise: &mut dyn FnMut(&mut ProbePartition<'_>),
+)
 where
     T: mrml_storage_usb::BulkTransport,
     T::Error: std::fmt::Debug,
@@ -1091,26 +1103,7 @@ where
             page,
             caps: &caps,
         };
-        let mut probe = ProvisionedProbe::verify(
-            &mut partition,
-            START as u32,
-            PROBE_PARTITION_SECTORS,
-            SERIAL,
-        )
-        .unwrap();
-        assert!(matches!(
-            probe.update(b"bad", b"new"),
-            Err(ProbeError::Update(FixedFileWriteError::StaleContents))
-        ));
-        // Cross multiple bulk and event ring wraps. The host compares the
-        // whole persisted image, not just the driver's readback.
-        let mut previous = *b"old";
-        for byte in b'A'..=b'K' {
-            let next = [byte; 3];
-            probe.update(&previous, &next).unwrap();
-            previous = next;
-        }
-        probe.update(&previous, b"new").unwrap();
+        exercise(&mut partition);
 
         // A stale completion cannot confirm a write or let this consumer send
         // another. Keep the exact on-disk comparison outside the queue.
