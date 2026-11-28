@@ -124,8 +124,21 @@ service microVMs.
 
 ## Current work
 
-1. Complete normal boot into admitted services and connect authenticated
-   recovery, launch, and service retirement end to end.
+The kernel PE has a separate `normal_boot` build profile. It uses the same
+bounded loader-handoff validation as the bring-up builds, checks the release
+boot policy on the bootstrap CPU, and then parks without launching anything.
+This profile rejects diagnostic features at compile time. The existing
+default and opt-in probe builds are unchanged in purpose; they are not
+alternate operating modes. Selecting `normal_boot` builds a kernel PE, not a
+complete boot image or a working installed system. In the Windows-hosted
+x86-64 release build, the PE's executable section was 26,765 virtual bytes
+and its writable data section was 8,192 virtual bytes. The diagnostic build
+still owns its secondary-CPU descriptor arena. These are section sizes for
+this bootstrap, not a full-runtime or trusted-code-base measurement.
+
+1. Connect authenticated recovery to the first admitted supervisor microVM
+   on the normal boot path. Verify launch and clean retirement of one real
+   service before moving supervision policy out of the kernel.
 2. Qualify USB controller handoff with firmware I/O closed and DMA blocked
    across the transition. Verify scratchpad retirement and controller
    isolation before running a physical read or a single authorized write

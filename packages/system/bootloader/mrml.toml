@@ -237,6 +237,11 @@ features = ["kernel-image"]
 targets = ["UEFI"]
 
 [[feature_profile]]
+features = ["production-policy"]
+name = "normal_boot"
+targets = ["UEFI"]
+
+[[feature_profile]]
 features = ["vmx-kernel-monitor", "vmx-root-probe"]
 name = "vmx_kernel_monitor"
 targets = ["UEFI"]
@@ -518,9 +523,9 @@ reason = "Read the declared compile-time setting mrml-service-min-version for em
 fingerprint = "fnv1a64:db10432d55e8f575"
 id = "compile-env.embedded-minimum-version.mrml-kernel-min-version"
 kind = "compile-env"
-line = 4806
-path = "packages/system/bootloader/src/main.rs"
-reason = "Read the declared compile-time setting mrml-kernel-min-version for embedded_minimum_version in org.mrml.system.bootloader; absence and defaults are handled explicitly at that site."
+line = 17
+path = "packages/system/bootloader/src/normal_boot.rs"
+reason = "Set the minimum admitted kernel version for the normal boot entry; absent or invalid configuration parks the kernel."
 
 [[build_input]]
 fingerprint = "fnv1a64:76bc24c0d500ef8c"

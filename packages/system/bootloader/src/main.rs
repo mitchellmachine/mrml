@@ -58,6 +58,12 @@ compile_error!("deadline receive cancellation denial and replay probes are mutua
         feature = "uefi-service-preemption-probe",
         feature = "user-probe",
         feature = "vmx-root-probe",
+        feature = "vmx-kernel-payload",
+        feature = "vmx-kernel-monitor",
+        feature = "vmx-desktop-monitor",
+        feature = "vmx-desktop-input-probe",
+        feature = "vmx-desktop-persistent-probe",
+        feature = "vmx-desktop-qemu-keyboard",
         feature = "whp-gpu-benchmark",
         feature = "whp-smp-ipi-probe",
         feature = "whp-smp-periodic-balance-probe",
@@ -71,15 +77,17 @@ compile_error!("production-policy cannot be combined with diagnostic kernel feat
 #[cfg(feature = "vmx-root-probe")]
 mod vmx_probe;
 
-#[cfg(not(feature = "fault-probe"))]
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 use core::arch::x86_64::{__cpuid, __cpuid_count};
 use core::arch::{asm, global_asm};
+#[cfg(not(feature = "production-policy"))]
 use core::cell::UnsafeCell;
+#[cfg(not(feature = "production-policy"))]
 use core::mem::MaybeUninit;
 #[cfg(any(feature = "smp-scheduler-probe", feature = "smp-ipi-probe"))]
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[cfg(feature = "production-policy")]
-use mrml_kernel::BootPolicy;
+mod normal_boot;
 #[cfg(any(feature = "block-service-probe", feature = "component-service-probe"))]
 use mrml_kernel::GuestMappingRevoker;
 #[cfg(any(feature = "timer-probe", feature = "smp-scheduler-probe"))]
@@ -159,7 +167,7 @@ use mrml_kernel::arch::x86_64::enter_user_context;
     feature = "smp-service-migration-probe"
 ))]
 use mrml_kernel::arch::x86_64::enter_user_context_on_stack;
-#[cfg(not(feature = "fault-probe"))]
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 use mrml_kernel::arch::x86_64::{
     ActiveApTrampolinePage, ActivePageTables, ApStartupTable, ApStartupTiming, ApTrampolineImage,
     ApTrampolinePage, ApicIpi, PerCpuPrivilegeStacks, X86CpuTopology,
@@ -169,10 +177,11 @@ use mrml_kernel::arch::x86_64::{
     ActiveServiceMappingRevoker, ActiveTaskUserCopy, ActiveTaskUserCopyError,
     DirectActiveUserMemory, Mapping, PagePermissions, UserBufferAccess, VirtAddr,
 };
+#[cfg(not(feature = "production-policy"))]
 use mrml_kernel::arch::x86_64::{
-    ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, MAX_X86_64_CPUS,
-    PRIVILEGE_STACK_ARENA_PAGES, PrivilegeStackLayout,
+    ApOnlineTable, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES, PrivilegeStackLayout,
 };
+use mrml_kernel::arch::x86_64::{CpuDescriptorState, HardwareTrapFrame};
 #[cfg(feature = "application-probe")]
 use mrml_kernel::arch::x86_64::{ApplicationAddressSpace, PageTableBuildError, ServiceSpaceError};
 #[cfg(any(
@@ -407,14 +416,18 @@ const SERVICE_STACK_TOP: u64 = 0x0070_8000;
 const SERVICE_STACK_TOP: u64 = 0x0080_0000;
 
 static mut CPU0_DESCRIPTORS: CpuDescriptorState = CpuDescriptorState::empty(0);
+#[cfg(not(feature = "production-policy"))]
 struct ApDescriptorSlots([UnsafeCell<MaybeUninit<CpuDescriptorState>>; MAX_X86_64_CPUS]);
+#[cfg(not(feature = "production-policy"))]
 unsafe impl Sync for ApDescriptorSlots {}
 // This storage is initialized independently by application processors after
 // the image has been sealed. Force it into the writable PE data region;
 // interior mutability alone is not a PE section-permission contract.
+#[cfg(not(feature = "production-policy"))]
 #[unsafe(link_section = ".data")]
 static AP_DESCRIPTORS: ApDescriptorSlots =
     ApDescriptorSlots([const { UnsafeCell::new(MaybeUninit::uninit()) }; MAX_X86_64_CPUS]);
+#[cfg(not(feature = "production-policy"))]
 static AP_ONLINE: ApOnlineTable<MAX_X86_64_CPUS> = ApOnlineTable::empty();
 #[cfg(any(feature = "smp-scheduler-probe", feature = "smp-ipi-probe"))]
 struct ApSchedulerSlot {
@@ -493,11 +506,11 @@ static SMP_PERIODIC_ROUND: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "smp-periodic-balance-probe")]
 #[unsafe(link_section = ".data")]
 static SMP_PERIODIC_TIMER_TICK: AtomicU32 = AtomicU32::new(0);
-#[cfg(not(feature = "fault-probe"))]
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 struct ApStartupWorkspace(UnsafeCell<MaybeUninit<ApStartupTable<MAX_X86_64_CPUS>>>);
-#[cfg(not(feature = "fault-probe"))]
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 unsafe impl Sync for ApStartupWorkspace {}
-#[cfg(not(feature = "fault-probe"))]
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 static AP_STARTUP_WORKSPACE: ApStartupWorkspace =
     ApStartupWorkspace(UnsafeCell::new(MaybeUninit::uninit()));
 #[cfg(feature = "timer-probe")]
@@ -3265,8 +3278,26 @@ pub unsafe extern "efiapi" fn kernel_entry(
         asm!("ud2", options(noreturn));
     }
     #[cfg(not(feature = "fault-probe"))]
-    unsafe {
-        run_kernel(bytes, length)
+    {
+        #[cfg(not(feature = "production-policy"))]
+        smp_trace(0x01);
+        if bytes.is_null() || !(HANDOFF_HEADER_BYTES..=MAX_HANDOFF_BYTES).contains(&length) {
+            halt();
+        }
+        // SAFETY: the entry contract supplies the readable handoff mapping.
+        let encoded = unsafe { core::slice::from_raw_parts(bytes, length) };
+        with_early_context(encoded, |handoff, regions, early| {
+            #[cfg(feature = "production-policy")]
+            {
+                let _ = regions;
+                normal_boot::enter(handoff, early)
+            }
+            #[cfg(not(feature = "production-policy"))]
+            {
+                // SAFETY: this is the BSP at the original boot entry.
+                unsafe { run_bringup(encoded, handoff, regions, early) }
+            }
+        })
     }
 }
 
@@ -3279,6 +3310,7 @@ pub unsafe extern "efiapi" fn kernel_entry(
 /// The BSP must have armed the exact CPU/generation pair, installed the shared
 /// kernel CR3, and supplied the base of that CPU's exclusively owned, mapped
 /// privilege-stack layout. The current RSP must be its early-stack top.
+#[cfg(not(feature = "production-policy"))]
 #[unsafe(export_name = "mrml_ap_entry")]
 pub unsafe extern "sysv64" fn ap_kernel_entry(cpu: u64, generation: u64, stack_base: u64) -> ! {
     let cpu = usize::try_from(cpu)
@@ -3429,7 +3461,7 @@ pub unsafe extern "sysv64" fn ap_kernel_entry(cpu: u64, generation: u64, stack_b
     halt()
 }
 
-#[cfg(not(feature = "fault-probe"))]
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 unsafe fn start_application_processors(topology: &X86CpuTopology, handoff: &BootHandoff) {
     smp_trace(0x10);
     let bsp_apic_id = current_apic_id().unwrap_or_else(|| halt());
@@ -3725,7 +3757,7 @@ unsafe fn send_reschedule_probe(topology: &X86CpuTopology) {
     }
 }
 
-#[cfg(not(feature = "fault-probe"))]
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 fn current_apic_id() -> Option<u32> {
     let maximum = __cpuid(0).eax;
     if maximum >= 0x0b {
@@ -3739,7 +3771,7 @@ fn current_apic_id() -> Option<u32> {
     (maximum >= 1).then(|| __cpuid(1).ebx >> 24)
 }
 
-#[cfg(not(feature = "fault-probe"))]
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
 fn ap_startup_timing() -> Option<ApStartupTiming> {
     if let Ok(timing) = ApStartupTiming::detect() {
         return Some(timing);
@@ -3771,7 +3803,11 @@ const fn ap_retry_timeout_micros() -> u32 {
     100_000
 }
 
-#[cfg(all(not(feature = "fault-probe"), not(feature = "emulated-ap-timing")))]
+#[cfg(all(
+    not(feature = "fault-probe"),
+    not(feature = "production-policy"),
+    not(feature = "emulated-ap-timing")
+))]
 const fn ap_retry_timeout_micros() -> u32 {
     1_000
 }
@@ -3781,7 +3817,11 @@ fn smp_trace(stage: u8) {
     unsafe { asm!("out dx, al", in("dx") 0xe9u16, in("al") stage, options(nomem, nostack)) };
 }
 
-#[cfg(all(not(feature = "fault-probe"), not(feature = "ap-startup-trace")))]
+#[cfg(all(
+    not(feature = "fault-probe"),
+    not(feature = "production-policy"),
+    not(feature = "ap-startup-trace")
+))]
 const fn smp_trace(_: u8) {}
 
 #[cfg(feature = "block-guest-driver-probe")]
@@ -4234,13 +4274,10 @@ unsafe fn run_pci_configuration_probe() -> ! {
 }
 
 #[cfg(not(feature = "fault-probe"))]
-#[allow(unreachable_code)]
-unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
-    smp_trace(0x01);
-    if bytes.is_null() || !(HANDOFF_HEADER_BYTES..=MAX_HANDOFF_BYTES).contains(&length) {
-        halt();
-    }
-    let encoded = unsafe { core::slice::from_raw_parts(bytes, length) };
+fn with_early_context<R>(
+    encoded: &[u8],
+    enter: impl FnOnce(&BootHandoff, &[MemoryRegion], &EarlyKernelContext<'_>) -> R,
+) -> R {
     let placeholder = match MemoryRegion::new(
         match PhysAddr::new(0) {
             Ok(value) => value,
@@ -4263,16 +4300,28 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         Ok(value) => value,
         Err(_) => halt(),
     };
-    #[cfg(feature = "uefi-service-preemption-probe")]
-    uefi_service_trace(0xc0);
-    smp_trace(0x02);
     if region_count != handoff.region_count() {
         halt();
     }
-    let early = EarlyKernelContext::from_handoff(&handoff, &regions[..region_count])
+    let regions = &regions[..region_count];
+    let early = EarlyKernelContext::from_handoff(&handoff, regions)
         .unwrap_or_else(|_| halt());
+    enter(&handoff, regions, &early)
+}
+
+#[cfg(all(not(feature = "fault-probe"), not(feature = "production-policy")))]
+#[allow(unreachable_code)]
+unsafe fn run_bringup(
+    _encoded: &[u8],
+    handoff: &BootHandoff,
+    _regions: &[MemoryRegion],
+    _early: &EarlyKernelContext<'_>,
+) -> ! {
+    #[cfg(feature = "uefi-service-preemption-probe")]
+    uefi_service_trace(0xc0);
+    smp_trace(0x02);
     #[cfg(feature = "vmx-kernel-payload")]
-    vmx_kernel_payload_ready(&early, &handoff);
+    vmx_kernel_payload_ready(_early, handoff);
     #[cfg(feature = "uefi-fat32-restart-probe")]
     let _boot_dma = handoff.boot_dma().map(|region| {
         // SAFETY: the trusted probe loader exclusively allocated LoaderData,
@@ -4296,7 +4345,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         initialized
     });
     #[cfg(feature = "uefi-fat32-restart-probe")]
-    if let Some((dmar, mcfg)) = handoff.dma_acpi(encoded) {
+    if let Some((dmar, mcfg)) = handoff.dma_acpi(_encoded) {
         use mrml_kernel::arch::x86_64::{
             DmarTopology, McfgTopology, PlatformMmioError, PlatformMmioManifest,
         };
@@ -4304,7 +4353,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let mcfg = McfgTopology::<8>::parse(mcfg).unwrap_or_else(|_| halt());
         native_fat32_probe::dma_topology_verified();
         // This reports map coverage only. It neither maps nor reads the registers.
-        match PlatformMmioManifest::<16>::from_topology(&dmar, &mcfg, &regions[..region_count]) {
+        match PlatformMmioManifest::<16>::from_topology(&dmar, &mcfg, _regions) {
             Ok(_) => native_fat32_probe::dma_mmio_coverage(true),
             Err(PlatformMmioError::OutsideFirmwareMmio) => {
                 native_fat32_probe::dma_mmio_coverage(false);
@@ -4314,14 +4363,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     #[cfg(feature = "q35-mmio-probe")]
     {
-        let _ = &early;
+        let _ = _early;
         if _boot_dma.is_none() {
             halt();
         }
         // SAFETY: this is the signed fixture's BSP and no secondary CPU has
         // started. Loader tables are identity-mapped and not mutated here.
         let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
-        let (dmar, mcfg) = handoff.dma_acpi(encoded).unwrap_or_else(|| halt());
+        let (dmar, mcfg) = handoff.dma_acpi(_encoded).unwrap_or_else(|| halt());
         use mrml_kernel::arch::x86_64::{DxeObservationError, Q35FixtureTopology, check_q35_dxe_diagnostic};
         let topology = Q35FixtureTopology::from_dmar(dmar).unwrap_or_else(|| halt());
         if let Some(diagnostic) = handoff.boot_dxe_diagnostic() {
@@ -4347,7 +4396,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 halt();
             }
             let usb = handoff.usb_pci_record().unwrap_or_else(|| halt());
-            let map = mrml_kernel::MemoryMap::new(&regions[..region_count]).unwrap_or_else(|_| halt());
+            let map = mrml_kernel::MemoryMap::new(_regions).unwrap_or_else(|_| halt());
             let verdict = check_q35_dxe_diagnostic(diagnostic, dmar, mcfg, usb, &map);
             native_fat32_probe::trace(match verdict {
                 Err(DxeObservationError::IncompleteDxe) => 0xcb,
@@ -4434,7 +4483,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     #[cfg(feature = "uefi-fat32-restart-probe")]
     let _ = paint_boot_diagnostic(handoff.framebuffer(), b"MRML KERNEL ENTRY");
     #[cfg(any(feature = "certificate-service-probe", feature = "vmx-root-probe"))]
-    let _ = &early;
+    let _ = _early;
     #[cfg(feature = "pci-configuration-probe")]
     unsafe {
         run_pci_configuration_probe()
@@ -4444,8 +4493,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         run_block_guest_driver_probe()
     }
     #[cfg(feature = "vmx-root-probe")]
-    run_vmx_boot_diagnostic(&handoff);
-    if let Some(madt) = handoff.madt(encoded) {
+    run_vmx_boot_diagnostic(handoff);
+    if let Some(madt) = handoff.madt(_encoded) {
         smp_trace(0x03);
         let topology = X86CpuTopology::parse_madt(madt).unwrap_or_else(|_| halt());
         smp_trace(0x40u8.saturating_add(topology.len() as u8));
@@ -4466,7 +4515,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     smp_trace(0x04);
                     #[cfg(feature = "uefi-fat32-restart-probe")]
                     let _ = paint_boot_diagnostic(handoff.framebuffer(), b"MRML SMP START");
-                    unsafe { start_application_processors(&topology, &handoff) };
+                    unsafe { start_application_processors(&topology, handoff) };
                     smp_trace(0x05);
                     #[cfg(feature = "smp-ipi-probe")]
                     unsafe {
@@ -4500,7 +4549,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     unsafe {
         #[cfg(feature = "uefi-fat32-restart-probe")]
         let _ = paint_boot_diagnostic(handoff.framebuffer(), b"MRML SMP READY");
-        run_service_probe(&handoff, |handoff| {
+        run_service_probe(handoff, |handoff| {
             let _ = handoff;
             #[cfg(feature = "scanout-service-probe")]
             scanout_service_probe::start();
@@ -4749,7 +4798,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 })
                 .unwrap_or_else(|_| halt());
             #[cfg(not(feature = "certificate-service-probe"))]
-            let recovery_capability = early.recovery_state().map(|_| {
+            let recovery_capability = _early.recovery_state().map(|_| {
                 let object = ObjectId(0xa3);
                 let capability = runtime
                     .capabilities_mut(receiver)
@@ -4759,7 +4808,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                             .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                     })
                     .unwrap_or_else(|_| halt());
-                let delivery = BootRecoveryDelivery::from_early(receiver, object, &early)
+                let delivery = BootRecoveryDelivery::from_early(receiver, object, _early)
                     .unwrap_or_else(|_| halt());
                 core::ptr::addr_of_mut!(SERVICE_BOOT_RECOVERY).write(Some(delivery));
                 capability
@@ -5433,21 +5482,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         not(feature = "service-probe")
     ))]
     {
-        #[cfg(feature = "production-policy")]
-        {
-            let minimum_version = match embedded_minimum_version() {
-                Some(value) => value,
-                None => halt(),
-            };
-            if BootPolicy::production(minimum_version)
-                .validate(handoff.evidence())
-                .is_err()
-            {
-                halt();
-            }
-        }
-        // Normal boot leaves the firmware-selected scanout alone. Only the
-        // explicitly selected benchmark paints its legacy completion marker.
+        // Only the explicitly selected benchmark paints its legacy completion marker.
         #[cfg(feature = "gpu-benchmark")]
         {
             if run_gpu_benchmark(handoff.evidence().entropy()).is_err() {
@@ -6871,22 +6906,6 @@ fn run_gpu_benchmark(entropy: &[u8; 32]) -> Result<(), ()> {
         } if elapsed_ns != 0 => Ok(()),
         _ => Err(()),
     }
-}
-
-#[cfg(all(not(feature = "fault-probe"), feature = "production-policy"))]
-fn embedded_minimum_version() -> Option<u64> {
-    let bytes = option_env!("MRML_KERNEL_MIN_VERSION")?.as_bytes();
-    if bytes.is_empty() || bytes.len() > 20 {
-        return None;
-    }
-    let mut value = 0u64;
-    for byte in bytes {
-        if !byte.is_ascii_digit() {
-            return None;
-        }
-        value = value.checked_mul(10)?.checked_add((byte - b'0') as u64)?;
-    }
-    (value != 0).then_some(value)
 }
 
 unsafe fn install_descriptor_tables(kernel_stack: u64, double_fault_stack: u64) {
