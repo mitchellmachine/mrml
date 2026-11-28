@@ -249,6 +249,13 @@ the version-3-capable Windows-hosted release measures 31,853 executable bytes
 and a 43,520-byte PE, with 8,192 virtual bytes of writable data. This is
 separate from the loader's avoided allocations.
 
+The normal kernel now accepts only version 3. Pair it with the
+`package_boot_normal` loader; a legacy loader handoff stops at kernel entry
+instead of falling back to native staging. This does not change legacy
+diagnostic builds. The same Windows-hosted normal release now measures
+24,909 executable bytes and a 36,352-byte PE, with 8,192 virtual bytes of
+writable data.
+
 The next boundary now has a tested owner selection record for exactly one
 release manifest and one measured service image. Its fixed 152-byte format
 starts with the supervisor role tag, followed by the little-endian release
@@ -309,6 +316,25 @@ write or counter increment. Its image SHA-256 was
 `cf34b28aedc378848aaa71af291bccc255d08b17be3e38b8918ab5d3c4c3fc52`.
 This verifies selection and journal behavior, not execution: the selected
 FAT32 PE was a fixture, and neither boot entered a service microVM.
+
+The version-3 handoff was then tested at `d522e278` under enrolled
+OVMF Secure Boot with a software TPM. Two signed loaders used the same
+freshly signed release and independently provisioned copies of the journal.
+Both emitted `HANDOFF:ENVELOPE` and `POLICY:ACCEPTED`. The pinned variant
+reported `SERVICE:CHECKED` and `SUPERVISOR:CHECKED`; all seven PCR 11
+extensions preceded one slot write and one counter increment. The unpinned
+control reported `SUPERVISOR:MISSING` and `SERVICE:CHECKED` with six PCR 11
+extensions. It also committed its release once. A cold reboot of the pinned
+image reproduced its exact 128-byte trace with seven PCR 11 extensions and
+no slot write or counter increment. The pinned image's SHA-256 was
+`714aafc4dbc965c3ee65b27d1014d18f1c1d9cd71e9e9dbc345253d83b14928d`.
+No guest was entered.
+
+Repeating all three tests with the narrower, v3-only normal kernel produced
+the same traces and TPM command counts. The pinned image's SHA-256 was
+`634466bc23263c914e19b535bc5197ddbf0d79c5c53fe4ef807c8a721b209e99`.
+Its paired trace (initial and cold) had SHA-256
+`dab4bc081827a544a8061f8c3f4c5c52a50a90671a502b145e3d7c9aa96a0b25`.
 
 The next guest-memory step now has a hosted-tested reservation and layout
 builder. It consumes page-aligned free RAM from the boot allocator, rejects

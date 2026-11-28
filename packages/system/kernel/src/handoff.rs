@@ -593,10 +593,6 @@ impl BootHandoff {
         }
     }
 
-    pub const fn is_envelope_only(&self) -> bool {
-        self.envelope.is_some()
-    }
-
     pub const fn application(&self) -> Option<ApplicationLaunch> {
         self.application
     }
@@ -634,16 +630,21 @@ impl BootHandoff {
     where
         F: FnMut(MemoryRegion),
     {
-        Self::decode_profile::<true, _>(input, emit)
+        Self::decode_profile::<true, true, _>(input, emit)
     }
 
     /// Normal boot accepts no QEMU USB PCI or copied DXE diagnostic records.
     /// The production specialization does not decode either record.
     pub fn decode_normal(input: &[u8]) -> Result<Self, HandoffError> {
-        Self::decode_profile::<false, _>(input, |_| ())
+        Self::decode_profile::<false, true, _>(input, |_| ())
     }
 
-    fn decode_profile<const DIAGNOSTICS: bool, F>(
+    /// Release kernel entry accepts only the envelope-only version-3 ABI.
+    pub fn decode_envelope(input: &[u8]) -> Result<Self, HandoffError> {
+        Self::decode_profile::<false, false, _>(input, |_| ())
+    }
+
+    fn decode_profile<const DIAGNOSTICS: bool, const LEGACY: bool, F>(
         input: &[u8],
         mut emit: F,
     ) -> Result<Self, HandoffError>
@@ -653,9 +654,12 @@ impl BootHandoff {
         if input.len() < HANDOFF_HEADER_BYTES {
             return Err(HandoffError::Truncated);
         }
-        let legacy_supervisor = &input[..16] == SUPERVISOR_HANDOFF_MAGIC;
-        let envelope_only = !DIAGNOSTICS && &input[..16] == ENVELOPE_HANDOFF_MAGIC;
-        if !legacy_supervisor && !envelope_only && &input[..16] != b"MRML-HANDOFF-v1\0" {
+        let v3 = &input[..16] == ENVELOPE_HANDOFF_MAGIC;
+        let legacy_supervisor = LEGACY && &input[..16] == SUPERVISOR_HANDOFF_MAGIC;
+        let envelope_only = !LEGACY || (!DIAGNOSTICS && v3);
+        if (!LEGACY && !v3)
+            || (LEGACY && !legacy_supervisor && !envelope_only && &input[..16] != b"MRML-HANDOFF-v1\0")
+        {
             return Err(HandoffError::BadMagic);
         }
         let encoded_length = read_u32(input, 16) as usize;
@@ -704,7 +708,7 @@ impl BootHandoff {
             .checked_add(service_bytes)
             .ok_or(HandoffError::NonCanonical)?;
         let application_bytes =
-            usize::from(flags & FLAG_APPLICATION_IMAGE != 0) * HANDOFF_APPLICATION_BYTES;
+            usize::from(!envelope_only && flags & FLAG_APPLICATION_IMAGE != 0) * HANDOFF_APPLICATION_BYTES;
         let recovery_offset = application_offset
             .checked_add(application_bytes)
             .ok_or(HandoffError::NonCanonical)?;
@@ -1203,7 +1207,7 @@ fn validate_supervisor_selection(
 
 fn decode_for_append(encoded: &[u8]) -> Result<BootHandoff, HandoffError> {
     if encoded.starts_with(ENVELOPE_HANDOFF_MAGIC) {
-        BootHandoff::decode_normal(encoded)
+        BootHandoff::decode_envelope(encoded)
     } else {
         BootHandoff::decode(encoded, |_| {})
     }
@@ -2374,7 +2378,7 @@ pub fn encode_normal_boot_handoff(
     let flags = read_u16(output, 22) | FLAG_SERVICE_IMAGE;
     output[22..24].copy_from_slice(&flags.to_le_bytes());
     apply_isolation_override(isolation_override, output);
-    BootHandoff::decode_normal(&output[..total])?;
+    BootHandoff::decode_envelope(&output[..total])?;
     Ok(total)
 }
 
@@ -3272,6 +3276,9 @@ mod tests {
             BootHandoff::decode(&encoded[..length], |_| panic!("must not emit")).err(),
             Some(HandoffError::BadMagic)
         );
+        let strict = BootHandoff::decode_envelope(&encoded[..length]).unwrap();
+        assert_eq!(strict.retained_envelope(), Some(envelope));
+        assert_eq!(strict.service(), None);
         let before = encoded;
         let wrong = BootSupervisorSelection::new(11, [5; 64], [8; 64]).unwrap();
         assert_eq!(append_boot_supervisor_selection(length, wrong, &mut encoded),
@@ -3284,12 +3291,16 @@ mod tests {
         assert_eq!(decoded.supervisor_selection(), Some(selection));
         assert_eq!(decoded.retained_envelope(), Some(envelope));
         assert_eq!(decoded.service(), None);
+        let strict = BootHandoff::decode_envelope(&encoded[..end]).unwrap();
+        assert_eq!(strict.supervisor_selection(), Some(selection));
         let mut bad = encoded;
         bad[HANDOFF_HEADER_BYTES + HANDOFF_REGION_BYTES + 16] = MemoryKind::Free as u8;
         assert_eq!(BootHandoff::decode_normal(&bad[..end]).err(), Some(HandoffError::NonCanonical));
+        assert_eq!(BootHandoff::decode_envelope(&bad[..end]).err(), Some(HandoffError::NonCanonical));
         bad = encoded;
         bad[end - 1] ^= 1;
         assert_eq!(BootHandoff::decode_normal(&bad[..end]).err(), Some(HandoffError::NonCanonical));
+        assert_eq!(BootHandoff::decode_envelope(&bad[..end]).err(), Some(HandoffError::NonCanonical));
 
         let recovery = RecoveryStateMetadata::new(12, 7, Some([0x6a; 16]), 19).unwrap();
         let installed = InstalledRecoveryBootIdentity::new(
@@ -3313,6 +3324,10 @@ mod tests {
         assert_eq!(decoded.installed_recovery(), Some(installed));
         assert_eq!(decoded.installed_recovery_sata_route(), Some(route));
         assert_eq!(decoded.madt(&encoded), Some(madt.as_slice()));
+        assert_eq!(
+            BootHandoff::decode_envelope(&encoded[..length]).unwrap().installed_recovery_sata_route(),
+            Some(route)
+        );
     }
 
     #[test]
@@ -3403,6 +3418,8 @@ mod tests {
         let normal = BootHandoff::decode_normal(&encoded[..total]).unwrap();
         assert_eq!(normal.supervisor_selection(), Some(selection));
         assert_eq!(normal.madt(&encoded), Some(madt.as_slice()));
+        assert_eq!(BootHandoff::decode_envelope(&encoded[..total]).err(), Some(HandoffError::BadMagic));
+        assert_eq!(BootHandoff::decode_envelope(&valid_handoff()).err(), Some(HandoffError::BadMagic));
         assert_eq!(
             append_boot_supervisor_selection(total, selection, &mut encoded),
             Err(HandoffError::NonCanonical)

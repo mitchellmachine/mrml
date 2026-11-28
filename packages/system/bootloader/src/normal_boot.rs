@@ -9,10 +9,7 @@ pub(super) fn enter(handoff: &BootHandoff) -> ! {
     if handoff.missing_installed_recovery_route() {
         super::halt();
     }
-    #[cfg(feature = "normal-boot-observation")]
-    if handoff.is_envelope_only() {
-        observe(b"MRML:BOOT:HANDOFF:ENVELOPE\n");
-    }
+    observe(b"MRML:BOOT:HANDOFF:ENVELOPE\n");
     let Some(minimum_version) = embedded_minimum_version() else {
         observe(b"MRML:BOOT:FLOOR:INVALID\n");
         super::halt();
@@ -64,12 +61,7 @@ fn check_retained_service(handoff: &BootHandoff) -> bool {
         core::slice::from_raw_parts(envelope.artifact_physical().get() as *const u8, length)
     };
     let release = handoff.evidence().image_version();
-    let checked = if let Some(legacy) = handoff.service() {
-        mrml_kernel::BootServiceImage::check(legacy, release, bytes)
-    } else {
-        mrml_kernel::BootServiceImage::check_envelope(envelope, release, bytes)
-    };
-    if checked.is_ok() {
+    if mrml_kernel::BootServiceImage::check_envelope(envelope, release, bytes).is_ok() {
         observe(b"MRML:BOOT:SERVICE:CHECKED\n");
         true
     } else {

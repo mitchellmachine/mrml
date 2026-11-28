@@ -3289,7 +3289,7 @@ pub unsafe extern "efiapi" fn kernel_entry(
         let encoded = unsafe { core::slice::from_raw_parts(bytes, length) };
         #[cfg(feature = "production-policy")]
         {
-            let handoff = BootHandoff::decode_normal(encoded).unwrap_or_else(|_| halt());
+            let handoff = BootHandoff::decode_envelope(encoded).unwrap_or_else(|_| halt());
             normal_boot::enter(&handoff)
         }
         #[cfg(not(feature = "production-policy"))]
