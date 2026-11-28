@@ -657,7 +657,20 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                     } else {
                         crate::qemu_mmio::capture_paused_display(&mut child, None)
                     };
-                    captured.and_then(|()| display.verify(&path))
+                    captured.and_then(|()| {
+                        if live_keyboard {
+                            use crate::qemu_display::DesktopScene;
+                            for (filename, scene) in [
+                                ("desktop-idle.ppm", DesktopScene::Idle),
+                                ("desktop-enter.ppm", DesktopScene::Enter),
+                                ("desktop-typed.ppm", DesktopScene::LiveKeyboard),
+                            ] {
+                                crate::qemu_display::verify_desktop_screen(&dir.join(filename), scene)
+                                    .map_err(|error| format!("{filename}: {error}"))?;
+                            }
+                        }
+                        display.verify(&path)
+                    })
                         .map(|(width, height)| (display, width, height))
                 });
                 let evidence = (verify_q35 && !released).then(|| {

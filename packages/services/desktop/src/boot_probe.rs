@@ -3,31 +3,45 @@
 #![no_main]
 
 use core::arch::asm;
-use mrml_desktop::boot_frame::{BOOT_REPLY_BYTES, BOOT_REQUEST, BootDesktop, render_boot_reply};
+use mrml_desktop::boot_frame::{
+    BOOT_REPLY_BYTES, BOOT_REQUEST, BootDesktop, BootScene, MAX_LIVE_KEYS, render_boot_reply,
+};
 
 const REQUEST: usize = BOOT_REQUEST.len();
-const BEGIN: [u8; REQUEST] = *b"MRMLDB1\x02";
-const ENTER: [u8; REQUEST] = *b"MRMLDB1\x01";
-const TEXT_A: [u8; REQUEST] = *b"MRMLDB1\x03";
 
 // The sealed loader requires a real DIR64 relocation when changing the PE base.
 static RELOCATION_ANCHOR: fn() -> ! = halt;
 
 #[unsafe(no_mangle)]
-extern "efiapi" fn efi_main(request: *const [u8; REQUEST], reply: *mut [u8; BOOT_REPLY_BYTES]) -> ! {
+extern "efiapi" fn efi_main(
+    request: *const [u8; REQUEST],
+    reply: *mut [u8; BOOT_REPLY_BYTES],
+) -> ! {
     core::hint::black_box(&RELOCATION_ANCHOR);
     let mut desktop = BootDesktop::new().unwrap_or_else(|_| halt());
-    for step in 0..3 {
+    let mut live = false;
+    for step in 0..MAX_LIVE_KEYS + 3 {
         // SAFETY: the signed monitor passes distinct aligned, fixed mailbox
         // pages. It touches them only while this vCPU is stopped. No guest
         // reference to either page survives the trapped OUT at the end.
         let completed = unsafe {
             let request = request.read_volatile();
             let reply = &mut *reply;
-            match (step, request) {
-                (0, BEGIN) => desktop.step(mrml_desktop::boot_frame::BootScene::Begin, reply).map(|()| false),
-                (1, ENTER) => desktop.step(mrml_desktop::boot_frame::BootScene::Enter, reply).map(|()| false),
-                (2, TEXT_A) => desktop.step(mrml_desktop::boot_frame::BootScene::TextA, reply).map(|()| true),
+            match (step, BootScene::parse(&request)) {
+                (0, Ok(scene @ (BootScene::Begin | BootScene::LiveBegin))) => {
+                    live = scene == BootScene::LiveBegin;
+                    desktop.step(scene, reply).map(|()| false)
+                }
+                (1, Ok(BootScene::Enter)) => desktop.step(BootScene::Enter, reply).map(|()| false),
+                (2, Ok(BootScene::TextA)) if !live => {
+                    desktop.step(BootScene::TextA, reply).map(|()| true)
+                }
+                (2.., Ok(scene @ BootScene::Letter(_))) if live && step < MAX_LIVE_KEYS + 2 => {
+                    desktop.step(scene, reply).map(|()| false)
+                }
+                (2.., Ok(BootScene::End)) if live => {
+                    desktop.step(BootScene::End, reply).map(|()| true)
+                }
                 (0, _) => render_boot_reply(&request, reply).map(|()| true),
                 _ => Err(mrml_desktop::boot_frame::Error::InvalidRequest),
             }

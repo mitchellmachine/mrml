@@ -72,7 +72,9 @@ Mitchell photographed the original unscaled image on the Dragonair showing
 `>A` and `1` under `KEYS`. The photo confirms desktop scanout on that machine,
 not the selected GOP mode, EDID match, or the newer scaling path.
 The scaled follow-up passed the same QEMU test at 1024 × 768, with a
-centered 960 × 560 preview. Host unit tests cover the fit geometry for
+centered 960 × 560 preview. Mitchell then photographed the centered preview
+with the expected echo and count on the Chromebook. This is evidence for
+physical scaling, but the active mode and EDID match are still unknown. Host unit tests cover the fit geometry for
 1080p, 4K, portrait, and undersized framebuffers.
 
 

@@ -81,11 +81,18 @@ pub(super) fn capture_paused_display(
             qmp_write(&mut input, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
             ack(&mut reader, "{\"return\": {}, \"id\": 71}")?;
             if let Some((path, trace)) = &keyboard {
+                dump_display(&mut input, &mut reader, "desktop-idle.ppm", 76)?;
                 send_desktop_key(&mut input, &mut reader, "ret", 74)?;
                 let second = trace.iter().position(|&byte| byte == 0xcb)
                     .ok_or("missing desktop second-key rendezvous")?;
                 wait_keyboard_trace(path, &trace[..=second])?;
+                dump_display(&mut input, &mut reader, "desktop-enter.ppm", 77)?;
                 send_desktop_key(&mut input, &mut reader, "a", 75)?;
+                let typed = trace.iter().rposition(|&byte| byte == 0xce)
+                    .ok_or("missing desktop text paint rendezvous")?;
+                wait_keyboard_trace(path, &trace[..=typed])?;
+                dump_display(&mut input, &mut reader, "desktop-typed.ppm", 78)?;
+                send_desktop_key(&mut input, &mut reader, "esc", 79)?;
                 wait_keyboard_trace(path, trace)?;
             }
             qmp_write(&mut input, "{\"execute\":\"stop\",\"id\":72}\n")?;
@@ -99,6 +106,18 @@ pub(super) fn capture_paused_display(
         .map_err(|_| "timed out reading QEMU display".to_owned())?;
     worker.join().map_err(|_| "QMP display worker panicked")?;
     result
+}
+
+fn dump_display(
+    input: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    filename: &str,
+    id: u8,
+) -> Result<(), String> {
+    qmp_write(input, &format!(
+        "{{\"execute\":\"screendump\",\"arguments\":{{\"filename\":\"{filename}\"}},\"id\":{id}}}\n"
+    ))?;
+    ack(reader, &format!("{{\"return\": {{}}, \"id\": {id}}}"))
 }
 
 fn send_desktop_key(

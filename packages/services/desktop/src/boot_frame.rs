@@ -2,7 +2,7 @@
 //! guest-provided addresses, framebuffer authority, or display-mode requests.
 use crate::{Desktop, Event, Key, RouteError, TerminalRoute, raster};
 use core::num::NonZeroU64;
-pub use mrml_boot_frame::BootScene;
+pub use mrml_boot_frame::{BootScene, MAX_LIVE_KEYS};
 
 pub use mrml_boot_frame::{
     BOOT_REPLY_BYTES, BOOT_REQUEST, Error, HEADER_BYTES, MAX_BYTES, decode, decode_boot_reply,
@@ -112,21 +112,32 @@ impl BootDesktop {
         reply.fill(0);
         let open = self.desktop.diagnostics().terminal_open;
         let event = match (scene, open) {
-            (BootScene::Idle | BootScene::Begin, false) => None,
+            (BootScene::Idle | BootScene::Begin | BootScene::LiveBegin, false) => None,
+            (BootScene::End, true) => None,
+            (BootScene::Letter(letter), true) => {
+                Some(Event::TerminalKey(Key::Text(letter.character())))
+            }
             (BootScene::Enter, false) => Some(Event::Enter),
             (BootScene::TextA, true) => Some(Event::TerminalKey(Key::Text('A'))),
             _ => return Err(Error::InvalidRequest),
         };
         if let Some(event) = event {
-            self.desktop.event(event, &mut self.terminal).map_err(|_| Error::InvalidDesktop)?;
+            self.desktop
+                .event(event, &mut self.terminal)
+                .map_err(|_| Error::InvalidDesktop)?;
             if !self.desktop.diagnostics().terminal_open {
                 return Err(Error::InvalidDesktop);
             }
         }
-        let echo = self.terminal.0.as_ref().and_then(|terminal| terminal.rows().last()).unwrap_or(&[]);
+        let echo = self
+            .terminal
+            .0
+            .as_ref()
+            .and_then(|terminal| terminal.rows().last())
+            .unwrap_or(&[]);
         let packet = (&mut reply[..MAX_BYTES])
-        .try_into()
-        .map_err(|_| Error::WrongOutputSize)?;
+            .try_into()
+            .map_err(|_| Error::WrongOutputSize)?;
         match encode(&self.desktop, echo, packet) {
             Ok(_) => Ok(()),
             Err(error) => {
@@ -140,6 +151,26 @@ impl BootDesktop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_mailbox_renders_multiple_distinct_keypresses_without_relaunch() {
+        use mrml_boot_frame::BootLetter;
+        let mut desktop = BootDesktop::new().unwrap();
+        let mut reply = [0; BOOT_REPLY_BYTES];
+        let letter = |byte| BootScene::Letter(BootLetter::new(byte).unwrap());
+        desktop.step(BootScene::LiveBegin, &mut reply).unwrap();
+        assert!(desktop.step(letter(b'A'), &mut reply).is_err());
+        desktop.step(BootScene::Enter, &mut reply).unwrap();
+        for byte in b"ABBA" {
+            let before = reply;
+            desktop.step(letter(*byte), &mut reply).unwrap();
+            assert_ne!(reply, before);
+        }
+        let present = reply;
+        desktop.step(BootScene::End, &mut reply).unwrap();
+        assert_eq!(reply, present);
+        assert_eq!(desktop.desktop.diagnostics().keys_delivered, 4);
+    }
 
     #[test]
     fn boot_request_seals_frame_and_rejects_nonzero_padding() {
@@ -180,7 +211,10 @@ mod tests {
 
         let mut bad = BootScene::Enter.request();
         bad[7] = 4;
-        assert_eq!(render_boot_reply(&bad, &mut reply), Err(Error::InvalidRequest));
+        assert_eq!(
+            render_boot_reply(&bad, &mut reply),
+            Err(Error::InvalidRequest)
+        );
         assert!(reply.iter().all(|&byte| byte == 0));
     }
 
@@ -188,13 +222,19 @@ mod tests {
     fn persistent_reply_rejects_text_before_enter_and_keeps_the_echo() {
         let mut desktop = BootDesktop::new().unwrap();
         let mut reply = [0; BOOT_REPLY_BYTES];
-        assert_eq!(desktop.step(BootScene::TextA, &mut reply), Err(Error::InvalidRequest));
+        assert_eq!(
+            desktop.step(BootScene::TextA, &mut reply),
+            Err(Error::InvalidRequest)
+        );
         desktop.step(BootScene::Begin, &mut reply).unwrap();
         desktop.step(BootScene::Enter, &mut reply).unwrap();
         let opened = reply;
         desktop.step(BootScene::TextA, &mut reply).unwrap();
         assert_ne!(reply, opened);
-        assert_eq!(desktop.terminal.0.as_ref().unwrap().rows().last(), Some(&['A'][..]));
+        assert_eq!(
+            desktop.terminal.0.as_ref().unwrap().rows().last(),
+            Some(&['A'][..])
+        );
         validate_boot_reply(&reply).unwrap();
     }
 

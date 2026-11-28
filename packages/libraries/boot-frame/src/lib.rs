@@ -12,6 +12,28 @@ pub enum BootScene {
     Enter,
     Begin,
     TextA,
+    LiveBegin,
+    End,
+    Letter(BootLetter),
+}
+
+pub const MAX_LIVE_KEYS: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BootLetter(u8);
+
+impl BootLetter {
+    pub const fn new(byte: u8) -> Option<Self> {
+        if byte.is_ascii_uppercase() {
+            Some(Self(byte))
+        } else {
+            None
+        }
+    }
+
+    pub const fn character(self) -> char {
+        self.0 as char
+    }
 }
 
 impl BootScene {
@@ -21,16 +43,51 @@ impl BootScene {
             Self::Enter => *b"MRMLDB1\x01",
             Self::Begin => *b"MRMLDB1\x02",
             Self::TextA => *b"MRMLDB1\x03",
+            Self::LiveBegin => *b"MRMLDB1\x04",
+            Self::End => *b"MRMLDB1\x05",
+            Self::Letter(letter) => [b'M', b'R', b'M', b'L', b'D', b'B', b'1', letter.0],
         }
     }
 
     pub fn parse(request: &[u8; BOOT_REQUEST.len()]) -> Result<Self, Error> {
-        [Self::Idle, Self::Enter, Self::Begin, Self::TextA]
-            .into_iter()
-            .find(|scene| scene.request() == *request)
-            .ok_or(Error::InvalidRequest)
+        if request[..7] != BOOT_REQUEST[..7] {
+            return Err(Error::InvalidRequest);
+        }
+        if let Some(letter) = BootLetter::new(request[7]) {
+            return Ok(Self::Letter(letter));
+        }
+        [
+            Self::Idle,
+            Self::Enter,
+            Self::Begin,
+            Self::TextA,
+            Self::LiveBegin,
+            Self::End,
+        ]
+        .into_iter()
+        .find(|scene| scene.request() == *request)
+        .ok_or(Error::InvalidRequest)
     }
 }
+#[cfg(test)]
+#[test]
+fn live_letter_codes_are_bounded_and_require_exact_magic() {
+    for byte in 0..=255 {
+        let mut framed = BOOT_REQUEST;
+        framed[7] = byte;
+        let decoded = BootScene::parse(&framed);
+        assert_eq!(
+            decoded.ok().and_then(|scene| match scene {
+                BootScene::Letter(letter) => Some(letter.character()),
+                _ => None,
+            }),
+            BootLetter::new(byte).map(BootLetter::character)
+        );
+        framed[0] ^= 1;
+        assert_eq!(BootScene::parse(&framed), Err(Error::InvalidRequest));
+    }
+}
+
 pub const BOOT_REPLY_BYTES: usize = 4096;
 
 pub const HEADER_BYTES: usize = 8;

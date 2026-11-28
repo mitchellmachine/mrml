@@ -392,16 +392,18 @@ delivered. `test-vmx-desktop-persistent` checks both the yield trace and all
 8,400 final pixels. The session is retired after this bounded test; it
 does not poll a hardware keyboard, grant a device, or change normal boot.
 
-The separate `image-vmx-desktop-keyboard` diagnostic waits for actual
-QEMU virtual keyboard events instead of injecting guest mailbox requests
-on its own. `test-vmx-desktop-keyboard` sends Enter and A through QMP to
-the emulated i8042, one key at each parked-guest rendezvous. The monitor
-accepts only the two complete make/release sequences, with a fixed wait
-bound, and forwards only the corresponding normalized events to the desktop.
-The tester verifies both receipt markers and the final 8,400 pixels.
+The separate `image-vmx-desktop-keyboard` profile presents the idle
+desktop, opens its terminal on a real virtual Enter event, and updates the
+visible frame after each letter. It resumes the same signed guest after
+each event and publishes only stopped, validated mailbox snapshots. Type
+up to eight A–Z keys; Escape, a time limit, or unsupported key traffic
+ends the session without forwarding unsupported input. Only complete
+make/release pairs in the scan format established by Enter are accepted.
+`test-vmx-desktop-keyboard` sends Enter, A, and Escape through QMP and
+checks idle, terminal-open, text-echo, and final VGA captures separately.
 The monitor polls only in the opt-in nested KVM profile, sends no controller
-commands, and gives the guest no keyboard ports. The fixture uses a fixed
-key mapping; it is not a physical keyboard driver or a Chromebook test.
+commands, and gives the guest no keyboard ports. This bounded session has
+no mouse, USB HID, modifiers, general keymap, or physical keyboard support.
 
 ### MicroVM task manager prototype
 

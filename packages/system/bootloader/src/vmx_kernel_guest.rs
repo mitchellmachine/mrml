@@ -135,7 +135,9 @@ pub(super) fn run_desktop_probe(
     ticks: u32,
     framebuffer: mrml_kernel::FramebufferInfo,
 ) -> Option<PhysAddr> {
-    use mrml_boot_frame::{BOOT_REPLY_BYTES, BootScene, FRAME_BYTES, HEIGHT, WIDTH, decode_boot_reply};
+    use mrml_boot_frame::{BOOT_REPLY_BYTES, FRAME_BYTES, HEIGHT, WIDTH, decode_boot_reply};
+    #[cfg(not(feature = "vmx-desktop-qemu-keyboard"))]
+    use mrml_boot_frame::BootScene;
     use mrml_kernel::{
         CapabilitySpace, DisplayOutputIdentity, FramebufferLayout, IsolationAdmissionTable,
         IsolationMode, IsolationPlacement, IsolationServiceSpec, ObjectId, PixelFormat, Rights,
@@ -150,20 +152,8 @@ pub(super) fn run_desktop_probe(
         ObjectId(vmcs.get()), ObjectId(0xd02), 1, service.guest.artifact_version,
         1, 1, TotalMicrovmClass::MicrovmEligible, IsolationPlacement::Microvm,
     ).ok()?;
-    let prepared = prepare_isolation_service_route(&mut admission, spec).ok()?;
-    let reply: [u8; BOOT_REPLY_BYTES] = if cfg!(feature = "vmx-desktop-persistent-probe") {
-        persistent_desktop(service, controller, controls, ticks)?
-    } else {
-        let scene = if cfg!(feature = "vmx-desktop-input-probe") {
-            BootScene::Enter
-        } else {
-            BootScene::Idle
-        };
-        service.exchange(controller, controls, ticks, scene.request())?
-    };
+    let route = prepare_isolation_service_route(&mut admission, spec).ok()?.commit(&mut admission, ()).ok()?;
     let mut frame = [0; FRAME_BYTES];
-    decode_boot_reply(&reply, &mut frame).ok()?;
-    let route = prepared.commit(&mut admission, &frame[..]).ok()?;
     let source = FramebufferLayout::new(
         FRAME_BYTES as u64, WIDTH as u32, HEIGHT as u32, WIDTH as u32,
         PixelFormat::BlueGreenRedReserved,
@@ -171,22 +161,104 @@ pub(super) fn run_desktop_probe(
     let identity = DisplayOutputIdentity::new(ObjectId(0xd30), 1).ok()?;
     let mut caps = CapabilitySpace::<1>::new();
     let control = caps.insert(identity.object(), Rights::CONTROL).ok()?;
-    let published = super::with_diagnostic_framebuffer(framebuffer, |output| {
-        mrml_compositor::publish_total_guest_scanout(
-            &admission, &route, spec, &caps, control, identity, identity,
-            source, framebuffer.layout(), mrml_compositor::BootProjection::FitCentered,
-            |&snapshot| Some(snapshot), output,
-        )
-    });
+    let mut present = |reply: &[u8; BOOT_REPLY_BYTES]| -> Option<()> {
+        decode_boot_reply(reply, &mut frame).ok()?;
+        // The only capture is an immutable view of the bounded host copy
+        // from the fixed reply page of this exact parked desktop guest.
+        super::with_diagnostic_framebuffer(framebuffer, |output| {
+            mrml_compositor::publish_total_guest_scanout(
+                &admission, &route, spec, &caps, control, identity, identity,
+                source, framebuffer.layout(), mrml_compositor::BootProjection::FitCentered,
+                |_| Some(frame.as_slice()), output,
+            )
+        }).ok()
+    };
+    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
+    let result = live_desktop(service, controller, controls, ticks, &mut present);
+    #[cfg(not(feature = "vmx-desktop-qemu-keyboard"))]
+    let result = (|| {
+        let reply: [u8; BOOT_REPLY_BYTES] = if cfg!(feature = "vmx-desktop-persistent-probe") {
+            persistent_desktop(service, controller, controls, ticks)?
+        } else {
+            let scene = if cfg!(feature = "vmx-desktop-input-probe") {
+                BootScene::Enter
+            } else {
+                BootScene::Idle
+            };
+            service.exchange(controller, controls, ticks, scene.request())?
+        };
+        present(&reply)
+    })();
     admission.retire(route.domain()).ok()?;
     caps.revoke(control).ok()?;
-    published.ok()?;
+    result?;
     // The caller retires this VMCS after restoring the separately parked
     // timer guest. The desktop is already stopped and cannot be reloaded.
     Some(vmcs)
 }
 
-#[cfg(feature = "vmx-desktop-monitor")]
+#[cfg(feature = "vmx-desktop-qemu-keyboard")]
+#[inline(never)]
+fn live_desktop(
+    service: ServiceLaunch,
+    controller: &mut VmxController<NativeVmx>,
+    controls: VmxControlPolicy,
+    ticks: u32,
+    present: &mut impl FnMut(&[u8; mrml_boot_frame::BOOT_REPLY_BYTES]) -> Option<()>,
+) -> Option<()> {
+    use mrml_boot_frame::{BOOT_REPLY_BYTES, BootScene, MAX_LIVE_KEYS};
+    let guest = service.guest;
+    let mut keyboard = super::vmx_qemu_keyboard::QemuKeyboard::probe()?;
+    ServiceLaunch::write_request(BootScene::LiveBegin.request())?;
+    guest.start(controller, controls, ticks)?;
+    let bounds = HIGH + IMAGE as u64..guest.image_end;
+    let park = |controller: &mut VmxController<NativeVmx>| {
+        controller.park_boot_call_probe(bounds.clone()).ok()
+    };
+    let resume = |controller: &mut VmxController<NativeVmx>, scene: BootScene| -> Option<()> {
+        ServiceLaunch::write_request(scene.request())?;
+        controller.reload_boot_probe_guest(guest.vmcs, guest.ept).ok()?;
+        controller.arm_boot_probe_timer(controls, ticks).ok()?;
+        controller.resume().ok()
+    };
+    park(controller)?;
+    let mut last: [u8; BOOT_REPLY_BYTES] = ServiceLaunch::read_reply()?;
+    present(&last)?;
+    super::vmx_probe::trace(0xca);
+
+    let enter = keyboard.await_key(BootScene::Enter)?;
+    super::vmx_probe::trace(0xcd);
+    resume(controller, enter)?;
+    park(controller)?;
+    last = ServiceLaunch::read_reply()?;
+    present(&last)?;
+    super::vmx_probe::trace(0xcb);
+
+    for _ in 0..MAX_LIVE_KEYS {
+        let Some(scene @ BootScene::Letter(_)) = keyboard.await_text() else {
+            break;
+        };
+        resume(controller, scene)?;
+        park(controller)?;
+        let next = ServiceLaunch::read_reply()?;
+        if last == next {
+            return None;
+        }
+        present(&next)?;
+        last = next;
+        super::vmx_probe::trace(0xce);
+    }
+    resume(controller, BootScene::End)?;
+    terminal(controller, 0xe8)?;
+    let end: [u8; BOOT_REPLY_BYTES] = ServiceLaunch::read_reply()?;
+    if end != last {
+        return None;
+    }
+    super::vmx_probe::trace(0xcf);
+    Some(())
+}
+
+#[cfg(all(feature = "vmx-desktop-monitor", not(feature = "vmx-desktop-qemu-keyboard")))]
 #[inline(never)]
 fn persistent_desktop(
     service: ServiceLaunch,
@@ -196,8 +268,6 @@ fn persistent_desktop(
 ) -> Option<[u8; mrml_boot_frame::BOOT_REPLY_BYTES]> {
     use mrml_boot_frame::{BOOT_REPLY_BYTES, BootScene, validate_boot_reply};
     let guest = service.guest;
-    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
-    let mut keyboard = super::vmx_qemu_keyboard::QemuKeyboard::probe()?;
     ServiceLaunch::write_request(BootScene::Begin.request())?;
     guest.start(controller, controls, ticks)?;
     let bounds = HIGH + IMAGE as u64..guest.image_end;
@@ -213,12 +283,7 @@ fn persistent_desktop(
         controller.resume().ok()
     };
     // The same VMCS, EPT and guest stack are kept across both yields.
-    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
-    let enter = keyboard.await_key(BootScene::Enter)?;
-    #[cfg(not(feature = "vmx-desktop-qemu-keyboard"))]
     let enter = BootScene::Enter;
-    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
-    super::vmx_probe::trace(0xcd);
     resume(enter)?;
     controller.park_boot_call_probe(bounds).ok()?;
     let entered: [u8; BOOT_REPLY_BYTES] = ServiceLaunch::read_reply()?;
@@ -227,12 +292,7 @@ fn persistent_desktop(
         return None;
     }
     super::vmx_probe::trace(0xcb);
-    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
-    let text = keyboard.await_key(BootScene::TextA)?;
-    #[cfg(not(feature = "vmx-desktop-qemu-keyboard"))]
     let text = BootScene::TextA;
-    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
-    super::vmx_probe::trace(0xce);
     ServiceLaunch::write_request(text.request())?;
     controller.reload_boot_probe_guest(guest.vmcs, guest.ept).ok()?;
     controller.arm_boot_probe_timer(controls, ticks).ok()?;
