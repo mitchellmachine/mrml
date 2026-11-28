@@ -51,6 +51,12 @@ architectural priority or formal verification. See the
 [architecture comparison](docs/gigakernel.md#how-the-gigakernel-compares)
 and [placement rules](docs/ISOLATION_PLACEMENT.md).
 
+### Architecture snapshot
+
+![MRML Gigakernel architecture: separate xHCI driver microVMs and five input services, with verified test paths distinguished from planned wiring](docs/images/gigakernel-2026-11-28.svg)
+
+**2026-11-28 UTC · source commit [9ea4887a2815864179068fa910eb3a4310ccae6b](https://github.com/mitchellmachine/mrml/commit/9ea4887a2815864179068fa910eb3a4310ccae6b).** This snapshot predates the diagram commit. QEMU verified separate admission routes for two xHCI controllers, not live driver guests. The PS/2 broker and all five input decoder components were tested outside those service guests. The USB write shown is a separate emulated test, not a Chromebook result. See the [text description and test limits](docs/gigakernel.md#hardware-discovery-and-driver-supervision).
+
 ## Software for Windows and Linux
 
 You can run parts of MRML directly on x86-64 Windows and Linux without
