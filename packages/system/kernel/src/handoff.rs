@@ -138,10 +138,60 @@ impl RecoveryStateMetadata {
     }
 }
 
+/// The retained signed envelope, separate from legacy native launch storage.
+/// This bounded descriptor is not itself authenticated or safe to dereference.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ServiceLaunch {
+pub struct RetainedBootEnvelope {
     artifact_physical: PhysAddr,
     artifact_length: u64,
+    version: u64,
+    measurement: [u8; 64],
+}
+
+impl RetainedBootEnvelope {
+    fn new_bounded(
+        artifact_physical: PhysAddr,
+        artifact_length: u64,
+        version: u64,
+        measurement: [u8; 64],
+        maximum_image_bytes: u32,
+    ) -> Result<Self, HandoffError> {
+        checked_pages(artifact_physical, artifact_length.div_ceil(crate::PAGE_SIZE))?;
+        if version == 0
+            || artifact_length
+                > u64::from(maximum_image_bytes) + crate::SIGNED_ARTIFACT_OVERHEAD_BYTES as u64
+            || measurement == [0; 64]
+        {
+            return Err(HandoffError::NonCanonical);
+        }
+        Ok(Self {
+            artifact_physical,
+            artifact_length,
+            version,
+            measurement,
+        })
+    }
+
+    pub const fn artifact_physical(self) -> PhysAddr {
+        self.artifact_physical
+    }
+
+    pub const fn artifact_length(self) -> u64 {
+        self.artifact_length
+    }
+
+    pub const fn version(self) -> u64 {
+        self.version
+    }
+
+    pub const fn measurement(self) -> [u8; 64] {
+        self.measurement
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceLaunch {
+    envelope: RetainedBootEnvelope,
     image_physical: PhysAddr,
     image_pages: u64,
     image_virtual: u64,
@@ -151,8 +201,6 @@ pub struct ServiceLaunch {
     stack_top: u64,
     table_physical: PhysAddr,
     table_pages: u64,
-    version: u64,
-    measurement: [u8; 64],
 }
 
 impl ServiceLaunch {
@@ -208,7 +256,13 @@ impl ServiceLaunch {
         maximum_image_bytes: u32,
     ) -> Result<Self, HandoffError> {
         let artifact_pages = artifact_length.div_ceil(crate::PAGE_SIZE);
-        let _ = checked_pages(artifact_physical, artifact_pages)?;
+        let envelope = RetainedBootEnvelope::new_bounded(
+            artifact_physical,
+            artifact_length,
+            version,
+            measurement,
+            maximum_image_bytes,
+        )?;
         let image_bytes = checked_pages(image_physical, image_pages)?;
         let stack_bytes = checked_pages(stack_physical, stack_pages)?;
         let _ = checked_pages(table_physical, table_pages)?;
@@ -221,12 +275,6 @@ impl ServiceLaunch {
         if image_pages > u64::from(maximum_image_bytes).div_ceil(crate::PAGE_SIZE)
             || stack_pages > 256
             || !(4..=256).contains(&table_pages)
-            || version == 0
-            || artifact_length
-                > (maximum_image_bytes as u64)
-                    .checked_add(crate::SIGNED_ARTIFACT_OVERHEAD_BYTES as u64)
-                    .ok_or(HandoffError::NonCanonical)?
-            || measurement.iter().all(|byte| *byte == 0)
             || !user_page(image_virtual)
             || !user_address(entry)
             || entry < image_virtual
@@ -259,8 +307,7 @@ impl ServiceLaunch {
             return Err(HandoffError::NonCanonical);
         }
         Ok(Self {
-            artifact_physical,
-            artifact_length,
+            envelope,
             image_physical,
             image_pages,
             image_virtual,
@@ -270,16 +317,18 @@ impl ServiceLaunch {
             stack_top,
             table_physical,
             table_pages,
-            version,
-            measurement,
         })
     }
 
+    pub const fn envelope(self) -> RetainedBootEnvelope {
+        self.envelope
+    }
+
     pub const fn artifact_physical(self) -> PhysAddr {
-        self.artifact_physical
+        self.envelope.artifact_physical()
     }
     pub const fn artifact_length(self) -> u64 {
-        self.artifact_length
+        self.envelope.artifact_length()
     }
 
     pub const fn image_physical(self) -> PhysAddr {
@@ -310,10 +359,10 @@ impl ServiceLaunch {
         self.table_pages
     }
     pub const fn version(self) -> u64 {
-        self.version
+        self.envelope.version()
     }
     pub const fn measurement(self) -> [u8; 64] {
-        self.measurement
+        self.envelope.measurement()
     }
 }
 
@@ -1092,7 +1141,7 @@ fn validate_supervisor_selection(
     service: Option<ServiceLaunch>,
 ) -> Result<(), HandoffError> {
     if flags & SUPERVISOR_EVIDENCE_FLAGS != SUPERVISOR_EVIDENCE_FLAGS
-        || !service.is_some_and(|launch| selection.matches_launch(release, launch))
+        || !service.is_some_and(|launch| selection.matches_envelope(release, launch.envelope()))
     {
         return Err(HandoffError::NonCanonical);
     }

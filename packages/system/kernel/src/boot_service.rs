@@ -1,6 +1,6 @@
 use crate::{
     ArtifactError, ArtifactKind, MAX_SERVICE_IMAGE_BYTES, PAGE_SIZE, PeError, PeImage,
-    ServiceLaunch, SignedArtifact,
+    RetainedBootEnvelope, ServiceLaunch, SignedArtifact,
 };
 use mrml_crypto::Sha3_512;
 
@@ -32,31 +32,44 @@ impl<'a> BootServiceImage<'a> {
         accepted_release: u64,
         bytes: &'a [u8],
     ) -> Result<Self, BootServiceImageError> {
-        if u64::try_from(bytes.len()).ok() != Some(launch.artifact_length()) {
-            return Err(BootServiceImageError::LayoutMismatch);
-        }
-        let artifact = SignedArtifact::decode(bytes).map_err(BootServiceImageError::Container)?;
-        if artifact.kind() != ArtifactKind::ServiceImage {
-            return Err(BootServiceImageError::WrongKind);
-        }
-        if artifact.version() != accepted_release || launch.version() != accepted_release {
-            return Err(BootServiceImageError::ReleaseMismatch);
-        }
-        if Sha3_512::digest(artifact.payload()) != launch.measurement() {
-            return Err(BootServiceImageError::MeasurementMismatch);
-        }
-        let image = PeImage::parse_with_limit(artifact.payload(), MAX_SERVICE_IMAGE_BYTES)
-            .map_err(BootServiceImageError::Image)?;
+        let checked = Self::check_envelope(launch.envelope(), accepted_release, bytes)?;
+        let image = checked.image();
         if u64::from(image.image_size()).div_ceil(PAGE_SIZE) != launch.image_pages()
             || image.image_base() != launch.image_virtual()
             || image.image_base().checked_add(u64::from(image.entry_rva())) != Some(launch.entry())
         {
             return Err(BootServiceImageError::LayoutMismatch);
         }
+        Ok(checked)
+    }
+
+    /// Check the retained source without adopting an existing image, stack
+    /// or page-table layout. The caller still needs an authenticated handoff
+    /// and must establish that the envelope's bytes are the retained bytes.
+    pub fn check_envelope(
+        envelope: RetainedBootEnvelope,
+        accepted_release: u64,
+        bytes: &'a [u8],
+    ) -> Result<Self, BootServiceImageError> {
+        if u64::try_from(bytes.len()).ok() != Some(envelope.artifact_length()) {
+            return Err(BootServiceImageError::LayoutMismatch);
+        }
+        let artifact = SignedArtifact::decode(bytes).map_err(BootServiceImageError::Container)?;
+        if artifact.kind() != ArtifactKind::ServiceImage {
+            return Err(BootServiceImageError::WrongKind);
+        }
+        if artifact.version() != accepted_release || envelope.version() != accepted_release {
+            return Err(BootServiceImageError::ReleaseMismatch);
+        }
+        if Sha3_512::digest(artifact.payload()) != envelope.measurement() {
+            return Err(BootServiceImageError::MeasurementMismatch);
+        }
+        let image = PeImage::parse_with_limit(artifact.payload(), MAX_SERVICE_IMAGE_BYTES)
+            .map_err(BootServiceImageError::Image)?;
         Ok(Self {
             image,
             release: accepted_release,
-            measurement: launch.measurement(),
+            measurement: envelope.measurement(),
         })
     }
 
@@ -105,10 +118,10 @@ impl BootSupervisorSelection {
         })
     }
 
-    pub(crate) fn matches_launch(self, release: u64, service: ServiceLaunch) -> bool {
+    pub(crate) fn matches_envelope(self, release: u64, envelope: RetainedBootEnvelope) -> bool {
         self.release == release
-            && service.version() == release
-            && self.service == service.measurement()
+            && envelope.version() == release
+            && self.service == envelope.measurement()
     }
 
     pub fn encode(self) -> [u8; BOOT_SUPERVISOR_SELECTION_BYTES] {
@@ -709,6 +722,46 @@ mod tests {
             ),
             Err(BootServiceImageError::Image(_))
         ));
+    }
+
+    #[test]
+    fn envelope_check_does_not_reuse_native_staging() {
+        let payload = crate::pe::tests::valid_pe();
+        let original = bundle(payload, ArtifactKind::ServiceImage, 7);
+        let staging = launch(&payload, 4, BASE + PAGE_SIZE + 1);
+        let envelope = staging.envelope();
+        assert_eq!(envelope.artifact_physical(), staging.artifact_physical());
+        assert_eq!(envelope.artifact_length(), original.len() as u64);
+        assert_eq!(
+            BootServiceImage::check_envelope(envelope, 7, &original)
+                .unwrap()
+                .image()
+                .entry_rva(),
+            PAGE_SIZE as u32
+        );
+        assert_eq!(
+            BootServiceImage::check(staging, 7, &original).err(),
+            Some(BootServiceImageError::LayoutMismatch)
+        );
+        assert_eq!(
+            BootServiceImage::check_envelope(envelope, 8, &original).err(),
+            Some(BootServiceImageError::ReleaseMismatch)
+        );
+        assert_eq!(
+            BootServiceImage::check_envelope(envelope, 7, &original[1..]).err(),
+            Some(BootServiceImageError::LayoutMismatch)
+        );
+        let mut changed = payload;
+        changed[0x200] ^= 1;
+        assert_eq!(
+            BootServiceImage::check_envelope(
+                envelope,
+                7,
+                &bundle(changed, ArtifactKind::ServiceImage, 7)
+            )
+            .err(),
+            Some(BootServiceImageError::MeasurementMismatch)
+        );
     }
 
     #[test]

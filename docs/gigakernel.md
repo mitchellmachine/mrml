@@ -228,6 +228,17 @@ signed QEMU fixture with the same four required policy gates produced
 This checks the retained FAT32 service payload; it does not reauthenticate
 the release signature, name a supervisor, or start a guest.
 
+The envelope identity and bounds now have their own type, independent of
+the loader's native image, stack and page-table addresses. The envelope
+checker validates length, kind, release, measured digest and PE32+ source.
+The legacy handoff still also checks the source against its native layout
+descriptor. This change does not alter handoff bytes or remove the loader
+allocations. A later normal handoff can carry just the envelope and preserve
+recovery metadata separately. The diagnostic paths that consume the native
+layout still need that descriptor.
+The same Windows-hosted release measurement after this refactor was 30,541
+executable bytes and a 41,984-byte PE, with 8,192 virtual bytes of writable data.
+
 The next boundary now has a tested owner selection record for exactly one
 release manifest and one measured service image. Its fixed 152-byte format
 starts with the supervisor role tag, followed by the little-endian release
