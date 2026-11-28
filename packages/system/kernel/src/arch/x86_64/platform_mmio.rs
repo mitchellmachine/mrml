@@ -2,7 +2,7 @@ use crate::{DeviceAddress, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysA
 
 use super::{
     ActivePageTables, DmarTopology, Mapping, McfgTopology, PagePermissions, VirtAddr,
-    VtdRegisterLayout,
+    VtdRegisterLayout, VtdRequesterRoute,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -503,6 +503,145 @@ impl<const RANGES: usize> PlatformMmioManifest<RANGES> {
         }
         self.requirements[self.count] = Some(requirement);
         self.count += 1;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DxeObservationError {
+    InvalidLayout,
+    InconsistentRoute,
+    ResourceOverlap,
+    IncompleteDxe,
+    ChangedLayout,
+    FinalMapConflict,
+}
+
+/// Copied firmware classifications bound to one requester and one exact ACPI
+/// layout. This type is diagnostic data, not an MMIO mapping or capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PassiveDxeObservation {
+    layout: PassiveDxeLayout,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PassiveDxeLayout {
+    route: VtdRequesterRoute,
+    window: MemoryRegion,
+    page: MemoryRegion,
+    bar: MemoryRegion,
+    remappers: [Option<(u16, MemoryRegion)>; 8],
+}
+
+impl PassiveDxeLayout {
+    fn from_acpi<const U: usize, const S: usize, const A: usize>(
+        route: VtdRequesterRoute,
+        dmar: &DmarTopology<U, S>,
+        mcfg: &McfgTopology<A>,
+        bar: MemoryRegion,
+    ) -> Result<Self, DxeObservationError> {
+        use DxeObservationError::*;
+        let requester = route.requester();
+        let entry = mcfg.allocations().find(|entry| {
+            entry.segment == requester.segment()
+                && (entry.start_bus..=entry.end_bus).contains(&requester.bus())
+        }).ok_or(InvalidLayout)?;
+        let region = |start, pages| {
+            let base = PhysAddr::new(start).map_err(|_| InvalidLayout)?;
+            MemoryRegion::new(base, pages, MemoryKind::Mmio).map_err(|_| InvalidLayout)
+        };
+        let start = entry.physical_start();
+        let window = region(start, entry.bytes() as u64 / PAGE_SIZE)?;
+        let offset = (u64::from(requester.bus() - entry.start_bus) << 20)
+            | (u64::from(requester.device()) << 15)
+            | (u64::from(requester.function()) << 12);
+        let page = region(start.checked_add(offset).ok_or(InvalidLayout)?, 1)?;
+        if page.end() > window.end() || bar.kind() != MemoryKind::Mmio || bar.start().get() == 0 {
+            return Err(InvalidLayout);
+        }
+        if mcfg.allocations().any(|allocation| {
+            let start = allocation.physical_start();
+            bar.start().get() < start + allocation.bytes() as u64 && start < bar.end()
+        }) {
+            return Err(ResourceOverlap);
+        }
+        let mut remappers = [None; 8];
+        let mut route_found = false;
+        for (index, unit) in dmar.units().enumerate() {
+            let frame = region(unit.register_base.get(), 1)?;
+            if overlaps_region(frame, bar)
+                || mcfg.allocations().any(|allocation| {
+                    let start = allocation.physical_start();
+                    frame.start().get() < start + allocation.bytes() as u64 && start < frame.end()
+                })
+                || remappers.iter().flatten().any(|&(_, prior)| overlaps_region(prior, frame))
+            {
+                return Err(ResourceOverlap);
+            }
+            route_found |= unit.segment == requester.segment()
+                && unit.register_base == route.register_base();
+            *remappers.get_mut(index).ok_or(InvalidLayout)? = Some((unit.segment, frame));
+        }
+        if !route_found {
+            return Err(InconsistentRoute);
+        }
+        Ok(Self { route, window, page, bar, remappers })
+    }
+
+    fn firmware_ranges(&self) -> impl Iterator<Item = MemoryRegion> + '_ {
+        [self.window, self.page].into_iter()
+            .chain(self.remappers.iter().flatten().map(|&(_, range)| range))
+    }
+}
+
+fn overlaps_region(left: MemoryRegion, right: MemoryRegion) -> bool {
+    left.start().get() < right.end() && right.start().get() < left.end()
+}
+
+impl PassiveDxeObservation {
+    /// Collect positive DXE classifications for each exact range. The caller
+    /// is responsible for sourcing them from live trusted firmware. No reader
+    /// is called if the ACPI layout already conflicts.
+    pub fn capture<const U: usize, const S: usize, const A: usize>(
+        route: VtdRequesterRoute,
+        dmar: &DmarTopology<U, S>,
+        mcfg: &McfgTopology<A>,
+        bar: MemoryRegion,
+        mut query: impl FnMut(PhysAddr, u64) -> bool,
+    ) -> Result<Self, DxeObservationError> {
+        let layout = PassiveDxeLayout::from_acpi(route, dmar, mcfg, bar)?;
+        if !layout.firmware_ranges().all(|range| query(range.start(), range.pages())) {
+            return Err(DxeObservationError::IncompleteDxe);
+        }
+        Ok(Self { layout })
+    }
+
+    /// Compare independently re-derived coordinates and validate that no
+    /// region in the final map conflicts. An entirely absent range is not a
+    /// conflict, but neither is it evidence of coverage. This method returns
+    /// no resource token and does not replace the ordinary MMIO policy.
+    pub fn check_final_map<const U: usize, const S: usize, const A: usize>(
+        self,
+        route: VtdRequesterRoute,
+        dmar: &DmarTopology<U, S>,
+        mcfg: &McfgTopology<A>,
+        bar: MemoryRegion,
+        memory: &MemoryMap<'_>,
+    ) -> Result<(), DxeObservationError> {
+        let current = PassiveDxeLayout::from_acpi(route, dmar, mcfg, bar)?;
+        if self.layout != current {
+            return Err(DxeObservationError::ChangedLayout);
+        }
+        for range in current.firmware_ranges().chain(core::iter::once(bar)) {
+            if memory.regions().iter().copied().any(|entry| {
+                overlaps_region(entry, range)
+                    && (entry.kind() != MemoryKind::Mmio
+                        || entry.start().get() > range.start().get()
+                        || entry.end() < range.end())
+            }) {
+                return Err(DxeObservationError::FinalMapConflict);
+            }
+        }
         Ok(())
     }
 }
@@ -1044,6 +1183,66 @@ mod tests {
         assert_eq!(
             PlatformMmioManifest::<2>::from_topology(&dmar, &mcfg, &memory),
             Err(PlatformMmioError::Overlap)
+        );
+    }
+
+    #[test]
+    fn dxe_observation_rejects_incomplete_evidence_layout_drift_and_final_conflicts() {
+        use DxeObservationError::*;
+        let requester = DeviceAddress::new(0, 0, 20, 0).unwrap();
+        let dmar = DmarTopology::<1, 0>::parse(&dmar(0xfed9_1000)).unwrap();
+        let mcfg = McfgTopology::<1>::parse(&mcfg(0xe000_0000)).unwrap();
+        let base = |raw| PhysAddr::new(raw).unwrap();
+        let region = |raw, pages, kind| MemoryRegion::new(base(raw), pages, kind).unwrap();
+        let route = VtdRequesterRoute::for_test(requester, base(0xfed9_1000));
+        let bar = region(0xceef_0000, 16, MemoryKind::Mmio);
+        let expected = [(0xe000_0000, 256), (0xe00a_0000, 1), (0xfed9_1000, 1)];
+        let mut count = 0;
+        let observation = PassiveDxeObservation::capture(route, &dmar, &mcfg, bar, |start, pages| {
+            assert_eq!((start.get(), pages), expected[count]);
+            count += 1;
+            true
+        }).unwrap();
+        assert_eq!(count, expected.len());
+        assert_eq!(PassiveDxeObservation::capture(route, &dmar, &mcfg, bar, |start, _| {
+            start.get() != 0xe00a_0000
+        }), Err(IncompleteDxe));
+        let colliding_bar = region(0xfed9_1000, 1, MemoryKind::Mmio);
+        assert_eq!(PassiveDxeObservation::capture(route, &dmar, &mcfg, colliding_bar, |_, _| {
+            panic!("overlap must reject before first query")
+        }), Err(ResourceOverlap));
+        let wrong_route = VtdRequesterRoute::for_test(requester, base(0xfed9_0000));
+        assert_eq!(PassiveDxeObservation::capture(wrong_route, &dmar, &mcfg, bar, |_, _| {
+            panic!("wrong route must reject before first query")
+        }), Err(InconsistentRoute));
+
+        let unrelated = region(0x1000, 1, MemoryKind::Free);
+        let check = |regions: &[MemoryRegion]| {
+            observation.check_final_map(route, &dmar, &mcfg, bar, &MemoryMap::new(regions).unwrap())
+        };
+        assert_eq!(check(&[unrelated]), Ok(()));
+        assert_eq!(check(&[
+            bar,
+            region(0xe000_0000, 256, MemoryKind::Mmio),
+            region(0xfed9_1000, 1, MemoryKind::Mmio),
+        ]), Ok(()));
+        for conflict in [
+            region(0xe00a_0000, 1, MemoryKind::Free),
+            region(0xe00a_0000, 1, MemoryKind::Mmio),
+            region(0xfed9_1000, 1, MemoryKind::Reserved),
+            region(0xceef_0000, 1, MemoryKind::Kernel),
+        ] {
+            assert_eq!(check(&[unrelated, conflict]), Err(FinalMapConflict));
+        }
+        let map = MemoryMap::new(core::slice::from_ref(&unrelated)).unwrap();
+        let moved_mcfg = McfgTopology::<1>::parse(&self::mcfg(0xe100_0000)).unwrap();
+        assert_eq!(observation.check_final_map(route, &dmar, &moved_mcfg, bar, &map), Err(ChangedLayout));
+        let sibling = VtdRequesterRoute::for_test(DeviceAddress::new(0, 0, 20, 1).unwrap(), base(0xfed9_1000));
+        assert_eq!(observation.check_final_map(sibling, &dmar, &mcfg, bar, &map), Err(ChangedLayout));
+        let moved_bar = region(0xcef0_0000, 16, MemoryKind::Mmio);
+        assert_eq!(
+            observation.check_final_map(route, &dmar, &mcfg, moved_bar, &map),
+            Err(ChangedLayout)
         );
     }
 

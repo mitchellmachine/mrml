@@ -62,7 +62,8 @@ pub use page_table::{
 };
 pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{
-    PassivePciPage, PassivePciPageError, PlatformMmioError, PlatformMmioManifest,
+    DxeObservationError, PassiveDxeObservation, PassivePciPage, PassivePciPageError,
+    PlatformMmioError, PlatformMmioManifest,
     PlatformMmioPurpose, PlatformMmioRequirement,
     StableXhciPciHeader, VerifiedPlatformMmio, XhciHeaderSampleError, check_boot_mmio_cpu_policy,
     extend_vtd_mmio_requirement, sample_stable_xhci_pci_header,

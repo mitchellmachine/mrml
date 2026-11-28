@@ -285,6 +285,13 @@ It uses only [PI GetMemorySpaceDescriptor](https://uefi.org/specs/PI/1.8/V2_Serv
 checks the function's location in boot-services code, and reports whether
 firmware classifies the range as MMIO capable of uncacheable access. This
 is not a cache-policy measurement or a substitute for explicit UEFI coverage.
+Dragonair then reported positive DXE classification for the full ECAM window,
+the exact PCI page and both remappers; all remained absent from `GetMemoryMap`.
+The follow-up model binds positive DXE observations to the requester, selected
+ECAM window, BAR, and routed remapper layout. It separately checks a later
+normalized map for incompatible or partial intersections. An absent range
+can be non-conflicting without proving coverage. These checks return no
+mapping and do not change the production or physical diagnostic policy.
 For a future passive post-exit diagnostic, the planner derives one 4 KiB PCI
 configuration page from the exact MCFG segment, bus, device and function. It
 requires explicit coverage by a normalized firmware MMIO range and rejects
