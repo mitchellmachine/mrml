@@ -241,6 +241,21 @@ before accepting the selection for further work. The observation profile
 distinguishes a checked and a missing selection. There is still no guest
 allocation, mapping, entry, or native fallback.
 
+Enrolled QEMU verified this handoff end to end at source commit
+`0349376ed32be9da2ca0d26ec050a50b3fdf630e`. Two loaders signed by the same
+disposable enrolled certificate used the same freshly signed release and
+separate copies of its initial software TPM journal. The matching pin
+produced `POLICY:ACCEPTED`, `SERVICE:CHECKED`, then `SUPERVISOR:CHECKED`.
+Seven PCR 11 extensions preceded one journal write and one counter increment.
+The unpinned control accepted the release and checked the same service, but
+reported `SUPERVISOR:MISSING`; its six PCR 11 extensions did not include the
+selection. The matching image then cold-booted with the committed journal:
+the same 101-byte trace returned, with seven PCR 11 extensions and no journal
+write or counter increment. Its image SHA-256 was
+`cf34b28aedc378848aaa71af291bccc255d08b17be3e38b8918ab5d3c4c3fc52`.
+This verifies selection and journal behavior, not execution: the selected
+FAT32 PE was a fixture, and neither boot entered a service microVM.
+
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
    service before moving supervision policy out of the kernel.
