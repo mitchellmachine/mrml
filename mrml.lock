@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 245
+compile_edges = 246
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 207
+package_edges = 208
 system_release_edges = 3
 
 [[package]]
@@ -59,6 +59,19 @@ isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.tls", "org.mrml.service.certificate", "org.mrml.tool.host"]
 
 static_runtime = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.tls", "org.mrml.service.certificate", "org.mrml.tool.host"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.app.terminal-probe"
+path = "packages/apps/terminal-probe"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
+isolation_maximum = "microvm"
+isolation_supported = ["microvm"]
+compile_dependencies = []
+
+static_runtime = []
 boot_bound = []
 system_release_bound = []
 
@@ -683,6 +696,19 @@ isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.storage", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.service.desktop"
+path = "packages/services/desktop"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
+isolation_maximum = "microvm"
+isolation_supported = ["microvm"]
+compile_dependencies = ["org.mrml.app.terminal-probe"]
+
+static_runtime = ["org.mrml.app.terminal-probe"]
 boot_bound = []
 system_release_bound = []
 

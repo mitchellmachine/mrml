@@ -309,6 +309,26 @@ Automation uses the same logical space and identifies every spatial reference
 with the appropriate display, window, surface, and object identities. Changing
 DPI must not invalidate semantic automation.
 
+## Desktop input prototype
+
+The `org.mrml.service.desktop` core uses one bounded semantic snapshot for
+focus, rendering and hit-testing. It provides three numbered workspaces, a
+single tiled keyboard-test terminal, a touch-sized launcher, and a cursor
+that appears on mouse attachment and disappears on detachment. Touch taps
+activate the same semantic controls as keyboard and mouse; touch never
+creates a mouse cursor. Use Super+Enter to request the dummy app, Tab to
+cycle focus, and activate the focused control. The terminal app only echoes
+text, handles Backspace and Enter, and retains at most six short lines.
+It cannot run commands.
+
+The host-only `mrml-desktop-preview` binary emits a [static SVG preview](images/desktop-preview.svg)
+from the same semantic layout. Desktop and dummy app builds contain no discovery,
+raw input, display mapping or native MRML fallback. A trusted launcher must
+admit the exact terminal guest, route normalized seat events, and authorize
+compositor presentation. Tests exercise keyboard, mouse and touch events
+with a fixture; normal boot, physical touchscreen input, and a full
+cross-VM Semantic Scene Graph transport are not yet connected.
+
 ## MRML Semantic Scene Graph
 
 The GUI is never only pixels. Every native GUI maintains synchronized visual

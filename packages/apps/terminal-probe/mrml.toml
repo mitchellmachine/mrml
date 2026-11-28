@@ -1,0 +1,42 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.app.terminal-probe"
+kind = "application"
+name = "mrml-terminal-probe"
+profile = "system-application"
+
+[isolation]
+default = "microvm"
+minimum = "microvm"
+must_run = false
+reason = "Bounded core and hosted tests; admitted guest entry and runtime transport are not wired"
+runtime_class = "unsupported-blocker"
+supported = ["microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_terminal_probe"
+
+[rust]
+crate_name = "mrml_terminal_probe"
+crate_type = "lib"
+source = "packages/apps/terminal-probe/src/lib.rs"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
