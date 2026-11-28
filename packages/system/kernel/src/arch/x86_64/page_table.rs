@@ -542,6 +542,47 @@ impl<S: PageTableStore> PageTableBuilder<S> {
         self.store.write(table, index, leaf.bits())
     }
 
+    /// Install a private window with existing page-table paths. The caller
+    /// owns this inactive root and discards it on any error; this routine
+    /// never allocates a page-table frame or touches a backing frame.
+    pub(crate) fn install_boot_private_mappings(
+        &mut self,
+        mappings: [Mapping; 4],
+    ) -> Result<(), PageTableBuildError> {
+        for mapping in mappings {
+            if mapping.permissions() != PagePermissions::KERNEL_READ_WRITE {
+                return Err(PageTableBuildError::MappingMismatch);
+            }
+            verify_physical_coverage_from_store(
+                &self.store,
+                self.root,
+                mapping.physical_start(),
+                mapping.pages(),
+                None,
+            )?;
+            for page in 0..mapping.pages() {
+                let (address, _) = mapping_page(mapping, page)?;
+                let (table, index) = self.leaf_location(address)?;
+                if self.store.read(table, index)? != 0 {
+                    return Err(PageTableBuildError::AlreadyMapped);
+                }
+            }
+        }
+        for mapping in mappings {
+            for page in 0..mapping.pages() {
+                let (address, physical) = mapping_page(mapping, page)?;
+                let (table, index) = self.leaf_location(address)?;
+                if self.store.read(table, index)? != 0 {
+                    return Err(PageTableBuildError::AlreadyMapped);
+                }
+                let entry = PageTableEntry::leaf(physical, mapping.permissions())
+                    .map_err(PageTableBuildError::Page)?;
+                self.store.write(table, index, entry.bits())?;
+            }
+        }
+        verify_boot_private_mappings_from_store(&self.store, self.root, self.root, mappings)
+    }
+
     /// Replaces leaf permissions only when every page still matches the exact
     /// expected physical frame and old permissions. Logical validation is
     /// completed for the full range before the first write.
@@ -2851,6 +2892,58 @@ mod tests {
             verify_boot_private_mappings_from_store(builder.store(), root, root, plan),
             Err(PageTableBuildError::PhysicalAlias),
         );
+    }
+
+    #[test]
+    fn supervisor_host_install_preflights_all_ranges_before_writing() {
+        let base = 0xffff_9000_0000_0000;
+        let address = |page| VirtAddr::new(base + page * PAGE_SIZE).unwrap();
+        let frame = |page| PhysAddr::new(0x400000 + page * PAGE_SIZE).unwrap();
+        let rw = PagePermissions::KERNEL_READ_WRITE;
+        let plan = core::array::from_fn(|slot| {
+            let page = (slot as u64) * 2;
+            Mapping::new(address(page), frame(page), 2, rw).unwrap()
+        });
+        for case in 0..4 {
+            let mut builder = PageTableBuilder::new(Tables {
+                pages: [[0; 512]; 8],
+                used: 0,
+            }).unwrap();
+            let sentinel = PhysAddr::new(0x500000).unwrap();
+            if case != 0 {
+                builder.map_page(address(9), sentinel, rw).unwrap();
+            }
+            if case == 1 {
+                builder.map_page(address(7), sentinel, rw).unwrap();
+            }
+            if case == 2 {
+                builder.map_page(address(8), frame(7), PagePermissions::KERNEL_READ).unwrap();
+            }
+            let expected = match case {
+                0 => Err(PageTableBuildError::NotMapped),
+                1 => Err(PageTableBuildError::AlreadyMapped),
+                2 => Err(PageTableBuildError::PhysicalAlias),
+                _ => Ok(()),
+            };
+            let before = builder.store().pages;
+            let used = builder.store().used;
+            assert_eq!(builder.install_boot_private_mappings(plan), expected);
+            assert_eq!(builder.store().used, used);
+            if expected.is_err() {
+                assert_eq!(builder.store().pages, before);
+                continue;
+            }
+            let root = builder.root();
+            assert_eq!(
+                verify_boot_private_mappings_from_store(builder.store(), root, root, plan),
+                Ok(()),
+            );
+            assert!(active_leaf_from_store(builder.store(), root, address(8)).unwrap().is_none());
+            assert_eq!(
+                active_leaf_from_store(builder.store(), root, address(9)).unwrap().unwrap().physical(),
+                sentinel,
+            );
+        }
     }
 
     #[test]

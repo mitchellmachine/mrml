@@ -402,6 +402,7 @@ pub enum SupervisorBootstrapError {
     Memory(crate::MemoryError),
     Guest(crate::VmError),
     Linear(crate::arch::x86_64::PageTableBuildError),
+    HostMapping(crate::arch::x86_64::PageTableBuildError),
     Image(PeError),
     Ept(crate::arch::x86_64::BootImageEptError),
 }
@@ -619,6 +620,35 @@ pub struct ReservedSupervisorMemory<'image> {
 /// tables and EPT order. These describe mappings rather than grant access.
 pub struct SupervisorHostMappings([crate::arch::x86_64::Mapping; 4]);
 
+/// Reservation bound to a private window installed in one inactive root.
+/// This does not initialize its bytes or prove that the root is active.
+pub struct InstalledSupervisorHostWindow<'image> {
+    reservation: ReservedSupervisorMemory<'image>,
+    mappings: SupervisorHostMappings,
+    root: crate::PhysAddr,
+}
+
+impl<'image> InstalledSupervisorHostWindow<'image> {
+    pub const fn reservation(&self) -> &ReservedSupervisorMemory<'image> {
+        &self.reservation
+    }
+
+    pub const fn mappings(&self) -> &SupervisorHostMappings {
+        &self.mappings
+    }
+
+    pub const fn root(&self) -> crate::PhysAddr {
+        self.root
+    }
+
+    pub fn verify_active(
+        &self,
+        active: &crate::arch::x86_64::ActivePageTables,
+    ) -> Result<(), crate::arch::x86_64::PageTableBuildError> {
+        self.mappings.verify(active, self.root)
+    }
+}
+
 impl SupervisorHostMappings {
     pub const fn mappings(&self) -> &[crate::arch::x86_64::Mapping; 4] {
         &self.0
@@ -671,6 +701,27 @@ impl InactiveSupervisorMemory<'_, '_> {
 }
 
 impl<'image> ReservedSupervisorMemory<'image> {
+    /// Install the window in an exclusively owned inactive hierarchy with
+    /// existing, empty leaf slots. The builder and reservation are consumed
+    /// on failure, including a late store error. Do not activate a failed
+    /// root by retaining a side handle to its backing.
+    pub fn install_host_window<Store: crate::arch::x86_64::PageTableStore>(
+        self,
+        mut builder: crate::arch::x86_64::PageTableBuilder<Store>,
+        start: crate::arch::x86_64::VirtAddr,
+    ) -> Result<
+        (crate::arch::x86_64::PageTableBuilder<Store>, InstalledSupervisorHostWindow<'image>),
+        SupervisorBootstrapError,
+    > {
+        let mappings = self.host_mappings(start)?;
+        builder
+            .install_boot_private_mappings(mappings.0)
+            .map_err(SupervisorBootstrapError::HostMapping)?;
+        let root = builder.root();
+        let installed = InstalledSupervisorHostWindow { reservation: self, mappings, root };
+        Ok((builder, installed))
+    }
+
     /// Lay out four adjacent, checked high-half ranges. The installer must
     /// reserve the window and create these exact mappings, with no aliases.
     pub fn host_mappings(

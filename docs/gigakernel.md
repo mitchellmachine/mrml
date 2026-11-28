@@ -376,9 +376,14 @@ writable and non-executable ranges for the reserved frames. Its preflight
 checks every page and rejects a different root, missing/wrong permissions,
 or another mapping to the same physical frame in that root. It does not
 read or write the backing ranges. These are structural checks only:
-normal boot still needs to install the mappings and prove live translation,
-write-back cache policy, exclusive access and DMA containment before
-initializing them. VM entry is still separate work.
+the installer can now fill four reserved ranges in an inactive hierarchy
+with preallocated table paths. It rejects an occupied slot, missing table
+path, or backing-frame alias before any leaf write, allocates no new table
+frames, and checks the completed root before returning it. A late store
+failure leaves no returned root to activate. Normal boot does not call
+this installer yet. It still needs to establish live translations,
+write-back cache policy, exclusive access and DMA containment before any
+backing writes or VM entry.
 
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
