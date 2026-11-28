@@ -27,7 +27,10 @@ data itself never grants those capabilities.
 Input decoding is split into five microVM-only service components: PS/2
 keyboard, PS/2 mouse, USB keyboard, USB mouse, and USB tablet. A shared
 i8042 broker must own the PS/2 ports and route keyboard and auxiliary
-bytes separately. Each USB controller keeps its own driver microVM and
+bytes separately. The broker's tested routing core separates command
+replies from input, bounds work and queues, and quarantines an affected
+stream after loss until the owner re-establishes its input boundary. It
+contains no live port reads. Each USB controller keeps its own driver microVM and
 will route just the admitted HID interface reports to the input service.
 Input services do not receive raw I/O ports, controller mappings, or DMA
 access. This keeps a USB mouse and keyboard separate even if they share

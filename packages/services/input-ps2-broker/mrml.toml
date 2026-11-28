@@ -1,0 +1,56 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.service.input-ps2-broker"
+kind = "service"
+name = "mrml-input-ps2-broker"
+profile = "system-service"
+
+[isolation]
+default = "microvm"
+minimum = "microvm"
+must_run = false
+reason = "Bounded PS/2 demultiplexing only; exclusive i8042 transport and guest routes are not wired"
+runtime_class = "unsupported-blocker"
+supported = ["microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_input_ps2_broker"
+
+[rust]
+crate_name = "mrml_input_ps2_broker"
+crate_type = "lib"
+source = "packages/services/input-ps2-broker/src/lib.rs"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[[dependency]]
+alias = "mrml_input_ps2_keyboard"
+compile_name = "mrml-input-ps2-keyboard"
+package = "org.mrml.service.input-ps2-keyboard"
+scope = "compile"
+test_only = true
+
+[[dependency]]
+alias = "mrml_input_ps2_mouse"
+compile_name = "mrml-input-ps2-mouse"
+package = "org.mrml.service.input-ps2-mouse"
+scope = "compile"
+test_only = true

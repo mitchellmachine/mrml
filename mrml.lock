@@ -4,7 +4,7 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 236
+compile_edges = 238
 build_tool_edges = 0
 runtime_interface_edges = 5
 package_edges = 205
@@ -722,6 +722,19 @@ isolation_supported = ["microvm"]
 compile_dependencies = ["org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.service.input-ps2-broker"
+path = "packages/services/input-ps2-broker"
+isolation_default = "microvm"
+isolation_minimum = "microvm"
+isolation_maximum = "microvm"
+isolation_supported = ["microvm"]
+compile_dependencies = ["org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse"]
+
+static_runtime = []
 boot_bound = []
 system_release_bound = []
 
