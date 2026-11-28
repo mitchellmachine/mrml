@@ -1,12 +1,12 @@
 use super::{TextOutput, check, line};
 use mrml_kernel::arch::x86_64::{
     AcpiError, AcpiMemory, DmarError, DmarTopology, McfgError, McfgTopology, PciConfigSpace,
-    copy_dmar, copy_mcfg,
+    PlatformMmioManifest, copy_dmar, copy_mcfg,
 };
-use mrml_kernel::{DeviceAddress, MAX_HANDOFF_DMA_ACPI_TABLE_BYTES};
+use mrml_kernel::{DeviceAddress, MAX_HANDOFF_DMA_ACPI_TABLE_BYTES, MemoryKind, MemoryMap, MemoryRegion, PhysAddr};
 use mrml_uefi::{
     ACPI_20_TABLE_GUID, ACPI_TABLE_GUID, BootServices, MAX_MEMORY_MAP_BYTES, MemoryDescriptor,
-    Status, SystemTable,
+    MAX_NORMALIZED_REGIONS, Status, SystemTable,
 };
 
 const PAGE: usize = 4096;
@@ -15,6 +15,8 @@ const MAP_PAGES: usize = MAX_MEMORY_MAP_BYTES.div_ceil(PAGE);
 pub(super) struct Tables {
     mcfg: Result<McfgTopology<8>, TableError<McfgError>>,
     dmar: Result<DmarTopology<8, 64>, TableError<DmarError>>,
+    regions: [MemoryRegion; MAX_NORMALIZED_REGIONS],
+    region_count: Option<usize>,
 }
 
 enum TableError<E> {
@@ -32,6 +34,48 @@ impl<E: core::fmt::Debug> core::fmt::Display for TableError<E> {
 }
 
 impl Tables {
+    /// Returns only a diagnostic verdict. No physical mapping or raw device
+    /// read is performed, even when all reported inputs agree.
+    pub(super) fn passive_pci_plan(
+        &self,
+        requester: DeviceAddress,
+        bar_base: u64,
+        bar_bytes: u32,
+        routed_drhd: Option<u64>,
+    ) -> &'static str {
+        let (Ok(mcfg), Ok(dmar), Some(drhd)) = (&self.mcfg, &self.dmar, routed_drhd) else {
+            return "MCFG or DMAR route unproven";
+        };
+        let Some(count) = self.region_count else {
+            return "firmware map invalid";
+        };
+        let Ok(map) = MemoryMap::new(&self.regions[..count]) else {
+            return "firmware map invalid";
+        };
+        let length = u64::from(bar_bytes);
+        let bar = PhysAddr::new(bar_base).ok().and_then(|base| {
+            length.is_multiple_of(PAGE as u64).then_some(length / PAGE as u64)
+                .and_then(|pages| MemoryRegion::new(base, pages, MemoryKind::Mmio).ok())
+        });
+        let Some(bar) = bar else {
+            return "BAR extent unproven";
+        };
+        if dmar.units().any(|unit| {
+            let start = unit.register_base.get();
+            start < bar.end()
+                && start.checked_add(PAGE as u64).is_none_or(|end| bar.start().get() < end)
+        }) || !dmar.units().any(|unit| unit.register_base.get() == drhd) {
+            return "BAR and remapper ranges conflict";
+        }
+        let Ok(manifest) = PlatformMmioManifest::<16>::from_topology(dmar, mcfg, map.regions()) else {
+            return "firmware MMIO coverage or topology unproven";
+        };
+        if manifest.passive_pci_page(requester, &map, bar).is_err() {
+            return "exact PCI page or BAR separation unproven";
+        }
+        "candidate only; no mapping or register access"
+    }
+
     // SAFETY: output is the live firmware console.
     pub(super) unsafe fn report(
         &self,
@@ -215,5 +259,14 @@ unsafe fn copy_tables(
     let dmar = copy_dmar(&mut memory, root, &mut bytes)
         .map_err(TableError::Read)
         .and_then(|len| DmarTopology::parse(&bytes[..len]).map_err(TableError::Invalid));
-    Ok(Tables { mcfg, dmar })
+    let placeholder = MemoryRegion::new(
+        PhysAddr::new(0).map_err(|_| "invalid map placeholder")?,
+        1,
+        MemoryKind::Reserved,
+    ).map_err(|_| "invalid map placeholder")?;
+    let mut regions = [placeholder; MAX_NORMALIZED_REGIONS];
+    let region_count = mrml_uefi::xhci_inventory::normalize_pci_inventory_map(
+        memory.bytes, stride, &mut regions,
+    );
+    Ok(Tables { mcfg, dmar, regions, region_count })
 }

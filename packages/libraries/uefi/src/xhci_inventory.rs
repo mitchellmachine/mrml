@@ -1,6 +1,65 @@
 #[path = "xhci_boot_observation.rs"]
 pub mod boot_observation;
 
+/// Normalize the inventory snapshot without a GOP overlay or emulator
+/// exception. Only explicit non-runtime MMIO descriptors establish coverage.
+pub fn normalize_pci_inventory_map(
+    raw: &[u8],
+    stride: usize,
+    output: &mut [mrml_kernel::MemoryRegion],
+) -> Option<usize> {
+    use mrml_kernel::{MemoryKind, MemoryRegion, PhysAddr};
+    const MIN: usize = core::mem::size_of::<crate::MemoryDescriptor>();
+    const MAX: usize = crate::MAX_MEMORY_MAP_BYTES;
+    if raw.is_empty() || raw.len() > MAX || !(MIN..=256).contains(&stride)
+        || !raw.len().is_multiple_of(stride)
+    {
+        return None;
+    }
+    let mut order = [0u16; MAX / MIN];
+    let order = &mut order[..raw.len() / stride];
+    for (i, slot) in order.iter_mut().enumerate() {
+        *slot = u16::try_from(i).ok()?;
+    }
+    let descriptor = |index| {
+        let offset = usize::from(index) * stride;
+        &raw[offset..offset + stride]
+    };
+    let start = |bytes: &[u8]| u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    order.sort_unstable_by_key(|&i| start(descriptor(i)));
+    let mut count = 0;
+    for &index in order.iter() {
+        let bytes = descriptor(index);
+        let ty = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+        let start = PhysAddr::new(start(bytes)).ok()?;
+        let pages = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
+        let attributes = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
+        let kind = if ty == 11 && attributes >> 63 == 0 {
+            MemoryKind::Mmio
+        } else {
+            MemoryKind::Reserved
+        };
+        let current = MemoryRegion::new(start, pages, kind).ok()?;
+        if count != 0 {
+            let previous = output[count - 1];
+            if previous.end() > start.get() {
+                return None;
+            }
+            if previous.end() == start.get() && previous.kind() == kind {
+                output[count - 1] = MemoryRegion::new(
+                    previous.start(),
+                    previous.pages().checked_add(pages)?,
+                    kind,
+                ).ok()?;
+                continue;
+            }
+        }
+        *output.get_mut(count)? = current;
+        count += 1;
+    }
+    Some(count)
+}
+
 /// Reference comparison for the first Dragonair USB inventory. The result
 /// describes a recorded configuration, not board identity, ownership transfer,
 /// safe MMIO coverage, or active DMA isolation.
@@ -163,6 +222,47 @@ pub fn source_transport(path: &[u8], remaining: usize) -> Option<SourceTransport
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_map_requires_explicit_non_runtime_mmio_and_rejects_overlap() {
+        use mrml_kernel::{MemoryKind, MemoryMap, MemoryRegion, PhysAddr};
+        fn descriptor(ty: u32, base: u64, pages: u64, attributes: u64) -> [u8; 48] {
+            let mut raw = [0u8; 48];
+            raw[..4].copy_from_slice(&ty.to_le_bytes());
+            raw[8..16].copy_from_slice(&base.to_le_bytes());
+            raw[24..32].copy_from_slice(&pages.to_le_bytes());
+            raw[32..40].copy_from_slice(&attributes.to_le_bytes());
+            raw
+        }
+        let placeholder = MemoryRegion::new(
+            PhysAddr::new(0).unwrap(), 1, MemoryKind::Reserved,
+        ).unwrap();
+        let mut output = [placeholder; 4];
+        let mut raw = [0u8; 4 * 48];
+        raw[0..48].copy_from_slice(&descriptor(11, 0xe008_0000, 128, 0));
+        raw[48..96].copy_from_slice(&descriptor(11, 0xe000_0000, 128, 0));
+        raw[96..144].copy_from_slice(&descriptor(12, 0xfed9_0000, 1, 0));
+        raw[144..].copy_from_slice(&descriptor(11, 0xfed9_1000, 1, 1 << 63));
+        let count = normalize_pci_inventory_map(&raw, 48, &mut output).unwrap();
+        let regions = MemoryMap::new(&output[..count]).unwrap();
+        assert_eq!(regions.regions().len(), 2);
+        assert_eq!(regions.regions()[0].pages(), 256);
+        assert_eq!(regions.regions()[0].kind(), MemoryKind::Mmio);
+        assert_eq!(regions.regions()[1].pages(), 2);
+        assert_eq!(regions.regions()[1].kind(), MemoryKind::Reserved);
+        assert_eq!(normalize_pci_inventory_map(&raw[..191], 48, &mut output), None);
+        assert_eq!(normalize_pci_inventory_map(&raw, 257, &mut output), None);
+        assert_eq!(normalize_pci_inventory_map(&raw, 48, &mut output[..1]), None);
+        for bad in [
+            descriptor(11, 0xe007_f000, 128, 0),
+            descriptor(11, 0xe008_0001, 128, 0),
+            descriptor(11, 0xe008_0000, 0, 0),
+            descriptor(11, 0xffff_ffff_ffff_f000, 1, 0),
+        ] {
+            raw[..48].copy_from_slice(&bad);
+            assert_eq!(normalize_pci_inventory_map(&raw, 48, &mut output), None);
+        }
+    }
 
     fn reference_boot(requester: u32, vendor_device: u32, revision: u8, base: u64) -> Option<boot_observation::RetainedBootXhci> {
         let mut descriptor = [0; BAR_RESOURCE_BYTES];

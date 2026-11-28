@@ -98,6 +98,8 @@ impl Case {
         if matches!(self, Self::UsbBoot) {
             return reported("xhci-inventory: controllers=2 incomplete=0")
                 && exact_usb_boot_evidence(report)
+                && report.lines().filter(|line| line.starts_with("xhci passive PCI plan: ")).count() == 1
+                && reported("xhci passive PCI plan: firmware MMIO coverage or topology unproven")
                 && report.lines().filter(|line| *line == GEOMETRY).count() == 2
                 && report
                     .split("xhci 0000:00:05.0")
@@ -224,7 +226,7 @@ pub(super) fn test(
                 .arg("-drive")
                 .arg(drive(&esp, "format=raw,file=fat:rw:"));
         }
-        if matches!(case, Case::WithRemapper) {
+        if matches!(case, Case::WithRemapper | Case::UsbBoot) {
             command.args(["-device", "intel-iommu"]);
         }
         let mut child = command.spawn().map_err(|e| format!("start QEMU: {e}"))?;

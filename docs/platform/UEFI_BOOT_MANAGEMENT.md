@@ -265,6 +265,13 @@ identity, BAR, geometry, ownership, MCFG coverage, or DMAR route cannot match.
 The comparison runs before firmware exit and performs no extra device reads;
 a match is not verification of board identity or permission to access hardware.
 Any change is a reason to record the full output, not to attempt a handoff.
+For the exact shared boot controller the inventory also reports `xhci passive
+PCI plan:`. It uses the same pre-exit `GetMemoryMap` snapshot as its ACPI read,
+normalized without a framebuffer overlay or an emulator exception. Only
+explicit non-runtime memory-mapped I/O coverage counts. A validated DMAR
+route, no overlapping resource, and an exact MCFG page are required. Even
+`candidate only` is not a final map, live mapping, or hardware authorization.
+The application continues to return to the EFI Shell without touching ECAM.
 For a future passive post-exit diagnostic, the planner derives one 4 KiB PCI
 configuration page from the exact MCFG segment, bus, device and function. It
 requires explicit coverage by a normalized firmware MMIO range and rejects
