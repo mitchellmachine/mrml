@@ -99,7 +99,14 @@ impl Case {
             return reported("xhci-inventory: controllers=2 incomplete=0")
                 && exact_usb_boot_evidence(report)
                 && report.lines().filter(|line| line.starts_with("xhci passive PCI plan: ")).count() == 1
-                && reported("xhci passive PCI plan: firmware MMIO coverage or topology unproven")
+                && reported("xhci passive PCI plan: explicit firmware MMIO coverage missing")
+                && report.lines().any(|line| line.starts_with("xhci map ECAM seg=0000 0xe0000000..0xf0000000: "))
+                && report.lines().any(|line| line.starts_with("xhci map DRHD routed 0xfed90000..0xfed91000: "))
+                && report.lines().any(|line| line.starts_with("xhci map PCI page 0xe0030000..0xe0031000: "))
+                && report.lines().any(|line| {
+                    (line.starts_with("xhci map ECAM ") || line.starts_with("xhci map DRHD "))
+                        && matches!(line.rsplit_once(": ").map(|(_, state)| state), Some("absent" | "non-mmio" | "partial-mmio"))
+                })
                 && report.lines().filter(|line| *line == GEOMETRY).count() == 2
                 && report
                     .split("xhci 0000:00:05.0")

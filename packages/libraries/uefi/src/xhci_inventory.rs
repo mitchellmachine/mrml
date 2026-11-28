@@ -60,6 +60,40 @@ pub fn normalize_pci_inventory_map(
     Some(count)
 }
 
+/// Describe coverage in the normalized snapshot without treating another
+/// descriptor kind, a gap, or a partial range as permission.
+pub fn pci_inventory_coverage(
+    map: &mrml_kernel::MemoryMap<'_>,
+    start: u64,
+    end: u64,
+) -> &'static str {
+    use mrml_kernel::MemoryKind;
+    if start >= end {
+        return "invalid-range";
+    }
+    let mut partial = false;
+    let mut other = false;
+    for region in map.regions().iter().copied() {
+        if region.start().get() >= end || region.end() <= start {
+            continue;
+        }
+        if region.kind() != MemoryKind::Mmio {
+            other = true;
+        } else if region.start().get() <= start && end <= region.end() {
+            return "covered";
+        } else {
+            partial = true;
+        }
+    }
+    if other {
+        "non-mmio"
+    } else if partial {
+        "partial-mmio"
+    } else {
+        "absent"
+    }
+}
+
 /// Reference comparison for the first Dragonair USB inventory. The result
 /// describes a recorded configuration, not board identity, ownership transfer,
 /// safe MMIO coverage, or active DMA isolation.
@@ -250,6 +284,11 @@ mod tests {
         assert_eq!(regions.regions()[0].kind(), MemoryKind::Mmio);
         assert_eq!(regions.regions()[1].pages(), 2);
         assert_eq!(regions.regions()[1].kind(), MemoryKind::Reserved);
+        assert_eq!(pci_inventory_coverage(&regions, 0xe000_0000, 0xe010_0000), "covered");
+        assert_eq!(pci_inventory_coverage(&regions, 0xe000_0000, 0xe010_1000), "partial-mmio");
+        assert_eq!(pci_inventory_coverage(&regions, 0xe010_0000, 0xe010_1000), "absent");
+        assert_eq!(pci_inventory_coverage(&regions, 0xfed9_0000, 0xfed9_2000), "non-mmio");
+        assert_eq!(pci_inventory_coverage(&regions, 0xe000_0000, 0xe000_0000), "invalid-range");
         assert_eq!(normalize_pci_inventory_map(&raw[..191], 48, &mut output), None);
         assert_eq!(normalize_pci_inventory_map(&raw, 257, &mut output), None);
         assert_eq!(normalize_pci_inventory_map(&raw, 48, &mut output[..1]), None);

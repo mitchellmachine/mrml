@@ -279,9 +279,13 @@ unsafe fn scan(
                         for (index, half) in record.chunks_exact(20).enumerate() {
                             line(output, format_args!("xhci boot wire {index}: {}", RecordHex(half)))?;
                         }
-                        let plan = tables.as_ref().map_or("firmware tables unavailable", |tables| {
-                            tables.passive_pci_plan(requester, base, bytes, dmar.map(|(_, address)| address))
-                        });
+                        let plan = match &tables {
+                            Ok(tables) => tables.passive_pci_plan(
+                                requester, base, bytes, dmar.map(|(_, address)| address),
+                                |detail| line(output, detail),
+                            )?,
+                            Err(_) => "firmware tables unavailable",
+                        };
                         line(output, format_args!("xhci passive PCI plan: {plan}"))?;
                     }
                     match geometry {

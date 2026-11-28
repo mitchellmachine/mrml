@@ -1,7 +1,7 @@
 use super::{TextOutput, check, line};
 use mrml_kernel::arch::x86_64::{
     AcpiError, AcpiMemory, DmarError, DmarTopology, McfgError, McfgTopology, PciConfigSpace,
-    PlatformMmioManifest, copy_dmar, copy_mcfg,
+    PlatformMmioError, PlatformMmioManifest, copy_dmar, copy_mcfg,
 };
 use mrml_kernel::{DeviceAddress, MAX_HANDOFF_DMA_ACPI_TABLE_BYTES, MemoryKind, MemoryMap, MemoryRegion, PhysAddr};
 use mrml_uefi::{
@@ -42,15 +42,16 @@ impl Tables {
         bar_base: u64,
         bar_bytes: u32,
         routed_drhd: Option<u64>,
-    ) -> &'static str {
+        mut report: impl FnMut(core::fmt::Arguments<'_>) -> Result<(), Status>,
+    ) -> Result<&'static str, Status> {
         let (Ok(mcfg), Ok(dmar), Some(drhd)) = (&self.mcfg, &self.dmar, routed_drhd) else {
-            return "MCFG or DMAR route unproven";
+            return Ok("MCFG or DMAR route unproven");
         };
         let Some(count) = self.region_count else {
-            return "firmware map invalid";
+            return Ok("firmware map invalid");
         };
         let Ok(map) = MemoryMap::new(&self.regions[..count]) else {
-            return "firmware map invalid";
+            return Ok("firmware map invalid");
         };
         let length = u64::from(bar_bytes);
         let bar = PhysAddr::new(bar_base).ok().and_then(|base| {
@@ -58,22 +59,55 @@ impl Tables {
                 .and_then(|pages| MemoryRegion::new(base, pages, MemoryKind::Mmio).ok())
         });
         let Some(bar) = bar else {
-            return "BAR extent unproven";
+            return Ok("BAR extent unproven");
         };
+        use mrml_uefi::xhci_inventory::pci_inventory_coverage;
+        for entry in mcfg.allocations() {
+            let start = entry.physical_start();
+            let end = start + entry.bytes() as u64;
+            let coverage = pci_inventory_coverage(&map, start, end);
+            let segment = entry.segment;
+            report(format_args!("xhci map ECAM seg={segment:04x} {start:#x}..{end:#x}: {coverage}"))?;
+            if segment == requester.segment() && (entry.start_bus..=entry.end_bus).contains(&requester.bus()) {
+                let offset = (u64::from(requester.bus() - entry.start_bus) << 20)
+                    | (u64::from(requester.device()) << 15)
+                    | (u64::from(requester.function()) << 12);
+                let page = start + offset;
+                let page_end = page + PAGE as u64;
+                let coverage = pci_inventory_coverage(&map, page, page_end);
+                report(format_args!("xhci map PCI page {page:#x}..{page_end:#x}: {coverage}"))?;
+            }
+        }
+        for unit in dmar.units() {
+            let start = unit.register_base.get();
+            let Some(end) = start.checked_add(PAGE as u64) else {
+                return Ok("remapper range invalid");
+            };
+            let coverage = pci_inventory_coverage(&map, start, end);
+            let role = if start == drhd { "routed" } else { "other" };
+            report(format_args!("xhci map DRHD {role} {start:#x}..{end:#x}: {coverage}"))?;
+        }
+        let start = bar.start().get();
+        let end = bar.end();
+        let coverage = pci_inventory_coverage(&map, start, end);
+        report(format_args!("xhci map BAR0 {start:#x}..{end:#x}: {coverage} (inventory only)"))?;
         if dmar.units().any(|unit| {
             let start = unit.register_base.get();
             start < bar.end()
                 && start.checked_add(PAGE as u64).is_none_or(|end| bar.start().get() < end)
         }) || !dmar.units().any(|unit| unit.register_base.get() == drhd) {
-            return "BAR and remapper ranges conflict";
+            return Ok("BAR and remapper ranges conflict");
         }
-        let Ok(manifest) = PlatformMmioManifest::<16>::from_topology(dmar, mcfg, map.regions()) else {
-            return "firmware MMIO coverage or topology unproven";
+        let manifest = match PlatformMmioManifest::<16>::from_topology(dmar, mcfg, map.regions()) {
+            Ok(manifest) => manifest,
+            Err(PlatformMmioError::Overlap) => return Ok("ACPI resource ranges overlap"),
+            Err(PlatformMmioError::OutsideFirmwareMmio) => return Ok("explicit firmware MMIO coverage missing"),
+            Err(_) => return Ok("ACPI topology unproven"),
         };
         if manifest.passive_pci_page(requester, &map, bar).is_err() {
-            return "exact PCI page or BAR separation unproven";
+            return Ok("exact PCI page or BAR separation unproven");
         }
-        "candidate only; no mapping or register access"
+        Ok("candidate only; no mapping or register access")
     }
 
     // SAFETY: output is the live firmware console.

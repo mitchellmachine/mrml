@@ -272,6 +272,11 @@ explicit non-runtime memory-mapped I/O coverage counts. A validated DMAR
 route, no overlapping resource, and an exact MCFG page are required. Even
 `candidate only` is not a final map, live mapping, or hardware authorization.
 The application continues to return to the EFI Shell without touching ECAM.
+On Dragonair, `XHCIMAP.EFI` from `79de697a` matched the earlier controller
+inventory but could not prove firmware coverage. The follow-up reports the
+half-open ECAM, DRHD and BAR0 ranges individually, separating missing,
+partial, and non-MMIO coverage from overlapping ACPI resources. BAR0 coverage
+is informational; the probe still does not map or access ECAM.
 For a future passive post-exit diagnostic, the planner derives one 4 KiB PCI
 configuration page from the exact MCFG segment, bus, device and function. It
 requires explicit coverage by a normalized firmware MMIO range and rejects
