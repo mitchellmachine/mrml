@@ -135,12 +135,12 @@ pub(super) fn run_desktop_probe(
     ticks: u32,
     framebuffer: mrml_kernel::FramebufferInfo,
 ) -> Option<PhysAddr> {
-    use mrml_boot_frame::{BOOT_REPLY_BYTES, FRAME_BYTES, HEIGHT, WIDTH, decode_boot_reply};
+    use mrml_boot_frame::BOOT_REPLY_BYTES;
     #[cfg(not(feature = "vmx-desktop-qemu-keyboard"))]
     use mrml_boot_frame::BootScene;
     use mrml_kernel::{
-        CapabilitySpace, DisplayOutputIdentity, FramebufferLayout, IsolationAdmissionTable,
-        IsolationMode, IsolationPlacement, IsolationServiceSpec, ObjectId, PixelFormat, Rights,
+        CapabilitySpace, DisplayOutputIdentity, IsolationAdmissionTable,
+        IsolationMode, IsolationPlacement, IsolationServiceSpec, ObjectId, Rights,
         TotalMicrovmClass, prepare_isolation_service_route,
     };
 
@@ -153,23 +153,15 @@ pub(super) fn run_desktop_probe(
         1, 1, TotalMicrovmClass::MicrovmEligible, IsolationPlacement::Microvm,
     ).ok()?;
     let route = prepare_isolation_service_route(&mut admission, spec).ok()?.commit(&mut admission, ()).ok()?;
-    let mut frame = [0; FRAME_BYTES];
-    let source = FramebufferLayout::new(
-        FRAME_BYTES as u64, WIDTH as u32, HEIGHT as u32, WIDTH as u32,
-        PixelFormat::BlueGreenRedReserved,
-    ).ok()?;
     let identity = DisplayOutputIdentity::new(ObjectId(0xd30), 1).ok()?;
     let mut caps = CapabilitySpace::<1>::new();
     let control = caps.insert(identity.object(), Rights::CONTROL).ok()?;
     let mut present = |reply: &[u8; BOOT_REPLY_BYTES]| -> Option<()> {
-        decode_boot_reply(reply, &mut frame).ok()?;
-        // The only capture is an immutable view of the bounded host copy
-        // from the fixed reply page of this exact parked desktop guest.
+        // Validate the bounded immutable host copy, then draw at output geometry.
         super::with_diagnostic_framebuffer(framebuffer, |output| {
-            mrml_compositor::publish_total_guest_scanout(
+            mrml_compositor::publish_total_guest_panel(
                 &admission, &route, spec, &caps, control, identity, identity,
-                source, framebuffer.layout(), mrml_compositor::BootProjection::FitCentered,
-                |_| Some(frame.as_slice()), output,
+                framebuffer.layout(), reply, output,
             )
         }).ok()
     };
@@ -235,7 +227,7 @@ fn live_desktop(
     super::vmx_probe::trace(0xcb);
 
     for _ in 0..MAX_LIVE_KEYS {
-        let Some(scene @ BootScene::Letter(_)) = keyboard.await_text() else {
+        let Some(scene @ (BootScene::Letter(_) | BootScene::Space | BootScene::Submit | BootScene::Backspace)) = keyboard.await_text() else {
             break;
         };
         resume(controller, scene)?;
@@ -266,14 +258,14 @@ fn persistent_desktop(
     controls: VmxControlPolicy,
     ticks: u32,
 ) -> Option<[u8; mrml_boot_frame::BOOT_REPLY_BYTES]> {
-    use mrml_boot_frame::{BOOT_REPLY_BYTES, BootScene, validate_boot_reply};
+    use mrml_boot_frame::{BOOT_REPLY_BYTES, BootPanel, BootScene};
     let guest = service.guest;
     ServiceLaunch::write_request(BootScene::Begin.request())?;
     guest.start(controller, controls, ticks)?;
     let bounds = HIGH + IMAGE as u64..guest.image_end;
     controller.park_boot_call_probe(bounds.clone()).ok()?;
     let idle: [u8; BOOT_REPLY_BYTES] = ServiceLaunch::read_reply()?;
-    validate_boot_reply(&idle).ok()?;
+    BootPanel::decode(&idle).ok()?;
     super::vmx_probe::trace(0xca);
 
     let mut resume = |scene: BootScene| -> Option<()> {
@@ -287,7 +279,7 @@ fn persistent_desktop(
     resume(enter)?;
     controller.park_boot_call_probe(bounds).ok()?;
     let entered: [u8; BOOT_REPLY_BYTES] = ServiceLaunch::read_reply()?;
-    validate_boot_reply(&entered).ok()?;
+    BootPanel::decode(&entered).ok()?;
     if entered == idle {
         return None;
     }

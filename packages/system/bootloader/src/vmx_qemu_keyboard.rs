@@ -48,7 +48,7 @@ impl QemuKeyboard {
     }
 
     /// After Enter established the translation mode, accept only an exact
-    /// make/release pair for one ordinary letter or Escape.
+    /// make/release pair for a supported clishell key or Escape.
     pub(super) fn await_text(&self) -> Option<BootScene> {
         const SET1: [u8; 26] = [
             0x1e, 0x30, 0x2e, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32, 0x31,
@@ -61,8 +61,18 @@ impl QemuKeyboard {
         let translated = self.translated?;
         let start = cycles();
         let make = self.wait_byte(start)?;
-        let scene = if make == if translated { 0x01 } else { 0x76 } {
-            BootScene::End
+        let special = if translated {
+            [0x01, 0x39, 0x1c, 0x0e]
+        } else {
+            [0x76, 0x29, 0x5a, 0x66]
+        };
+        let scene = if let Some(index) = special.iter().position(|&code| code == make) {
+            [
+                BootScene::End,
+                BootScene::Space,
+                BootScene::Submit,
+                BootScene::Backspace,
+            ][index]
         } else {
             let table = if translated { SET1 } else { SET2 };
             let index = table.iter().position(|&code| code == make)?;

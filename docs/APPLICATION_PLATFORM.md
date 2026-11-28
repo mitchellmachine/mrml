@@ -353,57 +353,34 @@ grants no device or display access.
 The separate, opt-in VMX desktop boot diagnostic is built with
 `mrml usb image-vmx-desktop DESKTOP.img` and checked with
 `mrml usb test-vmx-desktop DESKTOP.img OVMF_CODE OVMF_VARS QEMU`.
-The monitor starts an independently signed desktop microVM with a read-only
-request and a separate, non-executable RAM reply page. It accepts the
-thumbnail only after the exact trapped completion and validates the entire
-canonical frame and its zero padding. The boot output broker calls the
-compositor's scanout routine with the exact admitted
-microVM route and output control capability. It publishes only the 120×70
-preview from an immutable RAM snapshot and withdraws the route and
-capability. The preview is centered on the active framebuffer at the largest
-whole-pixel scale that fits, without stretching or changing the video mode.
-An unusually small framebuffer downscales proportionally. This makes the
-fixed boot raster legible at high resolutions; it is not a physical-DPI
-setting or responsive layout for the future desktop. A separately parked
-guest must still resume before the desktop VMCS is cleared. QEMU uses a private copy of the image, checks refusal
-without VMX under TCG, and requires nested VMX under KVM. Its paused VGA
-capture recovers all 8,400 source pixels from the scaled preview, compares
-them with the hosted reference, and checks every replicated pixel and the
-surrounding background. This is a static boot diagnostic. It does not
-grant a framebuffer or any device to the desktop guest, launch a separate
-compositor microVM, or change normal boot.
+The signed desktop microVM returns bounded panel state and shell text through
+a separate, non-executable reply page. The boot compositor validates the
+packet, exact admission and output capability before painting at the active
+framebuffer resolution. Workspace tabs and the status bar span the display;
+open panels tile the remaining area. Text and gaps use a modest, bounded
+resolution-based scale, and narrow layouts omit the secondary panel. This
+doesn't set firmware video modes or measure physical DPI. The guest never
+gets access to the framebuffer and the renderer is still part of the trusted
+boot broker, not an independently launched compositor.
 
-The `mrml usb image-vmx-desktop-input DESKTOP.img` variant supplies one
-synthetic Enter event through the same read-only request page. The signed
-guest runs its ordinary focus policy, opens a guest-private terminal
-placeholder, and submits a new frame. Use
-`mrml usb test-vmx-desktop-input DESKTOP.img OVMF_CODE OVMF_VARS QEMU`
-to verify the distinct terminal-open raster and its border in QEMU.
-The idle profile remains the control. Neither one-shot profile reads a
-hardware keyboard or preserves an interactive session between requests.
+The optional `image-vmx-desktop-input` image sends synthetic Enter to open
+the terminal. The `image-vmx-desktop-persistent` image keeps the same
+VMCS/EPT and guest stack across two yields and submits a synthetic
+`echo ready` to the guest-private `clishell`. The shell parses only the
+`echo` built-in and treats its argument as literal text; unknown commands
+are rejected. There is no external process launch, redirection, disk or
+network access. None of these profiles reads a hardware keyboard.
 
-The opt-in `image-vmx-desktop-persistent` profile keeps one signed desktop
-vCPU, EPT, and guest stack across an idle frame, synthetic Enter, and
-synthetic text A. The boot monitor checks the two bounded yield exits,
-writes only the fixed read-only request mapping while the guest is parked,
-and resumes the exact VMCS/EPT pair. It validates a distinct reply at each
-step and presents the final frame showing A in the terminal and one key
-delivered. `test-vmx-desktop-persistent` checks both the yield trace and all
-8,400 final pixels. The session is retired after this bounded test; it
-does not poll a hardware keyboard, grant a device, or change normal boot.
-
-The separate `image-vmx-desktop-keyboard` profile presents the idle
-desktop, opens its terminal on a real virtual Enter event, and updates the
-visible frame after each letter. It resumes the same signed guest after
-each event and publishes only stopped, validated mailbox snapshots. Type
-up to eight A–Z keys; Escape, a time limit, or unsupported key traffic
-ends the session without forwarding unsupported input. Only complete
-make/release pairs in the scan format established by Enter are accepted.
-`test-vmx-desktop-keyboard` sends Enter, A, and Escape through QMP and
-checks idle, terminal-open, text-echo, and final VGA captures separately.
-The monitor polls only in the opt-in nested KVM profile, sends no controller
-commands, and gives the guest no keyboard ports. This bounded session has
-no mouse, USB HID, modifiers, general keymap, or physical keyboard support.
+The `image-vmx-desktop-keyboard` profile shows the idle desktop and opens
+the terminal on a virtual Enter. It redraws after each complete key
+make/release pair from the emulator. Up to 32 events are supported,
+including letters, Space, Backspace and Enter to submit. Escape, a time
+limit or unsupported traffic ends the session without forwarding
+unsupported input. `test-vmx-desktop-keyboard` verifies VGA captures of
+idle, terminal-open, the draft of `echo hi`, its separate command output
+and the final screen. The nested-KVM-only transport sends no controller
+commands and gives the guest no keyboard ports. There is no physical input,
+mouse support or general keymap in this boot profile.
 
 ### MicroVM task manager prototype
 

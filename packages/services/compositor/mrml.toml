@@ -64,6 +64,12 @@ compile_name = "mrml-kernel"
 package = "org.mrml.system.kernel"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_boot_frame"
+compile_name = "mrml-boot-frame"
+package = "org.mrml.library.boot-frame"
+scope = "compile"
+
 [[projected_build]]
 targets = ["UEFI"]
 

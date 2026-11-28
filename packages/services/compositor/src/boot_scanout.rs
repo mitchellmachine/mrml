@@ -73,6 +73,44 @@ pub fn publish_total_guest_scanout<'frame, E, const N: usize, const DOMAINS: usi
     capture: impl FnOnce(&E) -> Option<&'frame [u8]>,
     scanout: &mut [u8],
 ) -> Result<(), BootScanoutError> {
+    validate_route(admission, route, expected)?;
+    validate_output(capabilities, control, binding, current)?;
+    let frame = capture(route.endpoint()).ok_or(BootScanoutError::CaptureUnavailable)?;
+    match projection {
+        BootProjection::ExactTopLeft => {
+            copy_visible_pixels(source_layout, frame, output_layout, scanout)
+        }
+        BootProjection::FitCentered => {
+            fit_visible_pixels(source_layout, frame, output_layout, scanout)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn publish_total_guest_panel<E, const N: usize, const DOMAINS: usize>(
+    admission: &IsolationAdmissionTable<DOMAINS>,
+    route: &RoutedIsolationService<E>,
+    expected: IsolationServiceSpec,
+    capabilities: &CapabilitySpace<N>,
+    control: Capability,
+    binding: DisplayOutputIdentity,
+    current: DisplayOutputIdentity,
+    output: FramebufferLayout,
+    reply: &[u8; mrml_boot_frame::BOOT_REPLY_BYTES],
+    scanout: &mut [u8],
+) -> Result<(), BootScanoutError> {
+    validate_route(admission, route, expected)?;
+    validate_output(capabilities, control, binding, current)?;
+    let panel = mrml_boot_frame::BootPanel::decode(reply)
+        .map_err(|_| BootScanoutError::CaptureUnavailable)?;
+    crate::boot_panel::paint(panel, output, scanout).map_err(BootScanoutError::Framebuffer)
+}
+
+fn validate_route<E, const DOMAINS: usize>(
+    admission: &IsolationAdmissionTable<DOMAINS>,
+    route: &RoutedIsolationService<E>,
+    expected: IsolationServiceSpec,
+) -> Result<(), BootScanoutError> {
     if admission.mode() != IsolationMode::TotalMicrovm
         || route.class() != TotalMicrovmClass::MicrovmEligible
         || route.placement() != IsolationPlacement::Microvm
@@ -88,16 +126,7 @@ pub fn publish_total_guest_scanout<'frame, E, const N: usize, const DOMAINS: usi
     {
         return Err(BootScanoutError::InvalidRoute);
     }
-    validate_output(capabilities, control, binding, current)?;
-    let frame = capture(route.endpoint()).ok_or(BootScanoutError::CaptureUnavailable)?;
-    match projection {
-        BootProjection::ExactTopLeft => {
-            copy_visible_pixels(source_layout, frame, output_layout, scanout)
-        }
-        BootProjection::FitCentered => {
-            fit_visible_pixels(source_layout, frame, output_layout, scanout)
-        }
-    }
+    Ok(())
 }
 
 fn copy_visible_pixels(

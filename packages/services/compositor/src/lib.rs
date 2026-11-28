@@ -1,6 +1,8 @@
 #![no_std]
 
+mod boot_panel;
 mod boot_scanout;
+pub use boot_scanout::publish_total_guest_panel;
 mod scanout_probe;
 mod transport;
 

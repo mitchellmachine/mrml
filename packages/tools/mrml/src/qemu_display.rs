@@ -14,6 +14,7 @@ pub(super) fn verify_fat32_screen(path: &Path) -> Result<(usize, usize), String>
 pub(super) enum DesktopScene {
     Idle,
     Enter,
+    Draft,
     Persistent,
     LiveKeyboard,
 }
@@ -60,61 +61,99 @@ fn parse(bytes: &[u8]) -> Result<(usize, usize, &[u8]), &'static str> {
 }
 
 fn verify_desktop(bytes: &[u8], scene: DesktopScene) -> Result<(usize, usize), &'static str> {
-    use core::fmt::Write as _;
-    const W: usize = 120;
-    const H: usize = 70;
-    // SHA3-512 of the raw hosted reference raster, row-major RGB, without
-    // the signed guest's mailbox codec or the boot scanout path.
-    let golden = match scene {
-        DesktopScene::Idle => concat!(
-            "b3406f001edef3b09a9e7a85ae53d6e71445daf1f9096660b1d17d826941bbde4",
-            "45183f169d842ed2cee62f7786ab50cbf3ad0a7fdad7c35b85227ef042951cb",
-        ),
-        DesktopScene::Persistent | DesktopScene::LiveKeyboard => concat!(
-            "ef859ad1827bfa4fbe53df1101f75dbdd9cc65ec2e7849d08e21b214cf5d92f1",
-            "2348fddb23c45c728f0e690f160e94eb164f32e93ee759ff79591608831502dc",
-        ),
-        DesktopScene::Enter => concat!(
-            "19760ffdadb80915cf9df340e823673bb3cedc8a6829c7d338ca6cf0254d4761",
-            "84549b67d910abc10adb7dd22e7c9e006bba7e92ba87432af9abe562fc94c8ad",
-        ),
-    };
-    let (width, height, rgb) = parse(bytes)?;
-    let scale = (width / W).min(height / H);
-    if scale == 0 {
-        return Err("QEMU display is too small to recover every desktop reference pixel");
+    let (w, h, rgb) = parse(bytes)?;
+    // OVMF/QEMU's pinned 1024x768 reference fixture. These geometry and
+    // glyph expectations are independent of the compositor implementation.
+    if (w, h) != (1024, 768) {
+        return Err("unexpected QEMU desktop reference resolution");
     }
-    let left = (width - W * scale) / 2;
-    let top = (height - H * scale) / 2;
-    let stride = width * 3;
-    let mut tile = [0; W * H * 3];
-    for sy in 0..H {
-        for sx in 0..W {
-            let offset = (top + sy * scale) * stride + (left + sx * scale) * 3;
-            let sample = (sy * W + sx) * 3;
-            tile[sample..sample + 3].copy_from_slice(&rgb[offset..offset + 3]);
-        }
+    let pixel = |x: usize, y: usize| &rgb[(y * w + x) * 3..][..3];
+    const WALL: [u8; 3] = [30, 34, 41];
+    const PANE: [u8; 3] = [20, 24, 30];
+    const GREEN: [u8; 3] = [146, 208, 153];
+    const WHITE: [u8; 3] = [232, 237, 245];
+    if pixel(0, 0) != [19, 22, 27]
+        || pixel(1023, 0) != [19, 22, 27]
+        || pixel(5, 3) != [40, 85, 119]
+        || pixel(0, 767) != WALL
+        || pixel(1023, 767) != WALL
+    {
+        return Err("desktop is missing its full-width bar, active workspace, or background");
     }
-    for (y, row) in rgb.chunks_exact(stride).enumerate() {
-        for (x, pixel) in row.chunks_exact(3).enumerate() {
-            if (left..left + W * scale).contains(&x) && (top..top + H * scale).contains(&y) {
-                let sample = (((y - top) / scale) * W + (x - left) / scale) * 3;
-                if pixel != &tile[sample..sample + 3] {
-                    return Err("QEMU desktop pixel group was not uniformly scaled");
+
+    let check_text = |x: usize, y: usize, letters: &[[u8; 7]], ink: [u8; 3]| {
+        for (i, glyph) in letters.iter().enumerate() {
+            for (dy, row) in glyph.iter().enumerate() {
+                for dx in 0..6 {
+                    let expected = if dx < 5 && row & (16 >> dx) != 0 {
+                        ink
+                    } else {
+                        PANE
+                    };
+                    for by in 0..2 {
+                        for bx in 0..2 {
+                            if pixel(x + i * 12 + dx * 2 + bx, y + dy * 2 + by) != expected {
+                                return Err("clishell command, output, or key count pixels differ");
+                            }
+                        }
+                    }
                 }
-            } else if pixel != BG {
-                return Err("QEMU desktop has unexpected pixels outside the centered preview");
             }
         }
+        Ok(())
+    };
+    const EMPTY: [u8; 7] = [0; 7];
+    const E: [u8; 7] = [31, 16, 16, 30, 16, 16, 31];
+    const C: [u8; 7] = [14, 17, 16, 16, 16, 17, 14];
+    const H: [u8; 7] = [17, 17, 17, 31, 17, 17, 17];
+    const O: [u8; 7] = [14, 17, 17, 17, 17, 17, 14];
+    const I: [u8; 7] = [14, 4, 4, 4, 4, 4, 14];
+    const R: [u8; 7] = [30, 17, 17, 30, 20, 18, 17];
+    const A: [u8; 7] = [14, 17, 17, 31, 17, 17, 17];
+    const D: [u8; 7] = [30, 17, 17, 17, 17, 17, 30];
+    const Y: [u8; 7] = [17, 17, 10, 4, 4, 4, 4];
+    const ZERO: [u8; 7] = [14, 17, 19, 21, 25, 17, 14];
+    const ONE: [u8; 7] = [4, 12, 4, 4, 4, 4, 14];
+    const SEVEN: [u8; 7] = [31, 1, 2, 4, 8, 8, 8];
+    const EIGHT: [u8; 7] = [14, 17, 17, 14, 17, 17, 14];
+    if matches!(scene, DesktopScene::Idle) {
+        if pixel(50, 700) != WALL || pixel(950, 700) != WALL {
+            return Err("desktop idle unexpectedly has open panes");
+        }
+        return Ok((w, h));
     }
-    let mut digest = String::with_capacity(128);
-    for byte in crate::Sha3_512::digest(&tile) {
-        write!(digest, "{byte:02x}").map_err(|_| "QEMU desktop digest formatting failed")?;
+    if pixel(13, 45) != [40, 85, 119]
+        || pixel(350, 43) != [49, 60, 74]
+        || pixel(50, 700) != PANE
+        || pixel(950, 700) != PANE
+        || pixel(800, 700) != WALL
+    {
+        return Err("desktop panes do not fill the available workspace with normal gaps");
     }
-    if digest != golden {
-        return Err("QEMU desktop pixels do not match the hosted reference raster");
+    match scene {
+        DesktopScene::Idle => unreachable!(),
+        DesktopScene::Enter => {
+            check_text(42, 126, &[EMPTY], WHITE)?;
+            check_text(24, 102, &[EMPTY], GREEN)?;
+            check_text(820, 102, &[ZERO], WHITE)?;
+        }
+        DesktopScene::Draft => {
+            check_text(42, 126, &[E, C, H, O, EMPTY, H, I], WHITE)?;
+            check_text(24, 102, &[EMPTY], GREEN)?;
+            check_text(820, 102, &[SEVEN], WHITE)?;
+        }
+        DesktopScene::LiveKeyboard => {
+            check_text(42, 126, &[EMPTY], WHITE)?;
+            check_text(24, 102, &[H, I, EMPTY], GREEN)?;
+            check_text(820, 102, &[EIGHT], WHITE)?;
+        }
+        DesktopScene::Persistent => {
+            check_text(42, 126, &[EMPTY], WHITE)?;
+            check_text(24, 102, &[R, E, A, D, Y, EMPTY], GREEN)?;
+            check_text(820, 102, &[ONE, ONE], WHITE)?;
+        }
     }
-    Ok((width, height))
+    Ok((w, h))
 }
 
 fn verify(bytes: &[u8]) -> Result<(usize, usize), &'static str> {

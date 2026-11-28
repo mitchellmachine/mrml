@@ -208,10 +208,11 @@ impl BootDisplay {
     const fn marker(self) -> &'static str {
         match self {
             Self::Fat32 => "fat32-pass",
-            Self::Desktop(crate::qemu_display::DesktopScene::Idle) => "desktop-fit-120x70-source",
-            Self::Desktop(crate::qemu_display::DesktopScene::Enter) => "desktop-enter-fit-120x70-source",
-            Self::Desktop(crate::qemu_display::DesktopScene::Persistent) => "desktop-persistent-fit-120x70-source",
-            Self::Desktop(crate::qemu_display::DesktopScene::LiveKeyboard) => "desktop-live-keyboard-fit-120x70-source",
+            Self::Desktop(crate::qemu_display::DesktopScene::Idle) => "desktop-responsive-idle",
+            Self::Desktop(crate::qemu_display::DesktopScene::Draft) => "desktop-responsive-draft",
+            Self::Desktop(crate::qemu_display::DesktopScene::Enter) => "desktop-responsive-enter",
+            Self::Desktop(crate::qemu_display::DesktopScene::Persistent) => "desktop-responsive-clishell-demo",
+            Self::Desktop(crate::qemu_display::DesktopScene::LiveKeyboard) => "desktop-responsive-clishell-live",
         }
     }
 }
@@ -663,6 +664,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                             for (filename, scene) in [
                                 ("desktop-idle.ppm", DesktopScene::Idle),
                                 ("desktop-enter.ppm", DesktopScene::Enter),
+                                ("desktop-draft.ppm", DesktopScene::Draft),
                                 ("desktop-typed.ppm", DesktopScene::LiveKeyboard),
                             ] {
                                 crate::qemu_display::verify_desktop_screen(&dir.join(filename), scene)

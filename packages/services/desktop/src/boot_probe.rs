@@ -4,7 +4,7 @@
 
 use core::arch::asm;
 use mrml_desktop::boot_frame::{
-    BOOT_REPLY_BYTES, BOOT_REQUEST, BootDesktop, BootScene, MAX_LIVE_KEYS, render_boot_reply,
+    BOOT_REPLY_BYTES, BOOT_REQUEST, BootPanelDesktop, BootScene, MAX_LIVE_KEYS,
 };
 
 const REQUEST: usize = BOOT_REQUEST.len();
@@ -18,7 +18,7 @@ extern "efiapi" fn efi_main(
     reply: *mut [u8; BOOT_REPLY_BYTES],
 ) -> ! {
     core::hint::black_box(&RELOCATION_ANCHOR);
-    let mut desktop = BootDesktop::new().unwrap_or_else(|_| halt());
+    let mut desktop = BootPanelDesktop::new().unwrap_or_else(|_| halt());
     let mut live = false;
     for step in 0..MAX_LIVE_KEYS + 3 {
         // SAFETY: the signed monitor passes distinct aligned, fixed mailbox
@@ -36,13 +36,21 @@ extern "efiapi" fn efi_main(
                 (2, Ok(BootScene::TextA)) if !live => {
                     desktop.step(BootScene::TextA, reply).map(|()| true)
                 }
-                (2.., Ok(scene @ BootScene::Letter(_))) if live && step < MAX_LIVE_KEYS + 2 => {
-                    desktop.step(scene, reply).map(|()| false)
-                }
+                (
+                    2..,
+                    Ok(
+                        scene @ (BootScene::Letter(_)
+                        | BootScene::Space
+                        | BootScene::Submit
+                        | BootScene::Backspace),
+                    ),
+                ) if live && step < MAX_LIVE_KEYS + 2 => desktop.step(scene, reply).map(|()| false),
                 (2.., Ok(BootScene::End)) if live => {
                     desktop.step(BootScene::End, reply).map(|()| true)
                 }
-                (0, _) => render_boot_reply(&request, reply).map(|()| true),
+                (0, Ok(scene @ (BootScene::Idle | BootScene::Enter))) => {
+                    desktop.step(scene, reply).map(|()| true)
+                }
                 _ => Err(mrml_desktop::boot_frame::Error::InvalidRequest),
             }
         };

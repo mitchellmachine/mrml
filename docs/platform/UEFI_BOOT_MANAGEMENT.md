@@ -38,12 +38,10 @@ internal system disk is not a target.
 ### Dragonair desktop scanout check
 
 Use the device-free persistent-desktop image for a display-only check. It
-boots one signed desktop microVM, sends synthetic Enter and A while preserving
-the same guest, and presents its final 120 × 70 source raster via the boot
-display broker. Current builds automatically center and scale this raster to
-the active framebuffer. That scaling does not set the video mode or confirm
-that firmware chose the monitor's preferred resolution. Do not use the
-KVM-only keyboard image on hardware.
+boots one signed desktop microVM and uses a synthetic `echo ready` command.
+The boot compositor tiles the panels at the active framebuffer resolution
+and keeps controls and glyphs compact. This does not set the video mode or
+confirm EDID matching. Do not use the KVM-only keyboard image on hardware.
 
 ```text
 mrml usb image-vmx-desktop-persistent mrml-dragonair-desktop-display.img
@@ -62,9 +60,10 @@ preflight the exact file to be written.
 
 Use the same dedicated expendable stick and one-time boot procedure above.
 Record the firmware version, current Secure Boot state and a photo of the
-screen. Success is a centered desktop preview with `>A` in the terminal and
-`1` under `KEYS`, with no keys pressed. The original image recorded above
-shows the same content as a small tile in the upper left. A lingering `VMX`
+screen. In the current image, look for a full-width workspace bar, `READY`
+in `CLISHELL`, and (when there is room for the input pane) `11` under `KEYS`.
+No key presses are required. The earlier images showed `>A` and `1` as a
+small upper-left tile or a scaled centered preview. A lingering `VMX`
 startup label, blank screen, or `NOT PASSED` is not a pass. The diagnostic
 halts after the result. Power off, remove the stick and boot the existing OS.
 No physical input, USB writes by MRML, or live desktop are expected.

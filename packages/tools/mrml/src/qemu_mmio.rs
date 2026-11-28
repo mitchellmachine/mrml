@@ -87,11 +87,16 @@ pub(super) fn capture_paused_display(
                     .ok_or("missing desktop second-key rendezvous")?;
                 wait_keyboard_trace(path, &trace[..=second])?;
                 dump_display(&mut input, &mut reader, "desktop-enter.ppm", 77)?;
-                send_desktop_key(&mut input, &mut reader, "a", 75)?;
-                let typed = trace.iter().rposition(|&byte| byte == 0xce)
-                    .ok_or("missing desktop text paint rendezvous")?;
-                wait_keyboard_trace(path, &trace[..=typed])?;
-                dump_display(&mut input, &mut reader, "desktop-typed.ppm", 78)?;
+                let mut paint = trace.iter().enumerate().filter(|(_, byte)| **byte == 0xce);
+                for (index, key) in ["e", "c", "h", "o", "spc", "h", "i", "ret"].into_iter().enumerate() {
+                    let (stop, _) = paint.next().ok_or("missing clishell paint rendezvous")?;
+                    send_desktop_key(&mut input, &mut reader, key, 80 + index as u8)?;
+                    wait_keyboard_trace(path, &trace[..=stop])?;
+                    if index == 6 {
+                        dump_display(&mut input, &mut reader, "desktop-draft.ppm", 78)?;
+                    }
+                }
+                dump_display(&mut input, &mut reader, "desktop-typed.ppm", 75)?;
                 send_desktop_key(&mut input, &mut reader, "esc", 79)?;
                 wait_keyboard_trace(path, trace)?;
             }

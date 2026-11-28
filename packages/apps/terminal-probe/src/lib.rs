@@ -1,7 +1,10 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-//! Local keyboard echo. This app has no shell or command interpreter.
+//! Bounded terminal display and echo-only shell.
+
+mod clishell;
+pub use clishell::CliShell;
 
 const COLUMNS: usize = 48;
 const ROWS: usize = 6;

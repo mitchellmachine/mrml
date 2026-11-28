@@ -2,6 +2,9 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+mod panel;
+pub use panel::{BootPanel, glyph};
+
 pub const BOOT_REQUEST: [u8; 8] = *b"MRMLDB1\0";
 
 /// The authenticated diagnostic has a closed, versioned set of inputs.
@@ -14,10 +17,13 @@ pub enum BootScene {
     TextA,
     LiveBegin,
     End,
+    Space,
+    Submit,
+    Backspace,
     Letter(BootLetter),
 }
 
-pub const MAX_LIVE_KEYS: usize = 8;
+pub const MAX_LIVE_KEYS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BootLetter(u8);
@@ -45,6 +51,9 @@ impl BootScene {
             Self::TextA => *b"MRMLDB1\x03",
             Self::LiveBegin => *b"MRMLDB1\x04",
             Self::End => *b"MRMLDB1\x05",
+            Self::Space => *b"MRMLDB1\x06",
+            Self::Submit => *b"MRMLDB1\x07",
+            Self::Backspace => *b"MRMLDB1\x08",
             Self::Letter(letter) => [b'M', b'R', b'M', b'L', b'D', b'B', b'1', letter.0],
         }
     }
@@ -63,6 +72,9 @@ impl BootScene {
             Self::TextA,
             Self::LiveBegin,
             Self::End,
+            Self::Space,
+            Self::Submit,
+            Self::Backspace,
         ]
         .into_iter()
         .find(|scene| scene.request() == *request)

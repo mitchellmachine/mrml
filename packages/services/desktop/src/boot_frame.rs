@@ -148,6 +148,131 @@ impl BootDesktop {
     }
 }
 
+/// A shell instance stays private to the signed desktop diagnostic. No
+/// external program, filesystem or inherited host authority is available.
+#[derive(Default)]
+struct PanelTerminal(Option<mrml_terminal_probe::CliShell>);
+
+impl TerminalRoute for PanelTerminal {
+    fn launch_terminal(&mut self) -> Result<NonZeroU64, RouteError> {
+        if self.0.is_some() {
+            return Err(RouteError::Unavailable);
+        }
+        self.0 = Some(mrml_terminal_probe::CliShell::new());
+        Ok(NonZeroU64::MIN)
+    }
+
+    fn send_key(&mut self, id: NonZeroU64, key: Key) -> Result<(), RouteError> {
+        if id != NonZeroU64::MIN {
+            return Err(RouteError::Retired);
+        }
+        self.0.as_mut().ok_or(RouteError::Retired)?.key(key);
+        Ok(())
+    }
+
+    fn retire_terminal(&mut self, _: NonZeroU64) -> Result<(), RouteError> {
+        Err(RouteError::Unavailable)
+    }
+}
+
+pub struct BootPanelDesktop {
+    desktop: Desktop,
+    terminal: PanelTerminal,
+}
+
+impl BootPanelDesktop {
+    pub fn new() -> Result<Self, Error> {
+        Ok(Self {
+            desktop: Desktop::new(480, 280).ok_or(Error::InvalidDesktop)?,
+            terminal: PanelTerminal::default(),
+        })
+    }
+
+    pub fn step(
+        &mut self,
+        scene: BootScene,
+        reply: &mut [u8; BOOT_REPLY_BYTES],
+    ) -> Result<(), Error> {
+        reply.fill(0);
+        let open = self.desktop.diagnostics().terminal_open;
+        let mut send = |event| {
+            self.desktop
+                .event(event, &mut self.terminal)
+                .map(|_| ())
+                .map_err(|_| Error::InvalidDesktop)
+        };
+        match (scene, open) {
+            (BootScene::Idle | BootScene::Begin | BootScene::LiveBegin, false)
+            | (BootScene::End, true) => (),
+            (BootScene::Enter, false) => send(Event::Enter)?,
+            (BootScene::Letter(letter), true) => {
+                send(Event::TerminalKey(Key::Text(letter.character())))?
+            }
+            (BootScene::Space, true) => send(Event::TerminalKey(Key::Text(' ')))?,
+            (BootScene::Submit, true) => send(Event::TerminalKey(Key::Enter))?,
+            (BootScene::Backspace, true) => send(Event::TerminalKey(Key::Backspace))?,
+            (BootScene::TextA, true) => {
+                // Device-free display regression; never a physical key claim.
+                for ch in "echo ready".chars() {
+                    send(Event::TerminalKey(Key::Text(ch)))?;
+                }
+                send(Event::TerminalKey(Key::Enter))?;
+            }
+            _ => return Err(Error::InvalidRequest),
+        }
+        let mut input = [0; 32];
+        let mut output = [0; 32];
+        let mut n = 0;
+        let mut m = 0;
+        if let Some(terminal) = self.terminal.0.as_ref() {
+            n = copy_ascii(terminal.input(), &mut input)?;
+            m = copy_ascii(terminal.output(), &mut output)?;
+        }
+        let diagnostics = self.desktop.diagnostics();
+        mrml_boot_frame::BootPanel {
+            open: diagnostics.terminal_open,
+            keys: u8::try_from(diagnostics.keys_delivered).map_err(|_| Error::InvalidDesktop)?,
+            input: &input[..n],
+            output: &output[..m],
+        }
+        .encode(reply)
+    }
+}
+
+fn copy_ascii(source: &[char], target: &mut [u8; 32]) -> Result<usize, Error> {
+    for (from, to) in source.iter().zip(target.iter_mut()) {
+        if !from.is_ascii() {
+            return Err(Error::InvalidDesktop);
+        }
+        *to = *from as u8;
+    }
+    if source.len() > target.len() {
+        return Err(Error::TooLarge);
+    }
+    Ok(source.len())
+}
+
+#[cfg(test)]
+#[test]
+fn panel_routes_shell_commands_and_preserves_literal_echo() {
+    use mrml_boot_frame::{BootLetter, BootPanel};
+    let mut app = BootPanelDesktop::new().unwrap();
+    let mut page = [0; BOOT_REPLY_BYTES];
+    app.step(BootScene::LiveBegin, &mut page).unwrap();
+    assert!(!BootPanel::decode(&page).unwrap().open);
+    app.step(BootScene::Enter, &mut page).unwrap();
+    for &b in b"ECHO HI" {
+        let event = BootLetter::new(b).map_or(BootScene::Space, BootScene::Letter);
+        app.step(event, &mut page).unwrap();
+    }
+    assert_eq!(BootPanel::decode(&page).unwrap().input, b"ECHO HI");
+    app.step(BootScene::Submit, &mut page).unwrap();
+    let panel = BootPanel::decode(&page).unwrap();
+    assert_eq!(panel.output, b"HI");
+    assert_eq!(panel.input, b"");
+    assert_eq!(panel.keys, 8);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
