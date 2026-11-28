@@ -124,10 +124,10 @@ fn inspect_qmp(
     }
     validate(&map)?;
     let mut guest_before = None;
-    if matches!(release, Some(0xad..=0xaf | 0xb4 | 0xb5 | 0xb7)) {
+    if matches!(release, Some(0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba)) {
         validate_scratch_uart(&map)?;
         verify_shared_boot(stdin, reader)?;
-        if matches!(release, Some(0xad | 0xaf | 0xb4 | 0xb5 | 0xb7)) {
+        if matches!(release, Some(0xad | 0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba)) {
             let before = sample_shared_controller(stdin, reader)?;
             qmp_write(
                 stdin,
@@ -151,7 +151,7 @@ fn inspect_qmp(
                         .into(),
                 );
             }
-            if matches!(release, Some(0xb5 | 0xb7)) {
+            if matches!(release, Some(0xb5 | 0xb7 | 0xba)) {
                 if after.disable_command() != Some(3) {
                     return Err("guest BME fixture does not have the exact halted baseline".into());
                 }
@@ -274,7 +274,7 @@ fn inspect_qmp(
             byte => byte,
         };
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7) {
+        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7 | 0xba) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -288,9 +288,10 @@ fn inspect_qmp(
         ack(reader, "{\"return\": {}, \"id\": 75}")?;
     }
     if let Some(before) = guest_before {
-        let allow = release == Some(0xb5);
+        let allow = matches!(release, Some(0xb5 | 0xba));
+        let require_unproven = release == Some(0xba);
         let (path, expected) = post.ok_or("missing signed guest BME trace expectation")?;
-        verify_guest_bme(stdin, reader, path, expected, before, allow)?;
+        verify_guest_bme(stdin, reader, path, expected, before, allow, require_unproven)?;
     }
     if let (Some(before), Some((path, prefix)), Some(state)) = (before, post, bar) {
         if let Some(allow) = cold {
@@ -662,6 +663,7 @@ fn verify_guest_bme(
     expected: &[u8],
     before: SharedController,
     allow: bool,
+    require_unproven: bool,
 ) -> Result<(), String> {
     let verdict = if allow { 0xef } else { 0xeb };
     let stop_at = expected
@@ -708,7 +710,17 @@ fn verify_guest_bme(
         if !retired_shared_boot_topology(&read_monitor(&mut *reader, 171)?) {
             return Err("virtual boot source is not retired at guest release".into());
         }
-        println!("q35-shared-release|status=PASS|boot_source_retired=true|bme=false|xhci_halted=true");
+        if require_unproven {
+            // Independently require translation to be off and no active
+            // root in this exact negative fixture. A running remapper is
+            // not a substitute for the requester proof either.
+            if after.gsts != 0 || after.root != 0 {
+                return Err("unexpected active VT-d state in missing-proof fixture".into());
+            }
+            println!("q35-shared-no-dma-proof|boot_source_retired=true|bme=false|xhci_halted=true|translation=false");
+        } else {
+            println!("q35-shared-release|status=PASS|boot_source_retired=true|bme=false|xhci_halted=true");
+        }
         // Only the test UART release register is written by the host.
         qmp_write(
             stdin,

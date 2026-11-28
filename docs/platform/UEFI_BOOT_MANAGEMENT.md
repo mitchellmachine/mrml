@@ -303,7 +303,11 @@ case continues from RAM only after the host verifies the exact change and
 rechecks that the emulated boot source is detached and the controller bus
 is empty. The guest then reads back the exact bus-master-disabled PCI
 command before leaving the test checkpoint. This does not prove VT-d
-containment or ownership transfer on physical hardware.
+containment or ownership transfer on physical hardware. A separate negative
+case on that same emulated boot controller sends the continue byte after
+retirement and bus-master shutdown, with VT-d translation independently
+observed off. The loader records the missing-proof rejection and halts.
+The positive VT-d verification below still uses a separate controller.
 This diagnostic is not in the normal boot profile and does not claim
 legacy semaphore transfer or enable DMA. An independent software model
 checks the retained lease, blocked DMA, quiescent boot source, and exact

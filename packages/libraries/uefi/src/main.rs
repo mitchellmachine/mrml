@@ -2864,14 +2864,14 @@ fn loader_trace(stage: u8) {
 fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
     use mrml_kernel::arch::x86_64::q35_fixture_marker;
     let profile = match q35_fixture_marker(memory, acpi_root).map(|marker| marker[32]) {
-        Ok(profile @ (1 | 2)) => profile,
+        Ok(profile @ (1..=3)) => profile,
         _ => {
             loader_trace(0xeb);
             halt();
         }
     };
     // Both this opt-in image and the exact emulator table are required.
-    // Only the second profile permits the exact test-only PCI command write.
+    // Only the BME and missing-proof profiles permit the test PCI command write.
     let scratch = || {
         let byte: u8;
         // SAFETY: the sealed emulator fixture uses only its dedicated
@@ -2885,17 +2885,24 @@ fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
     }
     loader_trace(0xe7);
     for _ in 0..100_000_000 {
-        match scratch() {
-            0 => core::hint::spin_loop(),
-            0xb5 if profile == 2 => {
+        match (profile, scratch()) {
+            (_, 0) => core::hint::spin_loop(),
+            (2, release @ 0xb5) | (3, release @ 0xba) => {
                 if !usb_preload_fixture_bme(true) {
                     break;
                 }
                 loader_trace(0xef);
                 for _ in 0..100_000_000 {
                     match scratch() {
-                        0xb5 => core::hint::spin_loop(),
-                        0xb6 if usb_preload_fixture_bme(false) => {
+                        byte if byte == release => core::hint::spin_loop(),
+                        // Retirement and BME readback are not proof of a
+                        // drained, denied requester. The marked missing-proof
+                        // fixture must reject even the normal test continue.
+                        0xb6 if profile == 3 && usb_preload_fixture_bme(false) => {
+                            loader_trace(0xec);
+                            halt();
+                        }
+                        0xb6 if profile == 2 && usb_preload_fixture_bme(false) => {
                             loader_trace(0xea);
                             return;
                         }
@@ -2904,7 +2911,7 @@ fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
                 }
                 break;
             }
-            0xad if profile == 1 => {
+            (1, 0xad) => {
                 loader_trace(0xea);
                 return;
             }
