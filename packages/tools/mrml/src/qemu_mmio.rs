@@ -151,12 +151,22 @@ fn inspect_qmp(
     validate(&map)?;
     let mut guest_before = None;
     let mut usb_record_before = None;
-    if matches!(release, Some(0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba | 0xbc)) {
+    let record_check = match release {
+        Some(0xbc) => Some(UsbRecordCheck::Present),
+        Some(0xbd) => Some(UsbRecordCheck::WrongRelease),
+        Some(0xbe) => Some(UsbRecordCheck::Missing),
+        _ => None,
+    };
+    if matches!(release, Some(0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba | 0xbc..=0xbe)) {
         validate_scratch_uart(&map)?;
-        verify_shared_boot(stdin, reader)?;
-        if release == Some(0xbc) {
+        if let Some(check) = record_check {
+            verify_record_boot(stdin, reader, check)?;
+        } else {
+            verify_shared_boot(stdin, reader)?;
+        }
+        if let Some(check) = record_check {
             verify_shared_record_class(stdin, reader)?;
-            usb_record_before = Some(sample_shared_controller(stdin, reader)?);
+            usb_record_before = Some((sample_shared_controller(stdin, reader)?, check));
         } else if matches!(release, Some(0xad | 0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba)) {
             let before = sample_shared_controller(stdin, reader)?;
             qmp_write(
@@ -332,10 +342,12 @@ fn inspect_qmp(
         let byte = match mode {
             0xaf => 0xad,
             0xb4 => 0xae,
+            0xbd => 0xbe, // Wrong release on correct marked profile.
+            0xbe => 0xbc, // Correct release, but booted on a different controller.
             byte => byte,
         };
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7 | 0xba | 0xbb | 0xbc) {
+        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7 | 0xba | 0xbb | 0xbc | 0xbe) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -348,9 +360,9 @@ fn inspect_qmp(
         qmp_write(stdin, "{\"execute\":\"cont\",\"id\":75}\n")?;
         ack(reader, "{\"return\": {}, \"id\": 75}")?;
     }
-    if let Some(before) = usb_record_before {
+    if let Some((before, check)) = usb_record_before {
         let (path, prefix) = post.ok_or("missing USB record trace")?;
-        verify_copied_usb_record(stdin, reader, path, prefix, before)?;
+        verify_copied_usb_record(stdin, reader, path, prefix, before, check)?;
         return Ok(None);
     }
     if let Some(before) = guest_before {
@@ -773,26 +785,54 @@ fn verify_shared_record_class(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbRecordCheck {
+    Present,
+    WrongRelease,
+    Missing,
+}
+
+fn verify_record_boot(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    check: UsbRecordCheck,
+) -> Result<(), String> {
+    if check == UsbRecordCheck::Missing {
+        verify_boot_on(stdin, reader, "bus: mrml_boot_xhci.0")
+    } else {
+        verify_shared_boot(stdin, reader)
+    }
+}
+
 fn verify_copied_usb_record(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
     path: &std::path::Path,
     prefix: &[u8],
     before: SharedController,
+    check: UsbRecordCheck,
 ) -> Result<(), String> {
     let mut expected = prefix.to_vec();
-    // The requester, PCI ID and class are independently checked by the host
-    // from the sealed root-bus fixture and the exact read-only PCI sample.
-    expected.extend_from_slice(b"\xbdMRMLXHCI\x01\x00\x28\x00\xd8\x00\x00\x00\x36\x1b\x0d\x00\x01\x30\x03\x0c");
-    expected.extend_from_slice(&before.xhci.bar.start.to_le_bytes());
-    expected.extend_from_slice(&0x4000u32.to_le_bytes());
-    expected.extend_from_slice(&[0, 0, 0, 0, 0xbe]);
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    loop {
+    if check != UsbRecordCheck::Present {
+        expected.push(0xeb);
+    } else {
+        // The requester, PCI ID and class are independently checked by the host
+        // from the sealed root-bus fixture and the exact read-only PCI sample.
+        expected.extend_from_slice(b"\xbdMRMLXHCI\x01\x00\x28\x00\xd8\x00\x00\x00\x36\x1b\x0d\x00\x01\x30\x03\x0c");
+        expected.extend_from_slice(&before.xhci.bar.start.to_le_bytes());
+        expected.extend_from_slice(&0x4000u32.to_le_bytes());
+        expected.extend_from_slice(&[0, 0, 0, 0, 0xbe]);
+    }
+    let read_trace = || {
         let mut bytes = Vec::new();
         std::fs::File::open(path)
             .and_then(|file| file.take(512).read_to_end(&mut bytes))
             .map_err(|e| format!("read copied USB record trace: {e}"))?;
+        Ok::<Vec<u8>, String>(bytes)
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let bytes = read_trace()?;
         if bytes == expected {
             break;
         }
@@ -803,7 +843,10 @@ fn verify_copied_usb_record(
     }
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":168}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 168}")?;
-    verify_shared_boot(stdin, reader)?;
+    if read_trace()? != expected {
+        return Err("USB record trace continued beyond the terminal result".into());
+    }
+    verify_record_boot(stdin, reader, check)?;
     verify_shared_record_class(stdin, reader)?;
     let after = sample_shared_controller(stdin, reader)?;
     if before.pci_command != after.pci_command
@@ -812,7 +855,8 @@ fn verify_copied_usb_record(
     {
         return Err("controller changed during the USB record-only diagnostic".into());
     }
-    println!("q35-usb-record|status=PASS|firmware_exited=true|bytes=40|exact_requester=0000:00:1b.0|boot_disk_attached=true|controller_writes=false|media_writes=0");
+    let count = if check == UsbRecordCheck::Present { 40 } else { 0 };
+    println!("q35-usb-record|status=PASS|case={check:?}|firmware_exited=true|bytes={count}|boot_disk_attached=true|controller_writes=false|media_writes=0");
     Ok(())
 }
 
@@ -985,7 +1029,12 @@ fn verify_shared_disk_retired(
     Ok(())
 }
 
+#[cfg(test)]
 fn shared_boot_topology(tree: &str) -> bool {
+    boot_topology(tree, "bus: mrml_probe_xhci.0")
+}
+
+fn boot_topology(tree: &str, boot_bus: &str) -> bool {
     let mut bus = None;
     let mut buses = 0;
     let mut disks = 0;
@@ -996,7 +1045,7 @@ fn shared_boot_topology(tree: &str) -> bool {
         if bus.is_some_and(|depth| indent <= depth) {
             bus = None;
         }
-        if content == "bus: mrml_probe_xhci.0" {
+        if content == boot_bus {
             buses += 1;
             bus = Some(indent);
         }
@@ -1034,11 +1083,19 @@ fn verify_shared_boot(
     stdin: &mut impl std::io::Write,
     reader: &mut impl std::io::BufRead,
 ) -> Result<(), String> {
+    verify_boot_on(stdin, reader, "bus: mrml_probe_xhci.0")
+}
+
+fn verify_boot_on(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    boot_bus: &str,
+) -> Result<(), String> {
     qmp_write(
         stdin,
         "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info qtree\"},\"id\":150}\n",
     )?;
-    if !shared_boot_topology(&read_monitor(&mut *reader, 150)?) {
+    if !boot_topology(&read_monitor(&mut *reader, 150)?, boot_bus) {
         return Err(
             "QEMU did not attach the firmware boot disk directly to the probe controller".into(),
         );

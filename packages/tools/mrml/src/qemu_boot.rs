@@ -103,6 +103,8 @@ pub(super) enum Q35FixtureCase {
     SharedGuestBmeDenied,
     SharedGuestRemappingUnproven,
     SharedBootRecord,
+    SharedBootRecordWrongRelease,
+    SharedBootRecordMissing,
     WrongRelease,
     ValidRelease,
     IsolatedWrongRelease,
@@ -147,7 +149,7 @@ impl Q35FixtureCase {
             Self::RetiredPrivileged(profile) => profile,
             Self::SharedGuestBme | Self::SharedGuestBmeDenied => 2,
             Self::SharedGuestRemappingUnproven => 3,
-            Self::SharedBootRecord => 4,
+            Self::SharedBootRecord | Self::SharedBootRecordWrongRelease | Self::SharedBootRecordMissing => 4,
             _ => 1,
         }
     }
@@ -327,6 +329,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 | Q35FixtureCase::SharedGuestBmeDenied
                 | Q35FixtureCase::SharedGuestRemappingUnproven
                 | Q35FixtureCase::SharedBootRecord
+                | Q35FixtureCase::SharedBootRecordWrongRelease
         )
     );
     let machine = if isolated {
@@ -399,7 +402,13 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             command.args(["-acpitable", "file=q35-mmio.acpi"]);
         }
     }
-    let (boot_xhci, boot_disk) = if shared_boot {
+    let record_missing = map_only_marker == Some(Q35FixtureCase::SharedBootRecordMissing);
+    let (boot_xhci, boot_disk) = if record_missing {
+        (
+            Some("qemu-xhci,bus=pcie.0,addr=0x5,id=mrml_boot_xhci"),
+            "usb-storage,bus=mrml_boot_xhci.0,drive=esp,id=mrml_shared_boot,removable=on,bootindex=1",
+        )
+    } else if shared_boot {
         (
             None,
             "usb-storage,bus=mrml_probe_xhci.0,drive=esp,id=mrml_shared_boot,removable=on,bootindex=1",
@@ -419,7 +428,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             "usb-storage,drive=esp,removable=on,bootindex=1",
         )
     };
-    let esp_mode = if shared_boot { ",readonly=on" } else { "" };
+    let esp_mode = if shared_boot || record_missing { ",readonly=on" } else { "" };
     let mut child = command
         .args(["-machine", &machine, "-m", "512M", "-display", "none"])
         .args(["-serial", "none", "-monitor", "none", "-no-reboot"])
@@ -481,6 +490,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::SharedGuestBmeDenied => Some(0xb7),
         Q35FixtureCase::SharedGuestRemappingUnproven => Some(0xba),
         Q35FixtureCase::SharedBootRecord => Some(0xbc),
+        Q35FixtureCase::SharedBootRecordWrongRelease => Some(0xbd),
+        Q35FixtureCase::SharedBootRecordMissing => Some(0xbe),
     });
     let post_check = map_only_marker.and_then(Q35FixtureCase::post_check);
     let mut released = false;
@@ -488,7 +499,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     loop {
         if let Ok(bytes) = fs::read(trace) {
             if let Some(valid) = release {
-                let ready = if matches!(valid, 0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba | 0xbc) {
+                let ready = if matches!(valid, 0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba | 0xbc..=0xbe) {
                     let index = expected
                         .iter()
                         .position(|&byte| byte == 0xe7)
@@ -502,7 +513,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         &mut child,
                         valid,
                         isolated,
-                        (matches!(valid, 0xa7 | 0xa8 | 0xb5 | 0xb7 | 0xba | 0xbb | 0xbc)
+                        (matches!(valid, 0xa7 | 0xa8 | 0xb5 | 0xb7 | 0xba | 0xbb | 0xbc..=0xbe)
                             || post_check.is_some())
                             .then_some((trace, expected)),
                         post_check,
@@ -537,7 +548,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 );
                 return Ok(());
             }
-            if released && (post_check.is_some() || release == Some(0xbc)) {
+            if released && (post_check.is_some() || matches!(release, Some(0xbc..=0xbe))) {
                 // The QMP worker already checked the full signed trace and
                 // independently sampled the paused device after the verdict.
                 child.kill().map_err(|e| format!("stop verified QEMU: {e}"))?;

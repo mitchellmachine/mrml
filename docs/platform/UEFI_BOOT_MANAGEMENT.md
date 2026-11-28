@@ -371,7 +371,10 @@ checks its diagnostic identity and emits only those bytes. The paused
 host independently verifies the same requester, BAR, and retained boot
 source, before and after reading the trace. The guest never reads the
 controller after exit in this case, and receives no ownership or write
-authority.
+authority. Two additional marked cases use either the wrong release byte
+or a real read-only boot disk on a different controller. Both yield an
+exact rejection trace with no record bytes, with the boot disk still
+attached and the observed controller unchanged.
 
 ### Diagnose a return to firmware
 
