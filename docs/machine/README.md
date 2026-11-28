@@ -50,7 +50,7 @@ environment and operation recorded.
 - [Protected Git and Gitd current checkpoint](../gitd/operations/CURRENT_COMPLETION.md)
 - [Certificate and ACME service](../ACME.md)
 - [Deployment, installation, and system administration](../DEPLOYMENT.md)
-- [Adaptive isolation placement](../ISOLATION_PLACEMENT.md)
+- [Total MicroVM admission and placement](../ISOLATION_PLACEMENT.md)
 - [Gigakernel design and evidence](../gigakernel.md)
 - [Paravirtual-device architecture](../PARAVIRTUAL_DEVICES.md)
 - [Braille interface design](../accessibility/BRAILLE_INTERFACE.md)
