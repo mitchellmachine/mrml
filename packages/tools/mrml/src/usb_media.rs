@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::qemu_display::DesktopScene;
 use crate::usb_image::{self, BYTES};
 #[cfg(any(test, all(any(windows, target_os = "linux"), target_arch = "x86_64")))]
 use crate::usb_transfer::transfer;
@@ -19,7 +20,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb image-vmx-desktop OUTPUT.img | mrml usb test-vmx-desktop IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-display OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb image-vmx-desktop OUTPUT.img | mrml usb image-vmx-desktop-input OUTPUT.img | mrml usb test-vmx-desktop-input IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-desktop IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-display OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
 
 #[path = "usb_xhci_inventory.rs"]
 mod xhci_inventory;
@@ -29,7 +30,7 @@ enum DiagnosticImage {
     Fat32,
     Vmx,
     VmxKernel,
-    VmxDesktop,
+    VmxDesktop(DesktopScene),
     Dma,
     Q35Mmio,
     SharedPreload,
@@ -51,13 +52,17 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             create(&load_workspace()?, Path::new(file), DiagnosticImage::VmxKernel)
         }
         [mode, file] if mode == "image-vmx-desktop" => {
-            create(&load_workspace()?, Path::new(file), DiagnosticImage::VmxDesktop)
+            create(&load_workspace()?, Path::new(file), DiagnosticImage::VmxDesktop(DesktopScene::Idle))
+        }
+        [mode, file] if mode == "image-vmx-desktop-input" => {
+            create(&load_workspace()?, Path::new(file), DiagnosticImage::VmxDesktop(DesktopScene::Enter))
         }
         [mode, image, code, vars, qemu]
-            if matches!(mode.as_str(), "test-vmx" | "test-vmx-kernel" | "test-vmx-desktop") =>
+            if matches!(mode.as_str(), "test-vmx" | "test-vmx-kernel" | "test-vmx-desktop" | "test-vmx-desktop-input") =>
         {
             let profile = match mode.as_str() {
-                "test-vmx-desktop" => DiagnosticImage::VmxDesktop,
+                "test-vmx-desktop" => DiagnosticImage::VmxDesktop(DesktopScene::Idle),
+                "test-vmx-desktop-input" => DiagnosticImage::VmxDesktop(DesktopScene::Enter),
                 "test-vmx-kernel" => DiagnosticImage::VmxKernel,
                 _ => DiagnosticImage::Vmx,
             };
@@ -168,16 +173,16 @@ fn test_vmx(image: &str, code: &str, vars: &str, qemu: &str, profile: Diagnostic
             "--accelerator", accelerator, "--expect-hex", expected,
             "--timeout-seconds", "60",
         ]);
-        if accelerator == "kvm" && matches!(profile, DiagnosticImage::VmxDesktop) {
-            crate::qemu_boot::run_qemu_with_desktop_evidence(&args)
-        } else {
-            crate::qemu_boot::run_qemu(&args)
+        match (accelerator, profile) {
+            ("kvm", DiagnosticImage::VmxDesktop(scene)) =>
+                crate::qemu_boot::run_qemu_with_desktop_evidence(&args, scene),
+            _ => crate::qemu_boot::run_qemu(&args),
         }
     };
     copy()?;
     run("tcg", "vmx-absent.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0e0e6")?;
     copy()?;
-    let expected = if matches!(profile, DiagnosticImage::VmxDesktop) {
+    let expected = if matches!(profile, DiagnosticImage::VmxDesktop(_)) {
         "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1c2c4ccc5dfd6"
     } else if matches!(profile, DiagnosticImage::VmxKernel) {
         "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1c2c4c6c3c5dfd6"
@@ -800,8 +805,8 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
     let pr = digest("kernel-package")?;
     let rr = digest("release")?;
     let mut nested = Vec::new();
-    if matches!(profile, DiagnosticImage::VmxKernel | DiagnosticImage::VmxDesktop) {
-        let desktop = matches!(profile, DiagnosticImage::VmxDesktop);
+    if matches!(profile, DiagnosticImage::VmxKernel | DiagnosticImage::VmxDesktop(_)) {
+        let desktop = matches!(profile, DiagnosticImage::VmxDesktop(_));
         let root = if desktop {
             kr.clone()
         } else {
@@ -844,7 +849,8 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
                 DiagnosticImage::Q35Mmio => "uefi_q35_mmio_probe",
                 DiagnosticImage::Vmx => "vmx_root_probe",
                 DiagnosticImage::VmxKernel => "vmx_kernel_monitor",
-                DiagnosticImage::VmxDesktop => "vmx_desktop_monitor",
+                DiagnosticImage::VmxDesktop(DesktopScene::Idle) => "vmx_desktop_monitor",
+                DiagnosticImage::VmxDesktop(DesktopScene::Enter) => "vmx_desktop_input_monitor",
                 _ => "uefi_fat32_restart_probe",
             },
             "--compile-env",
@@ -859,7 +865,7 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
         words(&[
             "--feature-profile",
             match profile {
-                DiagnosticImage::Fat32 | DiagnosticImage::Vmx | DiagnosticImage::VmxKernel | DiagnosticImage::VmxDesktop => "fat32_restart_boot",
+                DiagnosticImage::Fat32 | DiagnosticImage::Vmx | DiagnosticImage::VmxKernel | DiagnosticImage::VmxDesktop(_) => "fat32_restart_boot",
                 DiagnosticImage::SharedPreload => "usb_preload_probe",
                 DiagnosticImage::Dma => "boot_dma_probe",
                 DiagnosticImage::Q35Mmio => "q35_mmio_probe",

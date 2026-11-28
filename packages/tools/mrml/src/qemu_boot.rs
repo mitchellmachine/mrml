@@ -184,28 +184,32 @@ pub(super) fn run_qemu_with_display_evidence(args: &[String]) -> Result<(), Stri
     run_qemu_config(args, false, None, Some(BootDisplay::Fat32))
 }
 
-pub(super) fn run_qemu_with_desktop_evidence(args: &[String]) -> Result<(), String> {
-    run_qemu_config(args, false, None, Some(BootDisplay::Desktop))
+pub(super) fn run_qemu_with_desktop_evidence(
+    args: &[String],
+    scene: crate::qemu_display::DesktopScene,
+) -> Result<(), String> {
+    run_qemu_config(args, false, None, Some(BootDisplay::Desktop(scene)))
 }
 
 #[derive(Clone, Copy)]
 enum BootDisplay {
     Fat32,
-    Desktop,
+    Desktop(crate::qemu_display::DesktopScene),
 }
 
 impl BootDisplay {
     fn verify(self, path: &Path) -> Result<(usize, usize), String> {
         match self {
             Self::Fat32 => crate::qemu_display::verify_fat32_screen(path),
-            Self::Desktop => crate::qemu_display::verify_desktop_screen(path),
+            Self::Desktop(scene) => crate::qemu_display::verify_desktop_screen(path, scene),
         }
     }
 
     const fn marker(self) -> &'static str {
         match self {
             Self::Fat32 => "fat32-pass",
-            Self::Desktop => "desktop-pixels-120x70",
+            Self::Desktop(crate::qemu_display::DesktopScene::Idle) => "desktop-pixels-120x70",
+            Self::Desktop(crate::qemu_display::DesktopScene::Enter) => "desktop-enter-pixels-120x70",
         }
     }
 }

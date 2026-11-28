@@ -3,6 +3,30 @@
 #![forbid(unsafe_code)]
 
 pub const BOOT_REQUEST: [u8; 8] = *b"MRMLDB1\0";
+
+/// The authenticated diagnostic has a closed, versioned set of inputs.
+/// It carries no hardware reports, addresses, or app-launch authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootScene {
+    Idle,
+    Enter,
+}
+
+impl BootScene {
+    pub const fn request(self) -> [u8; BOOT_REQUEST.len()] {
+        match self {
+            Self::Idle => BOOT_REQUEST,
+            Self::Enter => *b"MRMLDB1\x01",
+        }
+    }
+
+    pub fn parse(request: &[u8; BOOT_REQUEST.len()]) -> Result<Self, Error> {
+        [Self::Idle, Self::Enter]
+            .into_iter()
+            .find(|scene| scene.request() == *request)
+            .ok_or(Error::InvalidRequest)
+    }
+}
 pub const BOOT_REPLY_BYTES: usize = 4096;
 
 pub const HEADER_BYTES: usize = 8;

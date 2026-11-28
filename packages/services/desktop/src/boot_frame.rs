@@ -1,6 +1,8 @@
 //! A fixed-geometry, single-mailbox diagnostic frame. Contains pixels, not
 //! guest-provided addresses, framebuffer authority, or display-mode requests.
-use crate::{Desktop, raster};
+use crate::{Desktop, Event, Key, RouteError, TerminalRoute, raster};
+use core::num::NonZeroU64;
+use mrml_boot_frame::BootScene;
 
 pub use mrml_boot_frame::{
     BOOT_REPLY_BYTES, BOOT_REQUEST, Error, HEADER_BYTES, MAX_BYTES, decode, decode_boot_reply,
@@ -48,6 +50,28 @@ pub fn encode(
     Ok(end)
 }
 
+/// No independent application is started in this fixture. The normal
+/// desktop policy is exercised against a guest-private terminal placeholder.
+struct BootTerminalFixture(bool);
+
+impl TerminalRoute for BootTerminalFixture {
+    fn launch_terminal(&mut self) -> Result<NonZeroU64, RouteError> {
+        if self.0 {
+            return Err(RouteError::Unavailable);
+        }
+        self.0 = true;
+        Ok(NonZeroU64::MIN)
+    }
+
+    fn send_key(&mut self, _: NonZeroU64, _: Key) -> Result<(), RouteError> {
+        Err(RouteError::Unavailable)
+    }
+
+    fn retire_terminal(&mut self, _: NonZeroU64) -> Result<(), RouteError> {
+        Err(RouteError::Unavailable)
+    }
+}
+
 /// One-shot Win64 diagnostic entry: fixed request, separate RAM reply.
 /// The reply is zero on failure, and padding remains zero on success.
 pub fn render_boot_reply(
@@ -55,10 +79,15 @@ pub fn render_boot_reply(
     reply: &mut [u8; BOOT_REPLY_BYTES],
 ) -> Result<(), Error> {
     reply.fill(0);
-    if request != &BOOT_REQUEST {
-        return Err(Error::InvalidRequest);
+    let scene = BootScene::parse(request)?;
+    let mut desktop = Desktop::new(480, 280).ok_or(Error::InvalidDesktop)?;
+    if scene == BootScene::Enter {
+        desktop.event(Event::Enter, &mut BootTerminalFixture(false))
+            .map_err(|_| Error::InvalidDesktop)?;
+        if !desktop.diagnostics().terminal_open {
+            return Err(Error::InvalidDesktop);
+        }
     }
-    let desktop = Desktop::new(480, 280).ok_or(Error::InvalidDesktop)?;
     let packet = (&mut reply[..MAX_BYTES])
         .try_into()
         .map_err(|_| Error::WrongOutputSize)?;
@@ -96,6 +125,26 @@ mod tests {
             Err(Error::InvalidPacket)
         );
         assert!(frame.iter().all(|&byte| byte == 0xa7));
+    }
+
+    #[test]
+    fn enter_opens_the_focused_terminal_and_unknown_input_clears_the_reply() {
+        let mut reply = [0; BOOT_REPLY_BYTES];
+        let mut frame = [0; raster::FRAME_BYTES];
+        let tile = (30 * raster::WIDTH + 20) * 4;
+
+        render_boot_reply(&BootScene::Idle.request(), &mut reply).unwrap();
+        decode_boot_reply(&reply, &mut frame).unwrap();
+        assert_eq!(frame[tile..tile + 4], COLORS[1]);
+
+        render_boot_reply(&BootScene::Enter.request(), &mut reply).unwrap();
+        decode_boot_reply(&reply, &mut frame).unwrap();
+        assert_eq!(frame[tile..tile + 4], COLORS[3]);
+
+        let mut bad = BootScene::Enter.request();
+        bad[7] = 2;
+        assert_eq!(render_boot_reply(&bad, &mut reply), Err(Error::InvalidRequest));
+        assert!(reply.iter().all(|&byte| byte == 0));
     }
 
     #[test]

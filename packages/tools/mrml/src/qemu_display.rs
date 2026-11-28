@@ -10,8 +10,17 @@ pub(super) fn verify_fat32_screen(path: &Path) -> Result<(usize, usize), String>
     verify(&read_screen(path)?).map_err(str::to_owned)
 }
 
-pub(super) fn verify_desktop_screen(path: &Path) -> Result<(usize, usize), String> {
-    verify_desktop(&read_screen(path)?).map_err(str::to_owned)
+#[derive(Clone, Copy)]
+pub(super) enum DesktopScene {
+    Idle,
+    Enter,
+}
+
+pub(super) fn verify_desktop_screen(
+    path: &Path,
+    scene: DesktopScene,
+) -> Result<(usize, usize), String> {
+    verify_desktop(&read_screen(path)?, scene).map_err(str::to_owned)
 }
 
 fn read_screen(path: &Path) -> Result<Vec<u8>, String> {
@@ -48,16 +57,22 @@ fn parse(bytes: &[u8]) -> Result<(usize, usize, &[u8]), &'static str> {
     Ok((width, height, rgb))
 }
 
-fn verify_desktop(bytes: &[u8]) -> Result<(usize, usize), &'static str> {
+fn verify_desktop(bytes: &[u8], scene: DesktopScene) -> Result<(usize, usize), &'static str> {
     use core::fmt::Write as _;
     const W: usize = 120;
     const H: usize = 70;
     // SHA3-512 of the raw hosted reference raster, row-major RGB, without
     // the signed guest's mailbox codec or the boot scanout path.
-    const GOLDEN: &str = concat!(
-        "b3406f001edef3b09a9e7a85ae53d6e71445daf1f9096660b1d17d826941bbde4",
-        "45183f169d842ed2cee62f7786ab50cbf3ad0a7fdad7c35b85227ef042951cb",
-    );
+    let golden = match scene {
+        DesktopScene::Idle => concat!(
+            "b3406f001edef3b09a9e7a85ae53d6e71445daf1f9096660b1d17d826941bbde4",
+            "45183f169d842ed2cee62f7786ab50cbf3ad0a7fdad7c35b85227ef042951cb",
+        ),
+        DesktopScene::Enter => concat!(
+            "19760ffdadb80915cf9df340e823673bb3cedc8a6829c7d338ca6cf0254d4761",
+            "84549b67d910abc10adb7dd22e7c9e006bba7e92ba87432af9abe562fc94c8ad",
+        ),
+    };
     let (width, height, rgb) = parse(bytes)?;
     if width <= W || height <= H {
         return Err("QEMU display is too small for the desktop witness");
@@ -78,7 +93,7 @@ fn verify_desktop(bytes: &[u8]) -> Result<(usize, usize), &'static str> {
     for byte in crate::Sha3_512::digest(&tile) {
         write!(digest, "{byte:02x}").map_err(|_| "QEMU desktop digest formatting failed")?;
     }
-    if digest != GOLDEN {
+    if digest != golden {
         return Err("QEMU desktop pixels do not match the hosted reference raster");
     }
     Ok((width, height))

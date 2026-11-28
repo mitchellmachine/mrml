@@ -123,7 +123,7 @@ pub(super) fn run_desktop_probe(
     ticks: u32,
     framebuffer: mrml_kernel::FramebufferInfo,
 ) -> Option<PhysAddr> {
-    use mrml_boot_frame::{BOOT_REPLY_BYTES, BOOT_REQUEST, FRAME_BYTES, HEIGHT, WIDTH, decode_boot_reply};
+    use mrml_boot_frame::{BOOT_REPLY_BYTES, BootScene, FRAME_BYTES, HEIGHT, WIDTH, decode_boot_reply};
     use mrml_kernel::{
         CapabilitySpace, DisplayOutputIdentity, FramebufferLayout, IsolationAdmissionTable,
         IsolationMode, IsolationPlacement, IsolationServiceSpec, ObjectId, PixelFormat, Rights,
@@ -139,8 +139,13 @@ pub(super) fn run_desktop_probe(
         1, 1, TotalMicrovmClass::MicrovmEligible, IsolationPlacement::Microvm,
     ).ok()?;
     let prepared = prepare_isolation_service_route(&mut admission, spec).ok()?;
+    let scene = if cfg!(feature = "vmx-desktop-input-probe") {
+        BootScene::Enter
+    } else {
+        BootScene::Idle
+    };
     let reply: [u8; BOOT_REPLY_BYTES] =
-        service.exchange(controller, controls, ticks, BOOT_REQUEST)?;
+        service.exchange(controller, controls, ticks, scene.request())?;
     let mut frame = [0; FRAME_BYTES];
     decode_boot_reply(&reply, &mut frame).ok()?;
     let route = prepared.commit(&mut admission, &frame[..]).ok()?;

@@ -355,8 +355,9 @@ The separate, opt-in VMX desktop boot diagnostic is built with
 `mrml usb test-vmx-desktop DESKTOP.img OVMF_CODE OVMF_VARS QEMU`.
 The monitor starts an independently signed desktop microVM with a read-only
 request and a separate, non-executable RAM reply page. It accepts the
-thumbnail only after the exact trapped completion, validates the entire canonical frame and its zero padding. The boot output
-broker calls the compositor's scanout routine with the exact admitted
+thumbnail only after the exact trapped completion and validates the entire
+canonical frame and its zero padding. The boot output broker calls the
+compositor's scanout routine with the exact admitted
 microVM route and output control capability. It publishes only the 120×70
 top-left tile from an immutable RAM snapshot and withdraws the route and
 capability. A separately parked guest must still resume before the desktop
@@ -366,6 +367,15 @@ capture compares all 8,400 tile pixels with a hosted reference raster and
 checks the adjacent edges. This is a static boot diagnostic. It does not
 grant a framebuffer or any device to the desktop guest, launch a separate
 compositor microVM, or change normal boot.
+
+The `mrml usb image-vmx-desktop-input DESKTOP.img` variant supplies one
+synthetic Enter event through the same read-only request page. The signed
+guest runs its ordinary focus policy, opens a guest-private terminal
+placeholder, and submits a new frame. Use
+`mrml usb test-vmx-desktop-input DESKTOP.img OVMF_CODE OVMF_VARS QEMU`
+to verify the distinct terminal-open raster and its border in QEMU.
+The idle profile remains the control. Neither profile reads a hardware
+keyboard or preserves an interactive session between requests.
 
 ### MicroVM task manager prototype
 
