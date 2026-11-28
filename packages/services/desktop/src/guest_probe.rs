@@ -4,8 +4,8 @@
 //! Opt-in diagnostic VM image, not a firmware entry in a deployed system.
 use core::arch::asm;
 use core::num::NonZeroU64;
-use mrml_desktop::raster;
 use mrml_desktop::{Control, Desktop, Event, Key, Point, RouteError, TerminalRoute};
+use mrml_desktop::{boot_frame, raster};
 use mrml_terminal_probe::Terminal;
 
 const PAGE: *mut u8 = 0xffff_8001_400f_0000 as *mut u8;
@@ -54,22 +54,35 @@ extern "efiapi" fn efi_main() -> ! {
             _ => None,
         };
         let wants_row = request[0] == 8 && y == 0;
-        let mut pixels = [0; raster::ROW_BYTES];
+        let wants_frame = request[0] == 9 && x == 0 && y == 0;
+        let mut pixels = [0; boot_frame::MAX_BYTES];
+        let mut payload_bytes = 0;
         let canonical = request[1] == 0 && request[6..].iter().all(|&byte| byte == 0);
         let accepted = canonical
-            && if wants_row {
+            && if wants_row || wants_frame {
                 let echo_line = echo
                     .0
                     .as_ref()
                     .and_then(|app| app.rows().last())
                     .unwrap_or(&[]);
-                raster::row(&desktop, echo_line, usize::from(x), &mut pixels)
+                if wants_frame {
+                    payload_bytes =
+                        boot_frame::encode(&desktop, echo_line, &mut pixels).unwrap_or(0);
+                    payload_bytes != 0
+                } else {
+                    let row = (&mut pixels[..raster::ROW_BYTES]).try_into().unwrap();
+                    let painted = raster::row(&desktop, echo_line, usize::from(x), row);
+                    if painted {
+                        payload_bytes = raster::ROW_BYTES;
+                    }
+                    painted
+                }
             } else {
                 event.is_some_and(|event| desktop.event(event, &mut echo).is_ok())
             };
-        if wants_row && accepted {
-            for (offset, byte) in pixels.into_iter().enumerate() {
-                // SAFETY: raster rows fit wholly within the one fixture page,
+        if accepted {
+            for (offset, &byte) in pixels[..payload_bytes].iter().enumerate() {
+                // SAFETY: raster replies fit wholly within the one fixture page,
                 // start after the command record and cannot overlap it.
                 unsafe { PAGE.add(RECORD + offset).write_volatile(byte) };
             }
@@ -99,6 +112,7 @@ extern "efiapi" fn efi_main() -> ! {
         reply[12..16].copy_from_slice(&d.keys_delivered.to_le_bytes());
         reply[16..20].copy_from_slice(&d.touch_reports.to_le_bytes());
         reply[20..24].copy_from_slice(&d.pointer_reports.to_le_bytes());
+        reply[24..26].copy_from_slice(&(payload_bytes as u16).to_le_bytes());
         for (offset, byte) in reply.into_iter().enumerate() {
             // SAFETY: bounded to the first RECORD bytes of the fixture page.
             unsafe { PAGE.add(offset).write_volatile(byte) };

@@ -1,7 +1,7 @@
 //! Opt-in proof that the built desktop state machine executes in a signed VM.
 use super::*;
 use mrml_compositor::{BootScanoutError, publish_total_guest_scanout};
-use mrml_desktop::raster;
+use mrml_desktop::{boot_frame, raster};
 use mrml_kernel::{DisplayOutputIdentity, FramebufferLayout, PixelFormat};
 use mrml_kernel::{
     IsolationAdmissionTable, IsolationMode, IsolationPlacement, IsolationServiceSpec,
@@ -116,7 +116,7 @@ fn live_desktop_guest_handles_seat_events_and_withdraws_mailbox() {
     assert!(route.is_live_in(&admission));
 
     let mut step = |operation: u8, payload: [u8; 4]| {
-        let mut packet = [0; 32 + raster::ROW_BYTES];
+        let mut packet = [0; 32 + boot_frame::MAX_BYTES];
         packet[0] = operation;
         packet[2..6].copy_from_slice(&payload);
         page.write_second(&packet[..32]).unwrap();
@@ -144,10 +144,22 @@ fn live_desktop_guest_handles_seat_events_and_withdraws_mailbox() {
         let [lo, hi] = y.to_le_bytes();
         let row = step(8, [lo, hi, 0, 0]);
         assert_eq!(&row[..2], &[0x51, 7]);
-        for &byte in &row[32..] {
+        assert_eq!(
+            usize::from(u16::from_le_bytes(row[24..26].try_into().unwrap())),
+            raster::ROW_BYTES
+        );
+        for &byte in &row[32..32 + raster::ROW_BYTES] {
             frame.push(byte);
         }
     }
+    let packed = step(9, [0; 4]);
+    assert_eq!(&packed[..2], &[0x51, 7]);
+    let bytes = usize::from(u16::from_le_bytes(packed[24..26].try_into().unwrap()));
+    assert!((boot_frame::HEADER_BYTES..=boot_frame::MAX_BYTES).contains(&bytes));
+    let mut frame_from_packet = mrml_runtime::Vector::with_capacity(raster::FRAME_BYTES).unwrap();
+    frame_from_packet.resize(raster::FRAME_BYTES, 0);
+    boot_frame::decode(&packed[32..32 + bytes], &mut frame_from_packet).unwrap();
+    assert_eq!(&frame_from_packet[..], &frame[..]);
     assert_eq!(step(8, [70, 0, 0, 0])[0], 0x52);
     assert_eq!(step(4, [0; 4])[..2], [0x51, 5]);
     assert_eq!(step(0xff, [0; 4])[..2], [0x52, 5]);
@@ -183,7 +195,7 @@ fn live_desktop_guest_handles_seat_events_and_withdraws_mailbox() {
         display,
         source,
         output,
-        |_| Some(&frame),
+        |_| Some(&frame_from_packet),
         &mut screen,
     )
     .unwrap();

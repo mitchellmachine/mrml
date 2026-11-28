@@ -345,6 +345,11 @@ The separate `mrml usb test-display OVMF_CODE OVMF_VARS QEMU` command checks
 real emulated VGA output after the signed FAT32 boot diagnostic. It compares
 the visible PASS glyph pixels independently of the serial boot trace. This
 qualifies the emulator's screen evidence path, not desktop presentation.
+The guest can now return its entire thumbnail in one fixed 4 KiB mailbox.
+The compositor fixture checks that this packed frame exactly matches the
+row-wise capture before projecting it. The format passes pixels only and
+grants no device or display access. The sealed boot monitor has not yet
+launched this desktop diagnostic.
 
 ### MicroVM task manager prototype
 
