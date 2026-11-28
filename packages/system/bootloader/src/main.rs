@@ -716,8 +716,8 @@ fn vmx_kernel_ipc_check() -> Option<()> {
 #[cfg(feature = "vmx-root-probe")]
 fn run_vmx_boot_diagnostic(handoff: &BootHandoff) {
     let framebuffer = handoff.framebuffer();
-    // The desktop diagnostic replaces the top-left tile, so keep its
-    // startup label entirely within that footprint at any glyph scale.
+    // The centered desktop diagnostic replaces the visible background
+    // after a successful guest exchange; this small label marks startup.
     let start: &[u8] = if cfg!(feature = "vmx-desktop-monitor") {
         b"VMX"
     } else {

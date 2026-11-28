@@ -174,7 +174,8 @@ pub(super) fn run_desktop_probe(
     let published = super::with_diagnostic_framebuffer(framebuffer, |output| {
         mrml_compositor::publish_total_guest_scanout(
             &admission, &route, spec, &caps, control, identity, identity,
-            source, framebuffer.layout(), |&snapshot| Some(snapshot), output,
+            source, framebuffer.layout(), mrml_compositor::BootProjection::FitCentered,
+            |&snapshot| Some(snapshot), output,
         )
     });
     admission.retire(route.domain()).ok()?;

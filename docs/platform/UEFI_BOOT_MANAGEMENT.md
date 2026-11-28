@@ -37,17 +37,20 @@ internal system disk is not a target.
 
 ### Dragonair desktop scanout check
 
-Use the device-free persistent-desktop image for the next display-only
-check. It boots one signed desktop microVM, sends synthetic Enter and A
-while preserving the same guest, and presents its final 120 × 70 tile via
-the boot display broker. Do not use the KVM-only keyboard image on hardware.
+Use the device-free persistent-desktop image for a display-only check. It
+boots one signed desktop microVM, sends synthetic Enter and A while preserving
+the same guest, and presents its final 120 × 70 source raster via the boot
+display broker. Current builds automatically center and scale this raster to
+the active framebuffer. That scaling does not set the video mode or confirm
+that firmware chose the monitor's preferred resolution. Do not use the
+KVM-only keyboard image on hardware.
 
 ```text
 mrml usb image-vmx-desktop-persistent mrml-dragonair-desktop-display.img
 mrml usb test-vmx-desktop-persistent mrml-dragonair-desktop-display.img OVMF_CODE OVMF_VARS QEMU
 ```
 
-On 2026-11-28 UTC, the image built from
+On 2026-11-28 UTC, the original unscaled image built from
 [`ec1bd7c71f3b5f2d749ba0af17e4d404da5e7ca7`](https://github.com/mitchellmachine/mrml/commit/ec1bd7c71f3b5f2d749ba0af17e4d404da5e7ca7)
 refused to enter VMX under QEMU TCG and passed under nested KVM. The VGA
 capture was 1024 × 768; all 8,400 tile pixels and the checked border matched
@@ -59,12 +62,18 @@ preflight the exact file to be written.
 
 Use the same dedicated expendable stick and one-time boot procedure above.
 Record the firmware version, current Secure Boot state and a photo of the
-screen. Success is a small desktop tile at the upper left with `>A` in the
-terminal and `1` under `KEYS`, with no keys pressed. A lingering `VMX`
+screen. Success is a centered desktop preview with `>A` in the terminal and
+`1` under `KEYS`, with no keys pressed. The original image recorded above
+shows the same content as a small tile in the upper left. A lingering `VMX`
 startup label, blank screen, or `NOT PASSED` is not a pass. The diagnostic
 halts after the result. Power off, remove the stick and boot the existing OS.
-No physical input, USB writes by MRML, or live desktop are expected. The
-Chromebook result for this image is pending.
+No physical input, USB writes by MRML, or live desktop are expected.
+Mitchell photographed the original unscaled image on the Dragonair showing
+`>A` and `1` under `KEYS`. The photo confirms desktop scanout on that machine,
+not the selected GOP mode, EDID match, or the newer scaling path.
+The scaled follow-up passed the same QEMU test at 1024 × 768, with a
+centered 960 × 560 preview. Host unit tests cover the fit geometry for
+1080p, 4K, portrait, and undersized framebuffers.
 
 
 ### Future Chromebook USB write check

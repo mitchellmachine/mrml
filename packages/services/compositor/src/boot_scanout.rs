@@ -43,6 +43,13 @@ pub fn render_private_boot_frame(
         .map_err(BootScanoutError::Framebuffer)
 }
 
+/// Select projection without changing display authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootProjection {
+    ExactTopLeft,
+    FitCentered,
+}
+
 /// Publish only from the exact running compositor route under strict Total.
 ///
 /// The trusted supervisor supplies the original admission table, the current
@@ -62,6 +69,7 @@ pub fn publish_total_guest_scanout<'frame, E, const N: usize, const DOMAINS: usi
     current: DisplayOutputIdentity,
     source_layout: FramebufferLayout,
     output_layout: FramebufferLayout,
+    projection: BootProjection,
     capture: impl FnOnce(&E) -> Option<&'frame [u8]>,
     scanout: &mut [u8],
 ) -> Result<(), BootScanoutError> {
@@ -82,7 +90,14 @@ pub fn publish_total_guest_scanout<'frame, E, const N: usize, const DOMAINS: usi
     }
     validate_output(capabilities, control, binding, current)?;
     let frame = capture(route.endpoint()).ok_or(BootScanoutError::CaptureUnavailable)?;
-    copy_visible_pixels(source_layout, frame, output_layout, scanout)
+    match projection {
+        BootProjection::ExactTopLeft => {
+            copy_visible_pixels(source_layout, frame, output_layout, scanout)
+        }
+        BootProjection::FitCentered => {
+            fit_visible_pixels(source_layout, frame, output_layout, scanout)
+        }
+    }
 }
 
 fn copy_visible_pixels(
@@ -128,6 +143,67 @@ fn copy_visible_pixels(
                 (pixel[0], pixel[2])
             };
             out.copy_from_slice(&[first, pixel[1], third, 0]);
+        }
+    }
+    Ok(())
+}
+
+fn fit_viewport(sw: usize, sh: usize, w: usize, h: usize) -> (usize, usize, usize, usize) {
+    let scale = (w / sw).min(h / sh);
+    let (dw, dh) = if scale != 0 {
+        (sw * scale, sh * scale)
+    } else if w * sh <= h * sw {
+        (w, (w * sh / sw).max(1))
+    } else {
+        ((h * sw / sh).max(1), h)
+    };
+    ((w - dw) / 2, (h - dh) / 2, dw, dh)
+}
+
+fn fit_visible_pixels(
+    source: FramebufferLayout,
+    guest_frame: &[u8],
+    output: FramebufferLayout,
+    scanout: &mut [u8],
+) -> Result<(), BootScanoutError> {
+    if guest_frame.len() != source.byte_length() as usize {
+        return Err(BootScanoutError::Framebuffer(
+            FramebufferError::InvalidLength,
+        ));
+    }
+    if scanout.len() < output.byte_length() as usize {
+        return Err(BootScanoutError::Framebuffer(
+            FramebufferError::BufferTooSmall,
+        ));
+    }
+    // Layouts limit dimensions to 16,384. Products of two dimensions fit
+    // usize on the supported targets; row padding and spare bytes stay intact.
+    let (sw, sh) = (source.width() as usize, source.height() as usize);
+    let (w, h) = (output.width() as usize, output.height() as usize);
+    let (x, y, dw, dh) = fit_viewport(sw, sh, w, h);
+    let ss = source.stride() as usize * 4;
+    let ds = output.stride() as usize * 4;
+    let swap = source.format() != output.format();
+    let bg = match output.format() {
+        mrml_kernel::PixelFormat::RedGreenBlueReserved => [0x0b, 0x3b, 0x5a, 0],
+        mrml_kernel::PixelFormat::BlueGreenRedReserved => [0x5a, 0x3b, 0x0b, 0],
+    };
+    for (dy, row) in scanout.chunks_exact_mut(ds).take(h).enumerate() {
+        let inside_y = (y..y + dh).contains(&dy);
+        let source_row = if inside_y { (dy - y) * sh / dh * ss } else { 0 };
+        for (dx, pixel) in row[..w * 4].chunks_exact_mut(4).enumerate() {
+            let value = if inside_y && (x..x + dw).contains(&dx) {
+                let offset = source_row + (dx - x) * sw / dw * 4;
+                let src = &guest_frame[offset..offset + 4];
+                if swap {
+                    [src[2], src[1], src[0], 0]
+                } else {
+                    [src[0], src[1], src[2], 0]
+                }
+            } else {
+                bg
+            };
+            pixel.copy_from_slice(&value);
         }
     }
     Ok(())
@@ -240,6 +316,7 @@ mod tests {
                     current,
                     layout,
                     layout,
+                    BootProjection::ExactTopLeft,
                     |_| panic!("invalid output authority captured"),
                     &mut screen
                 ),
@@ -260,6 +337,7 @@ mod tests {
                 output,
                 layout,
                 layout,
+                BootProjection::ExactTopLeft,
                 |_| panic!("wrong provider captured"),
                 &mut screen,
             ),
@@ -276,6 +354,7 @@ mod tests {
             output,
             layout,
             layout,
+            BootProjection::ExactTopLeft,
             |endpoint| {
                 assert_eq!(*endpoint, 7);
                 Some(&frame)
@@ -301,6 +380,7 @@ mod tests {
                 output,
                 layout,
                 layout,
+                BootProjection::ExactTopLeft,
                 |_| panic!("retired guest captured"),
                 &mut screen,
             ),
@@ -317,6 +397,7 @@ mod tests {
                 output,
                 layout,
                 layout,
+                BootProjection::ExactTopLeft,
                 |endpoint| {
                     assert_eq!(*endpoint, 8);
                     None
@@ -344,12 +425,55 @@ mod tests {
                 output,
                 layout,
                 layout,
+                BootProjection::ExactTopLeft,
                 |_| panic!("native fallback captured"),
                 &mut screen,
             ),
             Err(BootScanoutError::InvalidRoute)
         );
         assert_eq!(screen, frame);
+    }
+
+    #[test]
+    fn viewport_fits_standard_hidpi_portrait_and_small_modes() {
+        for (w, h, expected) in [
+            (1024, 768, (32, 104, 960, 560)),
+            (1920, 1080, (60, 15, 1800, 1050)),
+            (3840, 2160, (120, 30, 3600, 2100)),
+            (768, 1024, (24, 302, 720, 420)),
+            (60, 40, (0, 2, 60, 35)),
+            (1, 1, (0, 0, 1, 1)),
+        ] {
+            assert_eq!(fit_viewport(120, 70, w, h), expected);
+        }
+    }
+
+    #[test]
+    fn fit_centers_converts_and_preserves_padding() {
+        let source =
+            FramebufferLayout::new(12, 2, 1, 3, PixelFormat::BlueGreenRedReserved).unwrap();
+        let output =
+            FramebufferLayout::new(112, 5, 4, 7, PixelFormat::RedGreenBlueReserved).unwrap();
+        let mut screen = [0xa7; 116];
+        let frame = [5, 6, 7, 255, 8, 9, 10, 255, 0xde, 0xad, 0xbe, 0xef];
+        fit_visible_pixels(source, &frame, output, &mut screen).unwrap();
+        let bg = [0x0b, 0x3b, 0x5a, 0];
+        for (y, row) in screen[..112].chunks_exact(28).enumerate() {
+            for (x, pixel) in row[..20].chunks_exact(4).enumerate() {
+                let expected = match (y, x) {
+                    (1..=2, 0..=1) => [7, 6, 5, 0],
+                    (1..=2, 2..=3) => [10, 9, 8, 0],
+                    _ => bg,
+                };
+                assert_eq!(pixel, expected);
+            }
+            assert_eq!(&row[20..], &[0xa7; 8]);
+        }
+        assert_eq!(&screen[112..], &[0xa7; 4]);
+        let before = screen;
+        assert!(fit_visible_pixels(source, &frame[..11], output, &mut screen).is_err());
+        assert!(fit_visible_pixels(source, &frame, output, &mut screen[..111]).is_err());
+        assert_eq!(screen, before);
     }
 
     #[test]

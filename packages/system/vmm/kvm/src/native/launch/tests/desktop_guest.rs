@@ -195,6 +195,7 @@ fn live_desktop_guest_handles_seat_events_and_withdraws_mailbox() {
         display,
         source,
         output,
+        mrml_compositor::BootProjection::ExactTopLeft,
         |_| Some(&frame_from_packet),
         &mut screen,
     )
@@ -221,6 +222,7 @@ fn live_desktop_guest_handles_seat_events_and_withdraws_mailbox() {
             display,
             source,
             output,
+            mrml_compositor::BootProjection::ExactTopLeft,
             |_| panic!("retired guest must not be captured"),
             &mut screen,
         ),

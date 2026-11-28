@@ -2,7 +2,7 @@
 use std::io::Read;
 use std::path::Path;
 
-const MAX_FRAME: usize = 12 * 1024 * 1024;
+const MAX_FRAME: usize = 4096 * 4096 * 3 + 64;
 const BG: [u8; 3] = [11, 59, 90];
 const WHITE: [u8; 3] = [255; 3];
 
@@ -80,20 +80,32 @@ fn verify_desktop(bytes: &[u8], scene: DesktopScene) -> Result<(usize, usize), &
         ),
     };
     let (width, height, rgb) = parse(bytes)?;
-    if width <= W || height <= H {
-        return Err("QEMU display is too small for the desktop witness");
+    let scale = (width / W).min(height / H);
+    if scale == 0 {
+        return Err("QEMU display is too small to recover every desktop reference pixel");
     }
+    let left = (width - W * scale) / 2;
+    let top = (height - H * scale) / 2;
     let stride = width * 3;
     let mut tile = [0; W * H * 3];
-    for (y, dst) in tile.chunks_exact_mut(W * 3).enumerate() {
-        let row = &rgb[y * stride..(y + 1) * stride];
-        dst.copy_from_slice(&row[..W * 3]);
-        if row[W * 3..][..3] != BG {
-            return Err("QEMU desktop output changed a pixel outside its right edge");
+    for sy in 0..H {
+        for sx in 0..W {
+            let offset = (top + sy * scale) * stride + (left + sx * scale) * 3;
+            let sample = (sy * W + sx) * 3;
+            tile[sample..sample + 3].copy_from_slice(&rgb[offset..offset + 3]);
         }
     }
-    if rgb[H * stride..][..W * 3].chunks_exact(3).any(|px| px != BG) {
-        return Err("QEMU desktop output changed pixels below its bottom edge");
+    for (y, row) in rgb.chunks_exact(stride).enumerate() {
+        for (x, pixel) in row.chunks_exact(3).enumerate() {
+            if (left..left + W * scale).contains(&x) && (top..top + H * scale).contains(&y) {
+                let sample = (((y - top) / scale) * W + (x - left) / scale) * 3;
+                if pixel != &tile[sample..sample + 3] {
+                    return Err("QEMU desktop pixel group was not uniformly scaled");
+                }
+            } else if pixel != BG {
+                return Err("QEMU desktop has unexpected pixels outside the centered preview");
+            }
+        }
     }
     let mut digest = String::with_capacity(128);
     for byte in crate::Sha3_512::digest(&tile) {

@@ -359,12 +359,17 @@ thumbnail only after the exact trapped completion and validates the entire
 canonical frame and its zero padding. The boot output broker calls the
 compositor's scanout routine with the exact admitted
 microVM route and output control capability. It publishes only the 120×70
-top-left tile from an immutable RAM snapshot and withdraws the route and
-capability. A separately parked guest must still resume before the desktop
-VMCS is cleared. QEMU uses a private copy of the image, checks refusal
+preview from an immutable RAM snapshot and withdraws the route and
+capability. The preview is centered on the active framebuffer at the largest
+whole-pixel scale that fits, without stretching or changing the video mode.
+An unusually small framebuffer downscales proportionally. This makes the
+fixed boot raster legible at high resolutions; it is not a physical-DPI
+setting or responsive layout for the future desktop. A separately parked
+guest must still resume before the desktop VMCS is cleared. QEMU uses a private copy of the image, checks refusal
 without VMX under TCG, and requires nested VMX under KVM. Its paused VGA
-capture compares all 8,400 tile pixels with a hosted reference raster and
-checks the adjacent edges. This is a static boot diagnostic. It does not
+capture recovers all 8,400 source pixels from the scaled preview, compares
+them with the hosted reference, and checks every replicated pixel and the
+surrounding background. This is a static boot diagnostic. It does not
 grant a framebuffer or any device to the desktop guest, launch a separate
 compositor microVM, or change normal boot.
 
