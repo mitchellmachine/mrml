@@ -23,22 +23,29 @@ pub(super) fn fixture_acpi_table(profile: u8) -> [u8; 36] {
     table
 }
 
+#[derive(Clone, Copy)]
+enum PausedCheck {
+    Resources,
+    NoRemapper,
+    SharedBoot,
+    IsolatedSharedBoot,
+}
+
 pub(super) fn verify_paused_q35_resources(child: &mut Child) -> Result<(), String> {
-    inspect_q35(child, None, false, None, None).map(|_| ())
+    inspect_q35(child, None, false, None, None, PausedCheck::Resources).map(|_| ())
 }
 
-pub(super) fn verify_paused_no_remapper(
-    child: &mut Child,
-    trace: &std::path::Path,
-) -> Result<(), String> {
-    inspect_q35(child, None, true, Some((trace, &[])), None).map(|_| ())
+pub(super) fn verify_paused_no_remapper(child: &mut Child) -> Result<(), String> {
+    inspect_q35(child, None, true, None, None, PausedCheck::NoRemapper).map(|_| ())
 }
 
-pub(super) fn verify_paused_shared_boot(
-    child: &mut Child,
-    trace: &std::path::Path,
-) -> Result<(), String> {
-    inspect_q35(child, None, false, Some((trace, &[])), None).map(|_| ())
+pub(super) fn verify_paused_shared_boot(child: &mut Child, isolated: bool) -> Result<(), String> {
+    let check = if isolated {
+        PausedCheck::IsolatedSharedBoot
+    } else {
+        PausedCheck::SharedBoot
+    };
+    inspect_q35(child, None, isolated, None, None, check).map(|_| ())
 }
 
 pub(super) fn release_q35_fixture(
@@ -48,7 +55,7 @@ pub(super) fn release_q35_fixture(
     post: Option<(&std::path::Path, &[u8])>,
     cold: Option<bool>,
 ) -> Result<Option<FixtureState>, String> {
-    inspect_q35(child, Some(release), isolated, post, cold)
+    inspect_q35(child, Some(release), isolated, post, cold, PausedCheck::Resources)
 }
 
 fn inspect_q35(
@@ -57,6 +64,7 @@ fn inspect_q35(
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
     cold: Option<bool>,
+    paused_check: PausedCheck,
 ) -> Result<Option<FixtureState>, String> {
     let mut stdin = child.stdin.take().ok_or("missing QMP input")?;
     let stdout = child.stdout.take().ok_or("missing QMP output")?;
@@ -73,6 +81,7 @@ fn inspect_q35(
                 post.as_ref()
                     .map(|(path, prefix)| (path.as_path(), prefix.as_slice())),
                 cold,
+                paused_check,
             );
             let _ = send.send(result);
         })
@@ -95,6 +104,7 @@ fn inspect_qmp(
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
     cold: Option<bool>,
+    paused_check: PausedCheck,
 ) -> Result<Option<FixtureState>, String> {
     qmp_write(stdin, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
     ack(reader, "{\"return\": {}, \"id\": 71}")?;
@@ -105,22 +115,30 @@ fn inspect_qmp(
         "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f\"},\"id\":73}\n",
     )?;
     let map = read_monitor(&mut *reader, 73)?;
-    if release.is_none()
-        && post.is_some()
-    {
-        if !isolated {
+    match paused_check {
+        PausedCheck::Resources => {}
+        PausedCheck::SharedBoot | PausedCheck::IsolatedSharedBoot => {
             validate(&map)?;
             verify_shared_boot(stdin, reader)?;
+            if matches!(paused_check, PausedCheck::IsolatedSharedBoot) {
+                check_isolation_properties(stdin, reader)?;
+                qmp_write(stdin, "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info pci\"},\"id\":76}\n")?;
+                let pci = read_monitor(&mut *reader, 76)?;
+                fixture_bar_for_topology(&pci, true, false)?;
+                println!("q35-isolated-shared-boot|status=PASS|requester=0000:41:00.0|boot_backend_writes=0|activated=false");
+            }
             println!(
                 "q35-usb-shared-boot|status=PASS|firmware_disk_read=true|loader_rejected=true|native_release=false|boot_backend_writes=0"
             );
             return Ok(None);
         }
-        validate_resources(&map, false)?;
-        println!(
-            "q35-usb-no-remapper|status=PASS|loader_rejected=true|native_driver_entered=false"
-        );
-        return Ok(None);
+        PausedCheck::NoRemapper => {
+            validate_resources(&map, false)?;
+            println!(
+                "q35-usb-no-remapper|status=PASS|loader_rejected=true|native_driver_entered=false"
+            );
+            return Ok(None);
+        }
     }
     validate(&map)?;
     let mut guest_before = None;
@@ -1235,7 +1253,7 @@ pub(super) struct FixtureBar {
     end: u64,
 }
 
-fn validate_isolated_pci_branch(pci: &str) -> Result<(), String> {
+fn validate_isolated_pci_branch(pci: &str, separate_boot: bool) -> Result<(), String> {
     let mut current = 0u8;
     let mut roots = 0;
     let mut endpoints = 0;
@@ -1293,15 +1311,26 @@ fn validate_isolated_pci_branch(pci: &str) -> Result<(), String> {
             bridge_fields |= bit;
         }
     }
-    if (roots, endpoints, expander, boot, bridge_fields) != (1, 1, 1, 1, u8::MAX) {
+    let required_fields = if separate_boot { u8::MAX } else { u8::MAX & !(32 | 128) };
+    if (roots, endpoints, expander, boot, bridge_fields)
+        != (1, 1, 1, u8::from(separate_boot), required_fields)
+    {
         return Err("missing complete isolated QEMU PCI branch".into());
     }
     Ok(())
 }
 
 fn fixture_bar(pci: &str, isolated: bool) -> Result<FixtureBar, String> {
+    fixture_bar_for_topology(pci, isolated, true)
+}
+
+fn fixture_bar_for_topology(
+    pci: &str,
+    isolated: bool,
+    separate_boot: bool,
+) -> Result<FixtureBar, String> {
     if isolated {
-        validate_isolated_pci_branch(pci)?;
+        validate_isolated_pci_branch(pci, separate_boot)?;
     }
     let endpoint = if isolated {
         "Bus 65, device   0, function 0:"
@@ -1720,7 +1749,8 @@ mod tests {
                     Some(0x5a),
                     false,
                     None,
-                    None
+                    None,
+                    PausedCheck::Resources,
                 )
                 .is_ok(),
                 allowed
@@ -1754,6 +1784,18 @@ mod tests {
         let topology = format!("{branch}{pci}");
         assert!(fixture_bar(&topology, true).is_ok());
         assert!(fixture_bar(&topology, false).is_err());
+        let shared = topology.replace(
+            "Bus  0, device   5, function 0:\n USB controller: PCI device 1b36:000d\n id \"mrml_boot_xhci\"\n",
+            "",
+        );
+        assert!(fixture_bar_for_topology(&shared, true, false).is_ok());
+        assert!(fixture_bar_for_topology(&topology, true, false).is_err());
+        assert!(fixture_bar_for_topology(&shared, true, true).is_err());
+        assert!(fixture_bar_for_topology(
+            &format!("{shared}Bus 65, device   1, function 0:\n"),
+            true,
+            false,
+        ).is_err());
         for bad in [
             topology.replace("subordinate bus 65.", "subordinate bus 66."),
             topology.replace("Bus 65,", "Bus  0,"),
@@ -1805,6 +1847,7 @@ mod tests {
                 false,
                 None,
                 None,
+                PausedCheck::Resources,
             );
             assert_eq!(
                 result.as_ref().is_ok_and(Option::is_some),

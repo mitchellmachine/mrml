@@ -326,8 +326,12 @@ Register-model tests reject an occupied context, a different root, and an
 incomplete drain. The sealed cold QEMU diagnostic checks that an occupied
 context is refused, then verifies denial after withdrawing the leaf and
 clearing the exact context with both bus-master bits off. The host checks
-the resulting context page independently. Normal boot does not use this
-as hardware handoff authority.
+the resulting context page independently. A separate no-marker case also
+boots from a read-only disk attached directly to that same isolated
+`0000:41:00.0` requester, with no second boot controller. QEMU verifies
+firmware reads without writes and the loader refuses to release the fixture.
+This confirms the boot topology, not simultaneous boot-source retirement
+and DMA denial. Normal boot does not use this as hardware handoff authority.
 
 ### Diagnose a return to firmware
 

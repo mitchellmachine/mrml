@@ -92,6 +92,7 @@ pub(super) fn run_qemu_with_q35_evidence(args: &[String]) -> Result<(), String> 
 pub(super) enum Q35FixtureCase {
     NoMarker,
     SharedBootNoMarker,
+    IsolatedSharedBootNoMarker,
     SharedPreloadUnmarked,
     SharedPreloadDenied,
     SharedPreload,
@@ -121,6 +122,7 @@ impl Q35FixtureCase {
             self,
             Self::IsolatedWrongRelease
                 | Self::IsolatedValidRelease
+                | Self::IsolatedSharedBootNoMarker
                 | Self::ShutdownWrongRelease
                 | Self::ShutdownValidRelease
                 | Self::ColdWrongRelease
@@ -302,6 +304,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         map_only_marker,
         Some(
             Q35FixtureCase::SharedBootNoMarker
+                | Q35FixtureCase::IsolatedSharedBootNoMarker
                 | Q35FixtureCase::SharedPreloadUnmarked
                 | Q35FixtureCase::SharedPreloadDenied
                 | Q35FixtureCase::SharedPreload
@@ -360,6 +363,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             case,
             Q35FixtureCase::NoMarker
                 | Q35FixtureCase::SharedBootNoMarker
+                | Q35FixtureCase::IsolatedSharedBootNoMarker
                 | Q35FixtureCase::SharedPreloadUnmarked
         ) {
             command.args([
@@ -441,6 +445,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     let release = map_only_marker.and_then(|case| match case {
         Q35FixtureCase::NoMarker
         | Q35FixtureCase::SharedBootNoMarker
+        | Q35FixtureCase::IsolatedSharedBootNoMarker
         | Q35FixtureCase::SharedPreloadUnmarked
         | Q35FixtureCase::RetiredPrivileged(_)
         | Q35FixtureCase::NoRemapper => None,
@@ -549,9 +554,9 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 let no_remapper = map_only_marker == Some(Q35FixtureCase::NoRemapper);
                 let evidence = (verify_q35 && !released).then(|| {
                     if no_remapper {
-                        crate::qemu_mmio::verify_paused_no_remapper(&mut child, trace)
+                        crate::qemu_mmio::verify_paused_no_remapper(&mut child)
                     } else if shared_boot {
-                        crate::qemu_mmio::verify_paused_shared_boot(&mut child, trace)
+                        crate::qemu_mmio::verify_paused_shared_boot(&mut child, isolated)
                     } else {
                         crate::qemu_mmio::verify_paused_q35_resources(&mut child)
                     }
