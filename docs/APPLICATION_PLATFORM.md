@@ -341,6 +341,10 @@ memory output. The thumbnail includes tile labels, a small terminal echo
 and a diagnostic key count. The fixture verifies those pixels, not hardware
 scanout or an independently launched terminal app. The diagnostic bitmap font
 is restricted and substitutes a question mark for unsupported glyphs.
+The separate `mrml usb test-display OVMF_CODE OVMF_VARS QEMU` command checks
+real emulated VGA output after the signed FAT32 boot diagnostic. It compares
+the visible PASS glyph pixels independently of the serial boot trace. This
+qualifies the emulator's screen evidence path, not desktop presentation.
 
 ### MicroVM task manager prototype
 

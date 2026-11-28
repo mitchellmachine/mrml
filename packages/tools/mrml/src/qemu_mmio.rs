@@ -66,6 +66,28 @@ pub(super) fn release_q35_fixture(
     inspect_q35(child, Some(release), isolated, post, cold, PausedCheck::Resources)
 }
 
+pub(super) fn capture_paused_display(child: &mut Child) -> Result<(), String> {
+    let mut input = child.stdin.take().ok_or("missing QMP display input")?;
+    let output = child.stdout.take().ok_or("missing QMP display reply")?;
+    let (send, receive) = mpsc::sync_channel(1);
+    let worker = std::thread::Builder::new().spawn(move || {
+        let mut reader = BufReader::new(output);
+        let result = (|| {
+            qmp_write(&mut input, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
+            ack(&mut reader, "{\"return\": {}, \"id\": 71}")?;
+            qmp_write(&mut input, "{\"execute\":\"stop\",\"id\":72}\n")?;
+            ack(&mut reader, "{\"return\": {}, \"id\": 72}")?;
+            qmp_write(&mut input, "{\"execute\":\"screendump\",\"arguments\":{\"filename\":\"boot-display.ppm\"},\"id\":73}\n")?;
+            ack(&mut reader, "{\"return\": {}, \"id\": 73}")
+        })();
+        let _ = send.send(result);
+    }).map_err(|e| format!("QMP display worker: {e}"))?;
+    let result = receive.recv_timeout(Duration::from_secs(5))
+        .map_err(|_| "timed out reading QEMU display".to_owned())?;
+    worker.join().map_err(|_| "QMP display worker panicked")?;
+    result
+}
+
 fn inspect_q35(
     child: &mut Child,
     release: Option<u8>,

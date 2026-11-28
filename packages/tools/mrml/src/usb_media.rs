@@ -19,7 +19,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-display OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
 
 #[path = "usb_xhci_inventory.rs"]
 mod xhci_inventory;
@@ -87,7 +87,7 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             xhci_inventory::test(&load_workspace()?, code, vars, qemu)
         }
         [mode, code, vars, qemu]
-            if matches!(mode.as_str(), "test" | "test-dma" | "test-dma-acpi") =>
+            if matches!(mode.as_str(), "test" | "test-display" | "test-dma" | "test-dma-acpi") =>
         {
             let acpi_probe = mode == "test-dma-acpi";
             let dma_probe = acpi_probe || mode == "test-dma";
@@ -122,6 +122,16 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
             }
             if acpi_probe {
                 crate::qemu_boot::run_qemu_with_q35_evidence(&options)
+            } else if mode == "test-display" {
+                // QEMU switches to a fresh fixture directory for the fixed
+                // screen dump filename; resolve firmware paths first.
+                for index in 1..=2 {
+                    options[index] = string(&fs::canonicalize(&options[index]).map_err(|err| err.to_string())?);
+                }
+                if Path::new(qemu).is_file() {
+                    options[3] = string(&fs::canonicalize(qemu).map_err(|err| err.to_string())?);
+                }
+                crate::qemu_boot::run_qemu_with_display_evidence(&options)
             } else {
                 crate::qemu_boot::run_qemu(&options)
             }
