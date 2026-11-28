@@ -266,6 +266,14 @@ can be initialized through an exact-size non-executable view of the reserved
 range. Normal boot does not yet provide that view or install these mappings,
 so this is not EPT, guest allocation on hardware, or guest-entry evidence.
 
+The supervisor reservation can now build a private, inactive four-level EPT
+for the image. The builder accepts only fresh, zeroed tables outside the
+image reservation and installs exact read-only, read/execute, or read/write
+4 KiB leaves. Unmapped PE gaps remain absent. Hosted tests inspect the
+actual table entries and reject reused, dirty, out-of-width, or exhausted
+table storage. No VMCS receives this root. Guest linear page tables, stack,
+concrete physical backing setup, and execution remain separate work.
+
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
    service before moving supervision policy out of the kernel.

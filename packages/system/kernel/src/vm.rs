@@ -492,6 +492,10 @@ impl<const N: usize> GuestMemory<N> {
         }
     }
 
+    pub(crate) fn regions(&self) -> impl Iterator<Item = GuestRegion> + '_ {
+        self.mappings[..self.count].iter().flatten().map(|mapping| mapping.region)
+    }
+
     pub fn map(&mut self, region: GuestRegion) -> Result<GuestMappingId, VmError> {
         if N > MAX_GUEST_REGIONS || self.count == N {
             return Err(VmError::RegionTableFull);

@@ -218,11 +218,231 @@ fn set_access(entry: &mut u64, access: EptAccess) {
     *entry = (*entry & !EPT_ACCESS_MASK) | access.bits();
 }
 
+const BOOT_EPT_TABLE_LIMIT: usize = 80;
+const EPT_WRITE_BACK: u64 = 6 << 3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootImageEptError {
+    Storage(super::PageTableBuildError),
+    TableAlias,
+    InvalidTable,
+    Capacity,
+    OccupiedLeaf,
+}
+
+impl From<super::PageTableBuildError> for BootImageEptError {
+    fn from(error: super::PageTableBuildError) -> Self {
+        Self::Storage(error)
+    }
+}
+
+/// Build a private four-level EPT offline. This never installs a VMCS field
+/// or modifies active EPT. A failure leaves the unpublished arena to its
+/// caller for quarantine or teardown.
+pub(crate) fn build_boot_image_ept(
+    store: &mut impl super::PageTableStore,
+    image: core::ops::Range<u64>,
+    host_bits: u8,
+    regions: impl Iterator<Item = crate::GuestRegion>,
+) -> Result<PhysAddr, BootImageEptError> {
+    let mut tables = [None; BOOT_EPT_TABLE_LIMIT];
+    let end = 1u64 << host_bits;
+    let root = allocate_boot_ept_table(store, &image, end, &mut tables)?;
+    for region in regions {
+        // Read permission is implicit for a validated PE region. No large
+        // pages, execute-only leaves, or accessed/dirty tracking.
+        let leaf_flags = EPT_WRITE_BACK
+            | 1
+            | (u64::from(region.is_writable()) << 1)
+            | (u64::from(region.is_executable()) << 2);
+        for page in 0..region.pages() {
+            let offset = page * PAGE_SIZE;
+            let guest = region.guest_start() + offset;
+            let host = region.host_start().get() + offset;
+            let mut table = root;
+            for shift in [39, 30, 21] {
+                let index = ((guest >> shift) & 0x1ff) as usize;
+                let entry = store.read(table, index)?;
+                let child = if entry == 0 {
+                    let child = allocate_boot_ept_table(store, &image, end, &mut tables)?;
+                    store.write(table, index, child.get() | EPT_ACCESS_MASK)?;
+                    child
+                } else {
+                    let child = PhysAddr::new(entry & EPT_ADDRESS_MASK)
+                        .map_err(|_| BootImageEptError::InvalidTable)?;
+                    if entry != child.get() | EPT_ACCESS_MASK || !tables.contains(&Some(child)) {
+                        return Err(BootImageEptError::InvalidTable);
+                    }
+                    child
+                };
+                table = child;
+            }
+            let index = ((guest >> 12) & 0x1ff) as usize;
+            if store.read(table, index)? != 0 {
+                return Err(BootImageEptError::OccupiedLeaf);
+            }
+            store.write(table, index, host | leaf_flags)?;
+        }
+    }
+    Ok(root)
+}
+
+fn allocate_boot_ept_table(
+    store: &mut impl super::PageTableStore,
+    image: &core::ops::Range<u64>,
+    end: u64,
+    tables: &mut [Option<PhysAddr>; BOOT_EPT_TABLE_LIMIT],
+) -> Result<PhysAddr, BootImageEptError> {
+    let table = store.allocate_zeroed()?;
+    if table.get() == 0 || table.get() >= end {
+        return Err(BootImageEptError::InvalidTable);
+    }
+    if image.contains(&table.get()) || tables.contains(&Some(table)) {
+        return Err(BootImageEptError::TableAlias);
+    }
+    for index in 0..512 {
+        if store.read(table, index)? != 0 {
+            return Err(BootImageEptError::InvalidTable);
+        }
+    }
+    *tables
+        .iter_mut()
+        .find(|slot| slot.is_none())
+        .ok_or(BootImageEptError::Capacity)? = Some(table);
+    Ok(table)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::VmxInstructionError;
     use super::*;
     use crate::ProtectedMonitor;
+
+    struct BootTables {
+        base: u64,
+        pages: [[u64; 512]; 6],
+        count: usize,
+        limit: usize,
+        repeat: bool,
+    }
+
+    impl BootTables {
+        fn new(base: u64) -> Self {
+            Self {
+                base,
+                pages: [[0; 512]; 6],
+                count: 0,
+                limit: 6,
+                repeat: false,
+            }
+        }
+        fn slot(&self, address: PhysAddr) -> usize {
+            ((address.get() - self.base) / PAGE_SIZE) as usize
+        }
+        fn leaf(&self, mut table: PhysAddr, gpa: u64) -> u64 {
+            for shift in [39, 30, 21] {
+                let entry = self.pages[self.slot(table)][((gpa >> shift) & 511) as usize];
+                if entry == 0 {
+                    return 0;
+                }
+                assert_eq!(entry & !EPT_ADDRESS_MASK, 7);
+                table = PhysAddr::new(entry & EPT_ADDRESS_MASK).unwrap();
+            }
+            self.pages[self.slot(table)][((gpa >> 12) & 511) as usize]
+        }
+    }
+
+    impl super::super::PageTableStore for BootTables {
+        fn allocate_zeroed(&mut self) -> Result<PhysAddr, super::super::PageTableBuildError> {
+            if self.count == self.limit {
+                return Err(super::super::PageTableBuildError::Storage);
+            }
+            let offset = if self.repeat {
+                0
+            } else {
+                self.count as u64 * PAGE_SIZE
+            };
+            self.count += 1;
+            Ok(PhysAddr::new(self.base + offset).unwrap())
+        }
+
+        fn read(
+            &self,
+            table: PhysAddr,
+            index: usize,
+        ) -> Result<u64, super::super::PageTableBuildError> {
+            Ok(self.pages[self.slot(table)][index])
+        }
+
+        fn write(
+            &mut self,
+            table: PhysAddr,
+            index: usize,
+            value: u64,
+        ) -> Result<(), super::super::PageTableBuildError> {
+            let slot = self.slot(table);
+            self.pages[slot][index] = value;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn private_boot_ept_preserves_permissions_and_rejects_bad_table_storage() {
+        let image = 0x100000..0x104000;
+        let gpa = 0x1ff000;
+        let region = |offset, w, x| {
+            crate::GuestRegion::new(
+                gpa + offset,
+                PhysAddr::new(image.start + offset).unwrap(),
+                1,
+                w,
+                x,
+            )
+            .unwrap()
+        };
+        let mappings = [
+            region(0, false, false),
+            region(0x2000, false, true),
+            region(0x3000, true, false),
+        ];
+        let build = |tables: &mut BootTables| {
+            build_boot_image_ept(tables, image.clone(), 48, mappings.into_iter())
+        };
+        let mut tables = BootTables::new(0x400000);
+        let root = build(&mut tables).unwrap();
+        assert_eq!(tables.count, 5);
+        for (offset, leaf) in [
+            (0, 0x100000 | EPT_WRITE_BACK | 1),
+            (0x1000, 0),
+            (0x2000, 0x102000 | EPT_WRITE_BACK | 5),
+            (0x3000, 0x103000 | EPT_WRITE_BACK | 3),
+            (0x4000, 0),
+        ] {
+            assert_eq!(tables.leaf(root, gpa + offset), leaf);
+        }
+        assert_eq!(
+            build(&mut BootTables::new(0x101000)),
+            Err(BootImageEptError::TableAlias)
+        );
+        assert_eq!(
+            build(&mut BootTables::new(1 << 48)),
+            Err(BootImageEptError::InvalidTable)
+        );
+        let mut repeated = BootTables::new(0x400000);
+        repeated.repeat = true;
+        assert_eq!(build(&mut repeated), Err(BootImageEptError::TableAlias));
+        let mut dirty = BootTables::new(0x400000);
+        dirty.pages[0][511] = 1;
+        assert_eq!(build(&mut dirty), Err(BootImageEptError::InvalidTable));
+        let mut short = BootTables::new(0x400000);
+        short.limit = 4;
+        assert_eq!(
+            build(&mut short),
+            Err(BootImageEptError::Storage(
+                super::super::PageTableBuildError::Storage
+            ))
+        );
+    }
 
     #[derive(Default)]
     struct TestVmx {

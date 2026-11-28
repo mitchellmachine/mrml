@@ -236,6 +236,7 @@ pub struct ReservedBootSupervisorImage<'image> {
     image: PeImage<'image>,
     physical_base: crate::PhysAddr,
     guest_physical_base: u64,
+    host_physical_bits: u8,
     layout: crate::GuestMemory<BOOT_GUEST_IMAGE_REGIONS>,
 }
 
@@ -306,12 +307,50 @@ impl<'image> SelectedBootSupervisor<'image> {
             image: self.image,
             physical_base,
             guest_physical_base,
+            host_physical_bits,
             layout,
         })
     }
 }
 
-impl ReservedBootSupervisorImage<'_> {
+/// Completed but unpublished EPT for the image only. Guest page tables,
+/// stack, and launch controls are still required.
+pub struct BootSupervisorImageTables<'image, Store> {
+    _reservation: ReservedBootSupervisorImage<'image>,
+    _store: Store,
+    root: crate::PhysAddr,
+}
+
+impl<Store> BootSupervisorImageTables<'_, Store> {
+    pub const fn root(&self) -> crate::PhysAddr {
+        self.root
+    }
+}
+
+impl<'image> ReservedBootSupervisorImage<'image> {
+    /// Build against fresh, inactive table storage. The platform must keep
+    /// it exclusive and outside the image backing, and preserve it for the
+    /// entire lifetime of the result. No VMCS has consumed this root.
+    pub fn build_inactive_ept<Store: crate::arch::x86_64::PageTableStore>(
+        self,
+        mut store: Store,
+    ) -> Result<BootSupervisorImageTables<'image, Store>, crate::arch::x86_64::BootImageEptError>
+    {
+        let start = self.physical_base.get();
+        let end = start + u64::from(self.image_size());
+        let root = crate::arch::x86_64::build_boot_image_ept(
+            &mut store,
+            start..end,
+            self.host_physical_bits,
+            self.layout.regions(),
+        )?;
+        Ok(BootSupervisorImageTables {
+            _reservation: self,
+            _store: store,
+            root,
+        })
+    }
+
     pub const fn physical_base(&self) -> crate::PhysAddr {
         self.physical_base
     }
