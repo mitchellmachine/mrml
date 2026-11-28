@@ -76,6 +76,13 @@ impl DecodedBootXhci {
         Ok(Self(RetainedBootXhci { function, bar_base, bar_bytes }))
     }
 
+    /// Compare only copied PCI configuration observations. This checks a
+    /// base address, not the BAR length or coverage; it grants no access.
+    pub fn matches_pci_header(self, observed: XhciFunction, command: u16, base: u64) -> bool {
+        observed == self.0.function && command != u16::MAX && command & 2 != 0
+            && base == self.0.bar_base
+    }
+
     /// Compare with separately gathered diagnostic evidence. In particular,
     /// the address in this record does not establish safe MMIO coverage.
     pub fn correlate(self, post: PostExitXhci) -> Result<CorrelatedBootXhci, CorrelationError> {
@@ -232,6 +239,12 @@ mod tests {
         );
         let observed = DecodedBootXhci::decode(&encoded, FUNCTION).unwrap();
         assert_eq!(observed.correlate(POST), retained().correlate(POST));
+        assert!(observed.matches_pci_header(FUNCTION, 7, BASE));
+        assert!(observed.matches_pci_header(FUNCTION, 3, BASE));
+        assert!(!observed.matches_pci_header(FUNCTION, 4, BASE));
+        assert!(!observed.matches_pci_header(FUNCTION, u16::MAX, BASE));
+        assert!(!observed.matches_pci_header(FUNCTION, 7, BASE + u64::from(LENGTH)));
+        assert!(!observed.matches_pci_header(XhciFunction { requester: 0xa1, ..FUNCTION }, 7, BASE));
         assert_eq!(
             observed.correlate(PostExitXhci { observed_bar: None, ..POST }),
             Err(CorrelationError::BarUnverifiedOrChanged),

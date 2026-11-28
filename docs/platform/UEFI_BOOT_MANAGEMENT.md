@@ -374,7 +374,12 @@ controller after exit in this case, and receives no ownership or write
 authority. Two additional marked cases use either the wrong release byte
 or a real read-only boot disk on a different controller. Both yield an
 exact rejection trace with no record bytes, with the boot disk still
-attached and the observed controller unchanged.
+attached and the observed controller unchanged. A separate marked comparison
+case reads only the exact PCI function's identity, command and BAR base
+after exit, then restores the PCI configuration selector. It never reads
+the BAR as MMIO. QEMU independently checks the configuration, BAR length,
+and restored selector. A match is still not evidence of firmware ownership
+transfer, disk retirement, DMA denial, or permission to write.
 
 ### Diagnose a return to firmware
 

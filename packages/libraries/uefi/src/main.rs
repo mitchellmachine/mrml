@@ -2968,13 +2968,24 @@ fn usb_preload_rendezvous(
                 }
                 break;
             }
-            (4, 0xbc) => {
+            (4, release @ (0xbc | 0xbf)) => {
                 if let Some(record) = usb_boot_record
-                    && DecodedBootXhci::decode(&record, PRELOAD_BOOT_CONTROLLER).is_ok()
+                    && let Ok(decoded) = DecodedBootXhci::decode(&record, PRELOAD_BOOT_CONTROLLER)
                 {
+                    let command = if release == 0xbf {
+                        let Some(command) = usb_preload_compare_header(decoded) else { break; };
+                        Some(command)
+                    } else {
+                        None
+                    };
                     loader_trace(0xbd);
                     for byte in record {
                         loader_trace(byte);
+                    }
+                    if let Some(command) = command {
+                        for byte in command.to_le_bytes() {
+                            loader_trace(byte);
+                        }
                     }
                     loader_trace(0xbe);
                     halt();
@@ -2990,6 +3001,51 @@ fn usb_preload_rendezvous(
     }
     loader_trace(0xeb);
     halt();
+}
+
+#[cfg(feature = "usb-preload-probe")]
+fn usb_preload_compare_header(decoded: DecodedBootXhci) -> Option<u16> {
+    // SAFETY: the exact signed Q35 profile and independent host resource
+    // checks permit reads of one fixed PCI function on the sole guest CPU.
+    // Writes target only the config selector, which is restored before return;
+    // no config data port or BAR is ever written or read as an MMIO pointer.
+    unsafe {
+        const DEVICE: u32 = 0x8000_d800;
+        let select = |value: u32| {
+            core::arch::asm!("out dx, eax", in("dx") 0xcf8u16, in("eax") value, options(nomem, nostack));
+        };
+        let read = |port: u16| {
+            let value: u32;
+            core::arch::asm!("in eax, dx", in("dx") port, out("eax") value, options(nomem, nostack));
+            value
+        };
+        let saved = read(0xcf8);
+        let sample = |_register: u32| {
+            let selected = DEVICE | _register;
+            select(selected);
+            (read(0xcf8) == selected).then(|| read(0xcfc))
+        };
+        let live = (|| {
+            let identity = sample(0)?;
+            let command = sample(4)? as u16;
+            let class = sample(8)?;
+            let low = sample(0x10)?;
+            let high = sample(0x14)?;
+            let function = XhciFunction {
+                requester: PRELOAD_BOOT_CONTROLLER.requester,
+                vendor_device: identity,
+                class_revision: class,
+            };
+            let base = (u64::from(high) << 32) | u64::from(low & !15);
+            (low & 7 == 4 && decoded.matches_pci_header(function, command, base))
+                .then_some(command)
+        })();
+        select(saved);
+        if read(0xcf8) != saved {
+            return None;
+        }
+        live
+    }
 }
 
 #[cfg(feature = "usb-preload-probe")]

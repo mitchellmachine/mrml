@@ -153,11 +153,12 @@ fn inspect_qmp(
     let mut usb_record_before = None;
     let record_check = match release {
         Some(0xbc) => Some(UsbRecordCheck::Present),
+        Some(0xbf) => Some(UsbRecordCheck::Compare),
         Some(0xbd) => Some(UsbRecordCheck::WrongRelease),
         Some(0xbe) => Some(UsbRecordCheck::Missing),
         _ => None,
     };
-    if matches!(release, Some(0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba | 0xbc..=0xbe)) {
+    if matches!(release, Some(0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba | 0xbc..=0xbf)) {
         validate_scratch_uart(&map)?;
         if let Some(check) = record_check {
             verify_record_boot(stdin, reader, check)?;
@@ -166,7 +167,13 @@ fn inspect_qmp(
         }
         if let Some(check) = record_check {
             verify_shared_record_class(stdin, reader)?;
-            usb_record_before = Some((sample_shared_controller(stdin, reader)?, check));
+            let before = sample_shared_controller(stdin, reader)?;
+            let selector = if check == UsbRecordCheck::Compare {
+                Some(read_config_port(stdin, reader, 0xcf8, 174)?)
+            } else {
+                None
+            };
+            usb_record_before = Some((before, check, selector));
         } else if matches!(release, Some(0xad | 0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba)) {
             let before = sample_shared_controller(stdin, reader)?;
             qmp_write(
@@ -347,7 +354,7 @@ fn inspect_qmp(
             byte => byte,
         };
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7 | 0xba | 0xbb | 0xbc | 0xbe) {
+        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7 | 0xba | 0xbb | 0xbc | 0xbe | 0xbf) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -360,9 +367,9 @@ fn inspect_qmp(
         qmp_write(stdin, "{\"execute\":\"cont\",\"id\":75}\n")?;
         ack(reader, "{\"return\": {}, \"id\": 75}")?;
     }
-    if let Some((before, check)) = usb_record_before {
+    if let Some((before, check, selector)) = usb_record_before {
         let (path, prefix) = post.ok_or("missing USB record trace")?;
-        verify_copied_usb_record(stdin, reader, path, prefix, before, check)?;
+        verify_copied_usb_record(stdin, reader, path, prefix, before, check, selector)?;
         return Ok(None);
     }
     if let Some(before) = guest_before {
@@ -788,6 +795,7 @@ fn verify_shared_record_class(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UsbRecordCheck {
     Present,
+    Compare,
     WrongRelease,
     Missing,
 }
@@ -811,9 +819,11 @@ fn verify_copied_usb_record(
     prefix: &[u8],
     before: SharedController,
     check: UsbRecordCheck,
+    selector: Option<u32>,
 ) -> Result<(), String> {
     let mut expected = prefix.to_vec();
-    if check != UsbRecordCheck::Present {
+    let present = matches!(check, UsbRecordCheck::Present | UsbRecordCheck::Compare);
+    if !present {
         expected.push(0xeb);
     } else {
         // The requester, PCI ID and class are independently checked by the host
@@ -821,7 +831,11 @@ fn verify_copied_usb_record(
         expected.extend_from_slice(b"\xbdMRMLXHCI\x01\x00\x28\x00\xd8\x00\x00\x00\x36\x1b\x0d\x00\x01\x30\x03\x0c");
         expected.extend_from_slice(&before.xhci.bar.start.to_le_bytes());
         expected.extend_from_slice(&0x4000u32.to_le_bytes());
-        expected.extend_from_slice(&[0, 0, 0, 0, 0xbe]);
+        expected.extend_from_slice(&[0; 4]);
+        if check == UsbRecordCheck::Compare {
+            expected.extend_from_slice(&(before.pci_command as u16).to_le_bytes());
+        }
+        expected.push(0xbe);
     }
     let read_trace = || {
         let mut bytes = Vec::new();
@@ -848,6 +862,11 @@ fn verify_copied_usb_record(
     }
     verify_record_boot(stdin, reader, check)?;
     verify_shared_record_class(stdin, reader)?;
+    if let Some(saved) = selector
+        && read_config_port(stdin, reader, 0xcf8, 174)? != saved
+    {
+        return Err("guest did not restore the PCI configuration selector".into());
+    }
     let after = sample_shared_controller(stdin, reader)?;
     if before.pci_command != after.pci_command
         || before.xhci != after.xhci
@@ -855,7 +874,7 @@ fn verify_copied_usb_record(
     {
         return Err("controller changed during the USB record-only diagnostic".into());
     }
-    let count = if check == UsbRecordCheck::Present { 40 } else { 0 };
+    let count = if present { 40 } else { 0 };
     println!("q35-usb-record|status=PASS|case={check:?}|firmware_exited=true|bytes={count}|boot_disk_attached=true|controller_writes=false|media_writes=0");
     Ok(())
 }
