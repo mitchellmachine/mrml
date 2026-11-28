@@ -70,6 +70,13 @@ package = "org.mrml.test.usb-fat32-qtest"
 scope = "compile"
 test_only = true
 
+[[dependency]]
+alias = "mrml_hardware_supervisor"
+compile_name = "mrml-hardware-supervisor"
+package = "org.mrml.service.hardware-supervisor"
+scope = "compile"
+test_only = true
+
 [[build_input]]
 fingerprint = "fnv1a64:07cfb9d8b9ec012a"
 id = "native-link.native.c"

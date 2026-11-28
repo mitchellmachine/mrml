@@ -25,7 +25,12 @@ independently supplied controller binding and live control capability,
 rejects descriptor or incarnation changes, and prepares only a distinct
 Total MicroVM route in the existing kernel table. It grants no device
 mapping and starts no guest. The QEMU test verifies both requests prepare
-separate domains against a fixed test catalog. Production inventory transport and
+separate domains against a fixed test catalog. A separate hosted KVM lifecycle fixture uses synthetic controller
+snapshots and the same admission adapter to run two distinct signed,
+device-free diagnostic guests. It verifies that retiring one withdraws
+its route without stopping the other, and that a failed constructor
+publishes no running guest. This is not an xHCI driver guest or a combined
+QEMU-to-KVM device test. Production inventory transport and
 the platform adapter that binds each launch to independently admitted
 controller, interrupt, and DMA capabilities are not wired yet. Inventory
 data itself never grants those capabilities.
