@@ -1353,6 +1353,20 @@ impl ActivePageTables {
         verify_read_only_mmio_from_store(&IdentityMappedPageTables, self.root, mapping)
     }
 
+    /// Scan the trusted boot root for any leaf or page-table frame in this
+    /// physical range. This only checks current CPU page-table structure.
+    pub fn verify_no_physical_mapping(
+        &self,
+        expected_root: PhysAddr,
+        start: PhysAddr,
+        pages: u64,
+    ) -> Result<(), PageTableBuildError> {
+        if self.root != expected_root {
+            return Err(PageTableBuildError::MappingMismatch);
+        }
+        verify_physical_coverage_from_store(&IdentityMappedPageTables, self.root, start, pages, None)
+    }
+
     /// Check the exact single-page mapping proposed for passive PCI sampling.
     /// The expected root must come from the diagnostic's own page-table build,
     /// not from this snapshot. No register reads or mapping changes occur.
@@ -1706,11 +1720,22 @@ fn verify_exclusive_mapping_from_store<S: PageTableStore>(
     root: PhysAddr,
     mapping: Mapping,
 ) -> Result<(), PageTableBuildError> {
-    let physical_start = mapping.physical_start().get();
-    let physical_end = mapping
-        .pages()
-        .checked_mul(PAGE_SIZE)
+    verify_physical_coverage_from_store(store, root, mapping.physical_start(), mapping.pages(), Some(mapping))?;
+    verify_active_mapping_from_store(store, root, root, mapping)
+}
+
+fn verify_physical_coverage_from_store<S: PageTableStore>(
+    store: &S,
+    root: PhysAddr,
+    start: PhysAddr,
+    pages: u64,
+    mapping: Option<Mapping>,
+) -> Result<(), PageTableBuildError> {
+    let physical_start = start.get();
+    let physical_end = pages.checked_mul(PAGE_SIZE)
+        .filter(|&bytes| bytes != 0)
         .and_then(|bytes| physical_start.checked_add(bytes))
+        .filter(|&end| end <= (1u64 << 52))
         .ok_or(PageTableBuildError::AddressOverflow)?;
     let mut budget = BOOT_ALIAS_MAX_TABLES;
     fn scan(
@@ -1718,7 +1743,7 @@ fn verify_exclusive_mapping_from_store<S: PageTableStore>(
         table: PhysAddr,
         level: u32,
         virtual_prefix: u64,
-        mapping: Mapping,
+        mapping: Option<Mapping>,
         physical: core::ops::Range<u64>,
         budget: &mut usize,
     ) -> Result<(), PageTableBuildError> {
@@ -1755,7 +1780,7 @@ fn verify_exclusive_mapping_from_store<S: PageTableStore>(
                 )?;
             } else if physical.contains(&frame) {
                 let canonical = (((va << 16) as i64) >> 16) as u64;
-                let expected = mapping
+                let expected = mapping.ok_or(PageTableBuildError::PhysicalAlias)?
                     .virtual_start()
                     .get()
                     .checked_add(frame - physical.start)
@@ -1775,8 +1800,7 @@ fn verify_exclusive_mapping_from_store<S: PageTableStore>(
         mapping,
         physical_start..physical_end,
         &mut budget,
-    )?;
-    verify_active_mapping_from_store(store, root, root, mapping)
+    )
 }
 
 fn invalidate_mapping(mapping: Mapping) -> Result<(), PageTableBuildError> {
@@ -2529,6 +2553,35 @@ mod tests {
             verify_read_only_mmio_from_store(&store, root, mapping),
             Err(PageTableBuildError::InvalidIntermediate)
         );
+    }
+
+    #[test]
+    fn unmapped_boot_range_rejects_alternate_leaves_and_table_frames() {
+        let mut builder = PageTableBuilder::new(Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        }).unwrap();
+        let start = PhysAddr::new(0x8120_0000).unwrap();
+        let root = builder.root();
+        let check = |store: &Tables, address, pages| {
+            verify_physical_coverage_from_store(store, root, address, pages, None)
+        };
+        assert_eq!(check(builder.store(), start, 4), Ok(()));
+        assert_eq!(check(builder.store(), start, 0), Err(PageTableBuildError::AddressOverflow));
+        assert_eq!(check(builder.store(), root, 1), Err(PageTableBuildError::PhysicalAlias));
+        let last = PhysAddr::new(start.get() + 3 * PAGE_SIZE).unwrap();
+        let next = PhysAddr::new(start.get() + 4 * PAGE_SIZE).unwrap();
+        let arbitrary = VirtAddr::new(0xffff_da00_0000_0000).unwrap();
+        builder.map_page(arbitrary, last, PagePermissions::KERNEL_READ).unwrap();
+        assert_eq!(check(builder.store(), start, 4), Err(PageTableBuildError::PhysicalAlias));
+        assert_eq!(check(builder.store(), start, 3), Ok(()));
+        assert_eq!(check(builder.store(), next, 1), Ok(()));
+        let (table, _) = builder.leaf_location(arbitrary).unwrap();
+        assert_eq!(check(builder.store(), table, 1), Err(PageTableBuildError::PhysicalAlias));
+        let mut store = builder.into_store();
+        let pdpt = PhysAddr::new(store.read(root, ((arbitrary.get() >> 39) & 511) as usize).unwrap() & ADDRESS_MASK).unwrap();
+        store.write(pdpt, 0, 0x8000_0000 | 0x83).unwrap();
+        assert_eq!(check(&store, start, 4), Err(PageTableBuildError::InvalidIntermediate));
     }
 
     fn boot_dma_test_reservation() -> BootDmaReservation {

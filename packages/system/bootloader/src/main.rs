@@ -4291,7 +4291,16 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                             .is_some_and(|address| matches!(active.leaf(address), Ok(None)))
                     })
                 }));
-            if !fixture_unmapped {
+            let root = _boot_dma.as_ref().unwrap_or_else(|| halt()).root();
+            let device_ranges_unmapped = [
+                (0xe000_0000, 65536), // entire ECAM window, including bridge and USB function
+                (0xfed9_0000, 1),     // remapper bootstrap page
+                (0x8120_0000, 4),     // entire observed USB controller BAR
+            ].into_iter().all(|(base, pages)| {
+                PhysAddr::new(base).is_ok_and(|start|
+                    active.verify_no_physical_mapping(root, start, pages).is_ok())
+            });
+            if !fixture_unmapped || !device_ranges_unmapped {
                 halt();
             }
             let usb = handoff.usb_pci_record().unwrap_or_else(|| halt());

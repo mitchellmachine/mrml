@@ -307,7 +307,11 @@ In Q35 fixture profile 9, the signed loader uses the firmware query on the
 exact emulated resources and transports incomplete status or a complete
 copy across firmware exit. The kernel independently reconstructs the layout
 from the checked ACPI pair and USB record and tests the final map for
-conflicts. It stops without device mappings or host release regardless of
+conflicts. A bounded walk of the active CPU page tables also checks that
+no virtual alias or table frame points into the emulated ECAM window, DRHD
+bootstrap page, or full USB BAR. This is a structural CPU check, not a
+measurement of stale translations or DMA state. The fixture stops without
+device mappings or host release regardless of
 the verdict. Installed OVMF has exercised only the live incomplete case;
 complete and conflicting copies are covered by synthetic data-only tests.
 
