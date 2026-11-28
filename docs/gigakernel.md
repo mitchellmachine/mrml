@@ -274,6 +274,15 @@ actual table entries and reject reused, dirty, out-of-width, or exhausted
 table storage. No VMCS receives this root. Guest linear page tables, stack,
 concrete physical backing setup, and execution remain separate work.
 
+The supervisor bootstrap can reserve distinct physical backing for a guarded
+stack and guest page tables. Its inactive linear address space starts from an
+empty guest CR3, maps only the PE regions and the writable, non-executable
+stack, and leaves the guard unmapped. Hosted tests walk the resulting entries,
+confirm that they point to guest physical addresses rather than host frames,
+and verify that the stack and unused table pages are zeroed. The image-only
+EPT is not yet combined with the table and stack backing, and no launch path
+installs either hierarchy.
+
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
    service before moving supervision policy out of the kernel.

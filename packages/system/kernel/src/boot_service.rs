@@ -379,6 +379,233 @@ impl<'image> ReservedBootSupervisorImage<'image> {
     }
 }
 
+const SUPERVISOR_MAX_STACK_PAGES: u64 = 16;
+const SUPERVISOR_MAX_LINEAR_TABLES: u64 = 80;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SupervisorBootstrapError {
+    InvalidLayout,
+    InvalidView,
+    Memory(crate::MemoryError),
+    Guest(crate::VmError),
+    Linear(crate::arch::x86_64::PageTableBuildError),
+}
+
+/// Guest-private bootstrap reservations. The guard is absent from both
+/// address spaces. This does not map host RAM or authorize VM entry.
+pub struct ReservedSupervisorBootstrap<'image> {
+    image: ReservedBootSupervisorImage<'image>,
+    stack: crate::GuestRegion,
+    stack_top: u64,
+    table_arena: crate::GuestRegion,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SupervisorLinearState {
+    pub guest_cr3: crate::PhysAddr,
+    pub guest_stack_top: u64,
+}
+
+impl<'image> ReservedBootSupervisorImage<'image> {
+    /// Reserve distinct tables and stack beside the PE. Use the same
+    /// monotonic allocator which issued the image reservation.
+    pub fn reserve_guest_bootstrap(
+        self,
+        allocator: &mut crate::FrameAllocator<'_>,
+        guard_gva: u64,
+        guard_gpa: u64,
+        stack_pages: u64,
+        table_gpa: u64,
+        table_pages: u64,
+    ) -> Result<ReservedSupervisorBootstrap<'image>, SupervisorBootstrapError> {
+        if !(1..=SUPERVISOR_MAX_STACK_PAGES).contains(&stack_pages)
+            || !(1..=SUPERVISOR_MAX_LINEAR_TABLES).contains(&table_pages)
+        {
+            return Err(SupervisorBootstrapError::InvalidLayout);
+        }
+        let range = |start: u64, pages: u64, limit: u64| {
+            start
+                .checked_add(pages * PAGE_SIZE)
+                .filter(|&end| start != 0 && start.is_multiple_of(PAGE_SIZE) && end <= limit)
+                .map(|end| start..end)
+                .ok_or(SupervisorBootstrapError::InvalidLayout)
+        };
+        let stack_gva = range(guard_gva, stack_pages + 1, BOOT_GUEST_VIRTUAL_LIMIT)?;
+        let stack_gpa = range(guard_gpa, stack_pages + 1, BOOT_GUEST_PHYSICAL_LIMIT)?;
+        let tables = range(table_gpa, table_pages, BOOT_GUEST_PHYSICAL_LIMIT)?;
+        let image_bytes = u64::from(self.image_size());
+        let image_gpa = self.guest_physical_base..self.guest_physical_base + image_bytes;
+        let image_gva = self.guest_virtual_base()..self.guest_virtual_base() + image_bytes;
+        let overlap = |a: &core::ops::Range<u64>, b: &core::ops::Range<u64>| {
+            a.start < b.end && b.start < a.end
+        };
+        if overlap(&stack_gva, &image_gva)
+            || overlap(&stack_gpa, &image_gpa)
+            || overlap(&tables, &image_gpa)
+            || overlap(&tables, &stack_gpa)
+        {
+            return Err(SupervisorBootstrapError::InvalidLayout);
+        }
+        let mut allocate = |pages| {
+            allocator
+                .allocate_contiguous_in(pages, 1, PAGE_SIZE, 1 << self.host_physical_bits)
+                .map_err(SupervisorBootstrapError::Memory)
+        };
+        let stack = crate::GuestRegion::new(
+            stack_gpa.start + PAGE_SIZE,
+            allocate(stack_pages)?,
+            stack_pages,
+            true,
+            false,
+        )
+        .map_err(SupervisorBootstrapError::Guest)?;
+        let table_arena = crate::GuestRegion::new(
+            tables.start,
+            allocate(table_pages)?,
+            table_pages,
+            true,
+            false,
+        )
+        .map_err(SupervisorBootstrapError::Guest)?;
+        let host_range = |region: crate::GuestRegion| {
+            region.host_start().get()..region.host_start().get() + region.pages() * PAGE_SIZE
+        };
+        let image_host = self.physical_base.get()..self.physical_base.get() + image_bytes;
+        if overlap(&image_host, &host_range(stack))
+            || overlap(&image_host, &host_range(table_arena))
+            || overlap(&host_range(stack), &host_range(table_arena))
+        {
+            return Err(SupervisorBootstrapError::InvalidLayout);
+        }
+        Ok(ReservedSupervisorBootstrap {
+            image: self,
+            stack,
+            stack_top: stack_gva.end,
+            table_arena,
+        })
+    }
+}
+
+impl ReservedSupervisorBootstrap<'_> {
+    pub const fn stack_region(&self) -> crate::GuestRegion {
+        self.stack
+    }
+    pub const fn table_region(&self) -> crate::GuestRegion {
+        self.table_arena
+    }
+
+    /// Populate the exact reserved NX views. The platform must bind slices
+    /// to the reservations, not to active or shared mappings. Entries are
+    /// addressed by guest physical addresses even though the host writes them.
+    /// A failed build publishes no CR3 or stack pointer.
+    pub fn initialize_linear(
+        &self,
+        tables: &mut [[u64; 512]],
+        stack: &mut [u8],
+    ) -> Result<SupervisorLinearState, SupervisorBootstrapError> {
+        use crate::arch::x86_64::{PagePermissions, PageTableBuilder, VirtAddr};
+        if tables.len() as u64 != self.table_arena.pages()
+            || stack.len() as u64 != self.stack.pages() * PAGE_SIZE
+        {
+            return Err(SupervisorBootstrapError::InvalidView);
+        }
+        let mut builder = PageTableBuilder::new(GuestLinearArena {
+            pages: tables,
+            base: self.table_arena.guest_start(),
+            count: 0,
+        })
+        .map_err(SupervisorBootstrapError::Linear)?;
+        let mut map = |guest_virtual, region: crate::GuestRegion| {
+            let permissions = match (region.is_writable(), region.is_executable()) {
+                (true, false) => PagePermissions::KERNEL_READ_WRITE,
+                (false, true) => PagePermissions::KERNEL_READ_EXECUTE,
+                (false, false) => PagePermissions::KERNEL_READ,
+                _ => return Err(SupervisorBootstrapError::InvalidLayout),
+            };
+            // This is a fresh guest CR3, not a host address space.
+            for page in 0..region.pages() {
+                let offset = page * PAGE_SIZE;
+                let virtual_page = VirtAddr::new(guest_virtual + offset)
+                    .map_err(|_| SupervisorBootstrapError::InvalidLayout)?;
+                let guest_page = crate::PhysAddr::new(region.guest_start() + offset)
+                    .map_err(SupervisorBootstrapError::Memory)?;
+                builder
+                    .map_page(virtual_page, guest_page, permissions)
+                    .map_err(SupervisorBootstrapError::Linear)?;
+            }
+            Ok(())
+        };
+        for region in self.image.layout.regions() {
+            let offset = region.guest_start() - self.image.guest_physical_base;
+            map(self.image.guest_virtual_base() + offset, region)?;
+        }
+        map(self.stack_top - self.stack.pages() * PAGE_SIZE, self.stack)?;
+        stack.fill(0);
+        // Even unused arena pages must never expose old host contents.
+        let guest_cr3 = builder.root();
+        let arena = builder.into_store();
+        arena.pages[arena.count..].fill([0; 512]);
+        Ok(SupervisorLinearState {
+            guest_cr3,
+            guest_stack_top: self.stack_top,
+        })
+    }
+}
+
+struct GuestLinearArena<'a> {
+    pages: &'a mut [[u64; 512]],
+    base: u64,
+    count: usize,
+}
+
+use crate::arch::x86_64::PageTableBuildError as LinearError;
+
+impl GuestLinearArena<'_> {
+    fn index(&self, table: crate::PhysAddr) -> Result<usize, LinearError> {
+        let page = table
+            .get()
+            .checked_sub(self.base)
+            .ok_or(LinearError::Storage)?
+            / PAGE_SIZE;
+        (page < self.count as u64)
+            .then_some(page as usize)
+            .ok_or(LinearError::Storage)
+    }
+}
+
+impl crate::arch::x86_64::PageTableStore for GuestLinearArena<'_> {
+    fn allocate_zeroed(&mut self) -> Result<crate::PhysAddr, LinearError> {
+        self.pages
+            .get_mut(self.count)
+            .ok_or(LinearError::Storage)?
+            .fill(0);
+        let table = crate::PhysAddr::new(self.base + self.count as u64 * PAGE_SIZE)
+            .map_err(|_| LinearError::Storage)?;
+        self.count += 1;
+        Ok(table)
+    }
+
+    fn read(&self, table: crate::PhysAddr, index: usize) -> Result<u64, LinearError> {
+        self.pages[self.index(table)?]
+            .get(index)
+            .copied()
+            .ok_or(LinearError::Storage)
+    }
+
+    fn write(
+        &mut self,
+        table: crate::PhysAddr,
+        index: usize,
+        value: u64,
+    ) -> Result<(), LinearError> {
+        let page = self.index(table)?;
+        *self.pages[page]
+            .get_mut(index)
+            .ok_or(LinearError::Storage)? = value;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,5 +876,93 @@ mod tests {
         assert_eq!(&backing[8192..8704], &payload[0x200..]);
         assert!(backing[4096..8192].iter().all(|&byte| byte == 0));
         assert!(backing[8704..].iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
+    fn supervisor_linear_tables_use_guest_addresses_and_guard_the_stack() {
+        use crate::{FrameAllocator, MemoryKind, MemoryMap, MemoryRegion};
+        const IMAGE_GPA: u64 = 0x200000;
+        const STACK_GPA: u64 = 0x300000;
+        const STACK_GVA: u64 = 0x2_0000_0000;
+        const TABLE_GPA: u64 = 0x400000;
+        let payload = crate::pe::tests::valid_pe();
+        let envelope = bundle(payload, ArtifactKind::ServiceImage, 7);
+        let metadata = launch(&payload, 2, BASE + PAGE_SIZE);
+        let manifest = [0x38; 64];
+        let selection = BootSupervisorSelection::new(7, manifest, metadata.measurement()).unwrap();
+        let regions =
+            [MemoryRegion::new(PhysAddr::new(0x800000).unwrap(), 40, MemoryKind::Free).unwrap()];
+        let mut allocator = FrameAllocator::new(MemoryMap::new(&regions).unwrap());
+        let selected = || {
+            selection
+                .bind(
+                    Sha3_512::digest(&selection.encode()),
+                    manifest,
+                    BootServiceImage::check(metadata, 7, &envelope).unwrap(),
+                )
+                .unwrap()
+        };
+        let image = selected()
+            .reserve_guest_image(&mut allocator, IMAGE_GPA, 48)
+            .unwrap();
+        assert_eq!(
+            image
+                .reserve_guest_bootstrap(&mut allocator, BASE, STACK_GPA, 2, TABLE_GPA, 8)
+                .err(),
+            Some(SupervisorBootstrapError::InvalidLayout),
+        );
+        let image = selected()
+            .reserve_guest_image(&mut allocator, IMAGE_GPA, 48)
+            .unwrap();
+        assert_eq!(
+            image
+                .reserve_guest_bootstrap(&mut allocator, STACK_GVA, STACK_GPA, 2, STACK_GPA, 8)
+                .err(),
+            Some(SupervisorBootstrapError::InvalidLayout),
+        );
+        let image = selected()
+            .reserve_guest_image(&mut allocator, IMAGE_GPA, 48)
+            .unwrap();
+        let guest = image
+            .reserve_guest_bootstrap(&mut allocator, STACK_GVA, STACK_GPA, 2, TABLE_GPA, 8)
+            .unwrap();
+        assert_eq!(guest.stack_region().guest_start(), STACK_GPA + PAGE_SIZE);
+        assert_ne!(guest.table_region().host_start().get(), TABLE_GPA);
+        let mut stack = [0xa5; 8192];
+        let mut tables = [[u64::MAX; 512]; 8];
+        assert_eq!(
+            guest.initialize_linear(&mut tables[..7], &mut stack),
+            Err(SupervisorBootstrapError::InvalidView)
+        );
+        assert!(stack.iter().all(|&b| b == 0xa5));
+        assert_eq!(tables[0][0], u64::MAX);
+        let state = guest.initialize_linear(&mut tables, &mut stack).unwrap();
+        assert_eq!(state.guest_cr3.get(), TABLE_GPA);
+        assert_eq!(state.guest_stack_top, STACK_GVA + PAGE_SIZE * 3);
+        assert!(stack.iter().all(|&b| b == 0));
+        assert_eq!(tables[7], [0; 512]);
+        let mask = 0x000f_ffff_ffff_f000;
+        let lookup = |gva: u64| {
+            let mut table = state.guest_cr3.get();
+            for shift in [39, 30, 21, 12] {
+                let index = ((gva >> shift) & 511) as usize;
+                let entry = tables[((table - TABLE_GPA) / PAGE_SIZE) as usize][index];
+                if entry == 0 || shift == 12 {
+                    return entry;
+                }
+                table = entry & mask;
+            }
+            unreachable!()
+        };
+        let nx = 1 << 63;
+        assert_eq!(lookup(BASE), IMAGE_GPA | nx | 1);
+        assert_eq!(lookup(BASE + PAGE_SIZE), (IMAGE_GPA + PAGE_SIZE) | 1);
+        assert_eq!(lookup(STACK_GVA), 0);
+        assert_eq!(
+            lookup(STACK_GVA + PAGE_SIZE),
+            (STACK_GPA + PAGE_SIZE) | nx | 3
+        );
+        assert_eq!(lookup(STACK_GVA + PAGE_SIZE * 3), 0);
+        assert_eq!(lookup(TABLE_GPA), 0);
     }
 }
