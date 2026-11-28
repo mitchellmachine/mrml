@@ -62,7 +62,8 @@ pub use page_table::{
 };
 pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{
-    PlatformMmioError, PlatformMmioManifest, PlatformMmioPurpose, PlatformMmioRequirement,
+    PassivePciPage, PassivePciPageError, PlatformMmioError, PlatformMmioManifest,
+    PlatformMmioPurpose, PlatformMmioRequirement,
     VerifiedPlatformMmio, check_boot_mmio_cpu_policy, extend_vtd_mmio_requirement,
     Q35FixtureTopology, q35_fixture_activation_mappings, q35_fixture_bar_preflight_mappings, verify_q35_activation_mmio, q35_fixture_probe_mappings, q35_fixture_shutdown_mappings, verify_active_platform_mmio,
 };

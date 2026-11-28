@@ -1,4 +1,4 @@
-use crate::{MemoryKind, MemoryRegion, PAGE_SIZE, PhysAddr};
+use crate::{DeviceAddress, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr};
 
 use super::{
     ActivePageTables, DmarTopology, Mapping, McfgTopology, PagePermissions, VirtAddr,
@@ -347,6 +347,64 @@ impl<const RANGES: usize> PlatformMmioManifest<RANGES> {
         Ok(manifest)
     }
 
+    /// Plan a one-page, passive PCI configuration observation. The memory map
+    /// must be the normalized map from the current boot; the BAR is the
+    /// controller allocation independently captured from firmware. The plan
+    /// is not a mapping and never conveys access to ECAM, BARs or DMA.
+    pub fn passive_pci_page(
+        &self,
+        requester: DeviceAddress,
+        memory: &MemoryMap<'_>,
+        controller_bar: MemoryRegion,
+    ) -> Result<PassivePciPage, PassivePciPageError> {
+        let mut candidates = self.iter().filter_map(|window| {
+            let PlatformMmioPurpose::PciEcam {
+                segment,
+                start_bus,
+                end_bus,
+            } = window.purpose
+            else {
+                return None;
+            };
+            (segment == requester.segment() && (start_bus..=end_bus).contains(&requester.bus()))
+                .then_some((window, start_bus))
+        });
+        let (window, start_bus) = candidates.next().ok_or(PassivePciPageError::MissingWindow)?;
+        if candidates.next().is_some() {
+            return Err(PassivePciPageError::Overlap);
+        }
+        let start = window.physical.get();
+        let end = window.end();
+        if controller_bar.kind() != MemoryKind::Mmio {
+            return Err(PassivePciPageError::InvalidBar);
+        }
+        if start < controller_bar.end() && controller_bar.start().get() < end {
+            return Err(PassivePciPageError::Overlap);
+        }
+        if !memory.regions().iter().any(|region| {
+            region.kind() == MemoryKind::Mmio && region.start().get() <= start && end <= region.end()
+        }) {
+            return Err(PassivePciPageError::OutsideFirmwareMmio);
+        }
+        // Manifest physical_start is already adjusted to start_bus. Apply
+        // the bus offset relative to that start, not relative to bus zero.
+        let offset = (u64::from(requester.bus() - start_bus) << 20)
+            | (u64::from(requester.device()) << 15)
+            | (u64::from(requester.function()) << 12);
+        let physical = start.checked_add(offset).ok_or(PassivePciPageError::InvalidRange)?;
+        if !physical
+            .checked_add(PAGE_SIZE)
+            .is_some_and(|limit| limit <= end)
+        {
+            return Err(PassivePciPageError::InvalidRange);
+        }
+        Ok(PassivePciPage {
+            requester,
+            controller_bar,
+            physical: PhysAddr::new(physical).map_err(|_| PassivePciPageError::InvalidRange)?,
+        })
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = PlatformMmioRequirement> + '_ {
         self.requirements[..self.count].iter().flatten().copied()
     }
@@ -382,6 +440,38 @@ impl<const RANGES: usize> PlatformMmioManifest<RANGES> {
         self.count += 1;
         Ok(())
     }
+}
+
+/// A physical-page candidate for a later independently verified kernel-only,
+/// uncached, read-only mapping. No pointer or register access is provided.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PassivePciPage {
+    requester: DeviceAddress,
+    controller_bar: MemoryRegion,
+    physical: PhysAddr,
+}
+
+impl PassivePciPage {
+    pub const fn requester(self) -> DeviceAddress {
+        self.requester
+    }
+
+    pub const fn physical(self) -> PhysAddr {
+        self.physical
+    }
+
+    pub const fn observed_controller_bar(self) -> MemoryRegion {
+        self.controller_bar
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PassivePciPageError {
+    MissingWindow,
+    OutsideFirmwareMmio,
+    Overlap,
+    InvalidRange,
+    InvalidBar,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -890,6 +980,65 @@ mod tests {
             PlatformMmioManifest::<2>::from_topology(&dmar, &mcfg, &memory),
             Err(PlatformMmioError::Overlap)
         );
+    }
+
+    #[test]
+    fn passive_pci_plan_bounds_the_exact_function_and_rechecks_the_memory_map() {
+        let dmar = DmarTopology::<1, 0>::parse(&dmar(0xfed9_0000)).unwrap();
+        let mut table = mcfg(0xe000_0000);
+        table[52..54].copy_from_slice(&7u16.to_le_bytes());
+        table[54] = 42;
+        table[55] = 43;
+        finalize(&mut table);
+        let mcfg = McfgTopology::<1>::parse(&table).unwrap();
+        let region = |address, pages, kind| {
+            MemoryRegion::new(PhysAddr::new(address).unwrap(), pages, kind).unwrap()
+        };
+        let bar = region(0xceef_0000, 16, MemoryKind::Mmio);
+        let ecam = region(0xe2a0_0000, 512, MemoryKind::Mmio);
+        let memory = [bar, ecam, region(0xfed9_0000, 1, MemoryKind::Mmio)];
+        let manifest = PlatformMmioManifest::<2>::from_topology(&dmar, &mcfg, &memory).unwrap();
+        let map = MemoryMap::new(&memory).unwrap();
+        for (bus, dev, f, physical) in [
+            (42, 0, 0, 0xe2a0_0000),
+            (42, 20, 0, 0xe2aa_0000),
+            (43, 31, 7, 0xe2bf_f000),
+        ] {
+            let requester = DeviceAddress::new(7, bus, dev, f).unwrap();
+            let page = manifest.passive_pci_page(requester, &map, bar).unwrap();
+            assert_eq!(page.requester(), requester);
+            assert_eq!(page.physical().get(), physical);
+        }
+        for (segment, bus) in [(0, 42), (7, 41), (7, 44)] {
+            let requester = DeviceAddress::new(segment, bus, 20, 0).unwrap();
+            assert_eq!(
+                manifest.passive_pci_page(requester, &map, bar),
+                Err(PassivePciPageError::MissingWindow)
+            );
+        }
+        let requester = DeviceAddress::new(7, 42, 20, 0).unwrap();
+        let collision = region(0xe2bf_f000, 1, MemoryKind::Mmio);
+        assert_eq!(
+            manifest.passive_pci_page(requester, &map, collision),
+            Err(PassivePciPageError::Overlap)
+        );
+        let reserved = region(0xceef_0000, 16, MemoryKind::Reserved);
+        assert_eq!(
+            manifest.passive_pci_page(requester, &map, reserved),
+            Err(PassivePciPageError::InvalidBar)
+        );
+        let fake_maps = [
+            [bar, region(0xe2aa_0000, 1, MemoryKind::Mmio)],
+            [bar, region(0xe2a0_0000, 512, MemoryKind::Reserved)],
+        ];
+        for fake in fake_maps {
+            let map = MemoryMap::new(&fake).unwrap();
+            assert_eq!(
+                manifest.passive_pci_page(requester, &map, bar),
+                Err(PassivePciPageError::OutsideFirmwareMmio)
+            );
+        }
+        assert!(MemoryMap::new(&[ecam, collision]).is_err());
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! This module does not read hardware, create mappings, or grant ownership.
 
 use super::inspect_bar0;
+use mrml_kernel::arch::x86_64::PassivePciPage;
 
 pub const BOOT_XHCI_RECORD_BYTES: usize = 40;
 const RECORD_MAGIC: &[u8; 8] = b"MRMLXHCI";
@@ -116,6 +117,24 @@ pub struct PostExitXhci {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PassiveHeaderError {
+    WrongRequester,
+    DifferentBarAllocation,
+    Unreadable,
+    ChangedFunction,
+    InvalidHeader,
+    Unstable,
+    ChangedBar,
+}
+
+/// Two consistent PCI header observations do not establish the BAR extent,
+/// DMA state, or that a device cannot change again immediately afterward.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PassivePciHeader {
+    pub command: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CorrelationError {
     FirmwareExitUnproven,
     ChangedFunction,
@@ -173,6 +192,66 @@ impl RetainedBootXhci {
         bytes
     }
 
+    /// Corroborate the retained boot USB identity with two samples of the
+    /// same function. The caller supplies reads from an independently verified
+    /// read-only mapping of the plan's single ECAM page. This function does
+    /// not install that mapping or access hardware by itself.
+    pub fn sample_passive_header(
+        self,
+        page: PassivePciPage,
+        read: impl FnMut(u16) -> Option<u32>,
+    ) -> Result<PassivePciHeader, PassiveHeaderError> {
+        let address = page.requester();
+        let packed = (u32::from(address.segment()) << 16)
+            | (u32::from(address.bus()) << 8)
+            | (u32::from(address.device()) << 3)
+            | u32::from(address.function());
+        if packed != self.function.requester {
+            return Err(PassiveHeaderError::WrongRequester);
+        }
+        let bar = page.observed_controller_bar();
+        if bar.start().get() != self.bar_base
+            || bar.end() - bar.start().get() != u64::from(self.bar_bytes)
+        {
+            return Err(PassiveHeaderError::DifferentBarAllocation);
+        }
+        self.sample_pci_words(read)
+    }
+
+    fn sample_pci_words(
+        self,
+        mut read: impl FnMut(u16) -> Option<u32>,
+    ) -> Result<PassivePciHeader, PassiveHeaderError> {
+        let mut word = |offset| read(offset).ok_or(PassiveHeaderError::Unreadable);
+        let mut sample = || {
+            if word(0)? != self.function.vendor_device || word(8)? != self.function.class_revision {
+                return Err(PassiveHeaderError::ChangedFunction);
+            }
+            let command = word(4)? as u16;
+            let header = ((word(0x0c)? >> 16) & 0xff) as u8;
+            if command == u16::MAX || command & 2 == 0 || header & 0x7f != 0 {
+                return Err(PassiveHeaderError::InvalidHeader);
+            }
+            let low = word(0x10)?;
+            let high = match low & 7 {
+                0 => 0,
+                4 => word(0x14)?,
+                _ => return Err(PassiveHeaderError::InvalidHeader),
+            };
+            Ok((command, header, low, high))
+        };
+        let first = sample()?;
+        if first != sample()? {
+            return Err(PassiveHeaderError::Unstable);
+        }
+        let (command, _, low, high) = first;
+        let base = (u64::from(high) << 32) | u64::from(low & !15);
+        if base != self.bar_base {
+            return Err(PassiveHeaderError::ChangedBar);
+        }
+        Ok(PassivePciHeader { command })
+    }
+
     /// Compare copied facts only. A matching extent is not safe MMIO
     /// coverage by itself, and BME off alone never implies DMA denial.
     pub fn correlate(self, post: PostExitXhci) -> Result<CorrelatedBootXhci, CorrelationError> {
@@ -182,7 +261,7 @@ impl RetainedBootXhci {
         if post.function != self.function {
             return Err(CorrelationError::ChangedFunction);
         }
-        if post.pci_command & 2 == 0 {
+        if post.pci_command == u16::MAX || post.pci_command & 2 == 0 {
             return Err(CorrelationError::MemoryDecodeDisabled);
         }
         if post.observed_bar != Some((self.bar_base, self.bar_bytes)) {
@@ -378,6 +457,118 @@ mod tests {
                 Err(CorrelationError::BarUnverifiedOrChanged)
             );
         }
+    }
+
+    #[test]
+    fn passive_header_refuses_drift_and_never_reads_beyond_the_pci_header() {
+        use PassiveHeaderError::*;
+        let baseline = |offset| match offset {
+            0 => Some(FUNCTION.vendor_device),
+            8 => Some(FUNCTION.class_revision),
+            4 => Some(0xabcd_0006),
+            0x0c => Some(0),
+            0x10 => Some(BASE as u32 | 4),
+            0x14 => Some(0),
+            _ => panic!("unexpected offset {offset:#x}"),
+        };
+        use mrml_kernel::arch::x86_64::{DmarTopology, McfgTopology, PlatformMmioManifest};
+        use mrml_kernel::{DeviceAddress, MemoryKind, MemoryMap, MemoryRegion, PhysAddr};
+
+        fn acpi_checksum(table: &mut [u8]) {
+            table[9] = 0;
+            table[9] = 0u8.wrapping_sub(table.iter().copied().fold(0, u8::wrapping_add));
+        }
+
+        let mut mcfg = [0u8; 60];
+        mcfg[..4].copy_from_slice(b"MCFG");
+        mcfg[4..8].copy_from_slice(&60u32.to_le_bytes());
+        mcfg[44..52].copy_from_slice(&0xe000_0000u64.to_le_bytes());
+        acpi_checksum(&mut mcfg);
+        let mut dmar = [0u8; 64];
+        dmar[..4].copy_from_slice(b"DMAR");
+        dmar[4..8].copy_from_slice(&64u32.to_le_bytes());
+        dmar[36] = 47;
+        dmar[50..52].copy_from_slice(&16u16.to_le_bytes());
+        dmar[52] = 1;
+        dmar[56..64].copy_from_slice(&0xfed9_0000u64.to_le_bytes());
+        acpi_checksum(&mut dmar);
+        let region = |base, pages| {
+            MemoryRegion::new(PhysAddr::new(base).unwrap(), pages, MemoryKind::Mmio).unwrap()
+        };
+        let bar = region(BASE, 16);
+        let regions = [bar, region(0xe000_0000, 256), region(0xfed9_0000, 1)];
+        let map = MemoryMap::new(&regions).unwrap();
+        let manifest = PlatformMmioManifest::<2>::from_topology(
+            &DmarTopology::<1, 0>::parse(&dmar).unwrap(),
+            &McfgTopology::<1>::parse(&mcfg).unwrap(),
+            map.regions(),
+        )
+        .unwrap();
+        let page = |function, bar| {
+            manifest.passive_pci_page(DeviceAddress::new(0, 0, 20, function).unwrap(), &map, bar)
+                .unwrap()
+        };
+        assert_eq!(
+            retained().sample_passive_header(page(1, bar), |_| panic!("wrong requester read")),
+            Err(WrongRequester)
+        );
+        assert_eq!(
+            retained().sample_passive_header(page(0, region(BASE, 8)), |_| panic!("wrong extent read")),
+            Err(DifferentBarAllocation)
+        );
+        let mut reads = [0; 12];
+        let mut count = 0;
+        let expected = Ok(PassivePciHeader { command: 6 });
+        assert_eq!(
+            retained().sample_passive_header(page(0, bar), |offset| {
+                reads[count] = offset;
+                count += 1;
+                baseline(offset)
+            }),
+            expected
+        );
+        assert_eq!(reads, [0, 8, 4, 0xc, 0x10, 0x14, 0, 8, 4, 0xc, 0x10, 0x14]);
+        let mut count = 0;
+        assert_eq!(
+            retained().sample_pci_words(|offset| {
+                count += 1;
+                Some(u32::MAX).filter(|_| offset == 0)
+            }),
+            Err(ChangedFunction)
+        );
+        assert_eq!(count, 1);
+        for (at, value, second, error) in [
+            (8, Some(0x0c03_3001), true, ChangedFunction),
+            (4, Some(2), true, Unstable),
+            (4, Some(0xffff), false, InvalidHeader),
+            (0x0c, Some(0x0001_0000), false, InvalidHeader),
+            (0x10, Some(BASE as u32 | 1), false, InvalidHeader),
+            (0x14, Some(1), false, ChangedBar),
+            (0x14, None, true, Unreadable),
+        ] {
+            let mut pass = 0;
+            assert_eq!(
+                retained().sample_pci_words(|offset| {
+                    if offset == 0 {
+                        pass += 1;
+                    }
+                    if offset == at && (!second || pass == 2) {
+                        value
+                    } else {
+                        baseline(offset)
+                    }
+                }),
+                Err(error)
+            );
+        }
+        assert_eq!(
+            retained().sample_pci_words(|offset| match offset {
+                0x10 => Some(BASE as u32),
+                0x14 => panic!("32-bit BAR must not read BAR1"),
+                _ => baseline(offset),
+            }),
+            expected
+        );
     }
 
     #[test]

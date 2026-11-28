@@ -265,6 +265,14 @@ identity, BAR, geometry, ownership, MCFG coverage, or DMAR route cannot match.
 The comparison runs before firmware exit and performs no extra device reads;
 a match is not verification of board identity or permission to access hardware.
 Any change is a reason to record the full output, not to attempt a handoff.
+For a future passive post-exit diagnostic, the planner derives one 4 KiB PCI
+configuration page from the exact MCFG segment, bus, device and function. It
+requires explicit coverage by a normalized firmware MMIO range and rejects
+collision with the retained controller BAR. The header sampler requires two
+matching identity, command, header and BAR samples and refuses an unexpected
+requester or a different retained BAR allocation before reading. These steps
+have model coverage only; no physical ECAM mapping is installed. A matching BAR base does not validate its extent,
+prove DMA isolation, or permit a handoff.
 
 The signed QEMU/OVMF negative control boots the same sealed test release
 from a read-only virtual disk attached directly to the sole xHCI candidate.
