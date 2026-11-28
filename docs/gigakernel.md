@@ -184,6 +184,19 @@ journal persistence in QEMU only. The kernel still parks without launching a
 supervisor. No physical firmware, TPM, USB drive, or service microVM was
 exercised.
 
+For the next launch boundary, `BootServiceImage` checks the retained service
+envelope against the accepted release number, loader-recorded payload
+measurement, and exact single-image PE32+ layout. It returns the checked PE
+source, not the loader's legacy native page tables or a launch capability.
+The observation profile reports this as a separate `MRML:BOOT:SERVICE:CHECKED`
+record, or reports missing or rejected input, and continues to park. A fresh
+signed QEMU fixture with the same four required policy gates produced
+`MRML:BOOT:POLICY:ACCEPTED` followed by `MRML:BOOT:SERVICE:CHECKED`.
+This checks the retained FAT32 service payload; it does not reauthenticate
+the release signature, name a supervisor, or start a guest. A supervisor
+still needs explicit role admission and fresh guest-owned mappings before
+entry.
+
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
    service before moving supervision policy out of the kernel.

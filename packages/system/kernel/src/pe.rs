@@ -665,11 +665,11 @@ fn read_u64(bytes: &[u8], at: usize) -> Result<u64, PeError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{MemoryKind, MemoryMap, MemoryRegion};
 
-    fn valid_pe() -> [u8; 1024] {
+    pub(crate) fn valid_pe() -> [u8; 1024] {
         let mut pe = [0u8; 1024];
         pe[0..2].copy_from_slice(&DOS_MAGIC.to_le_bytes());
         pe[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());

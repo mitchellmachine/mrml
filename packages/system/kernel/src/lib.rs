@@ -12,6 +12,7 @@ mod application_microvm;
 pub mod arch;
 mod artifact;
 mod boot;
+mod boot_service;
 mod boot_recovery;
 mod boot_recovery_syscall;
 mod build_receipt;
@@ -76,6 +77,7 @@ pub use artifact::{
     VerifiedExecutable, VerifiedRelease, artifact_statement, executable_image_limit,
 };
 pub use boot::{BootEvidence, BootPolicy, BootValidationError, ValidatedBoot};
+pub use boot_service::{BootServiceImage, BootServiceImageError};
 pub use boot_recovery::{
     BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryDelivery, BootRecoveryDeliveryError,
     BootRecoveryEnvelope, BootRecoveryEnvelopeError,

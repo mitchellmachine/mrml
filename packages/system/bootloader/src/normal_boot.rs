@@ -20,9 +20,37 @@ pub(super) fn enter(handoff: &BootHandoff, _early: &EarlyKernelContext<'_>) -> !
     }
     observe(b"MRML:BOOT:POLICY:ACCEPTED\n");
 
+    #[cfg(feature = "normal-boot-observation")]
+    observe_retained_service(handoff);
+
     // No authenticated supervisor is wired to this entry yet. Keep the
     // machine parked rather than starting a diagnostic or native workload.
     super::halt()
+}
+
+#[cfg(feature = "normal-boot-observation")]
+fn observe_retained_service(handoff: &BootHandoff) {
+    let Some(launch) = handoff.service() else {
+        observe(b"MRML:BOOT:SERVICE:MISSING\n");
+        return;
+    };
+    let Ok(length) = usize::try_from(launch.artifact_length()) else {
+        observe(b"MRML:BOOT:SERVICE:REJECTED\n");
+        return;
+    };
+    // SAFETY: normal entry follows complete handoff decoding and the boot
+    // policy check. The loader retained the exact bounded service allocation
+    // in a supervisor-only, read-only identity mapping. No guest has run.
+    let bytes = unsafe {
+        core::slice::from_raw_parts(launch.artifact_physical().get() as *const u8, length)
+    };
+    if mrml_kernel::BootServiceImage::check(launch, handoff.evidence().image_version(), bytes)
+        .is_ok()
+    {
+        observe(b"MRML:BOOT:SERVICE:CHECKED\n");
+    } else {
+        observe(b"MRML:BOOT:SERVICE:REJECTED\n");
+    }
 }
 
 fn embedded_minimum_version() -> Option<u64> {
