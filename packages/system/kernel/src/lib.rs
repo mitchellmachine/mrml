@@ -136,11 +136,12 @@ pub use graphics::{
     admit_surface_interface_commit, authorize_surface_commit,
 };
 pub use handoff::{
-    ApplicationLaunch, BootHandoff, BootIsolationOverride, HANDOFF_APPLICATION_BYTES,
+    ApplicationLaunch, BootDxeDiagnostic, BootHandoff, BootIsolationOverride, HANDOFF_APPLICATION_BYTES,
     HANDOFF_HEADER_BYTES, HANDOFF_RECOVERY_STATE_BYTES, HANDOFF_REGION_BYTES,
     HANDOFF_SERVICE_BYTES, HandoffError, MAX_HANDOFF_BYTES, MAX_HANDOFF_DMA_ACPI_TABLE_BYTES,
     MAX_HANDOFF_MADT_BYTES, MAX_HANDOFF_REGIONS, RecoveryStateMetadata, ServiceLaunch,
-    BOOT_USB_PCI_RECORD_BYTES, append_boot_dma_acpi, append_boot_usb_pci_record, encode_handoff,
+    BOOT_USB_PCI_RECORD_BYTES, PASSIVE_DXE_RECORD_BYTES, append_boot_dma_acpi,
+    append_boot_dxe_diagnostic, append_boot_usb_pci_record, encode_handoff,
     encode_handoff_with_application, encode_handoff_with_madt, encode_handoff_with_recovery,
     encode_handoff_with_recovery_and_isolation,
     encode_handoff_with_recovery_isolation_and_installed,

@@ -518,8 +518,7 @@ pub enum DxeObservationError {
     InvalidRecord,
 }
 
-/// Size of the canonical version-one passive DXE diagnostic copy.
-pub const PASSIVE_DXE_RECORD_BYTES: usize = 200;
+pub use crate::PASSIVE_DXE_RECORD_BYTES;
 
 /// Copied firmware classifications bound to one requester and one exact ACPI
 /// layout. This type is diagnostic data, not an MMIO mapping or capability.

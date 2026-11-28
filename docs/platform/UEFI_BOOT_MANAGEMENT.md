@@ -299,7 +299,11 @@ checking the final map. The standalone inventory also attempts this copy
 from genuine firmware classifications and reports refusal or agreement with
 its pre-exit snapshot. It returns to firmware either way; this does not run
 `ExitBootServices` and is not wired into the live boot handoff. Canonical
-equality does not authenticate origin.
+equality does not authenticate origin. A bounded optional handoff slot now
+models explicit incomplete status or a copied record bound to the checked
+USB requester and BAR. It requires the ACPI pair and USB observation and
+rejects partial, orphaned or mixed payloads before yielding memory regions.
+The live boot producer and post-exit topology check are not yet connected.
 For a future passive post-exit diagnostic, the planner derives one 4 KiB PCI
 configuration page from the exact MCFG segment, bus, device and function. It
 requires explicit coverage by a normalized firmware MMIO range and rejects
