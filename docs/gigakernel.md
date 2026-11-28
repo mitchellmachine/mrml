@@ -6,6 +6,22 @@ If isolation or a required resource is unavailable, the workload does not
 start. There is no native fallback inside MRML OS. The Windows and Linux
 host tools are separate programs, not an alternate execution mode.
 
+## Hardware discovery and driver supervision
+
+The hardware supervisor is a service, not part of the privileged kernel.
+It consumes a complete, generation-tagged PCI inventory from a trusted
+platform provider. For each xHCI controller it requests a separate driver
+microVM, keyed by PCI segment, bus, device, function, and controller
+incarnation. USB peripherals remain beneath their controller's driver;
+drivers are not shared across controllers. A failed driver launch has no
+native fallback. Removal or replacement stops routing and retires that
+controller's VM before reusing its address. Unrelated controllers stay put.
+
+This policy has a host-tested service core. Live inventory transport and
+the platform adapter that binds each launch to independently admitted
+controller, interrupt, and DMA capabilities are not wired yet. Inventory
+data itself never grants those capabilities.
+
 ## How the Gigakernel compares
 
 Gigakernel, named after Gigachad, is MRML's name for its experimental
