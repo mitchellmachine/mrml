@@ -349,7 +349,11 @@ The guest can now return its entire thumbnail in one fixed 4 KiB mailbox.
 The compositor fixture checks that this packed frame exactly matches the
 row-wise capture before projecting it. The format passes pixels only and
 grants no device or display access. The sealed boot monitor has not yet
-launched this desktop diagnostic.
+launched this desktop diagnostic. A separate one-shot desktop image now
+provides the sealed monitor's read-only request / private reply entry ABI.
+It renders a static diagnostic frame and only then emits its trapped
+completion signal. The exact request and zero-padded reply are tested;
+this image is not yet connected to firmware scanout.
 
 ### MicroVM task manager prototype
 
