@@ -278,7 +278,11 @@ root and exact one-page supervisor read-only, non-executable device mapping.
 A second mapping of that physical page, even if also read-only, is rejected.
 This checks page-table structure only; the live diagnostic must still prove
 firmware exit, retire stale translations, and check CPU cache policy before
-sampling. No live physical read is wired to this verifier.
+sampling. No live physical read is wired to this verifier. The sealed Q35
+regression runs the same structure check on its fixed emulated endpoint
+before the host release. It logs separate results for a verified read-only
+leaf and a writable endpoint rejected by the passive path. The writable
+shutdown fixtures still have their own independent checks and release.
 
 The signed QEMU/OVMF negative control boots the same sealed test release
 from a read-only virtual disk attached directly to the sole xHCI candidate.

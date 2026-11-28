@@ -1375,6 +1375,26 @@ impl ActivePageTables {
         )
     }
 
+    /// Exercise the passive mapping verifier on the sealed Q35 endpoint page.
+    /// This uses the emulator's fixed fixture address rather than admitting
+    /// an address from an incomplete firmware map on physical machines.
+    pub fn verify_q35_passive_pci_leaf(
+        &self,
+        expected_root: PhysAddr,
+        topology: super::Q35FixtureTopology,
+    ) -> Result<(), PageTableBuildError> {
+        let proposal = super::q35_fixture_probe_mappings(topology)
+            .map_err(|_| PageTableBuildError::MappingMismatch)?[1]
+            .ok_or(PageTableBuildError::MappingMismatch)?;
+        verify_passive_pci_mapping_from_store(
+            &IdentityMappedPageTables,
+            self.root,
+            expected_root,
+            proposal.physical_start(),
+            proposal,
+        )
+    }
+
     /// Verify the exact signed QEMU shutdown fixture, not arbitrary PCI
     /// memory. No MMIO access, permission changes, or TLB changes occur.
     pub fn verify_q35_shutdown_leaves(&self) -> Result<(), PageTableBuildError> {

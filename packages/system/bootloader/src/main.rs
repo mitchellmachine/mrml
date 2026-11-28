@@ -4311,7 +4311,21 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             halt();
         };
         let dma = _boot_dma.as_ref().unwrap_or_else(|| halt());
-        if matches!(release, 0xa7 | 0xa8) {
+        let writable_fixture = matches!(release, 0xa7 | 0xa8);
+        // The DMA adoption captured the root earlier in this same boot,
+        // before the fresh ActivePageTables snapshot above.
+        if active.root() != dma.root() {
+            halt();
+        }
+        let passive = active.verify_q35_passive_pci_leaf(dma.root(), topology);
+        match (writable_fixture, passive) {
+            (false, Ok(())) => native_fat32_probe::trace(0xc6),
+            (true, Err(mrml_kernel::arch::x86_64::PageTableBuildError::MappingMismatch)) => {
+                native_fat32_probe::trace(0xc7);
+            }
+            _ => halt(),
+        }
+        if writable_fixture {
             // SAFETY: the signed fixture runs with this dedicated root on
             // the BSP only, before enabling interrupts or configuring DMA.
             if unsafe { active.verify_boot_dma_write_back(dma) }.is_err() {
