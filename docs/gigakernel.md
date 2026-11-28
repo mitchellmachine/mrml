@@ -156,11 +156,16 @@ reached the kernel's normal-boot policy in both controls:
 | Enrolled OVMF, signed loader, no TPM | `MRML:BOOT:POLICY:MEASUREMENT` (49 trace bytes) | The Secure Boot gate passed; the measurement gate did not. |
 | Same signed image and enrollment, fresh emulated TPM 2.0 | `MRML:BOOT:POLICY:ROLLBACK` (46 trace bytes) | Secure Boot and the measurement gate passed; authenticated rollback state was absent. |
 
-An empty emulated TPM is not an owner-provisioned release journal. The next
-acceptance fixture needs a provisioned journal and a matching coherent
-release. Policy acceptance and actual supervisor guest entry must still be
-observed as separate checkpoints. No physical firmware, USB drive, or
-service microVM was exercised in this experiment.
+An empty emulated TPM is not an owner-provisioned release journal. A separate
+offline provisioning test used `mrml-sign prepare-release-genesis-slot` to
+encode the 200-byte slot for the counter value read from a fresh software
+TPM. The counter was 1, so slot 1 was selected. The software TPM returned
+the exact bytes under a PolicyPCR session and rejected a password-only read.
+That test used the emulator's reset PCR state, not a firmware-measured
+production policy. The next integrated fixture must bind the journal to the
+expected firmware measurements and boot a matching coherent release. Policy
+acceptance and actual supervisor guest entry remain separate checkpoints.
+No physical firmware, TPM, USB drive, or service microVM was exercised.
 
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real

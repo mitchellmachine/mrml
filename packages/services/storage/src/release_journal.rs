@@ -1,11 +1,28 @@
 use core::cell::RefCell;
 
 use mrml_crypto::Sha3_256;
-use mrml_kernel::{BOOTSTRAP_STATE_BYTES, MonotonicStateStore};
+use mrml_kernel::{ArtifactError, BOOTSTRAP_STATE_BYTES, BootstrapState, MonotonicStateStore};
 
 pub const RELEASE_STATE_JOURNAL_SLOT_BYTES: usize = 200;
 const JOURNAL_MAGIC: [u8; 8] = *b"MRLSTJ01";
 const JOURNAL_DIGEST_OFFSET: usize = 16 + BOOTSTRAP_STATE_BYTES;
+
+/// Encodes the slot selected by the observed initial counter. This is offline
+/// provisioning data, not authenticated state. The caller must separately
+/// establish that the counter and slots belong to a fresh owner-provisioned
+/// journal and verify any writes against those exact objects.
+pub fn encode_release_genesis_slot(
+    sequence: u64,
+    state: BootstrapState,
+) -> Result<(u8, [u8; RELEASE_STATE_JOURNAL_SLOT_BYTES]), ArtifactError> {
+    if state.installed_manifest_digest().is_some() {
+        return Err(ArtifactError::MalformedBootstrapState);
+    }
+    if sequence == u64::MAX {
+        return Err(ArtifactError::VersionExhausted);
+    }
+    Ok((slot_for(sequence), encode_slot(sequence, &state.encode())))
+}
 
 /// Authenticated durable primitives dedicated to release bootstrap state.
 ///
@@ -161,7 +178,6 @@ pub enum ReleaseStateJournalError<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mrml_kernel::BootstrapState;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum BackendError {
@@ -248,6 +264,40 @@ mod tests {
         BootstrapState::genesis([root; 64], release)
             .unwrap()
             .encode()
+    }
+
+    #[test]
+    fn genesis_slot_binds_readback_sequence_and_cannot_encode_installed_state() {
+        let genesis = state(0x5a, 7);
+        for sequence in [0, 1, 24, 25] {
+            let (index, slot) = encode_release_genesis_slot(
+                sequence,
+                BootstrapState::decode_canonical(&genesis).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(u64::from(index), sequence % 2);
+            assert_eq!(
+                decode_slot::<BackendError>(sequence, &slot),
+                Ok((sequence, genesis))
+            );
+            assert_eq!(
+                decode_slot::<BackendError>(sequence + 1, &slot),
+                Err(ReleaseStateJournalError::MalformedSlot)
+            );
+        }
+        assert_eq!(
+            encode_release_genesis_slot(
+                u64::MAX,
+                BootstrapState::decode_canonical(&genesis).unwrap()
+            ),
+            Err(ArtifactError::VersionExhausted)
+        );
+        let mut installed = genesis;
+        installed[88..].fill(1);
+        assert_eq!(
+            encode_release_genesis_slot(1, BootstrapState::decode_canonical(&installed).unwrap()),
+            Err(ArtifactError::MalformedBootstrapState)
+        );
     }
 
     #[test]

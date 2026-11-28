@@ -200,7 +200,7 @@ pub use recovery_journal::{
 };
 pub use release_journal::{
     AuthenticatedReleaseStateJournal, RELEASE_STATE_JOURNAL_SLOT_BYTES, ReleaseStateJournalBackend,
-    ReleaseStateJournalError,
+    ReleaseStateJournalError, encode_release_genesis_slot,
 };
 pub use service_loop::{
     BlockServiceLoop, BlockServiceLoopError, BlockServiceSyscalls, ReceivedBlockEnvelope,

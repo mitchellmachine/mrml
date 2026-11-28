@@ -50,6 +50,12 @@ compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_storage"
+compile_name = "mrml-storage"
+package = "org.mrml.service.storage"
+scope = "compile"
+
 [[binary]]
 crate_name = "mrml_sign"
 output = "mrml-sign"

@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 258
+compile_edges = 259
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 216
+package_edges = 217
 system_release_edges = 3
 
 [[package]]
@@ -1057,9 +1057,9 @@ isolation_default = "native-process"
 isolation_minimum = "native-process"
 isolation_maximum = "native-process"
 isolation_supported = ["native-process"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
-static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.system.kernel"]
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.service.storage", "org.mrml.system.kernel"]
 boot_bound = []
 system_release_bound = []
 

@@ -715,6 +715,15 @@ These commands handle no private key and grant no boot authority. They do not
 prove owner consent, provision TPM NV, replace or revoke a live root, authorize
 development mode, or provide accessible recovery.
 
+`mrml-sign prepare-release-genesis-slot OBSERVED_COUNTER STATE OUTPUT`
+encodes one 200-byte initial slot with the same codec used by the release
+journal. It takes the read-back counter value, reports its selected slot
+(counter modulo two), refuses installed-release state or an exhausted
+counter, and creates a new file without replacing existing data. It does
+not open a TPM or authenticate the counter or state. Use only to stage
+initial data for a separately verified fresh journal, never to repair or
+replace an installed journal.
+
 **IMPLEMENTED as bounded comparison infrastructure:** canonical build receipts
 omit ambient host identity and paths while binding declared tool versions,
 target/profile, a canonical source archive, dependency lockfile, unsigned boot

@@ -36,6 +36,23 @@ pub fn inspect(path: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn prepare_slot(sequence: u64, state_path: &str, output_path: &str) -> Result<()> {
+    if mrml_runtime::path_exists(output_path) {
+        return Err(anyhow!("refusing to overwrite release journal slot"));
+    }
+    let encoded = mrml_runtime::read_file_bounded(state_path, BOOTSTRAP_STATE_BYTES)?;
+    let state = BootstrapState::decode_canonical(&encoded)
+        .map_err(|_| anyhow!("invalid canonical bootstrap state"))?;
+    let (slot, bytes) = mrml_storage::encode_release_genesis_slot(sequence, state)
+        .map_err(|_| anyhow!("a fresh release journal requires genesis bootstrap state"))?;
+    mrml_runtime::write_new_file(output_path, &bytes)?;
+    println!(
+        "release-journal-slot|slot={}|sequence={}|authentication=not-verified|tpm-write=not-performed",
+        slot, sequence
+    );
+    Ok(())
+}
+
 fn encode_genesis(public: &[u8], minimum_release: u64) -> Result<[u8; BOOTSTRAP_STATE_BYTES]> {
     if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
         return Err(anyhow!("invalid public-key length"));
