@@ -93,6 +93,7 @@ pub(super) enum Q35FixtureCase {
     NoMarker,
     SharedBootNoMarker,
     IsolatedSharedBootNoMarker,
+    IsolatedSharedBootObserve,
     SharedPreloadUnmarked,
     SharedPreloadDenied,
     SharedPreload,
@@ -124,6 +125,7 @@ impl Q35FixtureCase {
             Self::IsolatedWrongRelease
                 | Self::IsolatedValidRelease
                 | Self::IsolatedSharedBootNoMarker
+                | Self::IsolatedSharedBootObserve
                 | Self::ShutdownWrongRelease
                 | Self::ShutdownValidRelease
                 | Self::ColdWrongRelease
@@ -148,12 +150,13 @@ impl Q35FixtureCase {
         }
     }
 
-    fn cold(self) -> Option<crate::qemu_mmio::ColdMode> {
-        use crate::qemu_mmio::ColdMode;
+    fn post_check(self) -> Option<crate::qemu_mmio::PostCheck> {
+        use crate::qemu_mmio::PostCheck;
         match self {
-            Self::ColdDenyActivation => Some(ColdMode::DenyActivation),
-            Self::ColdActivate => Some(ColdMode::SeparateBoot),
-            Self::ColdActivateSharedBoot => Some(ColdMode::SharedBoot),
+            Self::ColdDenyActivation => Some(PostCheck::DenyActivation),
+            Self::ColdActivate => Some(PostCheck::SeparateBoot),
+            Self::ColdActivateSharedBoot => Some(PostCheck::SharedBoot),
+            Self::IsolatedSharedBootObserve => Some(PostCheck::ObserveAttached),
             _ => None,
         }
     }
@@ -235,6 +238,7 @@ fn run_qemu_config(
         Some(
             Q35FixtureCase::ValidRelease
             | Q35FixtureCase::IsolatedValidRelease
+            | Q35FixtureCase::IsolatedSharedBootObserve
             | Q35FixtureCase::ShutdownValidRelease
             | Q35FixtureCase::ColdDenyActivation
             | Q35FixtureCase::ColdActivate
@@ -310,6 +314,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Some(
             Q35FixtureCase::SharedBootNoMarker
                 | Q35FixtureCase::IsolatedSharedBootNoMarker
+                | Q35FixtureCase::IsolatedSharedBootObserve
                 | Q35FixtureCase::ColdActivateSharedBoot
                 | Q35FixtureCase::SharedPreloadUnmarked
                 | Q35FixtureCase::SharedPreloadDenied
@@ -460,7 +465,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         | Q35FixtureCase::ShutdownWrongRelease
         | Q35FixtureCase::ColdWrongRelease
         | Q35FixtureCase::BarWrongRelease => Some(0x5a),
-        Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease => Some(0xa6),
+        Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease | Q35FixtureCase::IsolatedSharedBootObserve => Some(0xa6),
         Q35FixtureCase::ShutdownValidRelease => Some(0xa7),
         Q35FixtureCase::ColdDenyActivation | Q35FixtureCase::ColdActivate => Some(0xa8),
         Q35FixtureCase::ColdActivateSharedBoot => Some(0xbb),
@@ -473,7 +478,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::SharedGuestBmeDenied => Some(0xb7),
         Q35FixtureCase::SharedGuestRemappingUnproven => Some(0xba),
     });
-    let cold = map_only_marker.and_then(Q35FixtureCase::cold);
+    let post_check = map_only_marker.and_then(Q35FixtureCase::post_check);
     let mut released = false;
     let mut fixture_bar = None;
     loop {
@@ -493,9 +498,10 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         &mut child,
                         valid,
                         isolated,
-                        matches!(valid, 0xa7 | 0xa8 | 0xb5 | 0xb7 | 0xba | 0xbb)
+                        (matches!(valid, 0xa7 | 0xa8 | 0xb5 | 0xb7 | 0xba | 0xbb)
+                            || post_check.is_some())
                             .then_some((trace, expected)),
-                        cold,
+                        post_check,
                     ) {
                         Ok(bar) => bar,
                         Err(error) => {
@@ -527,10 +533,10 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 );
                 return Ok(());
             }
-            if released && cold.is_some() {
+            if released && post_check.is_some() {
                 // The QMP worker already checked the full signed trace and
                 // independently sampled the paused device after the verdict.
-                child.kill().map_err(|e| format!("stop cold QEMU: {e}"))?;
+                child.kill().map_err(|e| format!("stop verified QEMU: {e}"))?;
                 let _ = child.wait();
                 return Ok(());
             }

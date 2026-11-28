@@ -339,7 +339,13 @@ xHCI port-change event on an otherwise halted controller. The signed guest
 clears both bus-master bits, verifies VT-d denial after the drain, and the
 host independently checks the denied context and the empty USB bus again.
 This neither transfers physical firmware ownership nor authorizes hardware
-handoff in the normal boot path.
+handoff in the normal boot path. An independent read-only control case
+passes through the same post-firmware checkpoint but leaves the boot disk
+attached. The guest uses only read-only MMIO mappings. The paused host
+checks attachment, zero media writes, unchanged PCI and xHCI state, and
+inactive VT-d before and after the guest report. It records boot-source
+retirement, DMA containment, and firmware ownership transfer as unproved.
+Reaching the kernel alone is not evidence for any of those conditions.
 
 ### Diagnose a return to firmware
 

@@ -24,7 +24,8 @@ pub(super) fn fixture_acpi_table(profile: u8) -> [u8; 36] {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub(super) enum ColdMode {
+pub(super) enum PostCheck {
+    ObserveAttached,
     DenyActivation,
     SeparateBoot,
     SharedBoot,
@@ -60,7 +61,7 @@ pub(super) fn release_q35_fixture(
     release: u8,
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
-    cold: Option<ColdMode>,
+    cold: Option<PostCheck>,
 ) -> Result<Option<FixtureState>, String> {
     inspect_q35(child, Some(release), isolated, post, cold, PausedCheck::Resources)
 }
@@ -70,7 +71,7 @@ fn inspect_q35(
     release: Option<u8>,
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
-    cold: Option<ColdMode>,
+    cold: Option<PostCheck>,
     paused_check: PausedCheck,
 ) -> Result<Option<FixtureState>, String> {
     let mut stdin = child.stdin.take().ok_or("missing QMP input")?;
@@ -110,7 +111,7 @@ fn inspect_qmp(
     release: Option<u8>,
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
-    cold: Option<ColdMode>,
+    cold: Option<PostCheck>,
     paused_check: PausedCheck,
 ) -> Result<Option<FixtureState>, String> {
     qmp_write(stdin, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
@@ -235,7 +236,11 @@ fn inspect_qmp(
             );
         }
     }
-    let cold_shared = cold == Some(ColdMode::SharedBoot);
+    let cold_shared = cold == Some(PostCheck::SharedBoot);
+    let observe_attached = cold == Some(PostCheck::ObserveAttached);
+    if observe_attached && (release != Some(0xa6) || !isolated) {
+        return Err("retained boot source observation requires the read-only release".into());
+    }
     let bar = if matches!(release, Some(0xa6..=0xa9 | 0xbb)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
@@ -244,7 +249,7 @@ fn inspect_qmp(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info pci\"},\"id\":76}\n",
         )?;
-        let bar = fixture_bar_for_topology(&read_monitor(&mut *reader, 76)?, isolated, !cold_shared)?;
+        let bar = fixture_bar_for_topology(&read_monitor(&mut *reader, 76)?, isolated, !(cold_shared || observe_attached))?;
         qmp_write(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":77}\n",
@@ -289,6 +294,13 @@ fn inspect_qmp(
             return Err("controller is not halted with interrupts off".into());
         }
         Some(state)
+    } else {
+        None
+    };
+    let observation = if observe_attached {
+        let state = bar.filter(|_| isolated).ok_or("missing isolated no-write sample")?;
+        verify_shared_boot(stdin, reader)?;
+        Some(observe_attached_boot(stdin, reader, state)?)
     } else {
         None
     };
@@ -338,6 +350,22 @@ fn inspect_qmp(
         let (path, expected) = post.ok_or("missing signed guest BME trace expectation")?;
         verify_guest_bme(stdin, reader, path, expected, before, allow, require_unproven)?;
     }
+    if let Some(baseline) = observation {
+        let (path, prefix) = post.ok_or("missing read-only signed guest trace")?;
+        let state = bar.ok_or("missing isolated no-write sample")?;
+        let report = await_fixed_report(path, prefix, state, false)?;
+        qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
+        ack(reader, "{\"return\": {}, \"id\": 94}")?;
+        verify_shared_boot(stdin, reader)?;
+        if sample_xhci_state(stdin, reader, state.bar)? != state
+            || observe_attached_boot(stdin, reader, state)? != baseline
+        {
+            return Err("state changed during the read-only boot diagnostic".into());
+        }
+        println!("{report}");
+        println!("q35-usb-post-firmware-observation|status=PASS|firmware_exited=true|boot_source=attached|bme=on|vtd_translation=off|ownership_transfer=unproven|hardware_writes=false");
+        return Ok(bar);
+    }
     if let (Some(before), Some((path, prefix)), Some(state)) = (before, post, bar) {
         if let Some(mode) = cold {
             inspect_cold_activation(
@@ -351,7 +379,7 @@ fn inspect_qmp(
             )?;
             return Ok(bar);
         }
-        await_shutdown_report(path, prefix, state)?;
+        await_fixed_report(path, prefix, state, true)?;
         qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
         ack(reader, "{\"return\": {}, \"id\": 94}")?;
         let after = sample_shutdown(stdin, reader, 95)?;
@@ -375,6 +403,25 @@ struct ShutdownSample {
     bridge: u32,
     boot: u32,
     gsts: u32,
+}
+
+fn observe_attached_boot(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    state: FixtureState,
+) -> Result<ShutdownSample, String> {
+    let baseline = sample_shutdown(stdin, reader, 90)?;
+    if !state.matches_halted_shared_boot(state)
+        || baseline.endpoint as u16 != 7
+        || baseline.bridge as u16 != 7
+        || baseline.boot != u32::MAX
+        || baseline.gsts != 0
+        || read_root_pointer(stdin, reader)? != 0
+        || read_model_dword(stdin, reader, DRHD.0 + 0x34, 104)? != 0
+    {
+        return Err("unexpected retained boot source, PCI or remapper observation".into());
+    }
+    Ok(baseline)
 }
 
 fn sample_shutdown(
@@ -537,9 +584,9 @@ fn inspect_cold_activation(
     trace: (&std::path::Path, &[u8]),
     state: FixtureState,
     firmware: ShutdownSample,
-    mode: ColdMode,
+    mode: PostCheck,
 ) -> Result<(), String> {
-    let allow = mode != ColdMode::DenyActivation;
+    let allow = mode != PostCheck::DenyActivation;
     let (path, prefix) = trace;
     let (root, _) = wait_cold_trace(path, prefix, state, &[])?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
@@ -622,7 +669,7 @@ fn inspect_cold_activation(
         qmp_write(stdin, &format!("{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"xp /512gx {:#x}\"}},\"id\":172}}\n", root + 4096))?;
         verify_root_page_with_context(&read_monitor(&mut *reader, 172)?, root, 1, 0, 1, false)?;
     }
-    if mode == ColdMode::SharedBoot {
+    if mode == PostCheck::SharedBoot {
         verify_shared_disk_retired(stdin, reader)?;
         println!("q35-vtd-shared-boot|status=PASS|requester=0000:41:00.0|boot_source_detached=true|exact_requester_denied=true");
     }
@@ -1009,24 +1056,25 @@ fn named_block_stats(stats: &str, prefix: &str) -> Result<[u64; 4], String> {
     Ok(counters)
 }
 
-fn await_shutdown_report(
+fn await_fixed_report(
     path: &std::path::Path,
     prefix: &[u8],
     state: FixtureState,
-) -> Result<(), String> {
+    shutdown: bool,
+) -> Result<String, String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     while std::time::Instant::now() < deadline {
         let mut bytes = Vec::new();
         std::fs::File::open(path)
             .and_then(|file| file.take(512).read_to_end(&mut bytes))
-            .map_err(|e| format!("read shutdown trace: {e}"))?;
+            .map_err(|e| format!("read fixed register trace: {e}"))?;
         // The loop starts immediately after cont, so dc alone is legitimate.
-        if register_snapshot(prefix, &bytes, state, true, true)?.is_some() {
-            return Ok(());
+        if let Some(report) = register_snapshot(prefix, &bytes, state, true, shutdown)? {
+            return Ok(report);
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    Err("missing complete signed shutdown report".into())
+    Err("missing complete signed fixed register report".into())
 }
 
 fn check_isolation_properties(
