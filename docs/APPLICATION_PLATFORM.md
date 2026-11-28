@@ -348,12 +348,21 @@ qualifies the emulator's screen evidence path, not desktop presentation.
 The guest can now return its entire thumbnail in one fixed 4 KiB mailbox.
 The compositor fixture checks that this packed frame exactly matches the
 row-wise capture before projecting it. The format passes pixels only and
-grants no device or display access. The sealed boot monitor has not yet
-launched this desktop diagnostic. A separate one-shot desktop image now
-provides the sealed monitor's read-only request / private reply entry ABI.
-It renders a static diagnostic frame and only then emits its trapped
-completion signal. The exact request and zero-padded reply are tested;
-this image is not yet connected to firmware scanout.
+grants no device or display access.
+
+The separate, opt-in VMX desktop boot diagnostic is built with
+`mrml usb image-vmx-desktop DESKTOP.img` and checked with
+`mrml usb test-vmx-desktop DESKTOP.img OVMF_CODE OVMF_VARS QEMU`.
+The monitor starts an independently signed desktop microVM with a read-only
+request and a separate, non-executable RAM reply page. It accepts the
+thumbnail only after the exact trapped completion, validates the entire
+canonical frame and its zero padding, then checks that a separately parked
+guest can still resume before clearing the desktop VMCS. QEMU uses a private
+copy of the image, checks refusal without VMX under TCG, and requires nested
+VMX under KVM for the positive trace. The monitor displays a status label,
+not the desktop frame. This image does not grant a framebuffer or any
+device to the guest and does not change normal boot. Publishing the frame
+through an admitted compositor route remains open.
 
 ### MicroVM task manager prototype
 

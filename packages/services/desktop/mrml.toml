@@ -76,6 +76,12 @@ target = "MRML_NATIVE"
 triple = "x86_64-unknown-uefi"
 
 [[dependency]]
+alias = "mrml_boot_frame"
+compile_name = "mrml-boot-frame"
+package = "org.mrml.library.boot-frame"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_terminal_probe"
 compile_name = "mrml-terminal-probe"
 package = "org.mrml.app.terminal-probe"

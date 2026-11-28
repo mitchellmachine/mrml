@@ -5,11 +5,16 @@
 use core::arch::asm;
 use mrml_desktop::boot_frame::{BOOT_REPLY_BYTES, BOOT_REQUEST, render_boot_reply};
 
+// The sealed loader requires a real DIR64 relocation when changing the
+// preferred PE base. Keep an immutable pointer to an in-image symbol.
+static RELOCATION_ANCHOR: fn() -> ! = halt;
+
 #[unsafe(no_mangle)]
 pub extern "efiapi" fn efi_main(
     request: &[u8; BOOT_REQUEST.len()],
     reply: &mut [u8; BOOT_REPLY_BYTES],
 ) -> ! {
+    core::hint::black_box(&RELOCATION_ANCHOR);
     if render_boot_reply(request, reply).is_ok() {
         // SAFETY: the diagnostic launcher traps this one-byte completion
         // notification. The guest has no physical device or scanout mapping.

@@ -294,14 +294,16 @@ pub(super) enum ProbeFault {
     Resume = 0x15,
     LongState = 0x16,
     LongExecution = 0x17,
-    #[cfg(feature = "vmx-kernel-monitor")]
+    #[cfg(all(feature = "vmx-kernel-monitor", not(feature = "vmx-desktop-monitor")))]
     KernelPrepare = 0x18,
-    #[cfg(feature = "vmx-kernel-monitor")]
+    #[cfg(all(feature = "vmx-kernel-monitor", not(feature = "vmx-desktop-monitor")))]
     KernelExit = 0x19,
     #[cfg(feature = "vmx-kernel-monitor")]
     Timer = 0x1A,
     #[cfg(feature = "vmx-kernel-monitor")]
     Service = 0x1B,
+    #[cfg(feature = "vmx-desktop-monitor")]
+    DesktopReply = 0x1C,
 }
 
 pub(super) fn mismatch_labels(masks: [u64; 4]) -> [[u8; 26]; 4] {
@@ -453,7 +455,7 @@ pub(super) unsafe fn run(
         },
     )
     .map_err(|_| ProbeFault::LongState)?;
-    #[cfg(feature = "vmx-kernel-monitor")]
+    #[cfg(all(feature = "vmx-kernel-monitor", not(feature = "vmx-desktop-monitor")))]
     let kernel = super::vmx_kernel_guest::prepare(
         capabilities.revision_id(),
         controls,
@@ -636,6 +638,7 @@ pub(super) unsafe fn run(
                 return Err(ProbeFault::Timer);
             }
             trace(0xc4);
+            #[cfg(not(feature = "vmx-desktop-monitor"))]
             super::vmx_kernel_guest::run_service_call(
                 kernel,
                 service,
@@ -644,7 +647,17 @@ pub(super) unsafe fn run(
                 ticks(1 << 32),
             )
             .ok_or(ProbeFault::KernelExit)?;
+            #[cfg(not(feature = "vmx-desktop-monitor"))]
             trace(0xc3);
+            #[cfg(feature = "vmx-desktop-monitor")]
+            let desktop_vmcs = {
+                let vmcs = super::vmx_kernel_guest::run_desktop_probe(
+                    service, &mut controller, controls, ticks(1 << 32),
+                )
+                .ok_or(ProbeFault::DesktopReply)?;
+                trace(0xcc);
+                vmcs
+            };
             // SAFETY: the exact timer-exited VMCS is parked, the other guest
             // has stopped, and this byte is in only the timer guest's stack.
             unsafe {
@@ -671,6 +684,8 @@ pub(super) unsafe fn run(
             {
                 return Err(ProbeFault::Timer);
             }
+            #[cfg(feature = "vmx-desktop-monitor")]
+            controller.clear_vmcs(desktop_vmcs).map_err(|_| ProbeFault::DesktopReply)?;
             trace(0xc5);
         }
         controller.leave_root().map_err(|_| ProbeFault::Vmxoff)?;

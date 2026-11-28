@@ -131,6 +131,9 @@ name = "user-probe"
 name = "vmx-kernel-monitor"
 
 [[feature]]
+name = "vmx-desktop-monitor"
+
+[[feature]]
 name = "vmx-kernel-payload"
 
 [[feature]]
@@ -194,6 +197,13 @@ package = "org.mrml.library.storage.usb"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_boot_frame"
+compile_name = "mrml-boot-frame"
+package = "org.mrml.library.boot-frame"
+scope = "compile"
+targets = ["UEFI"]
+
+[[dependency]]
 alias = "mrml_interface_zstd_v3"
 compile_name = "mrml-interface-zstd-v3"
 package = "org.mrml.interface.compression.zstd"
@@ -213,6 +223,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["vmx-kernel-monitor", "vmx-root-probe"]
 name = "vmx_kernel_monitor"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["vmx-desktop-monitor", "vmx-kernel-monitor", "vmx-root-probe"]
+name = "vmx_desktop_monitor"
 targets = ["UEFI"]
 
 [[feature_profile]]
@@ -386,7 +401,7 @@ id = "compile-env.nested-service-bundle-path"
 kind = "compile-env"
 line = 312
 path = "packages/system/bootloader/src/vmx_kernel_guest.rs"
-reason = "Select the independently signed diagnostic Zstd provider."
+reason = "Select the independently signed service for the selected nested diagnostic profile."
 
 [[build_input]]
 fingerprint = "fnv1a64:f44da3a1d427805c"

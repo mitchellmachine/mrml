@@ -1,4 +1,4 @@
-//! Opt-in signed L2 Gigakernel and service diagnostic. No installed devices.
+//! Opt-in signed L2 Gigakernel, Zstd, and desktop diagnostics. No installed devices.
 use core::{arch::asm, cell::UnsafeCell};
 
 use mrml_kernel::arch::x86_64::{
@@ -6,13 +6,18 @@ use mrml_kernel::arch::x86_64::{
     PrivilegeStackLayout, VirtAddr, VmxControlPolicy, VmxController, VmxHostState,
     VmxLongModeGuest,
 };
+use mrml_kernel::{ArtifactKind, PhysAddr, SignedArtifact, TrustRoot};
+
+#[cfg(not(feature = "vmx-desktop-monitor"))]
 use mrml_kernel::{
-    ArtifactKind, CapabilitySpace, FramebufferInfo, MemoryKind, MemoryPoolTable, MemoryRegion,
-    MicrovmInterfaceQueueIdentity, MicrovmInterfaceQueuePair, ObjectId, PhysAddr, PixelFormat,
-    Rights, SignedArtifact, TrustRoot, encode_handoff, reserve_microvm_peer_page_projection,
+    CapabilitySpace, FramebufferInfo, MemoryKind, MemoryPoolTable, MemoryRegion,
+    MicrovmInterfaceQueueIdentity, MicrovmInterfaceQueuePair, ObjectId, PixelFormat, Rights,
+    encode_handoff, reserve_microvm_peer_page_projection,
 };
 
+#[cfg(not(feature = "vmx-desktop-monitor"))]
 use super::vmx_zstd_call::{CALL_GPA, REPLY, REQUEST};
+#[cfg(not(feature = "vmx-desktop-monitor"))]
 use mrml_interface_zstd_v3::{INTERFACE_FINGERPRINT, INTERFACE_GENERATION, OP_DECOMPRESS};
 
 const PAGE: usize = 4096;
@@ -29,6 +34,7 @@ const IMAGE: usize = 0x20_0000;
 const TRAMPOLINE: usize = 0x10_000;
 const HANDOFF: usize = 0x11_000;
 const GDT: usize = 0x12_000;
+#[cfg(not(feature = "vmx-desktop-monitor"))]
 const ACPI: usize = 0x13_000;
 const FRAMEBUFFER: usize = 0x14_000;
 const STACK: usize = 0x40_000;
@@ -44,8 +50,9 @@ static SERVICE_ARENA: Arena = Arena(UnsafeCell::new([0; ARENA_PAGES * PAGE]));
 
 #[derive(Clone, Copy)]
 enum Payload {
+    #[cfg(not(feature = "vmx-desktop-monitor"))]
     Kernel([u8; 32]),
-    Zstd,
+    Service,
 }
 
 struct GuestPlatform {
@@ -60,7 +67,9 @@ pub(super) struct PreparedGuest {
     vmcs: PhysAddr,
     ept: EptPointer,
     launch: MinimalVmcsLaunch,
+    #[cfg(not(feature = "vmx-desktop-monitor"))]
     image_end: u64,
+    #[cfg(not(feature = "vmx-desktop-monitor"))]
     artifact_version: u64,
 }
 
@@ -69,13 +78,16 @@ pub(super) struct ServiceLaunch {
 }
 
 impl ServiceLaunch {
-    fn exchange(
+    fn exchange<const REQUEST_BYTES: usize, const REPLY_BYTES: usize>(
         self,
         controller: &mut VmxController<NativeVmx>,
         controls: VmxControlPolicy,
         ticks: u32,
-        request: [u8; REQUEST],
-    ) -> Option<[u8; REPLY]> {
+        request: [u8; REQUEST_BYTES],
+    ) -> Option<[u8; REPLY_BYTES]> {
+        if REQUEST_BYTES > PAGE || REPLY_BYTES > PAGE {
+            return None;
+        }
         // SAFETY: the new provider VM has not run; this is its exact RO
         // request page. The monitor is the only writer.
         unsafe {
@@ -84,7 +96,7 @@ impl ServiceLaunch {
                 .get()
                 .cast::<u8>()
                 .add(RAM + HANDOFF)
-                .cast::<[u8; REQUEST]>()
+                .cast::<[u8; REQUEST_BYTES]>()
                 .write_volatile(request);
         }
         self.guest.start(controller, controls, ticks)?;
@@ -97,10 +109,27 @@ impl ServiceLaunch {
                 .get()
                 .cast::<u8>()
                 .add(RAM + FRAMEBUFFER)
-                .cast::<[u8; REPLY]>()
+                .cast::<[u8; REPLY_BYTES]>()
                 .read_volatile()
         })
     }
+}
+
+#[cfg(feature = "vmx-desktop-monitor")]
+pub(super) fn run_desktop_probe(
+    service: ServiceLaunch,
+    controller: &mut VmxController<NativeVmx>,
+    controls: VmxControlPolicy,
+    ticks: u32,
+) -> Option<PhysAddr> {
+    use mrml_boot_frame::{BOOT_REPLY_BYTES, BOOT_REQUEST, validate_boot_reply};
+    let vmcs = service.guest.vmcs;
+    let reply: [u8; BOOT_REPLY_BYTES] =
+        service.exchange(controller, controls, ticks, BOOT_REQUEST)?;
+    validate_boot_reply(&reply).ok()?;
+    // The caller retires this VMCS after restoring the separately parked
+    // timer guest. The desktop is already stopped and cannot be reloaded.
+    Some(vmcs)
 }
 
 fn terminal(controller: &mut VmxController<NativeVmx>, port: u16) -> Option<()> {
@@ -111,6 +140,7 @@ fn terminal(controller: &mut VmxController<NativeVmx>, port: u16) -> Option<()> 
 
 /// Route one call through the existing generation-bound capability queue.
 /// The queue is monitor-local: only bounded copies enter either stopped VM.
+#[cfg(not(feature = "vmx-desktop-monitor"))]
 pub(super) fn run_service_call(
     caller: PreparedGuest,
     service: ServiceLaunch,
@@ -187,7 +217,7 @@ pub(super) fn run_service_call(
     if sequence != 1 || operation != OP_DECOMPRESS || length != REQUEST {
         return None;
     }
-    let reply = service.exchange(controller, controls, ticks, payload)?;
+    let reply: [u8; REPLY] = service.exchange(controller, controls, ticks, payload)?;
     let notification = provider
         .respond(&mut queue, &projection, &caps, sequence, operation, &reply)
         .ok()?;
@@ -270,6 +300,7 @@ fn root_digest(hex: &str) -> Option<[u8; 64]> {
     Some(out)
 }
 
+#[cfg(not(feature = "vmx-desktop-monitor"))]
 pub(super) fn prepare(
     revision: u32,
     controls: VmxControlPolicy,
@@ -308,7 +339,7 @@ pub(super) fn prepare_service(
             guest_cr0,
             guest_cr4,
         },
-        Payload::Zstd,
+        Payload::Service,
         include_bytes!(env!("MRML_VMX_SERVICE_BUNDLE")),
         root_digest(SERVICE_ROOT)?,
         root_digest(KERNEL_ROOT)?,
@@ -334,8 +365,9 @@ fn prepare_payload(
         return None;
     }
     let kind = match payload {
+        #[cfg(not(feature = "vmx-desktop-monitor"))]
         Payload::Kernel(_) => ArtifactKind::Kernel,
-        Payload::Zstd => ArtifactKind::ServiceImage,
+        Payload::Service => ArtifactKind::ServiceImage,
     };
     let signed = SignedArtifact::decode(bundle).ok()?;
     if signed
@@ -353,8 +385,9 @@ fn prepare_payload(
         return None;
     }
     let backing = match payload {
+        #[cfg(not(feature = "vmx-desktop-monitor"))]
         Payload::Kernel(_) => &ARENA,
-        Payload::Zstd => &SERVICE_ARENA,
+        Payload::Service => &SERVICE_ARENA,
     };
     // SAFETY: the UEFI loader installed this BSP's validated four-level tables.
     let active = unsafe { ActivePageTables::current() }.ok()?;
@@ -378,7 +411,7 @@ fn prepare_payload(
     if sorted.windows(2).any(|w| w[0] == w[1]) {
         return None;
     }
-    if matches!(payload, Payload::Zstd) {
+    if matches!(payload, Payload::Service) {
         let kernel_base = ARENA.0.get() as u64;
         for index in 0..ARENA_PAGES {
             let leaf = active
@@ -400,6 +433,7 @@ fn prepare_payload(
         PrivilegeStackLayout::new(HIGH + STACK as u64, PRIVILEGE_STACK_ARENA_PAGES).ok()?;
     let stack_top = stacks.early_top().ok()?.checked_add(8)?;
     let (rdx, r8, r9) = match payload {
+        #[cfg(not(feature = "vmx-desktop-monitor"))]
         Payload::Kernel(entropy) => {
             let regions = [
                 MemoryRegion::new(PhysAddr::new(FRAMEBUFFER as u64).ok()?, 1, MemoryKind::Mmio)
@@ -445,7 +479,7 @@ fn prepare_payload(
                 stacks.double_fault_top().ok()?,
             )
         }
-        Payload::Zstd => (HIGH + FRAMEBUFFER as u64, 0, 0),
+        Payload::Service => (HIGH + FRAMEBUFFER as u64, 0, 0),
     };
     // Win64 ABI: RCX is the RO request/handoff, RDX is the RW service
     // reply or handoff length, and R8/R9 are kernel-only IST tops.
@@ -503,9 +537,10 @@ fn prepare_payload(
     map(TRAMPOLINE / PAGE, false, true, true);
     map(HANDOFF / PAGE, false, false, true);
     map(GDT / PAGE, true, false, true);
-    if matches!(payload, Payload::Zstd) {
+    if matches!(payload, Payload::Service) {
         map(FRAMEBUFFER / PAGE, true, false, true);
     } else {
+        #[cfg(not(feature = "vmx-desktop-monitor"))]
         map(CALL_GPA / PAGE, true, false, true);
     }
     for (start, pages) in [
@@ -554,7 +589,9 @@ fn prepare_payload(
         vmcs: PhysAddr::new(frames[VMCS]).ok()?,
         ept,
         launch,
+        #[cfg(not(feature = "vmx-desktop-monitor"))]
         image_end: HIGH + end as u64,
+        #[cfg(not(feature = "vmx-desktop-monitor"))]
         artifact_version: executable.artifact().version(),
     })
 }

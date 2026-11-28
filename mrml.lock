@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 253
+compile_edges = 255
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 211
+package_edges = 213
 system_release_edges = 3
 
 [[package]]
@@ -319,6 +319,19 @@ isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
 
 static_runtime = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.library.boot-frame"
+path = "packages/libraries/boot-frame"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
+compile_dependencies = []
+
+static_runtime = []
 boot_bound = []
 system_release_bound = []
 
@@ -706,9 +719,9 @@ isolation_default = "microvm"
 isolation_minimum = "microvm"
 isolation_maximum = "microvm"
 isolation_supported = ["microvm"]
-compile_dependencies = ["org.mrml.app.terminal-probe", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.app.terminal-probe", "org.mrml.library.boot-frame", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.system.kernel"]
 
-static_runtime = ["org.mrml.app.terminal-probe", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.system.kernel"]
+static_runtime = ["org.mrml.app.terminal-probe", "org.mrml.library.boot-frame", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.system.kernel"]
 boot_bound = []
 system_release_bound = []
 
@@ -875,10 +888,10 @@ isolation_default = "platform"
 isolation_minimum = "platform"
 isolation_maximum = "platform"
 isolation_supported = ["platform"]
-compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.interface.storage.block-provider", "org.mrml.interface.storage.filesystem", "org.mrml.library.storage.ahci", "org.mrml.library.storage.usb", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.interface.storage.block-provider", "org.mrml.interface.storage.filesystem", "org.mrml.library.boot-frame", "org.mrml.library.storage.ahci", "org.mrml.library.storage.usb", "org.mrml.system.kernel"]
 
 static_runtime = []
-boot_bound = ["org.mrml.library.storage.ahci", "org.mrml.library.storage.usb", "org.mrml.system.kernel"]
+boot_bound = ["org.mrml.library.boot-frame", "org.mrml.library.storage.ahci", "org.mrml.library.storage.usb", "org.mrml.system.kernel"]
 system_release_bound = []
 
 [[package]]

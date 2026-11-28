@@ -1,0 +1,34 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.boot-frame"
+kind = "library"
+name = "mrml-boot-frame"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_boot_frame"
+
+[rust]
+crate_name = "mrml_boot_frame"
+crate_type = "lib"
+source = "packages/libraries/boot-frame/src/lib.rs"
+
+[[projected_build]]
+targets = ["UEFI"]

@@ -1,10 +1,7 @@
 //! Fixed-size diagnostic thumbnail. No framebuffer mapping or output rights.
 use crate::{Control, Desktop, Point};
 
-pub const WIDTH: usize = 120;
-pub const HEIGHT: usize = 70;
-pub const ROW_BYTES: usize = WIDTH * 4;
-pub const FRAME_BYTES: usize = ROW_BYTES * HEIGHT;
+pub use mrml_boot_frame::{FRAME_BYTES, HEIGHT, ROW_BYTES, WIDTH};
 
 pub fn row(desktop: &Desktop, echo: &[char], y: usize, pixels: &mut [u8; ROW_BYTES]) -> bool {
     if desktop.size() != (480, 280) || y >= HEIGHT {

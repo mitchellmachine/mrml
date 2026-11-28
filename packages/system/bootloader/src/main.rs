@@ -601,7 +601,10 @@ fn paint_boot_diagnostic_lines(info: mrml_kernel::FramebufferInfo, labels: &[&[u
 #[cfg(feature = "vmx-kernel-monitor")]
 mod vmx_kernel_guest;
 
-#[cfg(any(feature = "vmx-kernel-payload", feature = "vmx-kernel-monitor"))]
+#[cfg(any(
+    feature = "vmx-kernel-payload",
+    all(feature = "vmx-kernel-monitor", not(feature = "vmx-desktop-monitor"))
+))]
 mod vmx_zstd_call;
 
 #[cfg(feature = "vmx-kernel-payload")]
@@ -706,8 +709,15 @@ fn run_vmx_boot_diagnostic(handoff: &BootHandoff) {
     // SAFETY: this opt-in boot probe runs on the BSP with validated early
     // state, before AP startup or publication of any service mappings.
     let mut host_mismatch = None;
+    let success: &[u8] = if cfg!(feature = "vmx-desktop-monitor") {
+        b"VMX DESKTOP PASS"
+    } else if cfg!(feature = "vmx-kernel-monitor") {
+        b"VMX KERNEL PASS"
+    } else {
+        b"VMX 64 PASS"
+    };
     match unsafe { vmx_probe::run(&mut host_mismatch, *handoff.evidence().entropy()) } {
-        Ok(()) if paint_boot_diagnostic(framebuffer, if cfg!(feature = "vmx-kernel-monitor") { b"VMX KERNEL PASS" } else { b"VMX 64 PASS" }) => vmx_probe::trace(0xd6),
+        Ok(()) if paint_boot_diagnostic(framebuffer, success) => vmx_probe::trace(0xd6),
         Err(fault) => {
             let label = fault.label();
             let details_painted = host_mismatch.is_some_and(|masks| {

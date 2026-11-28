@@ -19,7 +19,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-display OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb image-vmx-desktop OUTPUT.img | mrml usb test-vmx-desktop IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-display OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
 
 #[path = "usb_xhci_inventory.rs"]
 mod xhci_inventory;
@@ -29,6 +29,7 @@ enum DiagnosticImage {
     Fat32,
     Vmx,
     VmxKernel,
+    VmxDesktop,
     Dma,
     Q35Mmio,
     SharedPreload,
@@ -49,8 +50,18 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
         [mode, file] if mode == "image-vmx-kernel" => {
             create(&load_workspace()?, Path::new(file), DiagnosticImage::VmxKernel)
         }
-        [mode, image, code, vars, qemu] if matches!(mode.as_str(), "test-vmx" | "test-vmx-kernel") => {
-            test_vmx(image, code, vars, qemu, mode == "test-vmx-kernel")
+        [mode, file] if mode == "image-vmx-desktop" => {
+            create(&load_workspace()?, Path::new(file), DiagnosticImage::VmxDesktop)
+        }
+        [mode, image, code, vars, qemu]
+            if matches!(mode.as_str(), "test-vmx" | "test-vmx-kernel" | "test-vmx-desktop") =>
+        {
+            let profile = match mode.as_str() {
+                "test-vmx-desktop" => DiagnosticImage::VmxDesktop,
+                "test-vmx-kernel" => DiagnosticImage::VmxKernel,
+                _ => DiagnosticImage::Vmx,
+            };
+            test_vmx(image, code, vars, qemu, profile)
         }
         [mode, code, vars, qemu] if mode == "test-dma-map" => test_dma_map(code, vars, qemu),
         [mode, code, vars, qemu] if mode == "test-shared-preload" => {
@@ -140,7 +151,7 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn test_vmx(image: &str, code: &str, vars: &str, qemu: &str, kernel: bool) -> Result<(), String> {
+fn test_vmx(image: &str, code: &str, vars: &str, qemu: &str, profile: DiagnosticImage) -> Result<(), String> {
     let scratch = Scratch::new().map_err(|error| error.to_string())?;
     let source = Path::new(image);
     let meta = fs::metadata(source).map_err(|error| error.to_string())?;
@@ -161,7 +172,9 @@ fn test_vmx(image: &str, code: &str, vars: &str, qemu: &str, kernel: bool) -> Re
     copy()?;
     run("tcg", "vmx-absent.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0e0e6")?;
     copy()?;
-    let expected = if kernel {
+    let expected = if matches!(profile, DiagnosticImage::VmxDesktop) {
+        "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1c2c4ccc5dfd6"
+    } else if matches!(profile, DiagnosticImage::VmxKernel) {
         "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1c2c4c6c3c5dfd6"
     } else {
         "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1dfd6"
@@ -782,28 +795,40 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
     let pr = digest("kernel-package")?;
     let rr = digest("release")?;
     let mut nested = Vec::new();
-    if matches!(profile, DiagnosticImage::VmxKernel) {
-        signer(&sign, words(&["keygen", &key("nested", "private"), &key("nested", "public")]), false)?;
-        let root = digest("nested")?;
-        build("org.mrml.system.bootloader", "uefi-x86_64", words(&["--feature-profile", "vmx_kernel_payload"]))?;
-        let bundle = usb.path("nested.signed");
-        signer(&sign, words(&["sign-bundle", "kernel", "1", &string(&kernel), &key("nested", "private"), &string(&bundle)]), false)?;
-        let service_role = "nested-zstd";
+    if matches!(profile, DiagnosticImage::VmxKernel | DiagnosticImage::VmxDesktop) {
+        let desktop = matches!(profile, DiagnosticImage::VmxDesktop);
+        let root = if desktop {
+            kr.clone()
+        } else {
+            signer(&sign, words(&["keygen", &key("nested", "private"), &key("nested", "public")]), false)?;
+            let root = digest("nested")?;
+            build("org.mrml.system.bootloader", "uefi-x86_64", words(&["--feature-profile", "vmx_kernel_payload"]))?;
+            let bundle = usb.path("nested.signed");
+            signer(&sign, words(&["sign-bundle", "kernel", "1", &string(&kernel), &key("nested", "private"), &string(&bundle)]), false)?;
+            nested.extend(words(&["--compile-env", &format!("MRML_VMX_KERNEL_BUNDLE={}", bundle.display())]));
+            root
+        };
+        let service_role = if desktop { "nested-desktop" } else { "nested-zstd" };
         signer(&sign, words(&["keygen", &key(service_role, "private"), &key(service_role, "public")]), false)?;
         let service_root = digest(service_role)?;
-        if service_root == root {
+        if [&root, &kr, &sr].contains(&&service_root) {
             return Err("Nested kernel and service must have distinct signing roots".into());
         }
-        build("org.mrml.zstd", "native", words(&["--feature-profile", "vmx_service_probe"]))?;
-        let service_pe = native.join("mrml_native-x86_64-unknown-uefi/release/mrml-zstd-vmx-probe.efi");
-        let service_bundle = usb.path("nested-zstd.signed");
+        let output = if desktop {
+            build("org.mrml.service.desktop", "native", vec![])?;
+            "mrml-desktop-boot-probe.efi"
+        } else {
+            build("org.mrml.zstd", "native", words(&["--feature-profile", "vmx_service_probe"]))?;
+            "mrml-zstd-vmx-probe.efi"
+        };
+        let service_pe = native.join("mrml_native-x86_64-unknown-uefi/release").join(output);
+        let service_bundle = usb.path("nested-service.signed");
         signer(&sign, words(&["sign-bundle", "service", "1", &string(&service_pe), &key(service_role, "private"), &string(&service_bundle)]), false)?;
-        nested = words(&[
-            "--compile-env", &format!("MRML_VMX_KERNEL_BUNDLE={}", bundle.display()),
+        nested.extend(words(&[
             "--compile-env", &format!("MRML_VMX_KERNEL_ROOT={root}"),
             "--compile-env", &format!("MRML_VMX_SERVICE_BUNDLE={}", service_bundle.display()),
             "--compile-env", &format!("MRML_VMX_SERVICE_ROOT={service_root}"),
-        ]);
+        ]));
     }
     build(
         "org.mrml.system.bootloader",
@@ -814,6 +839,7 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
                 DiagnosticImage::Q35Mmio => "uefi_q35_mmio_probe",
                 DiagnosticImage::Vmx => "vmx_root_probe",
                 DiagnosticImage::VmxKernel => "vmx_kernel_monitor",
+                DiagnosticImage::VmxDesktop => "vmx_desktop_monitor",
                 _ => "uefi_fat32_restart_probe",
             },
             "--compile-env",
@@ -828,7 +854,7 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
         words(&[
             "--feature-profile",
             match profile {
-                DiagnosticImage::Fat32 | DiagnosticImage::Vmx | DiagnosticImage::VmxKernel => "fat32_restart_boot",
+                DiagnosticImage::Fat32 | DiagnosticImage::Vmx | DiagnosticImage::VmxKernel | DiagnosticImage::VmxDesktop => "fat32_restart_boot",
                 DiagnosticImage::SharedPreload => "usb_preload_probe",
                 DiagnosticImage::Dma => "boot_dma_probe",
                 DiagnosticImage::Q35Mmio => "q35_mmio_probe",
