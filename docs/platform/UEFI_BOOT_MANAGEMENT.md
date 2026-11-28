@@ -346,6 +346,12 @@ checks attachment, zero media writes, unchanged PCI and xHCI state, and
 inactive VT-d before and after the guest report. It records boot-source
 retirement, DMA containment, and firmware ownership transfer as unproved.
 Reaching the kernel alone is not evidence for any of those conditions.
+The read-only inventory library also has a correlation helper for the next
+physical diagnostic. It compares the USB boot requester, PCI identity and
+revision, enabled memory decoding, and the independently observed exact BAR
+range across firmware exit. It reports the bus-master bit without conferring
+access or inferring ownership, retirement, or DMA containment. It does not
+read hardware and is not yet wired into a physical diagnostic.
 
 ### Diagnose a return to firmware
 

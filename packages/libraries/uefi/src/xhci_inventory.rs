@@ -1,3 +1,6 @@
+#[path = "xhci_boot_observation.rs"]
+pub mod boot_observation;
+
 /// UEFI PCI I/O supplies a single QWord Address Space descriptor for BAR0
 /// followed by the ACPI End Tag. Other resource encodings are not accepted.
 pub const BAR_RESOURCE_BYTES: usize = 48;
