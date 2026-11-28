@@ -79,7 +79,8 @@ pub use artifact::{
 pub use boot::{BootEvidence, BootPolicy, BootValidationError, ValidatedBoot};
 pub use boot_service::{
     BOOT_SUPERVISOR_SELECTION_BYTES, BootServiceImage, BootServiceImageError, BootSupervisorError,
-    BootSupervisorSelection, SelectedBootSupervisor, StagedBootSupervisor,
+    BootSupervisorMemoryError, BootSupervisorSelection, ReservedBootSupervisorImage,
+    SelectedBootSupervisor, StagedBootSupervisor,
 };
 pub use boot_recovery::{
     BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryDelivery, BootRecoveryDeliveryError,

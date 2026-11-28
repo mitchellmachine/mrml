@@ -206,7 +206,7 @@ impl<'a> FrameAllocator<'a> {
         self.allocate_contiguous_in(pages, alignment_pages, 0, u64::MAX)
     }
 
-    fn allocate_contiguous_in(
+    pub(crate) fn allocate_contiguous_in(
         &mut self,
         pages: u64,
         alignment_pages: u64,

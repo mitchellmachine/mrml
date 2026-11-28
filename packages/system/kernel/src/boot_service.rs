@@ -218,6 +218,128 @@ impl StagedBootSupervisor<'_, '_> {
     }
 }
 
+const BOOT_GUEST_IMAGE_REGIONS: usize = crate::MAX_PE_SECTIONS + 1;
+const BOOT_GUEST_PHYSICAL_LIMIT: u64 = 1 << 48;
+const BOOT_GUEST_VIRTUAL_LIMIT: u64 = 1 << 47;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootSupervisorMemoryError {
+    InvalidGuestAperture,
+    Memory(crate::MemoryError),
+    Image(PeError),
+    Guest(crate::VmError),
+}
+
+/// Owns the boot allocator's reservation and the proposed guest mappings.
+/// Reservation does not install EPT, create a VM, or imply a host write alias.
+pub struct ReservedBootSupervisorImage<'image> {
+    image: PeImage<'image>,
+    physical_base: crate::PhysAddr,
+    guest_physical_base: u64,
+    layout: crate::GuestMemory<BOOT_GUEST_IMAGE_REGIONS>,
+}
+
+impl<'image> SelectedBootSupervisor<'image> {
+    /// The allocator must be the boot owner's unique allocator for this map.
+    /// Guest-physical offsets are independent of the PE's preferred virtual
+    /// base. Headers are RO/NX, sections retain their PE permissions, and
+    /// gaps receive no guest mapping. Failed reservations are never recycled.
+    pub fn reserve_guest_image(
+        self,
+        allocator: &mut crate::FrameAllocator<'_>,
+        guest_physical_base: u64,
+        host_physical_bits: u8,
+    ) -> Result<ReservedBootSupervisorImage<'image>, BootSupervisorMemoryError> {
+        let image_bytes = u64::from(self.image.image_size());
+        if self.image.image_base() == 0
+            || self
+                .image
+                .image_base()
+                .checked_add(image_bytes)
+                .is_none_or(|end| end > BOOT_GUEST_VIRTUAL_LIMIT)
+            || guest_physical_base == 0
+            || !guest_physical_base.is_multiple_of(PAGE_SIZE)
+            || guest_physical_base
+                .checked_add(image_bytes)
+                .is_none_or(|end| end > BOOT_GUEST_PHYSICAL_LIMIT)
+            || !(32..=52).contains(&host_physical_bits)
+        {
+            return Err(BootSupervisorMemoryError::InvalidGuestAperture);
+        }
+        let physical_base = allocator
+            .allocate_contiguous_in(
+                image_bytes / PAGE_SIZE,
+                1,
+                PAGE_SIZE,
+                1 << host_physical_bits,
+            )
+            .map_err(BootSupervisorMemoryError::Memory)?;
+        let mut layout = crate::GuestMemory::new();
+        for index in 0..self.image.load_region_count() {
+            let region = self
+                .image
+                .load_region(index)
+                .map_err(BootSupervisorMemoryError::Image)?;
+            let offset = u64::from(region.virtual_address());
+            let host = crate::PhysAddr::new(physical_base.get() + offset)
+                .map_err(BootSupervisorMemoryError::Memory)?;
+            let mapping = crate::GuestRegion::new(
+                guest_physical_base + offset,
+                host,
+                u64::from(region.pages()),
+                region.writable(),
+                region.executable(),
+            )
+            .map_err(BootSupervisorMemoryError::Guest)?;
+            layout
+                .map(mapping)
+                .map_err(BootSupervisorMemoryError::Guest)?;
+        }
+        layout
+            .prepare_range(
+                guest_physical_base + u64::from(self.image.entry_rva()),
+                1,
+                crate::GuestAccess::Execute,
+            )
+            .map_err(BootSupervisorMemoryError::Guest)?;
+        Ok(ReservedBootSupervisorImage {
+            image: self.image,
+            physical_base,
+            guest_physical_base,
+            layout,
+        })
+    }
+}
+
+impl ReservedBootSupervisorImage<'_> {
+    pub const fn physical_base(&self) -> crate::PhysAddr {
+        self.physical_base
+    }
+
+    pub const fn guest_physical_base(&self) -> u64 {
+        self.guest_physical_base
+    }
+
+    pub const fn guest_virtual_base(&self) -> u64 {
+        self.image.image_base()
+    }
+
+    pub const fn image_size(&self) -> u32 {
+        self.image.image_size()
+    }
+
+    pub const fn layout(&self) -> &crate::GuestMemory<BOOT_GUEST_IMAGE_REGIONS> {
+        &self.layout
+    }
+
+    /// Initialize an exact-size NX view of the reserved backing supplied by
+    /// the platform. This routine does not create or authenticate that view.
+    /// No guest mapping may be installed or active while bytes are written.
+    pub fn initialize_nx_view(&self, view: &mut [u8]) -> Result<u64, PeError> {
+        self.image.materialize(view)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,5 +522,93 @@ mod tests {
             );
             record = original;
         }
+    }
+
+    #[test]
+    fn supervisor_guest_reservation_uses_free_pages_and_distinct_address_spaces() {
+        use crate::{FrameAllocator, GuestAccess, MemoryKind, MemoryMap, MemoryRegion, VmError};
+        let mut payload = crate::pe::tests::valid_pe();
+        const OPTIONAL: usize = 0x98;
+        const SECTION: usize = OPTIONAL + 240;
+        payload[OPTIONAL + 16..OPTIONAL + 20].copy_from_slice(&0x2000u32.to_le_bytes());
+        payload[OPTIONAL + 56..OPTIONAL + 60].copy_from_slice(&0x3000u32.to_le_bytes());
+        payload[SECTION + 12..SECTION + 16].copy_from_slice(&0x2000u32.to_le_bytes());
+        payload[0x200] = 0x90;
+        let original = bundle(payload, ArtifactKind::ServiceImage, 7);
+        let expected = launch(&payload, 3, BASE + 2 * PAGE_SIZE);
+        let manifest = [0x12; 64];
+        let selection =
+            BootSupervisorSelection::new(7, manifest, Sha3_512::digest(&payload)).unwrap();
+        let selected = || {
+            selection
+                .bind(
+                    Sha3_512::digest(&selection.encode()),
+                    manifest,
+                    BootServiceImage::check(expected, 7, &original).unwrap(),
+                )
+                .unwrap()
+        };
+        let region =
+            |at, pages, kind| MemoryRegion::new(PhysAddr::new(at).unwrap(), pages, kind).unwrap();
+        let regions = [
+            region(0, 1, MemoryKind::Free),
+            region(0x10000, 128, MemoryKind::Reserved),
+            region(0x100000, 8, MemoryKind::Free),
+        ];
+        let mut allocator = FrameAllocator::new(MemoryMap::new(&regions).unwrap());
+        let gpa = 0x200000;
+        for (start, bits) in [
+            (0, 48),
+            (gpa + 1, 48),
+            ((1 << 48) - PAGE_SIZE, 48),
+            (gpa, 53),
+        ] {
+            assert_eq!(
+                selected()
+                    .reserve_guest_image(&mut allocator, start, bits)
+                    .err(),
+                Some(BootSupervisorMemoryError::InvalidGuestAperture),
+            );
+        }
+        let reserved = selected()
+            .reserve_guest_image(&mut allocator, gpa, 48)
+            .unwrap();
+        assert_eq!(reserved.physical_base().get(), 0x100000);
+        assert_eq!(reserved.guest_physical_base(), gpa);
+        assert_eq!(reserved.guest_virtual_base(), BASE);
+        assert_eq!(reserved.image_size(), 12288);
+        assert_eq!(allocator.allocate().unwrap().get(), 0x103000);
+        let layout = reserved.layout();
+        let code = layout
+            .prepare_range(gpa + 2 * PAGE_SIZE, 1, GuestAccess::Execute)
+            .unwrap();
+        assert_eq!(
+            layout.region(code.mapping()).unwrap().host_start().get(),
+            0x102000
+        );
+        assert_eq!(
+            layout.prepare_range(gpa + 2 * PAGE_SIZE, 1, GuestAccess::Write),
+            Err(VmError::PermissionDenied)
+        );
+        assert_eq!(
+            layout.prepare_range(gpa, 1, GuestAccess::Execute),
+            Err(VmError::PermissionDenied)
+        );
+        assert_eq!(
+            layout.prepare_range(gpa, 1, GuestAccess::Write),
+            Err(VmError::PermissionDenied)
+        );
+        assert_eq!(
+            layout.prepare_range(gpa + PAGE_SIZE, 1, GuestAccess::Read),
+            Err(VmError::Unmapped)
+        );
+        let mut backing = [0xa5; 12288];
+        assert_eq!(
+            reserved.initialize_nx_view(&mut backing),
+            Ok(BASE + 2 * PAGE_SIZE)
+        );
+        assert_eq!(&backing[8192..8704], &payload[0x200..]);
+        assert!(backing[4096..8192].iter().all(|&byte| byte == 0));
+        assert!(backing[8704..].iter().all(|&byte| byte == 0));
     }
 }

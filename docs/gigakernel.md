@@ -256,6 +256,16 @@ write or counter increment. Its image SHA-256 was
 This verifies selection and journal behavior, not execution: the selected
 FAT32 PE was a fixture, and neither boot entered a service microVM.
 
+The next guest-memory step now has a hosted-tested reservation and layout
+builder. It consumes page-aligned free RAM from the boot allocator, rejects
+the null page and out-of-width addresses, and keeps host-physical,
+guest-physical, and PE virtual addresses separate. Only the PE headers
+and sections appear in the proposed guest map: headers are read-only and
+non-executable, code is not writable, and gaps are left unmapped. The PE
+can be initialized through an exact-size non-executable view of the reserved
+range. Normal boot does not yet provide that view or install these mappings,
+so this is not EPT, guest allocation on hardware, or guest-entry evidence.
+
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
    service before moving supervision policy out of the kernel.
