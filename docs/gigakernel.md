@@ -193,9 +193,24 @@ record, or reports missing or rejected input, and continues to park. A fresh
 signed QEMU fixture with the same four required policy gates produced
 `MRML:BOOT:POLICY:ACCEPTED` followed by `MRML:BOOT:SERVICE:CHECKED`.
 This checks the retained FAT32 service payload; it does not reauthenticate
-the release signature, name a supervisor, or start a guest. A supervisor
-still needs explicit role admission and fresh guest-owned mappings before
-entry.
+the release signature, name a supervisor, or start a guest.
+
+The next boundary now has a tested owner selection record for exactly one
+release manifest and one measured service image. Its fixed 152-byte format
+starts with the supervisor role tag, followed by the little-endian release
+number and two SHA3-512 digests. The record cannot authorize itself: the
+caller must supply its SHA3-512 pin from independently authenticated owner
+policy and the manifest identity from coherent release admission. A publisher
+signature, build receipt, or generic service kind is not a substitute.
+
+Once selected, the image can be staged from the checked PE bytes into a
+separate, exact-size non-executable buffer. This stage returns a guest virtual
+entry address and the PE region permission plan; it does not adopt loader
+mappings, allocate guest frames, install EPT, or enter VMX. Hosted tests cover
+missing owner selection, a different manifest or release, a different service
+digest, invalid destination sizes, zeroed padding, and non-writable executable
+pages. The normal boot entry is unchanged and still parks: authenticated
+provisioning of the pin, guest-owned mappings, and guest entry are not wired.
 
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
