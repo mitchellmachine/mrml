@@ -63,13 +63,13 @@ fn main() {
         .unwrap();
     desktop.event(Event::AttachMouse, &mut app).unwrap();
     desktop
-        .event(Event::MouseMotion(278, -94), &mut app)
+        .event(Event::MouseMotion(96, -94), &mut app)
         .unwrap();
 
     let (w, h) = desktop.size();
     let mut svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" font-family="monospace" role="img" aria-labelledby="title desc">
-<title id="title">MRML desktop preview</title><desc id="desc">A dark tiling desktop with numbered workspaces, a focused dummy terminal showing keyboard echo, and a mouse cursor.</desc>"#
+<title id="title">MRML desktop preview</title><desc id="desc">A dark tiling desktop with numbered workspaces, a focused dummy terminal showing keyboard echo, a diagnostics tile and a mouse cursor.</desc>"#
     );
     rect(&mut svg, Rect(0, 0, w, h), "#0e151f", "none");
     rect(&mut svg, Rect(0, 0, w, 44), "#171f2c", "none");
@@ -118,6 +118,47 @@ fn main() {
                     "#a9bdd0",
                     "Super + Enter opens terminal  |  Tab moves focus",
                 );
+            }
+            Control::Diagnostics => {
+                rect(&mut svg, node.bounds, "#101722", accent);
+                rect(
+                    &mut svg,
+                    Rect(x + 1, y + 1, width - 2, 41),
+                    "#233449",
+                    "none",
+                );
+                text(&mut svg, x + 14, y + 26, 16, "#ecf8ff", "Diagnostics");
+                let d = desktop.diagnostics();
+                let lines = [
+                    String::from("Mode: hosted demo"),
+                    format!(
+                        "Terminal: {}",
+                        if d.terminal_open { "open" } else { "closed" }
+                    ),
+                    format!("Keys delivered: {}", d.keys_delivered),
+                    format!(
+                        "Mouse: {}",
+                        if d.mouse_attached {
+                            "attached"
+                        } else {
+                            "absent"
+                        }
+                    ),
+                    format!("Pointer events: {}", d.pointer_reports),
+                    format!("Touch events: {}", d.touch_reports),
+                    format!("Launch failures: {}", d.launch_failures),
+                    String::from("Hardware: not tested"),
+                ];
+                for (index, line) in lines.iter().enumerate() {
+                    text(
+                        &mut svg,
+                        x + 14,
+                        y + 76 + index as u16 * 26,
+                        15,
+                        "#c4d8ec",
+                        line,
+                    );
+                }
             }
             Control::CloseTerminal => {
                 rect(&mut svg, node.bounds, "#263444", accent);

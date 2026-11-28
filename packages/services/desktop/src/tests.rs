@@ -50,6 +50,16 @@ fn keyboard_launches_one_application_and_routes_echo_only_when_focused() {
         shell.event(event, &mut fixture).unwrap();
     }
     assert_eq!(fixture.generation, 1);
+    assert_eq!(shell.diagnostics().keys_delivered, 1);
+    let tile = shell
+        .nodes()
+        .find(|n| n.control == Control::Terminal)
+        .unwrap();
+    let monitor = shell
+        .nodes()
+        .find(|n| n.control == Control::Diagnostics)
+        .unwrap();
+    assert!(tile.bounds.0 + tile.bounds.2 < monitor.bounds.0);
     assert_eq!(shell.cursor(), None);
     assert_eq!(
         fixture.current.as_ref().unwrap().1.rows().next(),
@@ -156,6 +166,8 @@ fn launch_failure_and_retired_routes_cannot_send_keys_or_show_a_fake_tile() {
         Err(RouteError::Unavailable)
     );
     assert!(shell.nodes().all(|node| node.control != Control::Terminal));
+    assert_eq!(shell.diagnostics().launch_failures, 1);
+    assert!(!shell.diagnostics().terminal_open);
     fixture.unavailable = false;
     shell.event(Event::SuperEnter, &mut fixture).unwrap();
     let old = fixture.current.take().unwrap().0;

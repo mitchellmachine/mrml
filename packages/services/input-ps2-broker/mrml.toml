@@ -69,10 +69,24 @@ package = "org.mrml.system.kernel"
 scope = "compile"
 test_only = true
 
+[[dependency]]
+alias = "mrml_desktop"
+compile_name = "mrml-desktop"
+package = "org.mrml.service.desktop"
+scope = "compile"
+test_only = true
+
+[[dependency]]
+alias = "mrml_terminal_probe"
+compile_name = "mrml-terminal-probe"
+package = "org.mrml.app.terminal-probe"
+scope = "compile"
+test_only = true
+
 [[build_input]]
 fingerprint = "fnv1a64:22f5798d3dc27e3d"
 id = "external-command.run.qemu-system-x86-64.1"
 kind = "external-command"
-line = 313
+line = 339
 path = "packages/services/input-ps2-broker/src/qemu.rs"
 reason = "Opt-in test uses synthetic PS/2 input and reads emulated PCI configuration in a fresh private QEMU guest; no physical devices are passed through."

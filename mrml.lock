@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-11-26"
 
 [graphs]
-compile_edges = 246
+compile_edges = 250
 build_tool_edges = 0
 runtime_interface_edges = 5
-package_edges = 208
+package_edges = 210
 system_release_edges = 3
 
 [[package]]
@@ -706,9 +706,9 @@ isolation_default = "microvm"
 isolation_minimum = "microvm"
 isolation_maximum = "microvm"
 isolation_supported = ["microvm"]
-compile_dependencies = ["org.mrml.app.terminal-probe"]
+compile_dependencies = ["org.mrml.app.terminal-probe", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse"]
 
-static_runtime = ["org.mrml.app.terminal-probe"]
+static_runtime = ["org.mrml.app.terminal-probe", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse"]
 boot_bound = []
 system_release_bound = []
 
@@ -771,7 +771,7 @@ isolation_default = "microvm"
 isolation_minimum = "microvm"
 isolation_maximum = "microvm"
 isolation_supported = ["microvm"]
-compile_dependencies = ["org.mrml.service.hardware-supervisor", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.app.terminal-probe", "org.mrml.service.desktop", "org.mrml.service.hardware-supervisor", "org.mrml.service.input-ps2-keyboard", "org.mrml.service.input-ps2-mouse", "org.mrml.system.kernel"]
 
 static_runtime = []
 boot_bound = []

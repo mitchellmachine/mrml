@@ -26,6 +26,7 @@ pub enum Control {
     OpenTerminal,
     Terminal,
     CloseTerminal,
+    Diagnostics,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +40,7 @@ pub enum Event {
     TouchCancel(u32),
     Tab,
     ActivateFocused,
+    Enter,
     SuperEnter,
     TerminalKey(Key),
 }
@@ -66,6 +68,16 @@ pub struct Node {
     pub selected: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Diagnostics {
+    pub mouse_attached: bool,
+    pub pointer_reports: u32,
+    pub touch_reports: u32,
+    pub keys_delivered: u32,
+    pub terminal_open: bool,
+    pub launch_failures: u32,
+}
+
 pub struct Desktop {
     width: u16,
     height: u16,
@@ -76,6 +88,7 @@ pub struct Desktop {
     mouse_down: Option<Control>,
     primary_pressed: bool,
     touch: Option<(u32, Option<Control>)>,
+    counters: Diagnostics,
 }
 
 impl Desktop {
@@ -93,6 +106,7 @@ impl Desktop {
             mouse_down: None,
             primary_pressed: false,
             touch: None,
+            counters: Diagnostics::default(),
         })
     }
 
@@ -102,6 +116,14 @@ impl Desktop {
 
     pub const fn cursor(&self) -> Option<Point> {
         self.mouse
+    }
+
+    pub fn diagnostics(&self) -> Diagnostics {
+        Diagnostics {
+            mouse_attached: self.mouse.is_some(),
+            terminal_open: self.app.is_some(),
+            ..self.counters
+        }
     }
 
     fn visible_app(&self) -> Option<NonZeroU64> {
@@ -115,6 +137,9 @@ impl Desktop {
     pub fn nodes(&self) -> impl Iterator<Item = Node> + use<> {
         let tile_visible = self.visible_app().is_some();
         let (focus, active) = (self.focus, self.active);
+        let monitor_width = if self.width >= 720 { 252 } else { 144 };
+        let monitor_x = self.width - 12 - monitor_width;
+        let terminal_width = monitor_x - 24;
         [
             (Control::Workspace(1), "1", Rect(8, 4, 36, 36), true),
             (Control::Workspace(2), "2", Rect(48, 4, 36, 36), true),
@@ -128,14 +153,20 @@ impl Desktop {
             (
                 Control::Terminal,
                 "Keyboard test terminal",
-                Rect(12, 56, self.width - 24, self.height - 68),
+                Rect(12, 56, terminal_width, self.height - 68),
                 tile_visible,
             ),
             (
                 Control::CloseTerminal,
                 "Close terminal",
-                Rect(self.width - 60, 56, 48, 42),
+                Rect(monitor_x - 60, 56, 48, 42),
                 tile_visible,
+            ),
+            (
+                Control::Diagnostics,
+                "Diagnostics",
+                Rect(monitor_x, 56, monitor_width, self.height - 68),
+                true,
             ),
         ]
         .into_iter()
@@ -172,13 +203,20 @@ impl Desktop {
             Control::OpenTerminal => {
                 let (workspace, id) = match self.app {
                     Some(app) => app,
-                    None => (self.active, route.launch_terminal()?),
+                    None => match route.launch_terminal() {
+                        Ok(id) => (self.active, id),
+                        Err(error) => {
+                            self.counters.launch_failures =
+                                self.counters.launch_failures.saturating_add(1);
+                            return Err(error);
+                        }
+                    },
                 };
                 self.app = Some((workspace, id));
                 self.active = workspace;
                 self.focus = Control::Terminal;
             }
-            Control::Terminal => self.focus = control,
+            Control::Terminal | Control::Diagnostics => self.focus = control,
             Control::CloseTerminal => {
                 let id = self.visible_app().ok_or(RouteError::Retired)?;
                 match route.retire_terminal(id) {
@@ -206,6 +244,21 @@ impl Desktop {
         route: &mut impl TerminalRoute,
     ) -> Result<(), RouteError> {
         let mut action = None;
+        let event = match event {
+            Event::Enter if self.focus == Control::Terminal => Event::TerminalKey(Key::Enter),
+            Event::Enter => Event::ActivateFocused,
+            event => event,
+        };
+        if matches!(
+            event,
+            Event::TouchDown(..) | Event::TouchUp(..) | Event::TouchCancel(..)
+        ) {
+            self.counters.touch_reports = self.counters.touch_reports.saturating_add(1);
+        }
+        if self.mouse.is_some() && matches!(event, Event::MouseMotion(..) | Event::MousePrimary(..))
+        {
+            self.counters.pointer_reports = self.counters.pointer_reports.saturating_add(1);
+        }
         match event {
             Event::AttachMouse => {
                 if self.mouse.is_none() {
@@ -274,6 +327,7 @@ impl Desktop {
                         }
                         return Err(error);
                     }
+                    self.counters.keys_delivered = self.counters.keys_delivered.saturating_add(1);
                 }
             }
             _ => {}
@@ -284,6 +338,8 @@ impl Desktop {
         Ok(())
     }
 }
+
+pub mod seat;
 
 #[cfg(test)]
 mod tests;

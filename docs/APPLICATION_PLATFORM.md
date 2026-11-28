@@ -316,7 +316,9 @@ focus, rendering and hit-testing. It provides three numbered workspaces, a
 single tiled keyboard-test terminal, a touch-sized launcher, and a cursor
 that appears on mouse attachment and disappears on detachment. Touch taps
 activate the same semantic controls as keyboard and mouse; touch never
-creates a mouse cursor. Use Super+Enter to request the dummy app, Tab to
+creates a mouse cursor. A persistent diagnostics tile reports attachment,
+input event and delivered-key counts, terminal state, and launch failures.
+It does not record text or claim hardware checks. Use Super+Enter to request the dummy app, Tab to
 cycle focus, and activate the focused control. The terminal app only echoes
 text, handles Backspace and Enter, and retains at most six short lines.
 It cannot run commands.
@@ -326,7 +328,10 @@ from the same semantic layout. Desktop and dummy app builds contain no discovery
 raw input, display mapping or native MRML fallback. A trusted launcher must
 admit the exact terminal guest, route normalized seat events, and authorize
 compositor presentation. Tests exercise keyboard, mouse and touch events
-with a fixture; normal boot, physical touchscreen input, and a full
+with a fixture. An opt-in QEMU test also feeds emulated PS/2 keyboard
+and mouse reports through the i8042 broker into the hosted desktop and
+checks the echo, pointer position and diagnostic counts. Normal boot,
+physical touchscreen input, and a full
 cross-VM Semantic Scene Graph transport are not yet connected.
 
 ## MRML Semantic Scene Graph

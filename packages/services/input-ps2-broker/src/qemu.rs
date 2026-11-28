@@ -1,5 +1,7 @@
 //! Opt-in test of the emulated controller, never the host's physical ports.
 use super::*;
+use core::num::NonZeroU64;
+use mrml_desktop::{Desktop, Event, Key, RouteError, TerminalRoute, seat::Ps2Seat};
 use mrml_hardware_supervisor::{
     DriverMicrovmManager, HardwareSupervisor, PciInventoryProvider, PciObservation, PciSnapshot,
     XhciLaunch, XhciRouteBinding, XhciRouteCatalog,
@@ -10,6 +12,7 @@ use mrml_kernel::{
     CapabilitySpace, DeviceAddress, IsolationAdmissionTable, IsolationMode, IsolationPlacement,
     IsolationServiceSpec, ObjectId, Rights, TotalMicrovmClass,
 };
+use mrml_terminal_probe::Terminal;
 use std::{
     fs,
     io::{self, BufRead, BufReader, Write},
@@ -304,6 +307,29 @@ fn verify_prepared_routes(requests: &[XhciLaunch]) -> io::Result<()> {
     Ok(())
 }
 
+#[derive(Default)]
+struct DesktopFixture(Option<Terminal>);
+
+impl TerminalRoute for DesktopFixture {
+    fn launch_terminal(&mut self) -> Result<NonZeroU64, RouteError> {
+        self.0 = Some(Terminal::new());
+        Ok(NonZeroU64::MIN)
+    }
+
+    fn send_key(&mut self, route: NonZeroU64, key: Key) -> Result<(), RouteError> {
+        if route != NonZeroU64::MIN {
+            return Err(RouteError::Retired);
+        }
+        self.0.as_mut().ok_or(RouteError::Retired)?.key(key);
+        Ok(())
+    }
+
+    fn retire_terminal(&mut self, _: NonZeroU64) -> Result<(), RouteError> {
+        self.0 = None;
+        Ok(())
+    }
+}
+
 fn run(dir: &Path) -> io::Result<()> {
     // The guest CPU executes HLT at its reset vector; no OS or firmware can
     // race the test for the emulated controller. No physical device is
@@ -365,8 +391,9 @@ fn run(dir: &Path) -> io::Result<()> {
     assert_eq!(broker.poll(&mut qtest)?, 4);
     assert_eq!(broker.next_keyboard(), Some(InputByte::Data(0x1c)));
     let mut keyboard = Ps2Keyboard::default();
+    let key = keyboard.push(0x1c);
     assert_eq!(
-        keyboard.push(0x1c),
+        key,
         Some(KeyboardEvent::Key {
             scan: 0x1c,
             extended: false,
@@ -386,13 +413,36 @@ fn run(dir: &Path) -> io::Result<()> {
     }
     let mouse = decoded.ok_or_else(|| io::Error::other("invalid emulated mouse packet"))?;
     assert_eq!((mouse.dx, mouse.dy), (2, 1));
+    let mut desktop = Desktop::new(480, 280).unwrap();
+    let mut terminal = DesktopFixture::default();
+    let mut seat = Ps2Seat::default();
+    desktop.event(Event::Enter, &mut terminal).unwrap();
+    desktop
+        .event(seat.keyboard(key.unwrap()).unwrap(), &mut terminal)
+        .unwrap();
+    assert_eq!(terminal.0.as_ref().unwrap().rows().next(), Some(&['a'][..]));
+    assert_eq!(desktop.cursor(), None);
+    desktop.event(Event::AttachMouse, &mut terminal).unwrap();
+    Ps2Seat::mouse(&mut desktop, &mut terminal, mouse).unwrap();
+    assert_eq!(desktop.cursor(), Some(mrml_desktop::Point(242, 141)));
+    let diagnostics = desktop.diagnostics();
+    assert_eq!(
+        (
+            diagnostics.pointer_reports,
+            diagnostics.keys_delivered,
+            diagnostics.touch_reports
+        ),
+        (2, 1, 0)
+    );
     assert_eq!(broker.next_mouse(), None);
     qmp.qmp(r#"{"execute":"input-send-event","arguments":{"events":[{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"a"}}}]}}"#)?;
     assert_eq!(broker.poll(&mut qtest)?, 2);
     for byte in [0xf0, 0x1c] {
         assert_eq!(broker.next_keyboard(), Some(InputByte::Data(byte)));
+        let release = keyboard.push(byte);
+        assert!(release.and_then(|event| seat.keyboard(event)).is_none());
         assert_eq!(
-            keyboard.push(byte),
+            release,
             (byte == 0x1c).then_some(KeyboardEvent::Key {
                 scan: 0x1c,
                 extended: false,

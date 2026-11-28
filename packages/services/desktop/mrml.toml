@@ -55,5 +55,17 @@ compile_name = "mrml-terminal-probe"
 package = "org.mrml.app.terminal-probe"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_input_ps2_keyboard"
+compile_name = "mrml-input-ps2-keyboard"
+package = "org.mrml.service.input-ps2-keyboard"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_input_ps2_mouse"
+compile_name = "mrml-input-ps2-mouse"
+package = "org.mrml.service.input-ps2-mouse"
+scope = "compile"
+
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]
