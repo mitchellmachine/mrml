@@ -1241,6 +1241,7 @@ unsafe fn boot(
             acpi_root,
             framebuffer,
             prepared_service,
+            supervisor_selection,
             recovery_state,
             installed_recovery,
             isolation_selection,
@@ -1437,6 +1438,7 @@ unsafe fn launch_after_exit(
     acpi_root: u64,
     framebuffer: Framebuffer,
     service: PreparedService,
+    supervisor_selection: Option<mrml_kernel::BootSupervisorSelection>,
     recovery_state: Option<RecoveryStateMetadata>,
     installed_recovery: Option<InstalledRecoveryHandoff>,
     isolation_selection: BootIsolationSelection,
@@ -1564,6 +1566,7 @@ unsafe fn launch_after_exit(
         #[cfg(feature = "q35-mmio-probe")]
         q35_dxe.as_ref(),
         service,
+        supervisor_selection,
         recovery_state,
         installed_recovery,
         isolation_selection,
@@ -2415,6 +2418,7 @@ fn enter_kernel(
     #[cfg(feature = "q35-mmio-probe")]
     q35_dxe: Option<&mrml_kernel::BootDxeDiagnostic>,
     service: PreparedService,
+    supervisor_selection: Option<mrml_kernel::BootSupervisorSelection>,
     recovery_state: Option<RecoveryStateMetadata>,
     installed_recovery: Option<InstalledRecoveryHandoff>,
     isolation_selection: BootIsolationSelection,
@@ -2506,6 +2510,12 @@ fn enter_kernel(
     let handoff_length = if transition.q35_profile == 9 {
         let diagnostic = q35_dxe.ok_or(LOAD_ERROR)?;
         mrml_kernel::append_boot_dxe_diagnostic(handoff_length, diagnostic, handoff)
+            .map_err(|_| LOAD_ERROR)?
+    } else {
+        handoff_length
+    };
+    let handoff_length = if let Some(selection) = supervisor_selection {
+        mrml_kernel::append_boot_supervisor_selection(handoff_length, selection, handoff)
             .map_err(|_| LOAD_ERROR)?
     } else {
         handoff_length

@@ -1,5 +1,6 @@
 use crate::{
-    BootEvidence, BootValidationError, FramebufferError, FramebufferInfo,
+    BOOT_SUPERVISOR_SELECTION_BYTES, BootEvidence, BootSupervisorSelection, BootValidationError,
+    FramebufferError, FramebufferInfo,
     INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES, INSTALLED_RECOVERY_SATA_ROUTE_BYTES,
     InstalledRecoveryBootIdentity, InstalledRecoverySataRoute, InstalledRecoverySource,
     MemoryError, MemoryKind, MemoryMap, MemoryRegion, PhysAddr, PixelFormat,
@@ -14,6 +15,8 @@ const DMA_ACPI_LENGTH_BYTES: usize = 4;
 pub const BOOT_USB_PCI_RECORD_BYTES: usize = 40;
 pub const PASSIVE_DXE_RECORD_BYTES: usize = 200;
 const BOOT_DXE_DIAGNOSTIC_BYTES: usize = 8 + PASSIVE_DXE_RECORD_BYTES;
+const SUPERVISOR_TRAILER_BYTES: usize = BOOT_SUPERVISOR_SELECTION_BYTES + 64;
+const SUPERVISOR_HANDOFF_MAGIC: &[u8; 16] = b"MRML-HANDOFF-v2\0";
 pub const HANDOFF_SERVICE_BYTES: usize = 160;
 pub const HANDOFF_APPLICATION_BYTES: usize = 160;
 pub const HANDOFF_RECOVERY_STATE_BYTES: usize = 40;
@@ -29,7 +32,8 @@ pub const MAX_HANDOFF_BYTES: usize = HANDOFF_HEADER_BYTES
     + DMA_ACPI_LENGTH_BYTES
     + 2 * MAX_HANDOFF_DMA_ACPI_TABLE_BYTES
     + BOOT_USB_PCI_RECORD_BYTES
-    + BOOT_DXE_DIAGNOSTIC_BYTES;
+    + BOOT_DXE_DIAGNOSTIC_BYTES
+    + SUPERVISOR_TRAILER_BYTES;
 
 const FLAG_SECURE_BOOT: u16 = 1;
 const FLAG_MEASURED_BOOT: u16 = 1 << 1;
@@ -46,6 +50,11 @@ const FLAG_INSTALLED_RECOVERY_SATA_ROUTE: u16 = 1 << 11;
 const FLAG_DMA_ACPI: u16 = 1 << 12;
 const FLAG_USB_PCI_DIAGNOSTIC: u16 = 1 << 13;
 const FLAG_DXE_DIAGNOSTIC: u16 = 1 << 14;
+const FLAG_SUPERVISOR_SELECTION: u16 = 1 << 15;
+const SUPERVISOR_EVIDENCE_FLAGS: u16 = FLAG_SECURE_BOOT
+    | FLAG_MEASURED_BOOT
+    | FLAG_ROLLBACK_PROTECTED
+    | FLAG_COHERENT_RELEASE;
 const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_MEASURED_BOOT
     | FLAG_ROLLBACK_PROTECTED
@@ -432,6 +441,7 @@ pub struct BootHandoff {
     dma_acpi_lengths: Option<(usize, usize)>,
     usb_pci_record: Option<[u8; BOOT_USB_PCI_RECORD_BYTES]>,
     dxe_diagnostic: Option<BootDxeDiagnostic>,
+    supervisor_selection: Option<BootSupervisorSelection>,
     ap_trampoline: Option<u64>,
     ap_stack_arena: Option<u64>,
     service: Option<ServiceLaunch>,
@@ -488,6 +498,11 @@ impl BootHandoff {
         self.dxe_diagnostic.as_ref()
     }
 
+    /// The trusted loader's measured selection, not a signature or a launch token.
+    pub const fn supervisor_selection(&self) -> Option<BootSupervisorSelection> {
+        self.supervisor_selection
+    }
+
     pub const fn ap_trampoline(&self) -> Option<u64> {
         self.ap_trampoline
     }
@@ -531,15 +546,22 @@ impl BootHandoff {
         if input.len() < HANDOFF_HEADER_BYTES {
             return Err(HandoffError::Truncated);
         }
-        if &input[..16] != b"MRML-HANDOFF-v1\0" {
+        let has_supervisor = &input[..16] == SUPERVISOR_HANDOFF_MAGIC;
+        if !has_supervisor && &input[..16] != b"MRML-HANDOFF-v1\0" {
             return Err(HandoffError::BadMagic);
         }
         let encoded_length = read_u32(input, 16) as usize;
         let region_count = read_u16(input, 20) as usize;
         let flags = read_u16(input, 22);
-        if flags & !KNOWN_FLAGS != 0 {
+        if flags & !(KNOWN_FLAGS | if has_supervisor { FLAG_SUPERVISOR_SELECTION } else { 0 })
+            != 0
+        {
             return Err(HandoffError::UnknownFlags);
         }
+        if has_supervisor && flags & FLAG_SUPERVISOR_SELECTION == 0 {
+            return Err(HandoffError::NonCanonical);
+        }
+        let supervisor_bytes = usize::from(has_supervisor) * SUPERVISOR_TRAILER_BYTES;
         if region_count == 0 || region_count > MAX_HANDOFF_REGIONS {
             return Err(HandoffError::TooManyRegions);
         }
@@ -610,7 +632,7 @@ impl BootHandoff {
             let dmar = usize::from(read_u16(counts, 0));
             let mcfg = usize::from(read_u16(counts, 2));
             let end = DMA_ACPI_LENGTH_BYTES + dmar + mcfg;
-            if trailer.len() != end + usb_bytes + dxe_bytes {
+            if trailer.len() != end + usb_bytes + dxe_bytes + supervisor_bytes {
                 return Err(HandoffError::NonCanonical);
             }
             validate_dma_acpi_tables(
@@ -620,8 +642,11 @@ impl BootHandoff {
             (madt_end + end, Some((dmar, mcfg)))
         };
         let usb_end = acpi_end.checked_add(usb_bytes).ok_or(HandoffError::NonCanonical)?;
-        let expected_length = usb_end
+        let diagnostic_end = usb_end
             .checked_add(dxe_bytes)
+            .ok_or(HandoffError::NonCanonical)?;
+        let expected_length = diagnostic_end
+            .checked_add(supervisor_bytes)
             .ok_or(HandoffError::NonCanonical)?;
         if encoded_length != expected_length || input.len() != expected_length {
             return Err(HandoffError::NonCanonical);
@@ -636,7 +661,7 @@ impl BootHandoff {
             None
         };
         let dxe_diagnostic = if dxe_bytes != 0 {
-            let slot = &input[usb_end..expected_length];
+            let slot = &input[usb_end..diagnostic_end];
             if slot[1..8] != [0; 7] {
                 return Err(HandoffError::NonCanonical);
             }
@@ -687,6 +712,18 @@ impl BootHandoff {
         };
         let service = if service_bytes != 0 {
             Some(decode_service(input, service_offset)?)
+        } else {
+            None
+        };
+        let supervisor_selection = if has_supervisor {
+            let (record, recorded_digest) = input[diagnostic_end..].split_at(BOOT_SUPERVISOR_SELECTION_BYTES);
+            let selection = BootSupervisorSelection::decode(record)
+                .map_err(|_| HandoffError::NonCanonical)?;
+            validate_supervisor_selection(selection, flags, image_version, service)?;
+            if mrml_crypto::Sha3_512::digest(record).as_slice() != recorded_digest {
+                return Err(HandoffError::NonCanonical);
+            }
+            Some(selection)
         } else {
             None
         };
@@ -858,6 +895,7 @@ impl BootHandoff {
             dma_acpi_lengths,
             usb_pci_record,
             dxe_diagnostic,
+            supervisor_selection,
             ap_trampoline,
             ap_stack_arena,
             service,
@@ -897,7 +935,10 @@ pub fn append_boot_dma_acpi(
         .filter(|&total| total <= output.len() && total <= MAX_HANDOFF_BYTES)
         .ok_or(HandoffError::NonCanonical)?;
     let handoff = BootHandoff::decode(&output[..length], |_| {})?;
-    if handoff.boot_dma().is_none() || handoff.dma_acpi_lengths.is_some() {
+    if handoff.supervisor_selection().is_some()
+        || handoff.boot_dma().is_none()
+        || handoff.dma_acpi_lengths.is_some()
+    {
         return Err(HandoffError::NonCanonical);
     }
     let flags = read_u16(output, 22) | FLAG_DMA_ACPI;
@@ -944,7 +985,10 @@ pub fn append_boot_usb_pci_record(
         .filter(|&size| size <= output.len() && size <= MAX_HANDOFF_BYTES)
         .ok_or(HandoffError::NonCanonical)?;
     let handoff = BootHandoff::decode(&output[..length], |_| {})?;
-    if handoff.dma_acpi_lengths.is_none() || handoff.usb_pci_record.is_some() {
+    if handoff.supervisor_selection().is_some()
+        || handoff.dma_acpi_lengths.is_none()
+        || handoff.usb_pci_record.is_some()
+    {
         return Err(HandoffError::NonCanonical);
     }
     let flags = read_u16(output, 22) | FLAG_USB_PCI_DIAGNOSTIC;
@@ -994,7 +1038,7 @@ pub fn append_boot_dxe_diagnostic(
         .ok_or(HandoffError::NonCanonical)?;
     let handoff = BootHandoff::decode(&output[..length], |_| {})?;
     let usb = handoff.usb_pci_record().ok_or(HandoffError::NonCanonical)?;
-    if handoff.boot_dxe_diagnostic().is_some() {
+    if handoff.supervisor_selection().is_some() || handoff.boot_dxe_diagnostic().is_some() {
         return Err(HandoffError::NonCanonical);
     }
     if let BootDxeDiagnostic::Copied(record) = diagnostic {
@@ -1009,6 +1053,48 @@ pub fn append_boot_dxe_diagnostic(
         output[length] = 1;
         output[length + 8..total].copy_from_slice(record);
     }
+    Ok(total)
+}
+
+fn validate_supervisor_selection(
+    selection: BootSupervisorSelection,
+    flags: u16,
+    release: u64,
+    service: Option<ServiceLaunch>,
+) -> Result<(), HandoffError> {
+    if flags & SUPERVISOR_EVIDENCE_FLAGS != SUPERVISOR_EVIDENCE_FLAGS
+        || !service.is_some_and(|launch| selection.matches_launch(release, launch))
+    {
+        return Err(HandoffError::NonCanonical);
+    }
+    Ok(())
+}
+
+/// Transport the selection already matched against the enrolled loader's pin.
+/// The trailing digest detects inconsistent bytes, not a hostile handoff writer.
+/// The record goes last, after any ACPI and diagnostic records.
+pub fn append_boot_supervisor_selection(
+    length: usize,
+    selection: BootSupervisorSelection,
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    let total = length
+        .checked_add(SUPERVISOR_TRAILER_BYTES)
+        .filter(|&size| size <= output.len() && size <= MAX_HANDOFF_BYTES)
+        .ok_or(HandoffError::NonCanonical)?;
+    let handoff = BootHandoff::decode(&output[..length], |_| {})?;
+    if handoff.supervisor_selection().is_some() {
+        return Err(HandoffError::NonCanonical);
+    }
+    let flags = read_u16(output, 22);
+    validate_supervisor_selection(selection, flags, handoff.evidence().image_version(), handoff.service())?;
+    let record = selection.encode();
+    let recorded_digest = mrml_crypto::Sha3_512::digest(&record);
+    output[length..length + record.len()].copy_from_slice(&record);
+    output[length + record.len()..total].copy_from_slice(&recorded_digest);
+    output[..16].copy_from_slice(SUPERVISOR_HANDOFF_MAGIC);
+    output[22..24].copy_from_slice(&(flags | FLAG_SUPERVISOR_SELECTION).to_le_bytes());
+    output[16..20].copy_from_slice(&(total as u32).to_le_bytes());
     Ok(total)
 }
 
@@ -2900,6 +2986,117 @@ mod tests {
             ),
             Err(HandoffError::NonCanonical)
         );
+    }
+
+    #[test]
+    fn supervisor_trailer_requires_exact_service_and_complete_boot_evidence() {
+        let regions = [
+            MemoryRegion::new(PhysAddr::new(0xa0000).unwrap(), 1, MemoryKind::Mmio).unwrap(),
+            MemoryRegion::new(PhysAddr::new(0x10_0000).unwrap(), 64, MemoryKind::Reserved).unwrap(),
+        ];
+        let framebuffer = FramebufferInfo::new(
+            0xa0000,
+            0x1000,
+            16,
+            16,
+            16,
+            PixelFormat::BlueGreenRedReserved,
+        )
+        .unwrap();
+        let phys = |at| PhysAddr::new(at).unwrap();
+        let service = ServiceLaunch::new(
+            phys(0x11_0000),
+            1024,
+            phys(0x10_0000),
+            2,
+            0x1_4000_0000,
+            0x1_4000_0080,
+            phys(0x10_4000),
+            2,
+            0x2_0000_2000,
+            phys(0x10_8000),
+            4,
+            11,
+            [9; 64],
+        )
+        .unwrap();
+        let mut madt = [0u8; 44];
+        madt[..4].copy_from_slice(b"APIC");
+        madt[4..8].copy_from_slice(&44u32.to_le_bytes());
+        madt[9] = 0u8.wrapping_sub(madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+        let mut encoded = [0; 1024];
+        let length = encode_handoff_with_smp_service_and_recovery(
+            11,
+            [1; 32],
+            [2; 64],
+            true,
+            true,
+            true,
+            true,
+            0x9000,
+            framebuffer,
+            &regions,
+            0x8000,
+            0x40_0000,
+            service,
+            None,
+            &madt,
+            &mut encoded,
+        )
+        .unwrap();
+        assert_eq!(
+            BootHandoff::decode(&encoded[..length], |_| {})
+                .unwrap()
+                .supervisor_selection(),
+            None
+        );
+        let selection = BootSupervisorSelection::new(11, [5; 64], [9; 64]).unwrap();
+        for invalid in [
+            BootSupervisorSelection::new(10, [5; 64], [9; 64]).unwrap(),
+            BootSupervisorSelection::new(11, [5; 64], [8; 64]).unwrap(),
+        ] {
+            let original = encoded;
+            assert_eq!(
+                append_boot_supervisor_selection(length, invalid, &mut encoded),
+                Err(HandoffError::NonCanonical)
+            );
+            assert_eq!(encoded, original);
+        }
+        let total = append_boot_supervisor_selection(length, selection, &mut encoded).unwrap();
+        assert_eq!(total, length + SUPERVISOR_TRAILER_BYTES);
+        let decoded = BootHandoff::decode(&encoded[..total], |_| {}).unwrap();
+        assert_eq!(decoded.supervisor_selection(), Some(selection));
+        assert_eq!(decoded.madt(&encoded), Some(madt.as_slice()));
+        assert_eq!(
+            append_boot_supervisor_selection(total, selection, &mut encoded),
+            Err(HandoffError::NonCanonical)
+        );
+        assert!(BootHandoff::decode(&encoded[..total - 1], |_| {}).is_err());
+        for offset in [length, length + 24, length + 88, total - 1] {
+            let mut modified = encoded;
+            modified[offset] ^= 1;
+            let mut emitted = 0;
+            assert_eq!(
+                BootHandoff::decode(&modified[..total], |_| emitted += 1).err(),
+                Some(HandoffError::NonCanonical)
+            );
+            assert_eq!(emitted, 0);
+        }
+        for flag in [
+            FLAG_SECURE_BOOT,
+            FLAG_MEASURED_BOOT,
+            FLAG_ROLLBACK_PROTECTED,
+            FLAG_COHERENT_RELEASE,
+            FLAG_SUPERVISOR_SELECTION,
+        ] {
+            let mut modified = encoded;
+            let flags = read_u16(&encoded, 22) & !flag;
+            modified[22..24].copy_from_slice(&flags.to_le_bytes());
+            assert_eq!(
+                BootHandoff::decode(&modified[..total], |_| {}).err(),
+                Some(HandoffError::NonCanonical)
+            );
+        }
     }
 
     #[test]

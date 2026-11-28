@@ -20,23 +20,32 @@ pub(super) fn enter(handoff: &BootHandoff, _early: &EarlyKernelContext<'_>) -> !
     }
     observe(b"MRML:BOOT:POLICY:ACCEPTED\n");
 
-    #[cfg(feature = "normal-boot-observation")]
-    observe_retained_service(handoff);
+    // No selection means no eligible supervisor. The observation profile can
+    // still check the retained generic service as a separate diagnostic.
+    if handoff.supervisor_selection().is_none() {
+        observe(b"MRML:BOOT:SUPERVISOR:MISSING\n");
+        #[cfg(feature = "normal-boot-observation")]
+        check_retained_service(handoff);
+        super::halt();
+    }
+    if check_retained_service(handoff) {
+        observe(b"MRML:BOOT:SUPERVISOR:CHECKED\n");
+    } else {
+        observe(b"MRML:BOOT:SUPERVISOR:REJECTED\n");
+    }
 
-    // No authenticated supervisor is wired to this entry yet. Keep the
-    // machine parked rather than starting a diagnostic or native workload.
+    // Checking the selection does not install guest mappings or start a VM.
     super::halt()
 }
 
-#[cfg(feature = "normal-boot-observation")]
-fn observe_retained_service(handoff: &BootHandoff) {
+fn check_retained_service(handoff: &BootHandoff) -> bool {
     let Some(launch) = handoff.service() else {
         observe(b"MRML:BOOT:SERVICE:MISSING\n");
-        return;
+        return false;
     };
     let Ok(length) = usize::try_from(launch.artifact_length()) else {
         observe(b"MRML:BOOT:SERVICE:REJECTED\n");
-        return;
+        return false;
     };
     // SAFETY: normal entry follows complete handoff decoding and the boot
     // policy check. The loader retained the exact bounded service allocation
@@ -48,8 +57,10 @@ fn observe_retained_service(handoff: &BootHandoff) {
         .is_ok()
     {
         observe(b"MRML:BOOT:SERVICE:CHECKED\n");
+        true
     } else {
         observe(b"MRML:BOOT:SERVICE:REJECTED\n");
+        false
     }
 }
 

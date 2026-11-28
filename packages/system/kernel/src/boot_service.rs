@@ -105,6 +105,12 @@ impl BootSupervisorSelection {
         })
     }
 
+    pub(crate) fn matches_launch(self, release: u64, service: ServiceLaunch) -> bool {
+        self.release == release
+            && service.version() == release
+            && self.service == service.measurement()
+    }
+
     pub fn encode(self) -> [u8; BOOT_SUPERVISOR_SELECTION_BYTES] {
         let mut bytes = [0; BOOT_SUPERVISOR_SELECTION_BYTES];
         bytes[..16].copy_from_slice(SUPERVISOR_ROLE);

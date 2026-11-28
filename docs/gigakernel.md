@@ -231,8 +231,15 @@ cold boot issued a journal write or counter increment. This compares the
 loader checks against the same existing signed artifacts; it does not test a
 fresh journal transition, a physical TPM, or supervisor execution.
 
-The normal Gigakernel entry still parks. This check does not yet hand off
-launch authority, assign guest-owned mappings, or enter the supervisor.
+The loader now appends the measured selection to a bounded version-2 handoff.
+Version 1 remains valid and carries no selection. Version 2 is rejected if
+any production boot-evidence flag is absent, the retained service or release
+does not match, or the trailer digest is inconsistent. The digest detects
+corruption; it is not a second signature or an independent trust root. The
+kernel relies on the authenticated loader, then checks the retained PE bytes
+before accepting the selection for further work. The observation profile
+distinguishes a checked and a missing selection. There is still no guest
+allocation, mapping, entry, or native fallback.
 
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
