@@ -12,6 +12,7 @@ const MENU: &str = "BdsDxe: starting Boot0000 \"BootManagerMenuApp\"";
 const GEOMETRY: &str = "xhci DMA: scratchpads=0 page-mask=0x0001";
 const START: &str = "MRML xhci-inventory: read-only";
 const BOOT_EVIDENCE: &str = "xhci boot evidence: ";
+const BOOT_WIRE: &str = "xhci boot wire ";
 
 fn exact_usb_boot_evidence(report: &str) -> bool {
     if report.lines().filter(|line| line.starts_with(BOOT_EVIDENCE)).count() != 1 {
@@ -33,7 +34,30 @@ fn exact_usb_boot_evidence(report: &str) -> bool {
     let expected = format!(
         "{BOOT_EVIDENCE}requester=00000030 pci=000d1b36 class=0c033001 bar0={base} size={size}"
     );
-    usb.lines().any(|line| line == expected)
+    let Some(base) = base.strip_prefix("0x").and_then(|hex| u64::from_str_radix(hex, 16).ok()) else {
+        return false;
+    };
+    if size != "0x4000" || base == 0 || !base.is_multiple_of(0x4000)
+        || base.checked_add(0x4000).is_none()
+        || report.lines().filter(|line| line.starts_with(BOOT_WIRE)).count() != 2
+    {
+        return false;
+    }
+    // Independently reconstruct the diagnostic V1 bytes from the fixed
+    // emulator identity and text report, then compare the exact wire output.
+    let mut tail = String::new();
+    for byte in 0x0c03_3001u32.to_le_bytes().into_iter()
+        .chain(base.to_le_bytes())
+        .chain(0x4000u32.to_le_bytes())
+        .chain([0u8; 4])
+    {
+        use std::fmt::Write as _;
+        write!(tail, "{byte:02x}").unwrap();
+    }
+    let mut lines = usb.lines().skip_while(|line| *line != expected);
+    lines.next() == Some(expected.as_str())
+        && lines.next() == Some("xhci boot wire 0: 4d524d4c584843490100280030000000361b0d00")
+        && lines.next() == Some(format!("xhci boot wire 1: {tail}").as_str())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -57,7 +81,7 @@ impl Case {
         }
         let reported = |expected: &str| report.lines().any(|line| line == expected);
         if !matches!(self, Self::UsbBoot)
-            && report.lines().any(|line| line.starts_with(BOOT_EVIDENCE))
+            && report.lines().any(|line| line.starts_with(BOOT_EVIDENCE) || line.starts_with(BOOT_WIRE))
         {
             return false;
         }
@@ -255,13 +279,16 @@ mod tests {
     fn requires_one_evidence_record_bound_to_the_actual_boot_controller() {
         let line = "xhci boot evidence: requester=00000030 pci=000d1b36 class=0c033001 bar0=0x00000000f1000000 size=0x4000";
         let report = format!(
-            "xhci 0000:00:05.0 pci=1b36:000d rev=01 cmd=0007\nxhci 0000:00:06.0 pci=1b36:000d rev=01 cmd=0007\nxhci BAR0=0x00000000f1000000 size=0x4000 ownership=Ok(Absent)\n{line}\n"
+            "xhci 0000:00:05.0 pci=1b36:000d rev=01 cmd=0007\nxhci 0000:00:06.0 pci=1b36:000d rev=01 cmd=0007\nxhci BAR0=0x00000000f1000000 size=0x4000 ownership=Ok(Absent)\n{line}\nxhci boot wire 0: 4d524d4c584843490100280030000000361b0d00\nxhci boot wire 1: 0130030c000000f1000000000040000000000000\n"
         );
         assert!(exact_usb_boot_evidence(&report));
         assert!(!exact_usb_boot_evidence(&format!("{line}\n{report}")));
         assert!(!exact_usb_boot_evidence(&report.replace("requester=00000030", "requester=00000028")));
         assert!(!exact_usb_boot_evidence(&report.replace("bar0=0x00000000f1000000", "bar0=0x00000000f2000000")));
         assert!(!exact_usb_boot_evidence(&report.replace(line, "")));
+        assert!(!exact_usb_boot_evidence(&report.replace("wire 0:", "wire 1:")));
+        assert!(!exact_usb_boot_evidence(&report.replace("0130030c", "0131030c")));
+        assert!(!exact_usb_boot_evidence(&report.replace("wire 1: 0130030c000000f1", "wire 1: 0130030c000000f2")));
     }
 
     #[test]

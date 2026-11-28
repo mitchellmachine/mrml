@@ -359,8 +359,10 @@ firmware without granting access. The diagnostic library can also encode
 these fields as one 40-byte little-endian V1 record (`MRMLXHCI`). Decoding
 requires the exact version, size, zero reserved bytes, the independently
 identified PCI function, and an aligned nonoverflowing BAR span. Decoding
-untrusted bytes never proves provenance or safe read coverage. The post-exit
-consumer is not wired yet.
+untrusted bytes never proves provenance or safe read coverage. The EFI
+inventory prints the encoded bytes as two numbered, bounded hex lines;
+QEMU checks the exact contents and associates them with only the actual
+USB boot controller. The post-exit consumer is not wired yet.
 
 ### Diagnose a return to firmware
 

@@ -170,6 +170,17 @@ unsafe fn bar0(
     result.ok_or(LOAD_ERROR)
 }
 
+struct RecordHex<'a>(&'a [u8]);
+
+impl fmt::Display for RecordHex<'_> {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(out, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
 fn packed_requester(address: DeviceAddress) -> u32 {
     (u32::from(address.segment()) << 16)
         | (u32::from(address.bus()) << 8)
@@ -365,6 +376,10 @@ unsafe fn scan(
                             "xhci boot evidence: requester={:08x} pci={:08x} class={:08x} bar0={base:#018x} size={bytes:#x}",
                             identity.requester, identity.vendor_device, identity.class_revision,
                         ))?;
+                        let record = evidence.encode();
+                        for (index, half) in record.chunks_exact(20).enumerate() {
+                            line(output, format_args!("xhci boot wire {index}: {}", RecordHex(half)))?;
+                        }
                     }
                     match geometry {
                         Some((count, mask)) => line(
