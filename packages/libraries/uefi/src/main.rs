@@ -968,7 +968,24 @@ unsafe fn boot(
             *service_verified.artifact().digest(),
         )?;
     }
-    if let Some(release) = prepared_release.as_mut() {
+    trace.at("owner-selected supervisor policy");
+    let supervisor_selection = check_owner_supervisor_pin(
+        option_env!("MRML_BOOT_SUPERVISOR_PIN_HEX").map(str::as_bytes),
+        secure_boot,
+        prepared_release.as_ref().map(|release| {
+            (
+                release.admission.release(),
+                release.admission.manifest_digest(),
+                *service_verified.artifact().digest(),
+            )
+        }),
+    )
+    .map_err(|_| LOAD_ERROR)?;
+    // Preserve the existing journal ordering for unpinned boot. Opt-in
+    // supervisor policy is measured successfully before its release advances.
+    if supervisor_selection.is_none()
+        && let Some(release) = prepared_release.as_mut()
+    {
         release
             .admission
             .publish(&mut release.journal)
@@ -1035,10 +1052,25 @@ unsafe fn boot(
             unsafe { release_loaded_file(services, artifact.file) }?;
         }
     }
-    let measured_boot =
-        kernel_measured && service_measured && additional_release_measured && artifact_set_measured;
-    if require_tpm_measurement() && !measured_boot {
+    let supervisor_measured = if let Some(selection) = supervisor_selection {
+        measure_artifact(services, &selection.encode(), b"MRML owner supervisor selection")?
+    } else {
+        true
+    };
+    let measured_boot = kernel_measured
+        && service_measured
+        && additional_release_measured
+        && artifact_set_measured
+        && supervisor_measured;
+    if (require_tpm_measurement() || supervisor_selection.is_some()) && !measured_boot {
         return Err(LOAD_ERROR);
+    }
+    if supervisor_selection.is_some() {
+        let release = prepared_release.as_mut().ok_or(LOAD_ERROR)?;
+        release
+            .admission
+            .publish(&mut release.journal)
+            .map_err(|_| LOAD_ERROR)?;
     }
     trace.at("allocate and materialize service");
     let service_image_size = service_verified.image().image_size() as usize;

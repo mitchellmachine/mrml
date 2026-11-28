@@ -209,8 +209,30 @@ entry address and the PE region permission plan; it does not adopt loader
 mappings, allocate guest frames, install EPT, or enter VMX. Hosted tests cover
 missing owner selection, a different manifest or release, a different service
 digest, invalid destination sizes, zeroed padding, and non-writable executable
-pages. The normal boot entry is unchanged and still parks: authenticated
-provisioning of the pin, guest-owned mappings, and guest entry are not wired.
+pages.
+
+An owner building and enrolling the UEFI loader can now opt in by setting
+`MRML_BOOT_SUPERVISOR_PIN_HEX` to the 128 hexadecimal characters of the
+selection record's SHA3-512 digest. The loader reconstructs the record from
+the authenticated release and verified service; the boot volume cannot supply
+the pin. This option requires Secure Boot and the coherent signed release and
+TPM journal path. A malformed or mismatched pin stops boot before journal
+publication. For this opt-in path, complete PCR 11 measurements, including the
+owner selection, must succeed before the journal advances. Use a journal
+authorization policy not invalidated by the PCR 11 extensions, such as the
+PCR 7 fixture policy. Leaving the pin unset preserves the existing boot check
+and does not select a supervisor.
+
+In enrolled OVMF with a copy of the already-committed software TPM journal,
+the matching loader reached `POLICY:ACCEPTED` and `SERVICE:CHECKED` after
+seven PCR 11 extensions. The mismatched loader reached the selection check
+but failed before any PCR 11 extension or kernel policy acceptance. Neither
+cold boot issued a journal write or counter increment. This compares the
+loader checks against the same existing signed artifacts; it does not test a
+fresh journal transition, a physical TPM, or supervisor execution.
+
+The normal Gigakernel entry still parks. This check does not yet hand off
+launch authority, assign guest-owned mappings, or enter the supervisor.
 
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real

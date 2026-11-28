@@ -2370,6 +2370,90 @@ pub const fn status_is_error(status: Status) -> bool {
     status >> (usize::BITS - 1) != 0
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SupervisorPinError {
+    InvalidPin,
+    SecureBootRequired,
+    CoherentReleaseRequired,
+    InvalidSelection,
+    SelectionMismatch,
+}
+
+/// Resolve an opt-in owner selection carried by the enrolled loader, not by
+/// the boot volume. Values in `coherent_service` must come from exact release
+/// authentication. The result is measurement data, never launch authority.
+pub fn check_owner_supervisor_pin(
+    encoded_pin: Option<&[u8]>,
+    secure_boot: bool,
+    coherent_service: Option<(u64, [u8; 64], [u8; 64])>,
+) -> Result<Option<mrml_kernel::BootSupervisorSelection>, SupervisorPinError> {
+    let Some(encoded_pin) = encoded_pin else {
+        return Ok(None);
+    };
+    let pin = parse_root_digest(encoded_pin).ok_or(SupervisorPinError::InvalidPin)?;
+    if !secure_boot {
+        return Err(SupervisorPinError::SecureBootRequired);
+    }
+    let (release, manifest, service) =
+        coherent_service.ok_or(SupervisorPinError::CoherentReleaseRequired)?;
+    let selection = mrml_kernel::BootSupervisorSelection::new(release, manifest, service)
+        .map_err(|_| SupervisorPinError::InvalidSelection)?;
+    if mrml_crypto::Sha3_512::digest(&selection.encode()) != pin {
+        return Err(SupervisorPinError::SelectionMismatch);
+    }
+    Ok(Some(selection))
+}
+
+#[cfg(test)]
+mod supervisor_pin_tests {
+    use super::*;
+
+    #[test]
+    fn only_exact_coherent_selection_under_secure_boot_matches() {
+        let release = (7, [0x35; 64], [0x76; 64]);
+        let record =
+            mrml_kernel::BootSupervisorSelection::new(release.0, release.1, release.2).unwrap();
+        let digest = mrml_crypto::Sha3_512::digest(&record.encode());
+        let mut hex = [0; 128];
+        let alphabet = b"0123456789abcdef";
+        for (slot, byte) in hex.chunks_exact_mut(2).zip(digest) {
+            slot[0] = alphabet[(byte >> 4) as usize];
+            slot[1] = alphabet[(byte & 15) as usize];
+        }
+        assert_eq!(check_owner_supervisor_pin(None, false, None), Ok(None));
+        assert_eq!(
+            check_owner_supervisor_pin(Some(&hex), true, Some(release)),
+            Ok(Some(record))
+        );
+        assert_eq!(
+            check_owner_supervisor_pin(Some(b"bad"), true, Some(release)),
+            Err(SupervisorPinError::InvalidPin)
+        );
+        assert_eq!(
+            check_owner_supervisor_pin(Some(&[b'0'; 128]), true, Some(release)),
+            Err(SupervisorPinError::InvalidPin)
+        );
+        assert_eq!(
+            check_owner_supervisor_pin(Some(&hex), false, Some(release)),
+            Err(SupervisorPinError::SecureBootRequired)
+        );
+        assert_eq!(
+            check_owner_supervisor_pin(Some(&hex), true, None),
+            Err(SupervisorPinError::CoherentReleaseRequired)
+        );
+        for different in [
+            (8, release.1, release.2),
+            (7, [0x36; 64], release.2),
+            (7, release.1, [0x77; 64]),
+        ] {
+            assert_eq!(
+                check_owner_supervisor_pin(Some(&hex), true, Some(different)),
+                Err(SupervisorPinError::SelectionMismatch)
+            );
+        }
+    }
+}
+
 pub fn parse_root_digest(encoded: &[u8]) -> Option<[u8; 64]> {
     if encoded.len() != 128 {
         return None;

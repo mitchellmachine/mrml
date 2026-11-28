@@ -164,6 +164,9 @@ targets = ["WINDOWS", "LINUX"]
 targets = ["WINDOWS", "LINUX"]
 
 [[absent_compile_env]]
+name = "MRML_BOOT_SUPERVISOR_PIN_HEX"
+
+[[absent_compile_env]]
 name = "MRML_KERNEL_MIN_VERSION"
 
 [[absent_compile_env]]
@@ -415,3 +418,11 @@ kind = "compile-env"
 line = 979
 path = "packages/libraries/uefi/src/main.rs"
 reason = "Read the declared compile-time setting mrml-require-release-manifest for require_release_manifest in org.mrml.library.uefi; absence and defaults are handled explicitly at that site."
+
+[[build_input]]
+fingerprint = "fnv1a64:399ed1941fd2b8f7"
+id = "compile-env.boot.mrml-boot-supervisor-pin-hex"
+kind = "compile-env"
+line = 973
+path = "packages/libraries/uefi/src/main.rs"
+reason = "Read the optional independent owner role pin from the enrolled loader; a boot volume, release signature, or build receipt cannot supply it."
