@@ -160,8 +160,14 @@ complete boot image or a working installed system. In the November 28, 2026
 Windows-hosted x86-64 release build with release floor 1, removing the unused
 context reduced executable bytes from 34,253 at `d14abc95` to 32,669. The
 whole PE went from 46,592 to 44,032 bytes; writable data stayed at 8,192
-virtual bytes. These are bootstrap sizes, not full-runtime or trusted-code
-measurements.
+virtual bytes. The next cut excluded the QEMU-only USB PCI and copied DXE
+record decoders from normal boot, including its observation profile. Both
+reject those handoff flags, while bring-up builds still understand them.
+Normal boot still validates DMAR and MCFG when present and uses the same
+release, supervisor-selection and recovery checks. The same release build
+measured 31,197 executable bytes and a 42,496-byte PE after the cut;
+writable data was unchanged. These are bootstrap sizes, not full-runtime
+or trusted-code measurements.
 
 The separate `normal_boot_observed` fixture uses the same policy entry and
 emits fixed, non-authoritative QEMU trace records for invalid configuration,

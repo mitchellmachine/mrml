@@ -548,7 +548,23 @@ impl BootHandoff {
     /// ascending address order. Callers can place them directly into fixed
     /// early-boot storage; the parser never allocates or dereferences firmware
     /// pointers.
-    pub fn decode<F>(input: &[u8], mut emit: F) -> Result<Self, HandoffError>
+    pub fn decode<F>(input: &[u8], emit: F) -> Result<Self, HandoffError>
+    where
+        F: FnMut(MemoryRegion),
+    {
+        Self::decode_profile::<true, _>(input, emit)
+    }
+
+    /// Normal boot accepts no QEMU USB PCI or copied DXE diagnostic records.
+    /// The production specialization does not decode either record.
+    pub fn decode_normal(input: &[u8]) -> Result<Self, HandoffError> {
+        Self::decode_profile::<false, _>(input, |_| ())
+    }
+
+    fn decode_profile<const DIAGNOSTICS: bool, F>(
+        input: &[u8],
+        mut emit: F,
+    ) -> Result<Self, HandoffError>
     where
         F: FnMut(MemoryRegion),
     {
@@ -562,6 +578,9 @@ impl BootHandoff {
         let encoded_length = read_u32(input, 16) as usize;
         let region_count = read_u16(input, 20) as usize;
         let flags = read_u16(input, 22);
+        if !DIAGNOSTICS && flags & (FLAG_USB_PCI_DIAGNOSTIC | FLAG_DXE_DIAGNOSTIC) != 0 {
+            return Err(HandoffError::UnknownFlags);
+        }
         if flags & !(KNOWN_FLAGS | if has_supervisor { FLAG_SUPERVISOR_SELECTION } else { 0 })
             != 0
         {
@@ -625,9 +644,10 @@ impl BootHandoff {
         let madt_end = madt_offset
             .checked_add(madt_length)
             .ok_or(HandoffError::NonCanonical)?;
-        let usb_bytes =
-            usize::from(flags & FLAG_USB_PCI_DIAGNOSTIC != 0) * BOOT_USB_PCI_RECORD_BYTES;
-        let dxe_bytes = usize::from(flags & FLAG_DXE_DIAGNOSTIC != 0) * BOOT_DXE_DIAGNOSTIC_BYTES;
+        let usb_bytes = usize::from(DIAGNOSTICS && flags & FLAG_USB_PCI_DIAGNOSTIC != 0)
+            * BOOT_USB_PCI_RECORD_BYTES;
+        let dxe_bytes = usize::from(DIAGNOSTICS && flags & FLAG_DXE_DIAGNOSTIC != 0)
+            * BOOT_DXE_DIAGNOSTIC_BYTES;
         if (usb_bytes != 0 && flags & FLAG_DMA_ACPI == 0) || (dxe_bytes != 0 && usb_bytes == 0) {
             return Err(HandoffError::NonCanonical);
         }
@@ -2497,11 +2517,17 @@ mod tests {
         assert_eq!(total, output.len());
         let decoded = BootHandoff::decode(&output, |_| {}).unwrap();
         assert_eq!(decoded.dma_acpi(&output), Some((&dmar[..], &mcfg[..])));
+        let normal = BootHandoff::decode_normal(&output).unwrap();
+        assert_eq!(normal.dma_acpi(&output), Some((&dmar[..], &mcfg[..])));
         assert_eq!(
             append_boot_dma_acpi(total, &dmar, &mcfg, &mut output),
             Err(HandoffError::NonCanonical)
         );
         output[total - 1] ^= 1;
+        assert_eq!(
+            BootHandoff::decode_normal(&output).err(),
+            Some(HandoffError::NonCanonical)
+        );
         assert_eq!(
             BootHandoff::decode(&output, |_| panic!("must validate before emit")).err(),
             Some(HandoffError::NonCanonical)
@@ -2592,6 +2618,10 @@ mod tests {
         let wire = b"MRMLXHCI\x01\x00\x28\x00\x00\x41\x00\x00\x36\x1b\x0d\x00\x01\x30\x03\x0c\x00\x00\x20\x81\x00\x00\x00\x00\x00\x40\x00\x00\x00\x00\x00\x00";
         let usb_end = append_boot_usb_pci_record(acpi_end, wire, &mut output).unwrap();
         assert_eq!(BootHandoff::decode(&output[..usb_end], |_| {}).unwrap().boot_dxe_diagnostic(), None);
+        assert_eq!(
+            BootHandoff::decode_normal(&output[..usb_end]).err(),
+            Some(HandoffError::UnknownFlags)
+        );
 
         let end = append_boot_dxe_diagnostic(usb_end, &missing, &mut output).unwrap();
         assert_eq!(BootHandoff::decode(&output[..end], |_| {}).unwrap().boot_dxe_diagnostic(), Some(&missing));
@@ -2613,6 +2643,10 @@ mod tests {
         let flags = read_u16(&orphan, 22) & !FLAG_USB_PCI_DIAGNOSTIC;
         orphan[22..24].copy_from_slice(&flags.to_le_bytes());
         rejects(&orphan[..end]);
+        assert_eq!(
+            BootHandoff::decode_normal(&orphan[..end]).err(),
+            Some(HandoffError::UnknownFlags)
+        );
 
         let mut record = [0; PASSIVE_DXE_RECORD_BYTES];
         record[..13].copy_from_slice(b"MRMLDXE\0\x01\x00\xc8\x00\x01");
@@ -2626,6 +2660,10 @@ mod tests {
         output[16..20].copy_from_slice(&(usb_end as u32).to_le_bytes());
         let end = append_boot_dxe_diagnostic(usb_end, &copied, &mut output).unwrap();
         assert_eq!(BootHandoff::decode(&output[..end], |_| {}).unwrap().boot_dxe_diagnostic(), Some(&copied));
+        assert_eq!(
+            BootHandoff::decode_normal(&output[..end]).err(),
+            Some(HandoffError::UnknownFlags)
+        );
         for offset in [0, 8, 10, 12, 13, 16, 18, 19, 20, 21, 56, 64, 82, 88, 199] {
             let mut changed = output;
             changed[usb_end + 8 + offset] ^= if offset == 12 { 0xff } else { 1 };
@@ -3059,6 +3097,12 @@ mod tests {
                 .supervisor_selection(),
             None
         );
+        assert_eq!(
+            BootHandoff::decode_normal(&encoded[..length])
+                .unwrap()
+                .supervisor_selection(),
+            None
+        );
         let selection = BootSupervisorSelection::new(11, [5; 64], [9; 64]).unwrap();
         for invalid in [
             BootSupervisorSelection::new(10, [5; 64], [9; 64]).unwrap(),
@@ -3076,6 +3120,9 @@ mod tests {
         let decoded = BootHandoff::decode(&encoded[..total], |_| {}).unwrap();
         assert_eq!(decoded.supervisor_selection(), Some(selection));
         assert_eq!(decoded.madt(&encoded), Some(madt.as_slice()));
+        let normal = BootHandoff::decode_normal(&encoded[..total]).unwrap();
+        assert_eq!(normal.supervisor_selection(), Some(selection));
+        assert_eq!(normal.madt(&encoded), Some(madt.as_slice()));
         assert_eq!(
             append_boot_supervisor_selection(total, selection, &mut encoded),
             Err(HandoffError::NonCanonical)
@@ -3084,6 +3131,10 @@ mod tests {
         for offset in [length, length + 24, length + 88, total - 1] {
             let mut modified = encoded;
             modified[offset] ^= 1;
+            assert_eq!(
+                BootHandoff::decode_normal(&modified[..total]).err(),
+                Some(HandoffError::NonCanonical)
+            );
             let mut emitted = 0;
             assert_eq!(
                 BootHandoff::decode(&modified[..total], |_| emitted += 1).err(),
