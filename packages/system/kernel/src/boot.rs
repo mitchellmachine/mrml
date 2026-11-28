@@ -8,6 +8,7 @@ pub enum BootValidationError {
     CoherentReleaseRequired,
     MissingSignedArtifact,
     DuplicateSignedArtifact,
+    UnexpectedSignedArtifact,
     MixedArtifactRelease,
     KernelMeasurementMismatch,
 }
@@ -187,10 +188,13 @@ impl BootPolicy {
                 return Err(BootValidationError::MixedArtifactRelease);
             }
             let index = artifact.kind() as usize - 1;
-            if present[index] {
+            let slot = present
+                .get_mut(index)
+                .ok_or(BootValidationError::UnexpectedSignedArtifact)?;
+            if *slot {
                 return Err(BootValidationError::DuplicateSignedArtifact);
             }
-            present[index] = true;
+            *slot = true;
             if artifact.kind() == crate::ArtifactKind::Kernel
                 && artifact.digest() != evidence.image_measurement()
             {
@@ -359,5 +363,34 @@ mod tests {
             BootPolicy::production(8).validate_signed_chain(&valid, &duplicate),
             Err(BootValidationError::DuplicateSignedArtifact)
         );
+
+        let application = signed_artifact(
+            ArtifactKind::ApplicationImage,
+            8,
+            b"separately admitted application",
+            &private,
+            &public,
+        );
+        let substituted = [
+            references[0],
+            references[1],
+            &application,
+            references[3],
+            references[4],
+        ];
+        let extended = [
+            references[0],
+            references[1],
+            references[2],
+            references[3],
+            references[4],
+            &application,
+        ];
+        for candidate in [substituted.as_slice(), extended.as_slice()] {
+            assert!(matches!(
+                BootPolicy::production(8).admit_signed_chain(&valid, candidate),
+                Err(BootValidationError::UnexpectedSignedArtifact)
+            ));
+        }
     }
 }

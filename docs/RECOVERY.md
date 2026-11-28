@@ -1801,10 +1801,12 @@ Application recovery must preserve the distinction between the fixed five-root
 early-boot release and independently admitted application artifacts. The kernel
 recognizes bounded executable `ApplicationImage` bytes, but a recovered
 `VerifiedRelease` cannot manufacture an application trust root: that request
-fails with `MissingTrustRoot`. Recovery must reacquire the exact independently
-selected application root and signed artifact through the eventual package and
-generation admission path. This is unit-tested artifact-boundary evidence, not
-an implemented application loader or recovered application execution path.
+fails with `MissingTrustRoot`. Kernel boot-policy admission also rejects a
+verified non-boot artifact explicitly, whether offered instead of a boot root
+or appended to the chain; no validated boot token is produced. Recovery must
+reacquire the independently selected application root and signed artifact
+through package and generation admission. This is unit-tested artifact-boundary
+evidence, not an implemented application loader or recovered execution path.
 
 The kernel now derives route-ready application identity only after the verified
 artifact kind, version, and SHA3-512 digest match the exact named package record
