@@ -292,6 +292,11 @@ ECAM window, BAR, and routed remapper layout. It separately checks a later
 normalized map for incompatible or partial intersections. An absent range
 can be non-conflicting without proving coverage. These checks return no
 mapping and do not change the production or physical diagnostic policy.
+A fixed 200-byte version-one diagnostic record can carry the scalar layout
+without retaining firmware pointers or indexing from record-supplied counts.
+Validation compares the entire copy with an independent reconstruction before
+checking the final map. This format has model tests but is not wired into
+the live boot handoff, and canonical equality does not authenticate origin.
 For a future passive post-exit diagnostic, the planner derives one 4 KiB PCI
 configuration page from the exact MCFG segment, bus, device and function. It
 requires explicit coverage by a normalized firmware MMIO range and rejects

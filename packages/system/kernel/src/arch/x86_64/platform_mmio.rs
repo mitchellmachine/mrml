@@ -515,7 +515,11 @@ pub enum DxeObservationError {
     IncompleteDxe,
     ChangedLayout,
     FinalMapConflict,
+    InvalidRecord,
 }
+
+/// Size of the canonical version-one passive DXE diagnostic copy.
+pub const PASSIVE_DXE_RECORD_BYTES: usize = 200;
 
 /// Copied firmware classifications bound to one requester and one exact ACPI
 /// layout. This type is diagnostic data, not an MMIO mapping or capability.
@@ -588,6 +592,49 @@ impl PassiveDxeLayout {
         Ok(Self { route, window, page, bar, remappers })
     }
 
+    fn diagnostic_record(&self) -> [u8; PASSIVE_DXE_RECORD_BYTES] {
+        let mut record = [0; PASSIVE_DXE_RECORD_BYTES];
+        record[..8].copy_from_slice(b"MRMLDXE\0");
+        record[8..10].copy_from_slice(&1u16.to_le_bytes());
+        record[10..12].copy_from_slice(&(PASSIVE_DXE_RECORD_BYTES as u16).to_le_bytes());
+        record[12] = self.remappers.iter().flatten().count() as u8;
+        let requester = self.route.requester();
+        record[16..18].copy_from_slice(&requester.segment().to_le_bytes());
+        record[18] = requester.bus();
+        record[19] = requester.device();
+        record[20] = requester.function();
+        for (offset, value) in [
+            (24, self.route.register_base().get()),
+            (32, self.window.start().get()),
+            (40, self.window.pages()),
+            (48, self.page.start().get()),
+            (56, self.bar.start().get()),
+            (64, self.bar.pages()),
+        ] {
+            record[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        for (index, &(segment, range)) in self.remappers.iter().flatten().enumerate() {
+            let offset = 72 + 16 * index;
+            record[offset..offset + 8].copy_from_slice(&range.start().get().to_le_bytes());
+            record[offset + 8..offset + 10].copy_from_slice(&segment.to_le_bytes());
+        }
+        record
+    }
+
+    fn check_map(&self, memory: &MemoryMap<'_>) -> Result<(), DxeObservationError> {
+        for range in self.firmware_ranges().chain(core::iter::once(self.bar)) {
+            if memory.regions().iter().copied().any(|entry| {
+                overlaps_region(entry, range)
+                    && (entry.kind() != MemoryKind::Mmio
+                        || entry.start().get() > range.start().get()
+                        || entry.end() < range.end())
+            }) {
+                return Err(DxeObservationError::FinalMapConflict);
+            }
+        }
+        Ok(())
+    }
+
     fn firmware_ranges(&self) -> impl Iterator<Item = MemoryRegion> + '_ {
         [self.window, self.page].into_iter()
             .chain(self.remappers.iter().flatten().map(|&(_, range)| range))
@@ -616,6 +663,36 @@ impl PassiveDxeObservation {
         Ok(Self { layout })
     }
 
+    /// Serialize only scalar classifications from the successful live capture.
+    /// All integers are little-endian; unused slots and reserved bytes are zero.
+    /// The record carries no proof of origin and grants no device access.
+    pub fn diagnostic_record(self) -> [u8; PASSIVE_DXE_RECORD_BYTES] {
+        self.layout.diagnostic_record()
+    }
+
+    /// Compare a trusted boot-stage copy against an independently reconstructed
+    /// layout and the final normalized map. A match does not authenticate the
+    /// copy, prove active cache policy, or authorize touching a device.
+    pub fn check_diagnostic_record<const U: usize, const S: usize, const A: usize>(
+        record: &[u8],
+        route: VtdRequesterRoute,
+        dmar: &DmarTopology<U, S>,
+        mcfg: &McfgTopology<A>,
+        bar: MemoryRegion,
+        memory: &MemoryMap<'_>,
+    ) -> Result<(), DxeObservationError> {
+        if record.len() != PASSIVE_DXE_RECORD_BYTES {
+            return Err(DxeObservationError::InvalidRecord);
+        }
+        let current = PassiveDxeLayout::from_acpi(route, dmar, mcfg, bar)?;
+        // No wire address or count is used for a read, a lookup, or a loop bound.
+        // Exact canonical equality also rejects unknown versions and extra data.
+        if record != current.diagnostic_record() {
+            return Err(DxeObservationError::InvalidRecord);
+        }
+        current.check_map(memory)
+    }
+
     /// Compare independently re-derived coordinates and validate that no
     /// region in the final map conflicts. An entirely absent range is not a
     /// conflict, but neither is it evidence of coverage. This method returns
@@ -632,17 +709,7 @@ impl PassiveDxeObservation {
         if self.layout != current {
             return Err(DxeObservationError::ChangedLayout);
         }
-        for range in current.firmware_ranges().chain(core::iter::once(bar)) {
-            if memory.regions().iter().copied().any(|entry| {
-                overlaps_region(entry, range)
-                    && (entry.kind() != MemoryKind::Mmio
-                        || entry.start().get() > range.start().get()
-                        || entry.end() < range.end())
-            }) {
-                return Err(DxeObservationError::FinalMapConflict);
-            }
-        }
-        Ok(())
+        current.check_map(memory)
     }
 }
 
@@ -1235,6 +1302,29 @@ mod tests {
             assert_eq!(check(&[unrelated, conflict]), Err(FinalMapConflict));
         }
         let map = MemoryMap::new(core::slice::from_ref(&unrelated)).unwrap();
+        let record = observation.diagnostic_record();
+        assert_eq!(&record[..13], b"MRMLDXE\0\x01\x00\xc8\x00\x01");
+        assert_eq!(&record[16..21], &[0, 0, 0, 20, 0]);
+        assert_eq!(&record[72..80], &0xfed9_1000u64.to_le_bytes());
+        assert_eq!(&record[82..], &[0; PASSIVE_DXE_RECORD_BYTES - 82]);
+        let validate = |bytes: &[u8], memory: &MemoryMap<'_>| {
+            PassiveDxeObservation::check_diagnostic_record(bytes, route, &dmar, &mcfg, bar, memory)
+        };
+        assert_eq!(validate(&record, &map), Ok(()));
+        for length in 0..PASSIVE_DXE_RECORD_BYTES {
+            assert_eq!(validate(&record[..length], &map), Err(InvalidRecord));
+        }
+        let mut extended = [0; PASSIVE_DXE_RECORD_BYTES + 1];
+        extended[..PASSIVE_DXE_RECORD_BYTES].copy_from_slice(&record);
+        assert_eq!(validate(&extended, &map), Err(InvalidRecord));
+        for offset in 0..record.len() {
+            let mut changed = record;
+            changed[offset] ^= 1;
+            assert_eq!(validate(&changed, &map), Err(InvalidRecord), "byte {offset}");
+        }
+        let conflict = region(0xe00a_0000, 1, MemoryKind::Free);
+        let conflict_map = MemoryMap::new(core::slice::from_ref(&conflict)).unwrap();
+        assert_eq!(validate(&record, &conflict_map), Err(FinalMapConflict));
         let moved_mcfg = McfgTopology::<1>::parse(&self::mcfg(0xe100_0000)).unwrap();
         assert_eq!(observation.check_final_map(route, &dmar, &moved_mcfg, bar, &map), Err(ChangedLayout));
         let sibling = VtdRequesterRoute::for_test(DeviceAddress::new(0, 0, 20, 1).unwrap(), base(0xfed9_1000));
