@@ -315,9 +315,15 @@ real firmware handshake. The bounded ownership-sequence validator is Rust
 library code shared with the model. Its result is not an authorization to
 write registers, enable DMA, or reset the controller. The VT-d table layer
 can also verify that an exact requester has an empty context before and
-after a completed read/write drain on a coherent active legacy root.
+after a completed read/write drain on the active legacy root. It requires
+an ordered writeback of the exact root and context entries on noncoherent
+hardware.
 Register-model tests reject an occupied context, a different root, and an
-incomplete drain. No boot path uses this as hardware handoff authority.
+incomplete drain. The sealed cold QEMU diagnostic checks that an occupied
+context is refused, then verifies denial after withdrawing the leaf and
+clearing the exact context with both bus-master bits off. The host checks
+the resulting context page independently. Normal boot does not use this
+as hardware handoff authority.
 
 ### Diagnose a return to firmware
 

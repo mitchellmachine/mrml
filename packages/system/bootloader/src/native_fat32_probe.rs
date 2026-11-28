@@ -417,7 +417,8 @@ fn fixture_activate(
 ) -> bool {
     use mrml_kernel::arch::x86_64::{
         DmarTopology, PciConfigSpace, SINGLE_REQUESTER_VTD_TABLE_PAGES, VerifiedVtdUnit,
-        VtdDmaAperture, prepare_cold_legacy_vtd_root, verify_q35_activation_mmio,
+        VtdBindingError, VtdDmaAperture, VtdTableError, prepare_cold_legacy_vtd_root,
+        verify_q35_activation_mmio, write_back_vtd_table_words,
     };
     use mrml_kernel::{DeviceAddress, PhysAddr};
 
@@ -500,7 +501,12 @@ fn fixture_activate(
                         unit.activate_cold_legacy_root(prepared).ok()?;
                         let backing = &mut *(dma.mapping().virtual_start().get()
                             as *mut [[u64; 512]; SINGLE_REQUESTER_VTD_TABLE_PAGES]);
-                        let mut tables = unit.borrow_boot_tables(route, root, backing).ok()?;
+                        let mut tables = unit.borrow_boot_tables(route, root, &mut *backing).ok()?;
+                        if unit.verify_routed_dma_denied(&mut tables, route)
+                            != Err(VtdBindingError::Table(VtdTableError::OccupiedContext))
+                        {
+                            return None;
+                        }
                         unit.install_routed_dma_aperture(&mut tables, aperture)
                             .ok()?;
                         unit.verify_routed_dma_aperture(
@@ -521,6 +527,16 @@ fn fixture_activate(
                                 0xb9 => {
                                     unit.revoke_routed_dma_aperture(&mut tables, aperture)
                                         .ok()?;
+                                    // Only this sealed fixture owns the exact live context.
+                                    // Its endpoint is halted and both PCI BME bits remain off.
+                                    let context = &mut backing[1][..2];
+                                    if context != [((root.get() + 2 * PAGE_SIZE) | 1), 0x102] {
+                                        return None;
+                                    }
+                                    context.fill(0);
+                                    write_back_vtd_table_words(context).ok()?;
+                                    let mut tables = unit.borrow_boot_tables(route, root, backing).ok()?;
+                                    unit.verify_routed_dma_denied(&mut tables, route).ok()?;
                                     trace(0xc5);
                                     return Some(());
                                 }

@@ -556,7 +556,7 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
     }
 
     /// Verify that an exact stopped requester has a canonical empty context
-    /// on the active coherent legacy root, including a completed cache drain.
+    /// on the active legacy root, including a completed cache drain.
     ///
     /// The caller must hold the retained assignment lock, keep the requester
     /// stopped, and independently exclude ATS, requester aliases and firmware
@@ -566,7 +566,7 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
     /// No table entries or PCI command bits are changed here.
     pub fn verify_routed_dma_denied<M: VtdTableMemory>(
         &mut self,
-        memory: &M,
+        memory: &mut M,
         route: VtdRequesterRoute,
     ) -> Result<(), VtdBindingError> {
         if !verified_unit_matches_route(&self.verified, route) {
@@ -582,15 +582,16 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
         {
             return Err(VtdBindingError::TableSubstitution);
         }
-        let check = || {
-            require_empty_legacy_context(memory, root, route.requester())
-                .map_err(VtdBindingError::Table)
-        };
-        check()?;
-        // An observed zero is insufficient on noncoherent walks. This path
-        // does not publish context/root cache lines, so only admit coherent
-        // walks and require the hardware's synchronous read/write drains.
-        self.invalidator.ready_for_dma_drain(false).map_err(VtdBindingError::Unit)?;
+        let (context, slot) = require_empty_legacy_context(memory, root, route.requester())
+            .map_err(VtdBindingError::Table)?;
+        let needs_writeback = self.invalidator
+            .ready_for_dma_drain(memory.supports_explicit_writeback())
+            .map_err(VtdBindingError::Unit)?;
+        if needs_writeback {
+            memory.publish_legacy_pair(provenance.root_table(), usize::from(route.requester().bus()))
+                .and_then(|()| memory.publish_legacy_pair(context, slot))
+                .map_err(VtdBindingError::Table)?;
+        }
         self.invalidator.invalidate_global().map_err(VtdBindingError::Unit)?;
         if self.invalidator.active_legacy_root().map_err(VtdBindingError::Unit)? != root {
             return Err(VtdBindingError::TableSubstitution);
@@ -598,7 +599,12 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
         if memory.provenance() != provenance {
             return Err(VtdBindingError::TableSubstitution);
         }
-        check()
+        if require_empty_legacy_context(memory, root, route.requester())
+            .map_err(VtdBindingError::Table)? != (context, slot)
+        {
+            return Err(VtdBindingError::TableSubstitution);
+        }
+        Ok(())
     }
 
     /// Checks a bounded, contiguous device-to-physical read/write window in
@@ -838,7 +844,7 @@ fn require_empty_legacy_context(
     memory: &impl VtdTableMemory,
     root: u64,
     requester: DeviceAddress,
-) -> Result<(), VtdTableError> {
+) -> Result<(PhysAddr, usize), VtdTableError> {
     let root = checked_table(root).map_err(|_| VtdTableError::InvalidRoot)?;
     let entry = memory.read128(root, usize::from(requester.bus()))?;
     // Require the exact existing context table. Do not confuse an absent
@@ -852,7 +858,7 @@ fn require_empty_legacy_context(
     if memory.read128(table, slot)? != [0, 0] {
         return Err(VtdTableError::OccupiedContext);
     }
-    Ok(())
+    Ok((table, slot))
 }
 
 fn verified_unit_matches_route(verified: &VerifiedPlatformMmio, route: VtdRequesterRoute) -> bool {
@@ -887,6 +893,11 @@ pub unsafe trait VtdTableMemory {
     /// device invalidation. The trait's exclusive ownership contract still
     /// holds during this call. Err leaves the update unconfirmed.
     fn write_back_leaf(&mut self, _table: PhysAddr, _index: usize) -> Result<(), VtdTableError> {
+        Err(VtdTableError::WritebackUnavailable)
+    }
+    /// Publish both words of the verified root or context entry before a
+    /// noncoherent walk. Backends without exact support fail closed.
+    fn publish_legacy_pair(&mut self, _table: PhysAddr, _index: usize) -> Result<(), VtdTableError> {
         Err(VtdTableError::WritebackUnavailable)
     }
     fn read128(&self, table: PhysAddr, index: usize) -> Result<[u64; 2], VtdTableError>;
@@ -941,6 +952,13 @@ unsafe impl VtdTableMemory for BootVtdTables<'_> {
         // SAFETY: the backing contract establishes WB/pins/exclusivity and
         // fixed CPU geometry; this is exactly the just-modified leaf.
         unsafe { write_back_vtd_table_words(core::slice::from_ref(leaf)) }
+    }
+
+    fn publish_legacy_pair(&mut self, table: PhysAddr, index: usize) -> Result<(), VtdTableError> {
+        let first = index.checked_mul(2).filter(|&first| first < 512)
+            .ok_or(VtdTableError::Storage)?;
+        self.write_back_leaf(table, first)?;
+        self.write_back_leaf(table, first + 1)
     }
 
     fn read128(&self, table: PhysAddr, index: usize) -> Result<[u64; 2], VtdTableError> {
@@ -1573,6 +1591,7 @@ mod tests {
         explicit_writeback: bool,
         failed_writeback: Option<usize>,
         published: [u64; 2],
+        published_pairs: [Option<(u64, usize)>; 2],
     }
 
     impl Tables {
@@ -1592,6 +1611,7 @@ mod tests {
                 explicit_writeback: false,
                 failed_writeback: None,
                 published: [0; 2],
+                published_pairs: [None; 2],
             };
             tables.root[2 * 2] = CONTEXT | 1;
             let context_index = 3 * 8;
@@ -1647,6 +1667,16 @@ mod tests {
                 .published
                 .get_mut(index)
                 .ok_or(VtdTableError::WritebackUnavailable)? = self.level1[index];
+            Ok(())
+        }
+
+        fn publish_legacy_pair(&mut self, table: PhysAddr, index: usize) -> Result<(), VtdTableError> {
+            if !self.explicit_writeback || self.failed_writeback == Some(index) {
+                return Err(VtdTableError::WritebackUnavailable);
+            }
+            let entry = self.published_pairs.iter_mut().find(|pair| pair.is_none())
+                .ok_or(VtdTableError::Storage)?;
+            *entry = Some((table.get(), index));
             Ok(())
         }
 
@@ -1978,42 +2008,55 @@ mod tests {
         let mut tables = Tables::identity(physical, 9);
         let mut unit = verified_unit(register, UnitRegisters::active(ROOT));
         let occupied = Err(VtdBindingError::Table(VtdTableError::OccupiedContext));
-        assert_eq!(unit.verify_routed_dma_denied(&tables, route), occupied);
+        assert_eq!(unit.verify_routed_dma_denied(&mut tables, route), occupied);
         let slot = 2 * (3 * 8);
         tables.context[slot + 2] = tables.context[slot];
         tables.context[slot + 3] = tables.context[slot + 1];
         tables.context[slot] = 0;
-        assert_eq!(unit.verify_routed_dma_denied(&tables, route), occupied);
+        assert_eq!(unit.verify_routed_dma_denied(&mut tables, route), occupied);
         tables.context[slot + 1] = 0;
-        assert_eq!(unit.verify_routed_dma_denied(&tables, route), Ok(()));
+        assert_eq!(unit.verify_routed_dma_denied(&mut tables, route), Ok(()));
         let neighbor = VtdRequesterRoute::for_test(DeviceAddress::new(0, 2, 3, 1).unwrap(), register);
-        assert_eq!(unit.verify_routed_dma_denied(&tables, neighbor), occupied);
+        assert_eq!(unit.verify_routed_dma_denied(&mut tables, neighbor), occupied);
 
         let mut missing_drain = UnitRegisters::active(ROOT);
         missing_drain.drain = false;
         let mut unit = verified_unit(register, missing_drain);
         assert_eq!(
-            unit.verify_routed_dma_denied(&tables, route),
+            unit.verify_routed_dma_denied(&mut tables, route),
             Err(VtdBindingError::Unit(VtdError::DrainUnsupported))
         );
         let mut failed_drain = UnitRegisters::active(ROOT);
         failed_drain.bad_completion_once = true;
         let mut unit = verified_unit(register, failed_drain);
         assert_eq!(
-            unit.verify_routed_dma_denied(&tables, route),
+            unit.verify_routed_dma_denied(&mut tables, route),
             Err(VtdBindingError::Unit(VtdError::InvalidCompletion))
         );
-        assert_eq!(unit.verify_routed_dma_denied(&tables, route), Ok(()));
+        assert_eq!(unit.verify_routed_dma_denied(&mut tables, route), Ok(()));
         let mut switched = UnitRegisters::active(ROOT);
         switched.root_after_drain = Some(ROOT + 4096);
         let mut switched_unit = verified_unit(register, switched);
         assert_eq!(
-            switched_unit.verify_routed_dma_denied(&tables, route),
+            switched_unit.verify_routed_dma_denied(&mut tables, route),
             Err(VtdBindingError::TableSubstitution)
         );
-        let new_root = tables.for_root(PhysAddr::new(ROOT + 4096).unwrap());
+        let mut noncoherent = UnitRegisters::active(ROOT);
+        noncoherent.coherent = false;
+        let mut noncoherent_unit = verified_unit(register, noncoherent);
+        assert!(noncoherent_unit.verify_routed_dma_denied(&mut tables, route).is_err());
+        tables.explicit_writeback = true;
+        tables.failed_writeback = Some(24);
+        assert_eq!(noncoherent_unit.verify_routed_dma_denied(&mut tables, route),
+                   Err(VtdBindingError::Table(VtdTableError::WritebackUnavailable)));
+        assert_eq!(tables.published_pairs, [Some((ROOT, 2)), None]);
+        tables.published_pairs = [None; 2];
+        tables.failed_writeback = None;
+        assert_eq!(noncoherent_unit.verify_routed_dma_denied(&mut tables, route), Ok(()));
+        assert_eq!(tables.published_pairs, [Some((ROOT, 2)), Some((CONTEXT, 24))]);
+        let mut new_root = tables.for_root(PhysAddr::new(ROOT + 4096).unwrap());
         assert_eq!(
-            unit.verify_routed_dma_denied(&new_root, route),
+            unit.verify_routed_dma_denied(&mut new_root, route),
             Err(VtdBindingError::TableSubstitution)
         );
     }

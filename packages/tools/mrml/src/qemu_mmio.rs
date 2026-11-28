@@ -413,6 +413,17 @@ fn verify_root_ram(map: &str, root: u64) -> Result<(), String> {
 }
 
 fn verify_root_page(text: &str, root: u64, page: u64, leaf: u64, pages: u8) -> Result<(), String> {
+    verify_root_page_with_context(text, root, page, leaf, pages, true)
+}
+
+fn verify_root_page_with_context(
+    text: &str,
+    root: u64,
+    page: u64,
+    leaf: u64,
+    pages: u8,
+    context_present: bool,
+) -> Result<(), String> {
     let address = root + page * 4096;
     let mut index = 0u64;
     for line in text.lines() {
@@ -427,8 +438,9 @@ fn verify_root_page(text: &str, root: u64, page: u64, leaf: u64, pages: u8) -> R
             let actual = u64::from_str_radix(value.strip_prefix("0x").ok_or("bad cold word")?, 16)
                 .map_err(|_| "invalid cold table word")?;
             let expected = match (page, index) {
-                (0, 130) | (1, 0) => (address + 4096) | 1,
-                (1, 1) => 0x102,
+                (0, 130) => (address + 4096) | 1,
+                (1, 0) if context_present => (address + 4096) | 1,
+                (1, 1) if context_present => 0x102,
                 (2 | 3, 0) | (4, 1) => (address + 4096) | 3,
                 (5, slot) if slot < u64::from(pages) && leaf != 0 => leaf + 4096 * slot,
                 _ => 0,
@@ -560,9 +572,11 @@ fn inspect_cold_activation(
             return Err("unexpected remapper or PCI state after DMA leaf withdrawal".into());
         }
         check_live_leaf(stdin, reader, root, payload, 1)?;
+        qmp_write(stdin, &format!("{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"xp /512gx {:#x}\"}},\"id\":172}}\n", root + 4096))?;
+        verify_root_page_with_context(&read_monitor(&mut *reader, 172)?, root, 1, 0, 1, false)?;
     }
     println!(
-        "q35-vtd-cold|status=PASS|activated={allow}|root={root:#x}|aperture_installed_and_revoked={allow}|no_present_dma_leaves=true|bme=false"
+        "q35-vtd-cold|status=PASS|activated={allow}|root={root:#x}|aperture_installed_and_revoked={allow}|no_present_dma_leaves=true|exact_requester_denied={allow}|bme=false"
     );
     Ok(())
 }
