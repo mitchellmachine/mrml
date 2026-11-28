@@ -10,6 +10,8 @@
 <text x="100" y="27" font-size="15" fill="#f2f7ff">3</text>
 <rect x="132" y="4" width="112" height="36" fill="#182638" stroke="#394b62"/>
 <text x="144" y="27" font-size="15" fill="#f2f7ff">Terminal</text>
+<rect x="252" y="4" width="136" height="36" fill="#182638" stroke="#394b62"/>
+<text x="264" y="27" font-size="15" fill="#f2f7ff">Task manager</text>
 <rect x="12" y="56" width="672" height="452" fill="#101722" stroke="#85cfff"/>
 <rect x="13" y="57" width="670" height="41" fill="#243c52" stroke="none"/>
 <text x="28" y="82" font-size="16" fill="#ecf8ff">Keyboard test terminal</text>

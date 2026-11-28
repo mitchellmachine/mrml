@@ -27,6 +27,8 @@ pub enum Control {
     Terminal,
     CloseTerminal,
     Diagnostics,
+    TaskManagerButton,
+    TaskManager,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,6 +91,7 @@ pub struct Desktop {
     primary_pressed: bool,
     touch: Option<(u32, Option<Control>)>,
     counters: Diagnostics,
+    task_manager_open: bool,
 }
 
 impl Desktop {
@@ -107,6 +110,7 @@ impl Desktop {
             primary_pressed: false,
             touch: None,
             counters: Diagnostics::default(),
+            task_manager_open: false,
         })
     }
 
@@ -135,7 +139,7 @@ impl Desktop {
     /// One bounded semantic snapshot drives both rendering and hit testing.
     /// Publishing it to other clients is a separate, authorized projection.
     pub fn nodes(&self) -> impl Iterator<Item = Node> + use<> {
-        let tile_visible = self.visible_app().is_some();
+        let tile_visible = self.visible_app().is_some() && !self.task_manager_open;
         let (focus, active) = (self.focus, self.active);
         let monitor_width = if self.width >= 720 { 252 } else { 144 };
         let monitor_x = self.width - 12 - monitor_width;
@@ -149,6 +153,18 @@ impl Desktop {
                 "Terminal",
                 Rect(132, 4, 112, 36),
                 true,
+            ),
+            (
+                Control::TaskManagerButton,
+                "Task manager",
+                Rect(252, 4, 136, 36),
+                true,
+            ),
+            (
+                Control::TaskManager,
+                "MicroVM task manager",
+                Rect(12, 56, terminal_width, self.height - 68),
+                self.task_manager_open,
             ),
             (
                 Control::Terminal,
@@ -214,9 +230,18 @@ impl Desktop {
                 };
                 self.app = Some((workspace, id));
                 self.active = workspace;
+                self.task_manager_open = false;
                 self.focus = Control::Terminal;
             }
-            Control::Terminal | Control::Diagnostics => self.focus = control,
+            Control::TaskManagerButton => {
+                self.task_manager_open = !self.task_manager_open;
+                self.focus = if self.task_manager_open {
+                    Control::TaskManager
+                } else {
+                    control
+                };
+            }
+            Control::Terminal | Control::Diagnostics | Control::TaskManager => self.focus = control,
             Control::CloseTerminal => {
                 let id = self.visible_app().ok_or(RouteError::Retired)?;
                 match route.retire_terminal(id) {
@@ -340,6 +365,7 @@ impl Desktop {
 }
 
 pub mod seat;
+pub mod tasks;
 
 #[cfg(test)]
 mod tests;

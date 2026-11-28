@@ -334,6 +334,17 @@ checks the echo, pointer position and diagnostic counts. Normal boot,
 physical touchscreen input, and a full
 cross-VM Semantic Scene Graph transport are not yet connected.
 
+### MicroVM task manager prototype
+
+The desktop exposes a separate task-manager view for supervisor-projected VM
+status. The prototype distinguishes starting, running, stopping, stopped,
+and quarantined instances. Listing and control use different capabilities.
+Stop and Restart target the exact displayed instance generation. Restart
+requires verified teardown and a newer instance; critical or quarantined
+guests cannot be stopped or restarted from this view. The static preview
+does not have a live supervisor, so its actions are disabled. Normal-boot
+supervisor integration remains open.
+
 ## MRML Semantic Scene Graph
 
 The GUI is never only pixels. Every native GUI maintains synchronized visual

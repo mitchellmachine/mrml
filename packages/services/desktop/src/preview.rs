@@ -66,6 +66,11 @@ fn main() {
         .event(Event::MouseMotion(96, -94), &mut app)
         .unwrap();
 
+    if std::env::args().any(|arg| arg == "--tasks") {
+        desktop
+            .activate(Control::TaskManagerButton, &mut app)
+            .unwrap();
+    }
     let (w, h) = desktop.size();
     let mut svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" font-family="monospace" role="img" aria-labelledby="title desc">
@@ -117,6 +122,49 @@ fn main() {
                     14,
                     "#a9bdd0",
                     "Super + Enter opens terminal  |  Tab moves focus",
+                );
+            }
+            Control::TaskManager => {
+                rect(&mut svg, node.bounds, "#101722", accent);
+                rect(
+                    &mut svg,
+                    Rect(x + 1, y + 1, width - 2, 41),
+                    "#233449",
+                    "none",
+                );
+                text(&mut svg, x + 14, y + 26, 16, "#ecf8ff", node.label);
+                text(
+                    &mut svg,
+                    x + 14,
+                    y + 76,
+                    15,
+                    "#c4d8ec",
+                    "Instance      Generation     Status",
+                );
+                text(
+                    &mut svg,
+                    x + 14,
+                    y + 106,
+                    15,
+                    "#c4d8ec",
+                    "No live supervisor connected",
+                );
+                for (offset, label) in [(14, "Stop"), (114, "Restart")] {
+                    rect(
+                        &mut svg,
+                        Rect(x + offset, y + 130, 88, 35),
+                        "#202938",
+                        "#394b62",
+                    );
+                    text(&mut svg, x + offset + 11, y + 152, 14, "#a9bdd0", label);
+                }
+                text(
+                    &mut svg,
+                    x + 14,
+                    y + 190,
+                    14,
+                    "#a9bdd0",
+                    "Actions require a current VM and control grant.",
                 );
             }
             Control::Diagnostics => {
