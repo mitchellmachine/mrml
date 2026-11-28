@@ -273,6 +273,12 @@ matching identity, command, header and BAR samples and refuses an unexpected
 requester or a different retained BAR allocation before reading. These steps
 have model coverage only; no physical ECAM mapping is installed. A matching BAR base does not validate its extent,
 prove DMA isolation, or permit a handoff.
+The page-table verifier now also binds this plan to the diagnostic's prepared
+root and exact one-page supervisor read-only, non-executable device mapping.
+A second mapping of that physical page, even if also read-only, is rejected.
+This checks page-table structure only; the live diagnostic must still prove
+firmware exit, retire stale translations, and check CPU cache policy before
+sampling. No live physical read is wired to this verifier.
 
 The signed QEMU/OVMF negative control boots the same sealed test release
 from a read-only virtual disk attached directly to the sole xHCI candidate.

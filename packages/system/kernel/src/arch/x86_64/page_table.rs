@@ -1,7 +1,7 @@
 use core::arch::asm;
 
 use super::{
-    ADDRESS_MASK, Mapping, PageError, PagePermissions, PageTableEntry, UserBufferAccess,
+    ADDRESS_MASK, Mapping, PageError, PagePermissions, PageTableEntry, PassivePciPage, UserBufferAccess,
     UserBufferError, VirtAddr,
 };
 use crate::{
@@ -1353,6 +1353,28 @@ impl ActivePageTables {
         verify_read_only_mmio_from_store(&IdentityMappedPageTables, self.root, mapping)
     }
 
+    /// Check the exact single-page mapping proposed for passive PCI sampling.
+    /// The expected root must come from the diagnostic's own page-table build,
+    /// not from this snapshot. No register reads or mapping changes occur.
+    ///
+    /// This is only a structural check. A caller must independently establish
+    /// firmware exit, exclusive BSP/root lifetime, CPU cache policy and
+    /// retirement of stale translations before it may read configuration.
+    pub fn verify_passive_pci_mapping(
+        &self,
+        expected_root: PhysAddr,
+        plan: PassivePciPage,
+        mapping: Mapping,
+    ) -> Result<(), PageTableBuildError> {
+        verify_passive_pci_mapping_from_store(
+            &IdentityMappedPageTables,
+            self.root,
+            expected_root,
+            plan.physical(),
+            mapping,
+        )
+    }
+
     /// Verify the exact signed QEMU shutdown fixture, not arbitrary PCI
     /// memory. No MMIO access, permission changes, or TLB changes occur.
     pub fn verify_q35_shutdown_leaves(&self) -> Result<(), PageTableBuildError> {
@@ -1630,6 +1652,23 @@ fn verify_active_mapping_from_store<S: PageTableStore>(
 }
 
 const BOOT_ALIAS_MAX_TABLES: usize = 1024;
+
+fn verify_passive_pci_mapping_from_store<S: PageTableStore>(
+    store: &S,
+    root: PhysAddr,
+    expected_root: PhysAddr,
+    expected_page: PhysAddr,
+    mapping: Mapping,
+) -> Result<(), PageTableBuildError> {
+    if root != expected_root
+        || mapping.pages() != 1
+        || mapping.physical_start() != expected_page
+        || mapping.permissions() != PagePermissions::KERNEL_MMIO_READ
+    {
+        return Err(PageTableBuildError::MappingMismatch);
+    }
+    verify_read_only_mmio_from_store(store, root, mapping)
+}
 
 fn verify_read_only_mmio_from_store<S: PageTableStore>(
     store: &S,
@@ -2395,6 +2434,52 @@ mod tests {
             )
             .unwrap();
         assert_eq!(verify(&builder), Err(PageTableBuildError::PhysicalAlias));
+    }
+
+    #[test]
+    fn passive_pci_mapping_requires_the_prepared_root_and_exact_exclusive_read_only_leaf() {
+        let mut builder = PageTableBuilder::new(Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        })
+        .unwrap();
+        let root = builder.root();
+        let virt = VirtAddr::new(0xffff_d900_0000_0000).unwrap();
+        let phys = PhysAddr::new(0xe00a_0000).unwrap();
+        let other = PhysAddr::new(phys.get() + PAGE_SIZE).unwrap();
+        let ro = PagePermissions::KERNEL_MMIO_READ;
+        let exact = Mapping::new(virt, phys, 1, ro).unwrap();
+        let verify = |store: &Tables, expected_root, proposal| {
+            verify_passive_pci_mapping_from_store(store, root, expected_root, phys, proposal)
+        };
+        assert_eq!(verify(builder.store(), root, exact), Err(PageTableBuildError::MappingMismatch));
+        builder.map(exact).unwrap();
+        assert_eq!(verify(builder.store(), root, exact), Ok(()));
+        for (expected_root, proposal) in [
+            (other, exact),
+            (root, Mapping::new(virt, phys, 2, ro).unwrap()),
+            (root, Mapping::new(virt, other, 1, ro).unwrap()),
+            (
+                root,
+                Mapping::new(virt, phys, 1, PagePermissions::KERNEL_HIGH_MMIO_READ_WRITE).unwrap(),
+            ),
+            (root, Mapping::new(virt, phys, 1, PagePermissions::KERNEL_READ).unwrap()),
+        ] {
+            assert_eq!(verify(builder.store(), expected_root, proposal), Err(PageTableBuildError::MappingMismatch));
+        }
+        let (table, index) = builder.leaf_location(virt).unwrap();
+        let mut store = builder.into_store();
+        let bits = store.read(table, index).unwrap();
+        for changed in [bits | (1 << 1), bits & !(1 << 63), bits & !(1 << 4)] {
+            store.write(table, index, changed).unwrap();
+            assert_eq!(verify(&store, root, exact), Err(PageTableBuildError::MappingMismatch));
+        }
+        store.write(table, index, bits).unwrap();
+        let mut builder = PageTableBuilder::from_existing_root(store, root);
+        builder
+            .map_page(VirtAddr::new(virt.get() + PAGE_SIZE).unwrap(), phys, ro)
+            .unwrap();
+        assert_eq!(verify(builder.store(), root, exact), Err(PageTableBuildError::PhysicalAlias));
     }
 
     #[test]
