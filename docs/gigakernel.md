@@ -161,11 +161,28 @@ offline provisioning test used `mrml-sign prepare-release-genesis-slot` to
 encode the 200-byte slot for the counter value read from a fresh software
 TPM. The counter was 1, so slot 1 was selected. The software TPM returned
 the exact bytes under a PolicyPCR session and rejected a password-only read.
-That test used the emulator's reset PCR state, not a firmware-measured
-production policy. The next integrated fixture must bind the journal to the
-expected firmware measurements and boot a matching coherent release. Policy
-acceptance and actual supervisor guest entry remain separate checkpoints.
-No physical firmware, TPM, USB drive, or service microVM was exercised.
+That offline test used the emulator's reset PCR state.
+
+On 2026-11-28, an integrated fixture built from `e82c1c92` bound the
+release journal to the SHA-256 PCR 7 measurements observed with the enrolled
+OVMF firmware. It used the authenticated package loader, required Secure
+Boot, TPM measurement, rollback protection, and a coherent manifest, and
+supplied five separately signed boot artifacts and the matching build receipt.
+On first boot, the TPM trace showed one NV slot write and one counter advance
+from the provisioned sequence of 1. The Gigakernel emitted the exact
+`MRML:BOOT:POLICY:ACCEPTED` record. A cold reboot of the same image with the
+committed TPM state produced the identical 46-byte trace with no slot write
+or counter increment. Removing `CUDA.SIGNED` from a copy and starting from
+the provisioned state stopped in the loader after reading the journal and
+did not write or advance it. That control produced no kernel policy record.
+
+The fixture image's SHA-256 was
+`774a532322a9d2684ea457dddc7eb950000f23d1abae7b7a1d39bf8fbb46a143`.
+The VM image was the existing zstd probe PE; the CUDA bytes were inert fixture
+data. Neither was executed. This establishes kernel policy acceptance and
+journal persistence in QEMU only. The kernel still parks without launching a
+supervisor. No physical firmware, TPM, USB drive, or service microVM was
+exercised.
 
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
