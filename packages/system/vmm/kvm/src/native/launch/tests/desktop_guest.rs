@@ -132,8 +132,8 @@ fn live_desktop_guest_handles_seat_events_and_withdraws_mailbox() {
     let tap = step(6, [150, 0, 15, 0]);
     assert_eq!(tap[..2], [0x51, 5]);
     assert_eq!(tap[16..20], 2u32.to_le_bytes());
-    let typed = step(7, u32::from('λ').to_le_bytes());
-    assert_eq!(typed[8..12], u32::from('λ').to_le_bytes());
+    let typed = step(7, 0x03bbu32.to_le_bytes());
+    assert_eq!(typed[8..12], 0x03bbu32.to_le_bytes());
     assert_eq!(typed[12..16], 1u32.to_le_bytes());
     assert_eq!(step(2, [0; 4])[..2], [0x51, 7]);
     let motion = step(3, [2, 0, 1, 0]);
@@ -190,6 +190,9 @@ fn live_desktop_guest_handles_seat_events_and_withdraws_mailbox() {
     let pixel = |x: usize, y: usize| &screen[(y * 124 + x) * 4..][..4];
     assert_eq!(pixel(20, 30), &[16, 23, 34, 0]); // terminal
     assert_eq!(pixel(90, 30), &[35, 52, 73, 0]); // diagnostics
+    assert_eq!(pixel(12, 27), &[214, 234, 248, 0]); // typed lambda stroke
+    assert_eq!(pixel(11, 27), &[16, 23, 34, 0]); // beside the stroke
+    assert_eq!(pixel(85, 39), &[214, 234, 248, 0]); // delivered-key count
     assert_eq!(pixel(60, 35), &[245, 251, 255, 0]); // live guest cursor
     assert_eq!(pixel(120, 35), &[0xa7; 4]); // outside source
     assert_eq!(pixel(0, 70), &[0xa7; 4]);

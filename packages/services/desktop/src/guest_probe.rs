@@ -58,7 +58,12 @@ extern "efiapi" fn efi_main() -> ! {
         let canonical = request[1] == 0 && request[6..].iter().all(|&byte| byte == 0);
         let accepted = canonical
             && if wants_row {
-                raster::row(&desktop, usize::from(x), &mut pixels)
+                let echo_line = echo
+                    .0
+                    .as_ref()
+                    .and_then(|app| app.rows().last())
+                    .unwrap_or(&[]);
+                raster::row(&desktop, echo_line, usize::from(x), &mut pixels)
             } else {
                 event.is_some_and(|event| desktop.event(event, &mut echo).is_ok())
             };

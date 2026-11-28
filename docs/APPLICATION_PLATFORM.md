@@ -337,8 +337,10 @@ diagnostic image exercises the desktop state machine and its same-guest echo
 fixture via a bounded synthetic input mailbox. The host verifies diagnostic
 state and mailbox withdrawal. It also captures a guest-rendered 120×70
 layout thumbnail and projects it through the compositor to a disposable
-memory output. The thumbnail verifies tile/cursor placement, not rendered
-terminal text, hardware scanout or an independently launched terminal app.
+memory output. The thumbnail includes tile labels, a small terminal echo
+and a diagnostic key count. The fixture verifies those pixels, not hardware
+scanout or an independently launched terminal app. The diagnostic bitmap font
+is restricted and substitutes a question mark for unsupported glyphs.
 
 ### MicroVM task manager prototype
 
