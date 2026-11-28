@@ -94,6 +94,7 @@ pub(super) enum Q35FixtureCase {
     SharedBootNoMarker,
     IsolatedSharedBootNoMarker,
     IsolatedSharedBootObserve,
+    IsolatedSharedBootDxeIncomplete,
     IsolatedSharedBootRecordMissing,
     SharedPreloadUnmarked,
     SharedPreloadDenied,
@@ -131,6 +132,7 @@ impl Q35FixtureCase {
                 | Self::IsolatedValidRelease
                 | Self::IsolatedSharedBootNoMarker
                 | Self::IsolatedSharedBootObserve
+                | Self::IsolatedSharedBootDxeIncomplete
                 | Self::IsolatedSharedBootRecordMissing
                 | Self::ShutdownWrongRelease
                 | Self::ShutdownValidRelease
@@ -150,6 +152,7 @@ impl Q35FixtureCase {
             Self::ShutdownWrongRelease | Self::ShutdownValidRelease => 2,
             Self::BarWrongRelease | Self::BarValidRelease => 4,
             Self::RetiredPrivileged(profile) => profile,
+            Self::IsolatedSharedBootDxeIncomplete => 9,
             Self::IsolatedSharedBootObserve | Self::IsolatedSharedBootRecordMissing => 8,
             Self::SharedGuestBme | Self::SharedGuestBmeDenied => 2,
             Self::SharedGuestRemappingUnproven => 3,
@@ -323,6 +326,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             Q35FixtureCase::SharedBootNoMarker
                 | Q35FixtureCase::IsolatedSharedBootNoMarker
                 | Q35FixtureCase::IsolatedSharedBootObserve
+                | Q35FixtureCase::IsolatedSharedBootDxeIncomplete
                 | Q35FixtureCase::ColdActivateSharedBoot
                 | Q35FixtureCase::SharedPreloadUnmarked
                 | Q35FixtureCase::SharedPreloadDenied
@@ -475,6 +479,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         | Q35FixtureCase::SharedBootNoMarker
         | Q35FixtureCase::IsolatedSharedBootNoMarker
         | Q35FixtureCase::IsolatedSharedBootRecordMissing
+        | Q35FixtureCase::IsolatedSharedBootDxeIncomplete
         | Q35FixtureCase::SharedPreloadUnmarked
         | Q35FixtureCase::RetiredPrivileged(_)
         | Q35FixtureCase::NoRemapper => None,

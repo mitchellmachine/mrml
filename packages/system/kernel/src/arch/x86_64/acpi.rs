@@ -110,7 +110,7 @@ pub fn q35_fixture_marker<M: AcpiMemory>(
     )? != SDT_HEADER_BYTES
         || marker[8] != 1
         || &marker[10..32] != b"MRMLQ3MMIOTEST\x01\x00\x00\x00MRML"
-        || !matches!(marker[32], 1..=4 | 8)
+        || !matches!(marker[32], 1..=4 | 8 | 9)
         || marker[33..] != [0; 3]
     {
         return Err(AcpiError::InvalidQ35FixtureMarker);
@@ -461,7 +461,10 @@ mod tests {
         memory.0[0x3a0] = 8;
         finalize(&mut memory.0[0x380..0x3a4], 9);
         assert_eq!(q35_fixture_marker(&mut memory, 0x100).unwrap()[32], 8);
-        for profile in [5, 6, 7, 9] {
+        memory.0[0x3a0] = 9;
+        finalize(&mut memory.0[0x380..0x3a4], 9);
+        assert_eq!(q35_fixture_marker(&mut memory, 0x100).unwrap()[32], 9);
+        for profile in [5, 6, 7, 10] {
             memory.0[0x3a0] = profile;
             finalize(&mut memory.0[0x380..0x3a4], 9);
             assert_eq!(

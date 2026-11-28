@@ -1161,7 +1161,7 @@ unsafe fn boot(
     #[cfg(feature = "usb-preload-probe")]
     let usb_boot_record = capture_fixture_usb_record(image, services, PRELOAD_BOOT_CONTROLLER);
     #[cfg(feature = "q35-mmio-probe")]
-    let q35_usb_record = if transition.q35_profile == 8 {
+    let q35_usb_record = if matches!(transition.q35_profile, 8 | 9) {
         let expected = mrml_kernel::arch::x86_64::Q35_SHARED_BOOT_USB_RECORD;
         let record = capture_fixture_usb_record(image, services, XhciFunction {
             requester: 0x4100,
@@ -1176,6 +1176,14 @@ unsafe fn boot(
     } else {
         None
     };
+    #[cfg(feature = "q35-mmio-probe")]
+    if transition.q35_profile == 9 {
+        if q35_dxe_is_incomplete(system, services) != Some(true) {
+            loader_trace(0xef);
+            halt();
+        }
+        loader_trace(0xf9);
+    }
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services, trace) }?;
     paint_boot_stage(framebuffer, b"MRML EFI END PASS");
     unsafe {
@@ -1202,6 +1210,46 @@ unsafe fn boot(
             #[cfg(feature = "q35-mmio-probe")]
             q35_usb_record,
         )
+    }
+}
+
+#[cfg(feature = "q35-mmio-probe")]
+fn q35_dxe_is_incomplete(system: &SystemTable, services: &BootServices) -> Option<bool> {
+    use mrml_uefi::dxe_mmio::{dxe_boot_services_contains, inspect_dxe_mmio};
+
+    // SAFETY: only the sealed fixture on the BSP calls this before the first
+    // ExitBootServices. The raw map bounds the live DXE table and executable
+    // entry. Only GetMemorySpaceDescriptor is called; no target is accessed.
+    unsafe {
+        let buffer = MEMORY_MAP.0.get().cast::<MemoryDescriptor>();
+        let mut size = MAP_BYTES;
+        let mut key = 0;
+        let mut stride = 0;
+        let mut version = 0;
+        if (services.get_memory_map)(&mut size, buffer, &mut key, &mut stride, &mut version)
+            != SUCCESS
+            || version != 1
+            || !(size_of::<MemoryDescriptor>()..=256).contains(&stride)
+            || !(stride..=MAP_BYTES).contains(&size)
+            || !size.is_multiple_of(stride)
+        {
+            return None;
+        }
+        let raw = core::slice::from_raw_parts(buffer.cast::<u8>(), size);
+        // The earlier fixture snapshot proved the exact MCFG/DMAR layout and
+        // firmware PCI I/O established the exact shared USB controller.
+        let ranges = [
+            (0xe000_0000, 0x1000_0000),
+            (0xe410_0000, 0x1000),
+            (0xfed9_0000, 0x1000),
+        ];
+        let mut complete = true;
+        for (base, bytes) in ranges {
+            complete &= inspect_dxe_mmio(system, base, bytes, |access, address, bytes| {
+                dxe_boot_services_contains(raw, stride, access, address, bytes)
+            }).is_ok();
+        }
+        Some(!complete)
     }
 }
 
@@ -2384,6 +2432,14 @@ fn enter_kernel(
     } else {
         handoff_length
     };
+    #[cfg(feature = "q35-mmio-probe")]
+    let handoff_length = if transition.q35_profile == 9 {
+        mrml_kernel::append_boot_dxe_diagnostic(
+            handoff_length, &mrml_kernel::BootDxeDiagnostic::Incomplete, handoff,
+        ).map_err(|_| LOAD_ERROR)?
+    } else {
+        handoff_length
+    };
     loader_trace(0xb3);
     if kernel_entry == 0 {
         return Err(LOAD_ERROR);
@@ -2720,11 +2776,13 @@ fn q35_mmio_snapshot(
         loader_trace(0xe6);
         return None;
     }
-    if marker[32] == 8 && topology != Q35FixtureTopology::Isolated {
+    if matches!(marker[32], 8 | 9) && topology != Q35FixtureTopology::Isolated {
         loader_trace(0xe6);
         return None;
     }
-    let mappings = if matches!(marker[32], 2..=4) {
+    let mappings = if marker[32] == 9 {
+        [None; 4]
+    } else if matches!(marker[32], 2..=4) {
         if topology != Q35FixtureTopology::Isolated {
             loader_trace(0xe6);
             return None;

@@ -4281,6 +4281,26 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let (dmar, _) = handoff.dma_acpi(encoded).unwrap_or_else(|| halt());
         use mrml_kernel::arch::x86_64::Q35FixtureTopology;
         let topology = Q35FixtureTopology::from_dmar(dmar).unwrap_or_else(|| halt());
+        if let Some(diagnostic) = handoff.boot_dxe_diagnostic() {
+            let fixture_unmapped = mrml_kernel::arch::x86_64::q35_fixture_probe_mappings(topology)
+                .is_ok_and(|mappings| mappings.into_iter().flatten().all(|mapping| {
+                    (0..mapping.pages()).all(|index| {
+                        let offset = index * mrml_kernel::PAGE_SIZE;
+                        mapping.virtual_start().get().checked_add(offset)
+                            .and_then(|address| VirtAddr::new(address).ok())
+                            .is_some_and(|address| matches!(active.leaf(address), Ok(None)))
+                    })
+                }));
+            if topology == Q35FixtureTopology::Isolated
+                && handoff.usb_pci_record() == Some(mrml_kernel::arch::x86_64::Q35_SHARED_BOOT_USB_RECORD)
+                && matches!(diagnostic, mrml_kernel::BootDxeDiagnostic::Incomplete)
+                && fixture_unmapped
+            {
+                native_fat32_probe::trace(0xcb);
+            }
+            // This diagnostic never reaches the QMP release or device code.
+            halt();
+        }
         let mappings = mrml_kernel::arch::x86_64::q35_fixture_probe_mappings(topology)
             .unwrap_or_else(|_| halt());
         let preflight = mrml_kernel::arch::x86_64::q35_fixture_bar_preflight_mappings()

@@ -303,7 +303,20 @@ equality does not authenticate origin. A bounded optional handoff slot now
 models explicit incomplete status or a copied record bound to the checked
 USB requester and BAR. It requires the ACPI pair and USB observation and
 rejects partial, orphaned or mixed payloads before yielding memory regions.
-The live boot producer and post-exit topology check are not yet connected.
+In Q35 fixture profile 9, the signed loader uses the firmware query on the
+exact emulated resources, carries only a genuine incomplete status across
+firmware exit, and the kernel stops without a device mapping or host release.
+Complete classification is not accepted by this fixture yet. The positive
+copy and post-exit topology comparison are not connected to live boot.
+
+The [Linux PCI/ACPI notes](https://docs.kernel.org/PCI/acpi-info.html) explain
+why a missing EFI map descriptor does not by itself diagnose a firmware bug:
+the ECAM reservation belongs in an ACPI motherboard resource. The
+[MrChromebox coreboot source](https://github.com/MrChromebox/coreboot/blob/master/src/acpi/dsdt_top.asl#L62)
+can expose it through `PNP0C02` (when configured), but the installed
+Dragonair DSDT has not been verified. Compare an exact firmware dump with the
+MCFG interval before treating it as corroboration. This does not account for
+the remapper, BAR, effective cache policy, DMA, or handoff authority.
 For a future passive post-exit diagnostic, the planner derives one 4 KiB PCI
 configuration page from the exact MCFG segment, bus, device and function. It
 requires explicit coverage by a normalized firmware MMIO range and rejects
