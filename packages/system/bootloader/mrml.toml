@@ -74,6 +74,9 @@ name = "preemption-probe"
 name = "production-policy"
 
 [[feature]]
+name = "normal-boot-observation"
+
+[[feature]]
 name = "service-preemption-probe"
 
 [[feature]]
@@ -239,6 +242,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["production-policy"]
 name = "normal_boot"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["normal-boot-observation", "production-policy"]
+name = "normal_boot_observed"
 targets = ["UEFI"]
 
 [[feature_profile]]
@@ -523,7 +531,7 @@ reason = "Read the declared compile-time setting mrml-service-min-version for em
 fingerprint = "fnv1a64:db10432d55e8f575"
 id = "compile-env.embedded-minimum-version.mrml-kernel-min-version"
 kind = "compile-env"
-line = 17
+line = 29
 path = "packages/system/bootloader/src/normal_boot.rs"
 reason = "Set the minimum admitted kernel version for the normal boot entry; absent or invalid configuration parks the kernel."
 

@@ -3812,7 +3812,7 @@ const fn ap_retry_timeout_micros() -> u32 {
     1_000
 }
 
-#[cfg(all(not(feature = "fault-probe"), feature = "ap-startup-trace"))]
+#[cfg(all(not(feature = "fault-probe"), any(feature = "ap-startup-trace", feature = "normal-boot-observation")))]
 fn smp_trace(stage: u8) {
     unsafe { asm!("out dx, al", in("dx") 0xe9u16, in("al") stage, options(nomem, nostack)) };
 }
@@ -6986,3 +6986,6 @@ fn halt() -> ! {
         unsafe { asm!("cli", "hlt", options(nomem, nostack)) };
     }
 }
+
+#[cfg(all(feature = "normal-boot-observation", not(feature = "production-policy")))]
+compile_error!("normal-boot-observation requires production-policy");

@@ -136,6 +136,16 @@ and its writable data section was 8,192 virtual bytes. The diagnostic build
 still owns its secondary-CPU descriptor arena. These are section sizes for
 this bootstrap, not a full-runtime or trusted-code-base measurement.
 
+The separate `normal_boot_observed` fixture uses the same policy entry and
+emits fixed, non-authoritative QEMU trace records for invalid configuration,
+policy rejection, or policy acceptance. The shipping profile has no such
+trace output. `mrml usb test-normal-boot-policy OVMF_CODE OVMF_VARS QEMU`
+uses a disposable signed image, records the exact kernel digest and embedded
+release floor, and checks that unenrolled OVMF is rejected by the kernel. It
+does not prove enrolled Secure Boot, TPM measurement, authenticated rollback
+or release state, or supervisor guest entry. A future acceptance test must
+observe policy acceptance and actual guest entry as separate checkpoints.
+
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
    service before moving supervision policy out of the kernel.

@@ -20,13 +20,14 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-i8042-inventory OUTPUT.img | mrml usb test-i8042-inventory IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb image-vmx-desktop OUTPUT.img | mrml usb image-vmx-desktop-keyboard OUTPUT.img | mrml usb test-vmx-desktop-keyboard IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb image-vmx-desktop-persistent OUTPUT.img | mrml usb test-vmx-desktop-persistent IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb image-vmx-desktop-input OUTPUT.img | mrml usb test-vmx-desktop-input IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-desktop IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-display OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb test-normal-boot-policy OVMF_CODE OVMF_VARS QEMU | mrml usb image OUTPUT.img | mrml usb image-i8042-inventory OUTPUT.img | mrml usb test-i8042-inventory IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb image-vmx-desktop OUTPUT.img | mrml usb image-vmx-desktop-keyboard OUTPUT.img | mrml usb test-vmx-desktop-keyboard IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb image-vmx-desktop-persistent OUTPUT.img | mrml usb test-vmx-desktop-persistent IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb image-vmx-desktop-input OUTPUT.img | mrml usb test-vmx-desktop-input IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-desktop IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-display OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
 
 #[path = "usb_xhci_inventory.rs"]
 mod xhci_inventory;
 
 #[derive(Clone, Copy)]
 enum DiagnosticImage {
+    NormalBootPolicy,
     Fat32,
     I8042Inventory,
     Vmx,
@@ -41,6 +42,21 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
     match args {
         [mode] if matches!(mode.as_str(), "help" | "--help" | "-h") => {
             println!("{USAGE}");
+            Ok(())
+        }
+        [mode, code, vars, qemu] if mode == "test-normal-boot-policy" => {
+            let scratch = Scratch::new().map_err(|e| e.to_string())?;
+            let image = scratch.path("normal-policy.img");
+            create(&load_workspace()?, &image, DiagnosticImage::NormalBootPolicy)?;
+            let expected = concat!(
+                "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3",
+                "4d524d4c3a424f4f543a504f4c4943593a5345435552452d424f4f540a",
+            );
+            crate::qemu_boot::run_qemu(&words(&[
+                &string(&image), code, vars, qemu, &string(&scratch.path("policy.trace")),
+                "--accelerator", "tcg", "--expect-hex", expected, "--timeout-seconds", "60",
+            ]))?;
+            println!("normal-boot-policy|status=PASS|evidence=secure-boot-rejection|guest-entry=not-tested");
             Ok(())
         }
         [mode, file] if mode == "image" => {
@@ -884,6 +900,7 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
         words(&[
             "--feature-profile",
             match profile {
+                DiagnosticImage::NormalBootPolicy => "normal_boot_observed",
                 DiagnosticImage::Q35Mmio => "uefi_q35_mmio_probe",
                 DiagnosticImage::Vmx => "vmx_root_probe",
                 DiagnosticImage::VmxKernel => "vmx_kernel_monitor",
@@ -897,14 +914,23 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
             &format!("MRML_SERVICE_ROOT_DIGEST_HEX={sr}"),
             "--compile-env",
             "MRML_SERVICE_MIN_VERSION=1",
-        ]).into_iter().chain(nested).collect(),
+        ]).into_iter().chain(nested).chain(
+            matches!(profile, DiagnosticImage::NormalBootPolicy)
+                .then(|| words(&["--compile-env", "MRML_KERNEL_MIN_VERSION=1"]))
+                .into_iter().flatten(),
+        ).collect(),
     )?;
+    if matches!(profile, DiagnosticImage::NormalBootPolicy) {
+        let bytes = fs::read(&kernel).map_err(|error| error.to_string())?;
+        println!("normal-boot-kernel|release-floor=1|sha3-512={}", sha3(&bytes));
+    }
     build(
         "org.mrml.library.uefi",
         "uefi-x86_64",
         words(&[
             "--feature-profile",
             match profile {
+                DiagnosticImage::NormalBootPolicy => "package_boot",
                 DiagnosticImage::Fat32 | DiagnosticImage::Vmx | DiagnosticImage::VmxKernel | DiagnosticImage::VmxDesktop(_) => "fat32_restart_boot",
                 DiagnosticImage::I8042Inventory => "i8042_inventory_probe",
                 DiagnosticImage::SharedPreload => "usb_preload_probe",
