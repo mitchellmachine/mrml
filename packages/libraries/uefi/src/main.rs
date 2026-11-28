@@ -41,6 +41,17 @@ use mrml_uefi::tpm::{
 };
 use mrml_uefi::*;
 
+#[cfg(feature = "usb-preload-probe")]
+#[path = "xhci_inventory_pci.rs"]
+mod usb_pci;
+#[cfg(feature = "usb-preload-probe")]
+use usb_pci::PCI_IO;
+#[cfg(feature = "usb-preload-probe")]
+#[path = "xhci_inventory_source.rs"]
+mod usb_source;
+#[cfg(feature = "usb-preload-probe")]
+use mrml_uefi::xhci_inventory::boot_observation::{BOOT_XHCI_RECORD_BYTES, DecodedBootXhci, XhciFunction};
+
 const MAP_BYTES: usize = MAX_MEMORY_MAP_BYTES;
 
 struct FirmwareBuffer(UnsafeCell<[u8; MAP_BYTES]>);
@@ -1143,6 +1154,8 @@ unsafe fn boot(
     #[cfg(feature = "fat32-restart-probe")]
     trace.save_report(image, None);
     paint_boot_stage(framebuffer, b"MRML EFI END START");
+    #[cfg(feature = "usb-preload-probe")]
+    let usb_boot_record = capture_fixture_usb_record(image, services);
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services, trace) }?;
     paint_boot_stage(framebuffer, b"MRML EFI END PASS");
     unsafe {
@@ -1164,6 +1177,8 @@ unsafe fn boot(
             recovery_state,
             installed_recovery,
             isolation_selection,
+            #[cfg(feature = "usb-preload-probe")]
+            usb_boot_record,
         )
     }
 }
@@ -1304,6 +1319,8 @@ unsafe fn launch_after_exit(
     recovery_state: Option<RecoveryStateMetadata>,
     installed_recovery: Option<InstalledRecoveryHandoff>,
     isolation_selection: BootIsolationSelection,
+    #[cfg(feature = "usb-preload-probe")]
+    usb_boot_record: Option<[u8; BOOT_XHCI_RECORD_BYTES]>,
 ) -> ! {
     let map_bytes = unsafe { core::slice::from_raw_parts(MEMORY_MAP.0.get().cast(), map_size) };
     if let Some(base) = transition.boot_dma {
@@ -1345,7 +1362,7 @@ unsafe fn launch_after_exit(
         regions: &regions[..region_count],
     };
     #[cfg(feature = "usb-preload-probe")]
-    usb_preload_rendezvous(&mut acpi_memory, acpi_root);
+    usb_preload_rendezvous(&mut acpi_memory, acpi_root, usb_boot_record);
     let madt_storage = unsafe { &mut *MADT.0.get() };
     let madt_length = match copy_madt(&mut acpi_memory, acpi_root, madt_storage) {
         Ok(length) => length,
@@ -2861,10 +2878,50 @@ fn loader_trace(stage: u8) {
 }
 
 #[cfg(feature = "usb-preload-probe")]
-fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
+fn capture_fixture_usb_record(
+    image: Handle,
+    services: &BootServices,
+) -> Option<[u8; BOOT_XHCI_RECORD_BYTES]> {
+    // SAFETY: opt-in loader passes its live image and services before the
+    // final memory map. All pointers are discarded; only copied bytes escape.
+    unsafe {
+        let (handle, transport) = usb_source::inspect(image, services)?;
+        if transport != usb_source::Transport::Usb {
+            return None;
+        }
+        let (address, io) = usb_pci::locate_function(services, handle).ok()?;
+        let requester = usb_pci::packed_requester(address);
+        let function = XhciFunction {
+            requester,
+            vendor_device: usb_pci::cfg(io, 0).ok()?,
+            class_revision: usb_pci::cfg(io, 8).ok()?,
+        };
+        if function != PRELOAD_BOOT_CONTROLLER {
+            return None;
+        }
+        let command = usb_pci::cfg(io, 4).ok()? as u16;
+        let header = (usb_pci::cfg(io, 0x0c).ok()? >> 16) as u8;
+        let bar = usb_pci::bar0(services, io, command, header, Some(requester), function).ok()?;
+        Some(bar.boot_evidence?.encode())
+    }
+}
+
+#[cfg(feature = "usb-preload-probe")]
+const PRELOAD_BOOT_CONTROLLER: XhciFunction = XhciFunction {
+    requester: 0x0000_00d8,
+    vendor_device: 0x000d_1b36,
+    class_revision: 0x0c03_3001,
+};
+
+#[cfg(feature = "usb-preload-probe")]
+fn usb_preload_rendezvous(
+    memory: &mut impl AcpiMemory,
+    acpi_root: u64,
+    usb_boot_record: Option<[u8; BOOT_XHCI_RECORD_BYTES]>,
+) {
     use mrml_kernel::arch::x86_64::q35_fixture_marker;
     let profile = match q35_fixture_marker(memory, acpi_root).map(|marker| marker[32]) {
-        Ok(profile @ (1..=3)) => profile,
+        Ok(profile @ (1..=4)) => profile,
         _ => {
             loader_trace(0xeb);
             halt();
@@ -2908,6 +2965,19 @@ fn usb_preload_rendezvous(memory: &mut impl AcpiMemory, acpi_root: u64) {
                         }
                         _ => break,
                     }
+                }
+                break;
+            }
+            (4, 0xbc) => {
+                if let Some(record) = usb_boot_record
+                    && DecodedBootXhci::decode(&record, PRELOAD_BOOT_CONTROLLER).is_ok()
+                {
+                    loader_trace(0xbd);
+                    for byte in record {
+                        loader_trace(byte);
+                    }
+                    loader_trace(0xbe);
+                    halt();
                 }
                 break;
             }

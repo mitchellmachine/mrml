@@ -68,6 +68,7 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
                 (crate::qemu_boot::Q35FixtureCase::SharedGuestBmeDenied, "guest-bme-denied.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1e7eb"),
                 (crate::qemu_boot::Q35FixtureCase::SharedGuestBme, "guest-bme-cleared.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1e7efeab2b3d0d1d2d3"),
                 (crate::qemu_boot::Q35FixtureCase::SharedGuestRemappingUnproven, "guest-remapping-unproven.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1e7efec"),
+                (crate::qemu_boot::Q35FixtureCase::SharedBootRecord, "guest-boot-record.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1e7"),
             ] {
                 let fixture = Scratch::new().map_err(|e| e.to_string())?;
                 let args = words(&[

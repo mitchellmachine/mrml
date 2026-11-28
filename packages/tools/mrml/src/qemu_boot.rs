@@ -102,6 +102,7 @@ pub(super) enum Q35FixtureCase {
     SharedGuestBme,
     SharedGuestBmeDenied,
     SharedGuestRemappingUnproven,
+    SharedBootRecord,
     WrongRelease,
     ValidRelease,
     IsolatedWrongRelease,
@@ -146,6 +147,7 @@ impl Q35FixtureCase {
             Self::RetiredPrivileged(profile) => profile,
             Self::SharedGuestBme | Self::SharedGuestBmeDenied => 2,
             Self::SharedGuestRemappingUnproven => 3,
+            Self::SharedBootRecord => 4,
             _ => 1,
         }
     }
@@ -324,6 +326,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 | Q35FixtureCase::SharedGuestBme
                 | Q35FixtureCase::SharedGuestBmeDenied
                 | Q35FixtureCase::SharedGuestRemappingUnproven
+                | Q35FixtureCase::SharedBootRecord
         )
     );
     let machine = if isolated {
@@ -477,6 +480,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::SharedGuestBme => Some(0xb5),
         Q35FixtureCase::SharedGuestBmeDenied => Some(0xb7),
         Q35FixtureCase::SharedGuestRemappingUnproven => Some(0xba),
+        Q35FixtureCase::SharedBootRecord => Some(0xbc),
     });
     let post_check = map_only_marker.and_then(Q35FixtureCase::post_check);
     let mut released = false;
@@ -484,7 +488,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     loop {
         if let Ok(bytes) = fs::read(trace) {
             if let Some(valid) = release {
-                let ready = if matches!(valid, 0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba) {
+                let ready = if matches!(valid, 0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba | 0xbc) {
                     let index = expected
                         .iter()
                         .position(|&byte| byte == 0xe7)
@@ -498,7 +502,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         &mut child,
                         valid,
                         isolated,
-                        (matches!(valid, 0xa7 | 0xa8 | 0xb5 | 0xb7 | 0xba | 0xbb)
+                        (matches!(valid, 0xa7 | 0xa8 | 0xb5 | 0xb7 | 0xba | 0xbb | 0xbc)
                             || post_check.is_some())
                             .then_some((trace, expected)),
                         post_check,
@@ -533,7 +537,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 );
                 return Ok(());
             }
-            if released && post_check.is_some() {
+            if released && (post_check.is_some() || release == Some(0xbc)) {
                 // The QMP worker already checked the full signed trace and
                 // independently sampled the paused device after the verdict.
                 child.kill().map_err(|e| format!("stop verified QEMU: {e}"))?;

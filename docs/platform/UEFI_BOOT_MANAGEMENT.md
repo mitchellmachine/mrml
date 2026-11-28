@@ -365,8 +365,13 @@ QEMU checks the exact contents and associates them with only the actual
 USB boot controller. The read-only firmware PCI adapter is shared as a
 separate module and keeps all protocol pointers on the firmware side. That
 lets the opt-in loader reuse the same capture code without duplicating the
-PCI ABI or retaining a firmware interface after exit. The post-exit
-consumer is not wired yet.
+PCI ABI or retaining a firmware interface after exit. The marked QEMU
+loader copies the exact record across a successful ExitBootServices,
+checks its diagnostic identity and emits only those bytes. The paused
+host independently verifies the same requester, BAR, and retained boot
+source, before and after reading the trace. The guest never reads the
+controller after exit in this case, and receives no ownership or write
+authority.
 
 ### Diagnose a return to firmware
 

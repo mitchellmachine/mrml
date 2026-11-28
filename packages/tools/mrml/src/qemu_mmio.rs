@@ -150,10 +150,14 @@ fn inspect_qmp(
     }
     validate(&map)?;
     let mut guest_before = None;
-    if matches!(release, Some(0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba)) {
+    let mut usb_record_before = None;
+    if matches!(release, Some(0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba | 0xbc)) {
         validate_scratch_uart(&map)?;
         verify_shared_boot(stdin, reader)?;
-        if matches!(release, Some(0xad | 0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba)) {
+        if release == Some(0xbc) {
+            verify_shared_record_class(stdin, reader)?;
+            usb_record_before = Some(sample_shared_controller(stdin, reader)?);
+        } else if matches!(release, Some(0xad | 0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba)) {
             let before = sample_shared_controller(stdin, reader)?;
             qmp_write(
                 stdin,
@@ -331,7 +335,7 @@ fn inspect_qmp(
             byte => byte,
         };
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7 | 0xba | 0xbb) {
+        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7 | 0xba | 0xbb | 0xbc) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -343,6 +347,11 @@ fn inspect_qmp(
         ack(reader, "{\"return\": \"\", \"id\": 74}")?;
         qmp_write(stdin, "{\"execute\":\"cont\",\"id\":75}\n")?;
         ack(reader, "{\"return\": {}, \"id\": 75}")?;
+    }
+    if let Some(before) = usb_record_before {
+        let (path, prefix) = post.ok_or("missing USB record trace")?;
+        verify_copied_usb_record(stdin, reader, path, prefix, before)?;
+        return Ok(None);
     }
     if let Some(before) = guest_before {
         let allow = matches!(release, Some(0xb5 | 0xba));
@@ -751,6 +760,60 @@ fn sample_shared_controller(
         root,
         fsts,
     })
+}
+
+fn verify_shared_record_class(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+) -> Result<(), String> {
+    const ENDPOINT_CLASS: u64 = ECAM.0 + (27 << 15) + 8;
+    if read_model_dword(stdin, reader, ENDPOINT_CLASS, 173)? != 0x0c03_3001 {
+        return Err("incorrect shared USB record class or revision".into());
+    }
+    Ok(())
+}
+
+fn verify_copied_usb_record(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    path: &std::path::Path,
+    prefix: &[u8],
+    before: SharedController,
+) -> Result<(), String> {
+    let mut expected = prefix.to_vec();
+    // The requester, PCI ID and class are independently checked by the host
+    // from the sealed root-bus fixture and the exact read-only PCI sample.
+    expected.extend_from_slice(b"\xbdMRMLXHCI\x01\x00\x28\x00\xd8\x00\x00\x00\x36\x1b\x0d\x00\x01\x30\x03\x0c");
+    expected.extend_from_slice(&before.xhci.bar.start.to_le_bytes());
+    expected.extend_from_slice(&0x4000u32.to_le_bytes());
+    expected.extend_from_slice(&[0, 0, 0, 0, 0xbe]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(512).read_to_end(&mut bytes))
+            .map_err(|e| format!("read copied USB record trace: {e}"))?;
+        if bytes == expected {
+            break;
+        }
+        if !expected.starts_with(&bytes) || std::time::Instant::now() >= deadline {
+            return Err(format!("missing or altered post-exit USB record: {bytes:02x?}"));
+        }
+        std::thread::sleep(Duration::from_millis(3));
+    }
+    qmp_write(stdin, "{\"execute\":\"stop\",\"id\":168}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 168}")?;
+    verify_shared_boot(stdin, reader)?;
+    verify_shared_record_class(stdin, reader)?;
+    let after = sample_shared_controller(stdin, reader)?;
+    if before.pci_command != after.pci_command
+        || before.xhci != after.xhci
+        || !before.matches_control(after)
+    {
+        return Err("controller changed during the USB record-only diagnostic".into());
+    }
+    println!("q35-usb-record|status=PASS|firmware_exited=true|bytes=40|exact_requester=0000:00:1b.0|boot_disk_attached=true|controller_writes=false|media_writes=0");
+    Ok(())
 }
 
 fn verify_guest_bme(
