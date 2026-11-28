@@ -3,6 +3,86 @@
 
 use super::inspect_bar0;
 
+pub const BOOT_XHCI_RECORD_BYTES: usize = 40;
+const RECORD_MAGIC: &[u8; 8] = b"MRMLXHCI";
+const RECORD_VERSION: u16 = 1;
+
+/// Untrusted diagnostic bytes decoded as an observation, never as a
+/// firmware-validated snapshot or as permission to read/write registers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DecodedBootXhci(RetainedBootXhci);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootXhciRecordError {
+    BadLength,
+    BadMagic,
+    UnsupportedVersion,
+    ReservedBits,
+    InvalidFunction,
+    InvalidRange,
+    UnexpectedFunction,
+}
+
+fn valid_function(function: XhciFunction) -> bool {
+    !matches!(function.vendor_device as u16, 0 | u16::MAX)
+        && function.class_revision >> 8 == 0x0c0330
+}
+
+impl DecodedBootXhci {
+    /// Decode only canonical V1 fields for the independently identified
+    /// boot controller. A valid record proves no source or ownership.
+    pub fn decode(
+        bytes: &[u8],
+        expected: XhciFunction,
+    ) -> Result<Self, BootXhciRecordError> {
+        let bytes: &[u8; BOOT_XHCI_RECORD_BYTES] = bytes
+            .try_into()
+            .map_err(|_| BootXhciRecordError::BadLength)?;
+        let u16_at = |offset| u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+        let u32_at = |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+        if &bytes[..8] != RECORD_MAGIC {
+            return Err(BootXhciRecordError::BadMagic);
+        }
+        if u16_at(8) != RECORD_VERSION {
+            return Err(BootXhciRecordError::UnsupportedVersion);
+        }
+        if usize::from(u16_at(10)) != BOOT_XHCI_RECORD_BYTES {
+            return Err(BootXhciRecordError::BadLength);
+        }
+        if bytes[36..] != [0; 4] {
+            return Err(BootXhciRecordError::ReservedBits);
+        }
+        let function = XhciFunction {
+            requester: u32_at(12),
+            vendor_device: u32_at(16),
+            class_revision: u32_at(20),
+        };
+        if !valid_function(function) {
+            return Err(BootXhciRecordError::InvalidFunction);
+        }
+        if function != expected {
+            return Err(BootXhciRecordError::UnexpectedFunction);
+        }
+        let bar_base = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
+        let bar_bytes = u32_at(32);
+        if bar_base == 0
+            || bar_bytes < 0x20
+            || !bar_bytes.is_power_of_two()
+            || !bar_base.is_multiple_of(u64::from(bar_bytes))
+            || bar_base.checked_add(u64::from(bar_bytes)).is_none()
+        {
+            return Err(BootXhciRecordError::InvalidRange);
+        }
+        Ok(Self(RetainedBootXhci { function, bar_base, bar_bytes }))
+    }
+
+    /// Compare with separately gathered diagnostic evidence. In particular,
+    /// the address in this record does not establish safe MMIO coverage.
+    pub fn correlate(self, post: PostExitXhci) -> Result<CorrelatedBootXhci, CorrelationError> {
+        self.0.correlate(post)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct XhciFunction {
     /// PCI segment in bits 31:16, bus in 15:8, device/function in 7:0.
@@ -56,11 +136,7 @@ impl RetainedBootXhci {
         bar_high: u32,
         resource: &[u8],
     ) -> Option<Self> {
-        let vendor = function.vendor_device as u16;
-        if usb_boot_requester != Some(function.requester)
-            || matches!(vendor, 0 | u16::MAX)
-            || function.class_revision >> 8 != 0x0c0330
-        {
+        if usb_boot_requester != Some(function.requester) || !valid_function(function) {
             return None;
         }
         let (bar_base, bar_bytes) = inspect_bar0(command, header, bar_low, bar_high, resource)?;
@@ -74,6 +150,20 @@ impl RetainedBootXhci {
     /// Pointer-free fields for an observation report, not a mapping request.
     pub fn diagnostic_fields(self) -> (XhciFunction, u64, u32) {
         (self.function, self.bar_base, self.bar_bytes)
+    }
+
+    /// Serialize copied observation fields; the record is not authenticated.
+    pub fn encode(self) -> [u8; BOOT_XHCI_RECORD_BYTES] {
+        let mut bytes = [0; BOOT_XHCI_RECORD_BYTES];
+        bytes[..8].copy_from_slice(RECORD_MAGIC);
+        bytes[8..10].copy_from_slice(&RECORD_VERSION.to_le_bytes());
+        bytes[10..12].copy_from_slice(&(BOOT_XHCI_RECORD_BYTES as u16).to_le_bytes());
+        bytes[12..16].copy_from_slice(&self.function.requester.to_le_bytes());
+        bytes[16..20].copy_from_slice(&self.function.vendor_device.to_le_bytes());
+        bytes[20..24].copy_from_slice(&self.function.class_revision.to_le_bytes());
+        bytes[24..32].copy_from_slice(&self.bar_base.to_le_bytes());
+        bytes[32..36].copy_from_slice(&self.bar_bytes.to_le_bytes());
+        bytes
     }
 
     /// Compare copied facts only. A matching extent is not safe MMIO
@@ -131,6 +221,54 @@ mod tests {
             &resource(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn record_is_canonical_and_still_requires_independent_post_exit_evidence() {
+        let encoded = retained().encode();
+        assert_eq!(
+            encoded,
+            *b"MRMLXHCI\x01\x00\x28\x00\xa0\x00\x00\x00\x86\x80\xed\x02\x00\x30\x03\x0c\x00\x00\xef\xce\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00"
+        );
+        let observed = DecodedBootXhci::decode(&encoded, FUNCTION).unwrap();
+        assert_eq!(observed.correlate(POST), retained().correlate(POST));
+        assert_eq!(
+            observed.correlate(PostExitXhci { observed_bar: None, ..POST }),
+            Err(CorrelationError::BarUnverifiedOrChanged),
+        );
+    }
+
+    #[test]
+    fn rejects_noncanonical_records_and_substitution() {
+        let encoded = retained().encode();
+        for length in 0..BOOT_XHCI_RECORD_BYTES {
+            assert_eq!(
+                DecodedBootXhci::decode(&encoded[..length], FUNCTION),
+                Err(BootXhciRecordError::BadLength)
+            );
+        }
+        let mut oversized = [0; BOOT_XHCI_RECORD_BYTES + 1];
+        oversized[..BOOT_XHCI_RECORD_BYTES].copy_from_slice(&encoded);
+        assert_eq!(DecodedBootXhci::decode(&oversized, FUNCTION), Err(BootXhciRecordError::BadLength));
+        for (offset, value, error) in [
+            (0, 0, BootXhciRecordError::BadMagic),
+            (8, 2, BootXhciRecordError::UnsupportedVersion),
+            (10, 39, BootXhciRecordError::BadLength),
+            (13, 1, BootXhciRecordError::UnexpectedFunction),
+            (16, 0x87, BootXhciRecordError::UnexpectedFunction),
+            (20, 1, BootXhciRecordError::UnexpectedFunction),
+            (21, 0, BootXhciRecordError::InvalidFunction),
+            (24, 1, BootXhciRecordError::InvalidRange),
+            (32, 1, BootXhciRecordError::InvalidRange),
+            (39, 1, BootXhciRecordError::ReservedBits),
+        ] {
+            let mut bad = encoded;
+            bad[offset] = value;
+            assert_eq!(DecodedBootXhci::decode(&bad, FUNCTION), Err(error), "offset {offset}");
+        }
+        let mut bad = encoded;
+        bad[24..32].copy_from_slice(&0xffff_ffff_ffff_0000u64.to_le_bytes());
+        assert_eq!(DecodedBootXhci::decode(&bad, FUNCTION), Err(BootXhciRecordError::InvalidRange));
     }
 
     const POST: PostExitXhci = PostExitXhci {

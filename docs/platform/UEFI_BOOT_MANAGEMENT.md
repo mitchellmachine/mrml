@@ -355,7 +355,12 @@ read hardware. The standalone EFI inventory now emits a pointer-free boot
 evidence record only for the exact USB boot controller and its firmware-
 validated BAR0. The QEMU test includes a second xHCI controller and checks
 that it does not claim the evidence record. The inventory still returns to
-firmware without granting access; the post-exit consumer is not wired yet.
+firmware without granting access. The diagnostic library can also encode
+these fields as one 40-byte little-endian V1 record (`MRMLXHCI`). Decoding
+requires the exact version, size, zero reserved bytes, the independently
+identified PCI function, and an aligned nonoverflowing BAR span. Decoding
+untrusted bytes never proves provenance or safe read coverage. The post-exit
+consumer is not wired yet.
 
 ### Diagnose a return to firmware
 
