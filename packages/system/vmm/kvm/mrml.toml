@@ -77,6 +77,20 @@ package = "org.mrml.service.hardware-supervisor"
 scope = "compile"
 test_only = true
 
+[[dependency]]
+alias = "mrml_desktop"
+compile_name = "mrml-desktop"
+package = "org.mrml.service.desktop"
+scope = "compile"
+test_only = true
+
+[[dependency]]
+alias = "mrml_compositor"
+compile_name = "mrml-compositor"
+package = "org.mrml.service.compositor"
+scope = "compile"
+test_only = true
+
 [[build_input]]
 fingerprint = "fnv1a64:07cfb9d8b9ec012a"
 id = "native-link.native.c"

@@ -364,6 +364,7 @@ impl Desktop {
     }
 }
 
+pub mod raster;
 pub mod seat;
 pub mod tasks;
 

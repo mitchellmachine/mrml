@@ -335,8 +335,10 @@ physical touchscreen input, and a full
 cross-VM Semantic Scene Graph transport are not yet connected. A signed KVM
 diagnostic image exercises the desktop state machine and its same-guest echo
 fixture via a bounded synthetic input mailbox. The host verifies diagnostic
-state and mailbox withdrawal; this is not a desktop scanout or an independently
-launched terminal app.
+state and mailbox withdrawal. It also captures a guest-rendered 120×70
+layout thumbnail and projects it through the compositor to a disposable
+memory output. The thumbnail verifies tile/cursor placement, not rendered
+terminal text, hardware scanout or an independently launched terminal app.
 
 ### MicroVM task manager prototype
 

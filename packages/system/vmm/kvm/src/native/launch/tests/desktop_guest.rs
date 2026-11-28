@@ -1,5 +1,8 @@
 //! Opt-in proof that the built desktop state machine executes in a signed VM.
 use super::*;
+use mrml_compositor::{BootScanoutError, publish_total_guest_scanout};
+use mrml_desktop::raster;
+use mrml_kernel::{DisplayOutputIdentity, FramebufferLayout, PixelFormat};
 use mrml_kernel::{
     IsolationAdmissionTable, IsolationMode, IsolationPlacement, IsolationServiceSpec,
     TotalMicrovmClass, VmDeadlineOutcome, prepare_isolation_service_route,
@@ -113,10 +116,10 @@ fn live_desktop_guest_handles_seat_events_and_withdraws_mailbox() {
     assert!(route.is_live_in(&admission));
 
     let mut step = |operation: u8, payload: [u8; 4]| {
-        let mut packet = [0; 32];
+        let mut packet = [0; 32 + raster::ROW_BYTES];
         packet[0] = operation;
         packet[2..6].copy_from_slice(&payload);
-        page.write_second(&packet).unwrap();
+        page.write_second(&packet[..32]).unwrap();
         assert_eq!(
             DeadlineVmBackend::run_with_deadline(page.first, 0, 1_000_000).unwrap(),
             VmDeadlineOutcome::Exit(VmExit::Halted)
@@ -136,10 +139,78 @@ fn live_desktop_guest_handles_seat_events_and_withdraws_mailbox() {
     let motion = step(3, [2, 0, 1, 0]);
     assert_eq!(motion[2..6], [242, 0, 141, 0]);
     assert_eq!(motion[20..24], 1u32.to_le_bytes());
+    let mut frame = mrml_runtime::Vector::with_capacity(raster::FRAME_BYTES).unwrap();
+    for y in 0..raster::HEIGHT as u16 {
+        let [lo, hi] = y.to_le_bytes();
+        let row = step(8, [lo, hi, 0, 0]);
+        assert_eq!(&row[..2], &[0x51, 7]);
+        for &byte in &row[32..] {
+            frame.push(byte);
+        }
+    }
+    assert_eq!(step(8, [70, 0, 0, 0])[0], 0x52);
     assert_eq!(step(4, [0; 4])[..2], [0x51, 5]);
     assert_eq!(step(0xff, [0; 4])[..2], [0x52, 5]);
 
+    let setup = |bytes, width, height, stride, format| {
+        FramebufferLayout::new(bytes, width, height, stride, format).unwrap()
+    };
+    let source = setup(
+        raster::FRAME_BYTES as u64,
+        120,
+        70,
+        120,
+        PixelFormat::BlueGreenRedReserved,
+    );
+    let output = setup(
+        124 * 71 * 4,
+        122,
+        71,
+        124,
+        PixelFormat::RedGreenBlueReserved,
+    );
+    let display = DisplayOutputIdentity::new(ObjectId(0xd30), 1).unwrap();
+    let display_control = caps.insert(display.object(), Rights::CONTROL).unwrap();
+    let mut screen = mrml_runtime::Vector::with_capacity(124 * 71 * 4).unwrap();
+    screen.resize(124 * 71 * 4, 0xa7);
+    publish_total_guest_scanout(
+        &admission,
+        &route,
+        spec,
+        &caps,
+        display_control,
+        display,
+        display,
+        source,
+        output,
+        |_| Some(&frame),
+        &mut screen,
+    )
+    .unwrap();
+    let pixel = |x: usize, y: usize| &screen[(y * 124 + x) * 4..][..4];
+    assert_eq!(pixel(20, 30), &[16, 23, 34, 0]); // terminal
+    assert_eq!(pixel(90, 30), &[35, 52, 73, 0]); // diagnostics
+    assert_eq!(pixel(60, 35), &[245, 251, 255, 0]); // live guest cursor
+    assert_eq!(pixel(120, 35), &[0xa7; 4]); // outside source
+    assert_eq!(pixel(0, 70), &[0xa7; 4]);
+
     admission.retire(route.domain()).unwrap();
+    assert_eq!(
+        publish_total_guest_scanout(
+            &admission,
+            &route,
+            spec,
+            &caps,
+            display_control,
+            display,
+            display,
+            source,
+            output,
+            |_| panic!("retired guest must not be captured"),
+            &mut screen,
+        ),
+        Err(BootScanoutError::InvalidRoute)
+    );
     assert!(!route.is_live_in(&admission));
     page.retire()
         .unwrap_or_else(|(error, _)| panic!("desktop fixture retirement: {error:?}"));
