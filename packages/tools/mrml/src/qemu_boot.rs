@@ -81,11 +81,11 @@ pub fn create_media(args: &[String]) -> Result<(), String> {
 }
 
 pub fn run_qemu(args: &[String]) -> Result<(), String> {
-    run_qemu_config(args, false, None, false)
+    run_qemu_config(args, false, None, None)
 }
 
 pub(super) fn run_qemu_with_q35_evidence(args: &[String]) -> Result<(), String> {
-    run_qemu_config(args, true, None, false)
+    run_qemu_config(args, true, None, None)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -177,18 +177,44 @@ pub(super) fn run_q35_map_only_fixture(
     args: &[String],
     case: Q35FixtureCase,
 ) -> Result<(), String> {
-    run_qemu_config(args, true, Some(case), false)
+    run_qemu_config(args, true, Some(case), None)
 }
 
 pub(super) fn run_qemu_with_display_evidence(args: &[String]) -> Result<(), String> {
-    run_qemu_config(args, false, None, true)
+    run_qemu_config(args, false, None, Some(BootDisplay::Fat32))
+}
+
+pub(super) fn run_qemu_with_desktop_evidence(args: &[String]) -> Result<(), String> {
+    run_qemu_config(args, false, None, Some(BootDisplay::Desktop))
+}
+
+#[derive(Clone, Copy)]
+enum BootDisplay {
+    Fat32,
+    Desktop,
+}
+
+impl BootDisplay {
+    fn verify(self, path: &Path) -> Result<(usize, usize), String> {
+        match self {
+            Self::Fat32 => crate::qemu_display::verify_fat32_screen(path),
+            Self::Desktop => crate::qemu_display::verify_desktop_screen(path),
+        }
+    }
+
+    const fn marker(self) -> &'static str {
+        match self {
+            Self::Fat32 => "fat32-pass",
+            Self::Desktop => "desktop-pixels-120x70",
+        }
+    }
 }
 
 fn run_qemu_config(
     args: &[String],
     verify_q35: bool,
     map_only_marker: Option<Q35FixtureCase>,
-    verify_display: bool,
+    verify_display: Option<BootDisplay>,
 ) -> Result<(), String> {
     if args.len() < 5 {
         return Err("PackageQemuBootUsage { expected: IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--accelerator tcg|whpx|kvm] [--iommu intel] [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX] }".into());
@@ -308,7 +334,7 @@ struct QemuChildOptions<'a> {
     intel_iommu: bool,
     verify_q35: bool,
     map_only_marker: Option<Q35FixtureCase>,
-    verify_display: bool,
+    verify_display: Option<BootDisplay>,
 }
 
 fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
@@ -366,12 +392,12 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         };
         command.args(["-device", remapper]);
     }
-    let display_dir = if verify_display {
+    let display_dir = if verify_display.is_some() {
         let dir = trace.parent().filter(|p| p.is_absolute()).ok_or("missing private display fixture directory")?;
         command.current_dir(dir);
         Some(dir)
     } else { None };
-    if verify_q35 || verify_display {
+    if verify_q35 || verify_display.is_some() {
         command.args(["-no-user-config", "-qmp", "stdio"]);
     }
     if let Some(case) = map_only_marker {
@@ -473,12 +499,12 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         .arg("-debugcon")
         .arg(format!("file:{}", trace.display()))
         .args(["-global", "isa-debugcon.iobase=0xe9"])
-        .stdin(if verify_q35 || verify_display {
+        .stdin(if verify_q35 || verify_display.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
         })
-        .stdout(if verify_q35 || verify_display {
+        .stdout(if verify_q35 || verify_display.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -605,10 +631,11 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
             };
             if rejection.is_none() && exact_trace {
                 let no_remapper = map_only_marker == Some(Q35FixtureCase::NoRemapper);
-                let screen = display_dir.map(|dir| {
+                let screen = display_dir.zip(verify_display).map(|(dir, display)| {
                     let path = dir.join("boot-display.ppm");
                     crate::qemu_mmio::capture_paused_display(&mut child)
-                        .and_then(|()| crate::qemu_display::verify_fat32_screen(&path))
+                        .and_then(|()| display.verify(&path))
+                        .map(|(width, height)| (display, width, height))
                 });
                 let evidence = (verify_q35 && !released).then(|| {
                     if no_remapper {
@@ -624,8 +651,8 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                     .map_err(|error| format!("PackageQemuStopError {{ detail: {error} }}"))?;
                 let _ = child.wait();
                 if let Some(screen) = screen {
-                    let (width, height) = screen?;
-                    println!("qemu-boot-display|status=PASS|width={width}|height={height}|marker=fat32-pass|scope=boot-diagnostic");
+                    let (display, width, height) = screen?;
+                    println!("qemu-boot-display|status=PASS|width={width}|height={height}|marker={}|scope=boot-diagnostic", display.marker());
                 }
                 if let Some(evidence) = evidence {
                     evidence?;

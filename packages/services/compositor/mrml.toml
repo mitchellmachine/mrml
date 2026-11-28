@@ -64,5 +64,8 @@ compile_name = "mrml-kernel"
 package = "org.mrml.system.kernel"
 scope = "compile"
 
+[[projected_build]]
+targets = ["UEFI"]
+
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]

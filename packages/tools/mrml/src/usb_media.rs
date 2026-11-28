@@ -163,11 +163,16 @@ fn test_vmx(image: &str, code: &str, vars: &str, qemu: &str, profile: Diagnostic
     let staged = scratch.path("vmx.img");
     let copy = || fs::copy(source, &staged).map(|_| ()).map_err(|error| error.to_string());
     let run = |accelerator, name, expected| {
-        crate::qemu_boot::run_qemu(&words(&[
+        let args = words(&[
             &string(&staged), code, vars, qemu, &string(&scratch.path(name)),
             "--accelerator", accelerator, "--expect-hex", expected,
             "--timeout-seconds", "60",
-        ]))
+        ]);
+        if accelerator == "kvm" && matches!(profile, DiagnosticImage::VmxDesktop) {
+            crate::qemu_boot::run_qemu_with_desktop_evidence(&args)
+        } else {
+            crate::qemu_boot::run_qemu(&args)
+        }
     };
     copy()?;
     run("tcg", "vmx-absent.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0e0e6")?;

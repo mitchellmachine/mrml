@@ -8,8 +8,8 @@
 | --- | ---: |
 | Workspace packages | 86 |
 | Package manifests | 86 |
-| Compile edges | 255 |
-| Package edges | 213 |
+| Compile edges | 256 |
+| Package edges | 214 |
 | Runtime-interface edges | 5 |
 | Build-tool edges | 0 |
 | System-release edges | 3 |
@@ -26,7 +26,7 @@
 | Measure | Current value |
 | --- | ---: |
 | Rust source files | 827 |
-| Rust source lines | 699836 |
+| Rust source lines | 699980 |
 | Static `#[test]` annotations | 4925 |
 | Largest Rust source | `packages/compiler/core/src/codegen/tests.rs` (996630 bytes) |
 | Files containing admitted unsafe boundaries | 190 |

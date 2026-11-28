@@ -69,7 +69,6 @@ pub(super) struct PreparedGuest {
     launch: MinimalVmcsLaunch,
     #[cfg(not(feature = "vmx-desktop-monitor"))]
     image_end: u64,
-    #[cfg(not(feature = "vmx-desktop-monitor"))]
     artifact_version: u64,
 }
 
@@ -116,17 +115,51 @@ impl ServiceLaunch {
 }
 
 #[cfg(feature = "vmx-desktop-monitor")]
+#[inline(never)]
 pub(super) fn run_desktop_probe(
     service: ServiceLaunch,
     controller: &mut VmxController<NativeVmx>,
     controls: VmxControlPolicy,
     ticks: u32,
+    framebuffer: mrml_kernel::FramebufferInfo,
 ) -> Option<PhysAddr> {
-    use mrml_boot_frame::{BOOT_REPLY_BYTES, BOOT_REQUEST, validate_boot_reply};
+    use mrml_boot_frame::{BOOT_REPLY_BYTES, BOOT_REQUEST, FRAME_BYTES, HEIGHT, WIDTH, decode_boot_reply};
+    use mrml_kernel::{
+        CapabilitySpace, DisplayOutputIdentity, FramebufferLayout, IsolationAdmissionTable,
+        IsolationMode, IsolationPlacement, IsolationServiceSpec, ObjectId, PixelFormat, Rights,
+        TotalMicrovmClass, prepare_isolation_service_route,
+    };
+
+    // One boot-local policy, one output, and one admitted device-free guest.
+    // The provider generation is the exact signed artifact's version.
     let vmcs = service.guest.vmcs;
+    let mut admission = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1, 1).ok()?;
+    let spec = IsolationServiceSpec::new(
+        ObjectId(vmcs.get()), ObjectId(0xd02), 1, service.guest.artifact_version,
+        1, 1, TotalMicrovmClass::MicrovmEligible, IsolationPlacement::Microvm,
+    ).ok()?;
+    let prepared = prepare_isolation_service_route(&mut admission, spec).ok()?;
     let reply: [u8; BOOT_REPLY_BYTES] =
         service.exchange(controller, controls, ticks, BOOT_REQUEST)?;
-    validate_boot_reply(&reply).ok()?;
+    let mut frame = [0; FRAME_BYTES];
+    decode_boot_reply(&reply, &mut frame).ok()?;
+    let route = prepared.commit(&mut admission, &frame[..]).ok()?;
+    let source = FramebufferLayout::new(
+        FRAME_BYTES as u64, WIDTH as u32, HEIGHT as u32, WIDTH as u32,
+        PixelFormat::BlueGreenRedReserved,
+    ).ok()?;
+    let identity = DisplayOutputIdentity::new(ObjectId(0xd30), 1).ok()?;
+    let mut caps = CapabilitySpace::<1>::new();
+    let control = caps.insert(identity.object(), Rights::CONTROL).ok()?;
+    let published = super::with_diagnostic_framebuffer(framebuffer, |output| {
+        mrml_compositor::publish_total_guest_scanout(
+            &admission, &route, spec, &caps, control, identity, identity,
+            source, framebuffer.layout(), |&snapshot| Some(snapshot), output,
+        )
+    });
+    admission.retire(route.domain()).ok()?;
+    caps.revoke(control).ok()?;
+    published.ok()?;
     // The caller retires this VMCS after restoring the separately parked
     // timer guest. The desktop is already stopped and cannot be reloaded.
     Some(vmcs)
@@ -591,7 +624,6 @@ fn prepare_payload(
         launch,
         #[cfg(not(feature = "vmx-desktop-monitor"))]
         image_end: HIGH + end as u64,
-        #[cfg(not(feature = "vmx-desktop-monitor"))]
         artifact_version: executable.artifact().version(),
     })
 }

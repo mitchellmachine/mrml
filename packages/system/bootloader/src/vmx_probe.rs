@@ -337,6 +337,7 @@ impl ProbeFault {
 pub(super) unsafe fn run(
     host_mismatch: &mut Option<[u64; 4]>,
     _entropy: [u8; 32],
+    #[cfg(feature = "vmx-desktop-monitor")] framebuffer: mrml_kernel::FramebufferInfo,
 ) -> Result<(), ProbeFault> {
     trace(0xd0);
     if __cpuid(1).ecx & (1 << 5) == 0 {
@@ -652,7 +653,7 @@ pub(super) unsafe fn run(
             #[cfg(feature = "vmx-desktop-monitor")]
             let desktop_vmcs = {
                 let vmcs = super::vmx_kernel_guest::run_desktop_probe(
-                    service, &mut controller, controls, ticks(1 << 32),
+                    service, &mut controller, controls, ticks(1 << 32), framebuffer,
                 )
                 .ok_or(ProbeFault::DesktopReply)?;
                 trace(0xcc);

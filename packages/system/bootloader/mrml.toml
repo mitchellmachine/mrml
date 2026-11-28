@@ -197,6 +197,13 @@ package = "org.mrml.library.storage.usb"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_compositor"
+compile_name = "mrml-compositor"
+package = "org.mrml.service.compositor"
+scope = "compile"
+targets = ["UEFI"]
+
+[[dependency]]
 alias = "mrml_boot_frame"
 compile_name = "mrml-boot-frame"
 package = "org.mrml.library.boot-frame"

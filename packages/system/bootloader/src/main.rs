@@ -568,13 +568,8 @@ fn paint_boot_diagnostic_lines(info: mrml_kernel::FramebufferInfo, labels: &[&[u
     {
         return false;
     }
-    // SAFETY: the loader mapped the validated framebuffer supervisor-only;
-    // the diagnostic retains the mapping and only the BSP draws on it.
-    let bytes = unsafe {
-        core::slice::from_raw_parts_mut(info.base().get() as *mut u8, info.byte_length() as usize)
-    };
-    FramebufferSurface::new(info, bytes)
-        .and_then(|mut surface| {
+    with_diagnostic_framebuffer(info, |bytes| {
+        FramebufferSurface::new(info, bytes).and_then(|mut surface| {
             surface.fill_rectangle(
                 0,
                 0,
@@ -596,6 +591,21 @@ fn paint_boot_diagnostic_lines(info: mrml_kernel::FramebufferInfo, labels: &[&[u
             Ok(())
         })
         .is_ok()
+    })
+}
+
+#[cfg(any(feature = "uefi-fat32-restart-probe", feature = "vmx-root-probe"))]
+fn with_diagnostic_framebuffer<T>(
+    info: mrml_kernel::FramebufferInfo,
+    draw: impl FnOnce(&mut [u8]) -> T,
+) -> T {
+    // SAFETY: the validated loader mapping is supervisor-only, and only
+    // the BSP touches it in these mutually exclusive boot diagnostics.
+    // The temporary borrow is confined to this trusted output broker.
+    let bytes = unsafe {
+        core::slice::from_raw_parts_mut(info.base().get() as *mut u8, info.byte_length() as usize)
+    };
+    draw(bytes)
 }
 
 #[cfg(feature = "vmx-kernel-monitor")]
@@ -703,21 +713,42 @@ fn vmx_kernel_ipc_check() -> Option<()> {
 #[cfg(feature = "vmx-root-probe")]
 fn run_vmx_boot_diagnostic(handoff: &BootHandoff) {
     let framebuffer = handoff.framebuffer();
-    if !paint_boot_diagnostic(framebuffer, b"VMX PROBE START") {
+    // The desktop diagnostic replaces the top-left tile, so keep its
+    // startup label entirely within that footprint at any glyph scale.
+    let start: &[u8] = if cfg!(feature = "vmx-desktop-monitor") {
+        b"VMX"
+    } else {
+        b"VMX PROBE START"
+    };
+    if !paint_boot_diagnostic(framebuffer, start) {
         halt();
     }
     // SAFETY: this opt-in boot probe runs on the BSP with validated early
     // state, before AP startup or publication of any service mappings.
     let mut host_mismatch = None;
-    let success: &[u8] = if cfg!(feature = "vmx-desktop-monitor") {
-        b"VMX DESKTOP PASS"
-    } else if cfg!(feature = "vmx-kernel-monitor") {
+    #[cfg(not(feature = "vmx-desktop-monitor"))]
+    let success: &[u8] = if cfg!(feature = "vmx-kernel-monitor") {
         b"VMX KERNEL PASS"
     } else {
         b"VMX 64 PASS"
     };
-    match unsafe { vmx_probe::run(&mut host_mismatch, *handoff.evidence().entropy()) } {
-        Ok(()) if paint_boot_diagnostic(framebuffer, success) => vmx_probe::trace(0xd6),
+    match unsafe {
+        vmx_probe::run(
+            &mut host_mismatch,
+            *handoff.evidence().entropy(),
+            #[cfg(feature = "vmx-desktop-monitor")]
+            framebuffer,
+        )
+    } {
+        Ok(()) => {
+            #[cfg(feature = "vmx-desktop-monitor")]
+            let presented = true;
+            #[cfg(not(feature = "vmx-desktop-monitor"))]
+            let presented = paint_boot_diagnostic(framebuffer, success);
+            if presented {
+                vmx_probe::trace(0xd6);
+            }
+        }
         Err(fault) => {
             let label = fault.label();
             let details_painted = host_mismatch.is_some_and(|masks| {
@@ -731,7 +762,6 @@ fn run_vmx_boot_diagnostic(handoff: &BootHandoff) {
                 vmx_probe::trace(0xe6);
             }
         }
-        _ => {}
     }
     halt();
 }
