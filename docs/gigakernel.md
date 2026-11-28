@@ -140,11 +140,27 @@ The separate `normal_boot_observed` fixture uses the same policy entry and
 emits fixed, non-authoritative QEMU trace records for invalid configuration,
 policy rejection, or policy acceptance. The shipping profile has no such
 trace output. `mrml usb test-normal-boot-policy OVMF_CODE OVMF_VARS QEMU`
-uses a disposable signed image, records the exact kernel digest and embedded
-release floor, and checks that unenrolled OVMF is rejected by the kernel. It
-does not prove enrolled Secure Boot, TPM measurement, authenticated rollback
-or release state, or supervisor guest entry. A future acceptance test must
-observe policy acceptance and actual guest entry as separate checkpoints.
+uses a disposable MRML-signed image, records the exact kernel digest and
+embedded release floor, and checks that unenrolled OVMF is rejected by the
+kernel. The command does not enroll firmware keys or provision a TPM.
+
+On 2026-11-28, a separate QEMU 11.1.3 q35/TCG experiment at `7816741e`
+used SMM-protected OVMF 4 MiB Secure Boot firmware, private copies of its
+variable store, and a disposable certificate to sign the EFI loader. The
+inner MRML packages were unchanged. With enrolled OVMF, the unsigned loader
+produced no MRML trace during the 18-second observation. The signed loader
+reached the kernel's normal-boot policy in both controls:
+
+| QEMU configuration | Final kernel trace record | What the run establishes |
+| --- | --- | --- |
+| Enrolled OVMF, signed loader, no TPM | `MRML:BOOT:POLICY:MEASUREMENT` (49 trace bytes) | The Secure Boot gate passed; the measurement gate did not. |
+| Same signed image and enrollment, fresh emulated TPM 2.0 | `MRML:BOOT:POLICY:ROLLBACK` (46 trace bytes) | Secure Boot and the measurement gate passed; authenticated rollback state was absent. |
+
+An empty emulated TPM is not an owner-provisioned release journal. The next
+acceptance fixture needs a provisioned journal and a matching coherent
+release. Policy acceptance and actual supervisor guest entry must still be
+observed as separate checkpoints. No physical firmware, USB drive, or
+service microVM was exercised in this experiment.
 
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
