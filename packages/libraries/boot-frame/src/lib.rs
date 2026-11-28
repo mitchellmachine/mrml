@@ -10,6 +10,8 @@ pub const BOOT_REQUEST: [u8; 8] = *b"MRMLDB1\0";
 pub enum BootScene {
     Idle,
     Enter,
+    Begin,
+    TextA,
 }
 
 impl BootScene {
@@ -17,11 +19,13 @@ impl BootScene {
         match self {
             Self::Idle => BOOT_REQUEST,
             Self::Enter => *b"MRMLDB1\x01",
+            Self::Begin => *b"MRMLDB1\x02",
+            Self::TextA => *b"MRMLDB1\x03",
         }
     }
 
     pub fn parse(request: &[u8; BOOT_REQUEST.len()]) -> Result<Self, Error> {
-        [Self::Idle, Self::Enter]
+        [Self::Idle, Self::Enter, Self::Begin, Self::TextA]
             .into_iter()
             .find(|scene| scene.request() == *request)
             .ok_or(Error::InvalidRequest)

@@ -20,7 +20,7 @@ mod host;
 #[path = "usb_windows.rs"]
 mod host;
 
-const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb image-vmx-desktop OUTPUT.img | mrml usb image-vmx-desktop-input OUTPUT.img | mrml usb test-vmx-desktop-input IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-desktop IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-display OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
+const USAGE: &str = "usage: mrml usb image OUTPUT.img | mrml usb image-vmx OUTPUT.img | mrml usb image-vmx-kernel OUTPUT.img | mrml usb image-vmx-desktop OUTPUT.img | mrml usb image-vmx-desktop-persistent OUTPUT.img | mrml usb test-vmx-desktop-persistent IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb image-vmx-desktop-input OUTPUT.img | mrml usb test-vmx-desktop-input IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-desktop IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb test-vmx-kernel IMAGE.img OVMF_CODE OVMF_VARS QEMU | mrml usb list [--erase|-e] | mrml usb burn IMAGE.img | mrml usb autoburn [--image IMAGE.img] [--erase|-e] | mrml usb test OVMF_CODE OVMF_VARS QEMU | mrml usb test-display OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-acpi OVMF_CODE OVMF_VARS QEMU | mrml usb test-dma-map OVMF_CODE OVMF_VARS QEMU | mrml usb test-xhci-inventory OVMF_CODE OVMF_VARS QEMU | mrml usb test-shared-preload OVMF_CODE OVMF_VARS QEMU";
 
 #[path = "usb_xhci_inventory.rs"]
 mod xhci_inventory;
@@ -54,15 +54,19 @@ pub(super) fn command(args: &[String]) -> Result<(), String> {
         [mode, file] if mode == "image-vmx-desktop" => {
             create(&load_workspace()?, Path::new(file), DiagnosticImage::VmxDesktop(DesktopScene::Idle))
         }
+        [mode, file] if mode == "image-vmx-desktop-persistent" => {
+            create(&load_workspace()?, Path::new(file), DiagnosticImage::VmxDesktop(DesktopScene::Persistent))
+        }
         [mode, file] if mode == "image-vmx-desktop-input" => {
             create(&load_workspace()?, Path::new(file), DiagnosticImage::VmxDesktop(DesktopScene::Enter))
         }
         [mode, image, code, vars, qemu]
-            if matches!(mode.as_str(), "test-vmx" | "test-vmx-kernel" | "test-vmx-desktop" | "test-vmx-desktop-input") =>
+            if matches!(mode.as_str(), "test-vmx" | "test-vmx-kernel" | "test-vmx-desktop" | "test-vmx-desktop-input" | "test-vmx-desktop-persistent") =>
         {
             let profile = match mode.as_str() {
                 "test-vmx-desktop" => DiagnosticImage::VmxDesktop(DesktopScene::Idle),
                 "test-vmx-desktop-input" => DiagnosticImage::VmxDesktop(DesktopScene::Enter),
+                "test-vmx-desktop-persistent" => DiagnosticImage::VmxDesktop(DesktopScene::Persistent),
                 "test-vmx-kernel" => DiagnosticImage::VmxKernel,
                 _ => DiagnosticImage::Vmx,
             };
@@ -182,7 +186,9 @@ fn test_vmx(image: &str, code: &str, vars: &str, qemu: &str, profile: Diagnostic
     copy()?;
     run("tcg", "vmx-absent.trace", "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0e0e6")?;
     copy()?;
-    let expected = if matches!(profile, DiagnosticImage::VmxDesktop(_)) {
+    let expected = if matches!(profile, DiagnosticImage::VmxDesktop(DesktopScene::Persistent)) {
+        "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1c2c4cacbccc5dfd6"
+    } else if matches!(profile, DiagnosticImage::VmxDesktop(_)) {
         "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1c2c4ccc5dfd6"
     } else if matches!(profile, DiagnosticImage::VmxKernel) {
         "c8b0b2b0b2c9b0b2b2a1a2a3a4a5a6a7a8b1b2b3d0d1d2d3d4f2f3f4d7d8d9f7f8f9c0c1c2c4c6c3c5dfd6"
@@ -851,6 +857,7 @@ fn build_image(workspace: &Workspace, profile: DiagnosticImage) -> Result<Vec<u8
                 DiagnosticImage::VmxKernel => "vmx_kernel_monitor",
                 DiagnosticImage::VmxDesktop(DesktopScene::Idle) => "vmx_desktop_monitor",
                 DiagnosticImage::VmxDesktop(DesktopScene::Enter) => "vmx_desktop_input_monitor",
+                DiagnosticImage::VmxDesktop(DesktopScene::Persistent) => "vmx_desktop_persistent_monitor",
                 _ => "uefi_fat32_restart_probe",
             },
             "--compile-env",

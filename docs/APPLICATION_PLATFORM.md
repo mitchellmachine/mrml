@@ -374,8 +374,18 @@ guest runs its ordinary focus policy, opens a guest-private terminal
 placeholder, and submits a new frame. Use
 `mrml usb test-vmx-desktop-input DESKTOP.img OVMF_CODE OVMF_VARS QEMU`
 to verify the distinct terminal-open raster and its border in QEMU.
-The idle profile remains the control. Neither profile reads a hardware
-keyboard or preserves an interactive session between requests.
+The idle profile remains the control. Neither one-shot profile reads a
+hardware keyboard or preserves an interactive session between requests.
+
+The opt-in `image-vmx-desktop-persistent` profile keeps one signed desktop
+vCPU, EPT, and guest stack across an idle frame, synthetic Enter, and
+synthetic text A. The boot monitor checks the two bounded yield exits,
+writes only the fixed read-only request mapping while the guest is parked,
+and resumes the exact VMCS/EPT pair. It validates a distinct reply at each
+step and presents the final frame showing A in the terminal and one key
+delivered. `test-vmx-desktop-persistent` checks both the yield trace and all
+8,400 final pixels. The session is retired after this bounded test; it
+does not poll a hardware keyboard, grant a device, or change normal boot.
 
 ### MicroVM task manager prototype
 

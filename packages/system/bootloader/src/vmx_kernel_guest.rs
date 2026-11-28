@@ -67,7 +67,6 @@ pub(super) struct PreparedGuest {
     vmcs: PhysAddr,
     ept: EptPointer,
     launch: MinimalVmcsLaunch,
-    #[cfg(not(feature = "vmx-desktop-monitor"))]
     image_end: u64,
     artifact_version: u64,
 }
@@ -84,11 +83,19 @@ impl ServiceLaunch {
         ticks: u32,
         request: [u8; REQUEST_BYTES],
     ) -> Option<[u8; REPLY_BYTES]> {
-        if REQUEST_BYTES > PAGE || REPLY_BYTES > PAGE {
+        Self::write_request(request)?;
+        self.guest.start(controller, controls, ticks)?;
+        terminal(controller, 0xe8)?;
+        Self::read_reply()
+    }
+
+    fn write_request<const REQUEST_BYTES: usize>(request: [u8; REQUEST_BYTES]) -> Option<()> {
+        if REQUEST_BYTES > PAGE {
             return None;
         }
-        // SAFETY: the new provider VM has not run; this is its exact RO
-        // request page. The monitor is the only writer.
+        // SAFETY: only the BSP calls this with the service vCPU stopped,
+        // before its first launch or while its exact continuation is parked.
+        // This is the fixed RO guest request page; only the monitor writes it.
         unsafe {
             SERVICE_ARENA
                 .0
@@ -98,8 +105,13 @@ impl ServiceLaunch {
                 .cast::<[u8; REQUEST_BYTES]>()
                 .write_volatile(request);
         }
-        self.guest.start(controller, controls, ticks)?;
-        terminal(controller, 0xe8)?;
+        Some(())
+    }
+
+    fn read_reply<const REPLY_BYTES: usize>() -> Option<[u8; REPLY_BYTES]> {
+        if REPLY_BYTES > PAGE {
+            return None;
+        }
         // SAFETY: the exact service vCPU is stopped. Copy only its fixed,
         // bounded response, not guest-controlled memory locations or sizes.
         Some(unsafe {
@@ -139,13 +151,16 @@ pub(super) fn run_desktop_probe(
         1, 1, TotalMicrovmClass::MicrovmEligible, IsolationPlacement::Microvm,
     ).ok()?;
     let prepared = prepare_isolation_service_route(&mut admission, spec).ok()?;
-    let scene = if cfg!(feature = "vmx-desktop-input-probe") {
-        BootScene::Enter
+    let reply: [u8; BOOT_REPLY_BYTES] = if cfg!(feature = "vmx-desktop-persistent-probe") {
+        persistent_desktop(service, controller, controls, ticks)?
     } else {
-        BootScene::Idle
+        let scene = if cfg!(feature = "vmx-desktop-input-probe") {
+            BootScene::Enter
+        } else {
+            BootScene::Idle
+        };
+        service.exchange(controller, controls, ticks, scene.request())?
     };
-    let reply: [u8; BOOT_REPLY_BYTES] =
-        service.exchange(controller, controls, ticks, scene.request())?;
     let mut frame = [0; FRAME_BYTES];
     decode_boot_reply(&reply, &mut frame).ok()?;
     let route = prepared.commit(&mut admission, &frame[..]).ok()?;
@@ -168,6 +183,48 @@ pub(super) fn run_desktop_probe(
     // The caller retires this VMCS after restoring the separately parked
     // timer guest. The desktop is already stopped and cannot be reloaded.
     Some(vmcs)
+}
+
+#[cfg(feature = "vmx-desktop-monitor")]
+#[inline(never)]
+fn persistent_desktop(
+    service: ServiceLaunch,
+    controller: &mut VmxController<NativeVmx>,
+    controls: VmxControlPolicy,
+    ticks: u32,
+) -> Option<[u8; mrml_boot_frame::BOOT_REPLY_BYTES]> {
+    use mrml_boot_frame::{BOOT_REPLY_BYTES, BootScene, validate_boot_reply};
+    let guest = service.guest;
+    ServiceLaunch::write_request(BootScene::Begin.request())?;
+    guest.start(controller, controls, ticks)?;
+    let bounds = HIGH + IMAGE as u64..guest.image_end;
+    controller.park_boot_call_probe(bounds.clone()).ok()?;
+    let idle: [u8; BOOT_REPLY_BYTES] = ServiceLaunch::read_reply()?;
+    validate_boot_reply(&idle).ok()?;
+    super::vmx_probe::trace(0xca);
+
+    let mut resume = |scene: BootScene| -> Option<()> {
+        ServiceLaunch::write_request(scene.request())?;
+        controller.reload_boot_probe_guest(guest.vmcs, guest.ept).ok()?;
+        controller.arm_boot_probe_timer(controls, ticks).ok()?;
+        controller.resume().ok()
+    };
+    // The same VMCS, EPT and guest stack are kept across both yields.
+    resume(BootScene::Enter)?;
+    controller.park_boot_call_probe(bounds).ok()?;
+    let entered: [u8; BOOT_REPLY_BYTES] = ServiceLaunch::read_reply()?;
+    validate_boot_reply(&entered).ok()?;
+    if entered == idle {
+        return None;
+    }
+    super::vmx_probe::trace(0xcb);
+    ServiceLaunch::write_request(BootScene::TextA.request())?;
+    controller.reload_boot_probe_guest(guest.vmcs, guest.ept).ok()?;
+    controller.arm_boot_probe_timer(controls, ticks).ok()?;
+    controller.resume().ok()?;
+    terminal(controller, 0xe8)?;
+    let typed = ServiceLaunch::read_reply()?;
+    (typed != entered).then_some(typed)
 }
 
 fn terminal(controller: &mut VmxController<NativeVmx>, port: u16) -> Option<()> {
@@ -627,7 +684,6 @@ fn prepare_payload(
         vmcs: PhysAddr::new(frames[VMCS]).ok()?,
         ept,
         launch,
-        #[cfg(not(feature = "vmx-desktop-monitor"))]
         image_end: HIGH + end as u64,
         artifact_version: executable.artifact().version(),
     })

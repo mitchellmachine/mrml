@@ -2,7 +2,7 @@
 //! guest-provided addresses, framebuffer authority, or display-mode requests.
 use crate::{Desktop, Event, Key, RouteError, TerminalRoute, raster};
 use core::num::NonZeroU64;
-use mrml_boot_frame::BootScene;
+pub use mrml_boot_frame::BootScene;
 
 pub use mrml_boot_frame::{
     BOOT_REPLY_BYTES, BOOT_REQUEST, Error, HEADER_BYTES, MAX_BYTES, decode, decode_boot_reply,
@@ -52,19 +52,23 @@ pub fn encode(
 
 /// No independent application is started in this fixture. The normal
 /// desktop policy is exercised against a guest-private terminal placeholder.
-struct BootTerminalFixture(bool);
+struct BootTerminalFixture(Option<mrml_terminal_probe::Terminal>);
 
 impl TerminalRoute for BootTerminalFixture {
     fn launch_terminal(&mut self) -> Result<NonZeroU64, RouteError> {
-        if self.0 {
+        if self.0.is_some() {
             return Err(RouteError::Unavailable);
         }
-        self.0 = true;
+        self.0 = Some(mrml_terminal_probe::Terminal::new());
         Ok(NonZeroU64::MIN)
     }
 
-    fn send_key(&mut self, _: NonZeroU64, _: Key) -> Result<(), RouteError> {
-        Err(RouteError::Unavailable)
+    fn send_key(&mut self, incarnation: NonZeroU64, key: Key) -> Result<(), RouteError> {
+        if incarnation != NonZeroU64::MIN {
+            return Err(RouteError::Retired);
+        }
+        self.0.as_mut().ok_or(RouteError::Retired)?.key(key);
+        Ok(())
     }
 
     fn retire_terminal(&mut self, _: NonZeroU64) -> Result<(), RouteError> {
@@ -80,22 +84,55 @@ pub fn render_boot_reply(
 ) -> Result<(), Error> {
     reply.fill(0);
     let scene = BootScene::parse(request)?;
-    let mut desktop = Desktop::new(480, 280).ok_or(Error::InvalidDesktop)?;
-    if scene == BootScene::Enter {
-        desktop.event(Event::Enter, &mut BootTerminalFixture(false))
-            .map_err(|_| Error::InvalidDesktop)?;
-        if !desktop.diagnostics().terminal_open {
-            return Err(Error::InvalidDesktop);
-        }
+    if !matches!(scene, BootScene::Idle | BootScene::Enter) {
+        return Err(Error::InvalidRequest);
     }
-    let packet = (&mut reply[..MAX_BYTES])
+    BootDesktop::new()?.step(scene, reply)
+}
+
+/// State owned by the signed guest, never serialized into the monitor.
+pub struct BootDesktop {
+    desktop: Desktop,
+    terminal: BootTerminalFixture,
+}
+
+impl BootDesktop {
+    pub fn new() -> Result<Self, Error> {
+        Ok(Self {
+            desktop: Desktop::new(480, 280).ok_or(Error::InvalidDesktop)?,
+            terminal: BootTerminalFixture(None),
+        })
+    }
+
+    pub fn step(
+        &mut self,
+        scene: BootScene,
+        reply: &mut [u8; BOOT_REPLY_BYTES],
+    ) -> Result<(), Error> {
+        reply.fill(0);
+        let open = self.desktop.diagnostics().terminal_open;
+        let event = match (scene, open) {
+            (BootScene::Idle | BootScene::Begin, false) => None,
+            (BootScene::Enter, false) => Some(Event::Enter),
+            (BootScene::TextA, true) => Some(Event::TerminalKey(Key::Text('A'))),
+            _ => return Err(Error::InvalidRequest),
+        };
+        if let Some(event) = event {
+            self.desktop.event(event, &mut self.terminal).map_err(|_| Error::InvalidDesktop)?;
+            if !self.desktop.diagnostics().terminal_open {
+                return Err(Error::InvalidDesktop);
+            }
+        }
+        let echo = self.terminal.0.as_ref().and_then(|terminal| terminal.rows().last()).unwrap_or(&[]);
+        let packet = (&mut reply[..MAX_BYTES])
         .try_into()
         .map_err(|_| Error::WrongOutputSize)?;
-    match encode(&desktop, &[], packet) {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            reply.fill(0);
-            Err(error)
+        match encode(&self.desktop, echo, packet) {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                reply.fill(0);
+                Err(error)
+            }
         }
     }
 }
@@ -142,9 +179,23 @@ mod tests {
         assert_eq!(frame[tile..tile + 4], COLORS[3]);
 
         let mut bad = BootScene::Enter.request();
-        bad[7] = 2;
+        bad[7] = 4;
         assert_eq!(render_boot_reply(&bad, &mut reply), Err(Error::InvalidRequest));
         assert!(reply.iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
+    fn persistent_reply_rejects_text_before_enter_and_keeps_the_echo() {
+        let mut desktop = BootDesktop::new().unwrap();
+        let mut reply = [0; BOOT_REPLY_BYTES];
+        assert_eq!(desktop.step(BootScene::TextA, &mut reply), Err(Error::InvalidRequest));
+        desktop.step(BootScene::Begin, &mut reply).unwrap();
+        desktop.step(BootScene::Enter, &mut reply).unwrap();
+        let opened = reply;
+        desktop.step(BootScene::TextA, &mut reply).unwrap();
+        assert_ne!(reply, opened);
+        assert_eq!(desktop.terminal.0.as_ref().unwrap().rows().last(), Some(&['A'][..]));
+        validate_boot_reply(&reply).unwrap();
     }
 
     #[test]

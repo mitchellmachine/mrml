@@ -210,6 +210,7 @@ impl BootDisplay {
             Self::Fat32 => "fat32-pass",
             Self::Desktop(crate::qemu_display::DesktopScene::Idle) => "desktop-pixels-120x70",
             Self::Desktop(crate::qemu_display::DesktopScene::Enter) => "desktop-enter-pixels-120x70",
+            Self::Desktop(crate::qemu_display::DesktopScene::Persistent) => "desktop-persistent-pixels-120x70",
         }
     }
 }

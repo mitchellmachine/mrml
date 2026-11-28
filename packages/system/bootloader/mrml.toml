@@ -137,6 +137,9 @@ name = "vmx-desktop-monitor"
 name = "vmx-desktop-input-probe"
 
 [[feature]]
+name = "vmx-desktop-persistent-probe"
+
+[[feature]]
 name = "vmx-kernel-payload"
 
 [[feature]]
@@ -243,6 +246,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["vmx-desktop-input-probe", "vmx-desktop-monitor", "vmx-kernel-monitor", "vmx-root-probe"]
 name = "vmx_desktop_input_monitor"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["vmx-desktop-monitor", "vmx-desktop-persistent-probe", "vmx-kernel-monitor", "vmx-root-probe"]
+name = "vmx_desktop_persistent_monitor"
 targets = ["UEFI"]
 
 [[feature_profile]]
