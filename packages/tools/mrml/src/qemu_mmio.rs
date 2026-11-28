@@ -66,15 +66,28 @@ pub(super) fn release_q35_fixture(
     inspect_q35(child, Some(release), isolated, post, cold, PausedCheck::Resources)
 }
 
-pub(super) fn capture_paused_display(child: &mut Child) -> Result<(), String> {
+pub(super) fn capture_paused_display(
+    child: &mut Child,
+    keyboard: Option<(&std::path::Path, &[u8])>,
+) -> Result<(), String> {
     let mut input = child.stdin.take().ok_or("missing QMP display input")?;
     let output = child.stdout.take().ok_or("missing QMP display reply")?;
     let (send, receive) = mpsc::sync_channel(1);
+    let keyboard = keyboard.map(|(path, trace)| (path.to_owned(), trace.to_vec()));
+    let timeout = if keyboard.is_some() { 12 } else { 5 };
     let worker = std::thread::Builder::new().spawn(move || {
         let mut reader = BufReader::new(output);
         let result = (|| {
             qmp_write(&mut input, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
             ack(&mut reader, "{\"return\": {}, \"id\": 71}")?;
+            if let Some((path, trace)) = &keyboard {
+                send_desktop_key(&mut input, &mut reader, "ret", 74)?;
+                let second = trace.iter().position(|&byte| byte == 0xcb)
+                    .ok_or("missing desktop second-key rendezvous")?;
+                wait_keyboard_trace(path, &trace[..=second])?;
+                send_desktop_key(&mut input, &mut reader, "a", 75)?;
+                wait_keyboard_trace(path, trace)?;
+            }
             qmp_write(&mut input, "{\"execute\":\"stop\",\"id\":72}\n")?;
             ack(&mut reader, "{\"return\": {}, \"id\": 72}")?;
             qmp_write(&mut input, "{\"execute\":\"screendump\",\"arguments\":{\"filename\":\"boot-display.ppm\"},\"id\":73}\n")?;
@@ -82,10 +95,39 @@ pub(super) fn capture_paused_display(child: &mut Child) -> Result<(), String> {
         })();
         let _ = send.send(result);
     }).map_err(|e| format!("QMP display worker: {e}"))?;
-    let result = receive.recv_timeout(Duration::from_secs(5))
+    let result = receive.recv_timeout(Duration::from_secs(timeout))
         .map_err(|_| "timed out reading QEMU display".to_owned())?;
     worker.join().map_err(|_| "QMP display worker panicked")?;
     result
+}
+
+fn send_desktop_key(
+    input: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+    qcode: &str,
+    id: u8,
+) -> Result<(), String> {
+    qmp_write(input, &format!(
+        "{{\"execute\":\"input-send-event\",\"arguments\":{{\"events\":[{{\"type\":\"key\",\"data\":{{\"down\":true,\"key\":{{\"type\":\"qcode\",\"data\":\"{qcode}\"}}}}}},{{\"type\":\"key\",\"data\":{{\"down\":false,\"key\":{{\"type\":\"qcode\",\"data\":\"{qcode}\"}}}}}}]}},\"id\":{id}}}\n"
+    ))?;
+    ack(reader, &format!("{{\"return\": {{}}, \"id\": {id}}}"))
+}
+
+fn wait_keyboard_trace(path: &std::path::Path, expected: &[u8]) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(4);
+    loop {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| file.take(256).read_to_end(&mut bytes))
+            .map_err(|error| format!("read desktop keyboard trace: {error}"))?;
+        if bytes == expected {
+            return Ok(());
+        }
+        if !expected.starts_with(&bytes) || std::time::Instant::now() >= deadline {
+            return Err(format!("desktop keyboard rendezvous failed: {bytes:02x?}"));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn inspect_q35(

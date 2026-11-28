@@ -195,6 +195,8 @@ fn persistent_desktop(
 ) -> Option<[u8; mrml_boot_frame::BOOT_REPLY_BYTES]> {
     use mrml_boot_frame::{BOOT_REPLY_BYTES, BootScene, validate_boot_reply};
     let guest = service.guest;
+    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
+    let mut keyboard = super::vmx_qemu_keyboard::QemuKeyboard::probe()?;
     ServiceLaunch::write_request(BootScene::Begin.request())?;
     guest.start(controller, controls, ticks)?;
     let bounds = HIGH + IMAGE as u64..guest.image_end;
@@ -210,7 +212,13 @@ fn persistent_desktop(
         controller.resume().ok()
     };
     // The same VMCS, EPT and guest stack are kept across both yields.
-    resume(BootScene::Enter)?;
+    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
+    let enter = keyboard.await_key(BootScene::Enter)?;
+    #[cfg(not(feature = "vmx-desktop-qemu-keyboard"))]
+    let enter = BootScene::Enter;
+    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
+    super::vmx_probe::trace(0xcd);
+    resume(enter)?;
     controller.park_boot_call_probe(bounds).ok()?;
     let entered: [u8; BOOT_REPLY_BYTES] = ServiceLaunch::read_reply()?;
     validate_boot_reply(&entered).ok()?;
@@ -218,7 +226,13 @@ fn persistent_desktop(
         return None;
     }
     super::vmx_probe::trace(0xcb);
-    ServiceLaunch::write_request(BootScene::TextA.request())?;
+    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
+    let text = keyboard.await_key(BootScene::TextA)?;
+    #[cfg(not(feature = "vmx-desktop-qemu-keyboard"))]
+    let text = BootScene::TextA;
+    #[cfg(feature = "vmx-desktop-qemu-keyboard")]
+    super::vmx_probe::trace(0xce);
+    ServiceLaunch::write_request(text.request())?;
     controller.reload_boot_probe_guest(guest.vmcs, guest.ept).ok()?;
     controller.arm_boot_probe_timer(controls, ticks).ok()?;
     controller.resume().ok()?;

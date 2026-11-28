@@ -611,6 +611,9 @@ fn with_diagnostic_framebuffer<T>(
 #[cfg(feature = "vmx-kernel-monitor")]
 mod vmx_kernel_guest;
 
+#[cfg(feature = "vmx-desktop-qemu-keyboard")]
+mod vmx_qemu_keyboard;
+
 #[cfg(any(
     feature = "vmx-kernel-payload",
     all(feature = "vmx-kernel-monitor", not(feature = "vmx-desktop-monitor"))

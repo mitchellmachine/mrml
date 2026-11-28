@@ -15,6 +15,7 @@ pub(super) enum DesktopScene {
     Idle,
     Enter,
     Persistent,
+    LiveKeyboard,
 }
 
 pub(super) fn verify_desktop_screen(
@@ -69,7 +70,7 @@ fn verify_desktop(bytes: &[u8], scene: DesktopScene) -> Result<(usize, usize), &
             "b3406f001edef3b09a9e7a85ae53d6e71445daf1f9096660b1d17d826941bbde4",
             "45183f169d842ed2cee62f7786ab50cbf3ad0a7fdad7c35b85227ef042951cb",
         ),
-        DesktopScene::Persistent => concat!(
+        DesktopScene::Persistent | DesktopScene::LiveKeyboard => concat!(
             "ef859ad1827bfa4fbe53df1101f75dbdd9cc65ec2e7849d08e21b214cf5d92f1",
             "2348fddb23c45c728f0e690f160e94eb164f32e93ee759ff79591608831502dc",
         ),

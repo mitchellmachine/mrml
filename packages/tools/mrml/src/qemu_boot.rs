@@ -211,6 +211,7 @@ impl BootDisplay {
             Self::Desktop(crate::qemu_display::DesktopScene::Idle) => "desktop-pixels-120x70",
             Self::Desktop(crate::qemu_display::DesktopScene::Enter) => "desktop-enter-pixels-120x70",
             Self::Desktop(crate::qemu_display::DesktopScene::Persistent) => "desktop-persistent-pixels-120x70",
+            Self::Desktop(crate::qemu_display::DesktopScene::LiveKeyboard) => "desktop-live-keyboard-pixels-120x70",
         }
     }
 }
@@ -552,8 +553,19 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
     let post_check = map_only_marker.and_then(Q35FixtureCase::post_check);
     let mut released = false;
     let mut fixture_bar = None;
+    let live_keyboard = matches!(verify_display, Some(BootDisplay::Desktop(crate::qemu_display::DesktopScene::LiveKeyboard)));
+    let mut keyboard_captured = false;
     loop {
         if let Ok(bytes) = fs::read(trace) {
+            if live_keyboard && !keyboard_captured && bytes.last() == Some(&0xca) && expected.starts_with(&bytes) {
+                if let Err(error) = crate::qemu_mmio::capture_paused_display(&mut child, Some((trace, expected))) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+                keyboard_captured = true;
+                continue;
+            }
             if let Some(valid) = release {
                 let ready = if matches!(valid, 0xad..=0xaf | 0xb4 | 0xb5 | 0xb7 | 0xba | 0xbc..=0xbf) {
                     let index = expected
@@ -638,8 +650,14 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                 let no_remapper = map_only_marker == Some(Q35FixtureCase::NoRemapper);
                 let screen = display_dir.zip(verify_display).map(|(dir, display)| {
                     let path = dir.join("boot-display.ppm");
-                    crate::qemu_mmio::capture_paused_display(&mut child)
-                        .and_then(|()| display.verify(&path))
+                    let captured = if live_keyboard && keyboard_captured {
+                        Ok(())
+                    } else if live_keyboard {
+                        Err("Desktop boot finished without the QMP keyboard exchange".into())
+                    } else {
+                        crate::qemu_mmio::capture_paused_display(&mut child, None)
+                    };
+                    captured.and_then(|()| display.verify(&path))
                         .map(|(width, height)| (display, width, height))
                 });
                 let evidence = (verify_q35 && !released).then(|| {
