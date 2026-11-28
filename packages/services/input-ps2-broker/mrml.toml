@@ -55,10 +55,24 @@ package = "org.mrml.service.input-ps2-mouse"
 scope = "compile"
 test_only = true
 
+[[dependency]]
+alias = "mrml_hardware_supervisor"
+compile_name = "mrml-hardware-supervisor"
+package = "org.mrml.service.hardware-supervisor"
+scope = "compile"
+test_only = true
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+test_only = true
+
 [[build_input]]
 fingerprint = "fnv1a64:22f5798d3dc27e3d"
 id = "external-command.run.qemu-system-x86-64.1"
 kind = "external-command"
-line = 121
+line = 259
 path = "packages/services/input-ps2-broker/src/qemu.rs"
-reason = "Opt-in test sends synthetic input only to a fresh private QEMU i8042 emulator; no host input devices are opened or passed through."
+reason = "Opt-in test uses synthetic PS/2 input and reads emulated PCI configuration in a fresh private QEMU guest; no physical devices are passed through."

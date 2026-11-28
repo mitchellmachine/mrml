@@ -17,7 +17,10 @@ drivers are not shared across controllers. A failed driver launch has no
 native fallback. Removal or replacement stops routing and retires that
 controller's VM before reusing its address. Unrelated controllers stay put.
 
-This policy has a host-tested service core. Live inventory transport and
+An opt-in QEMU fixture enumerates two real emulated xHCI functions and
+checks that each produces one distinct launch request. A second scan
+retains both. It records requests and does not launch driver guests.
+Production inventory transport and
 the platform adapter that binds each launch to independently admitted
 controller, interrupt, and DMA capabilities are not wired yet. Inventory
 data itself never grants those capabilities.

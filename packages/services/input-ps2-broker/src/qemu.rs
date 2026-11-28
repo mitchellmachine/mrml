@@ -1,7 +1,12 @@
 //! Opt-in test of the emulated controller, never the host's physical ports.
 use super::*;
+use mrml_hardware_supervisor::{
+    DriverMicrovmManager, HardwareSupervisor, PciInventoryProvider, PciObservation, PciSnapshot,
+    XhciLaunch,
+};
 use mrml_input_ps2_keyboard::{KeyboardEvent, Ps2Keyboard};
 use mrml_input_ps2_mouse::Ps2Mouse;
+use mrml_kernel::DeviceAddress;
 use std::{
     fs,
     io::{self, BufRead, BufReader, Write},
@@ -11,6 +16,7 @@ use std::{
     string::String,
     thread,
     time::{Duration, Instant},
+    vec::Vec,
 };
 
 struct Guest(Child);
@@ -101,7 +107,7 @@ impl ControllerSource for Channel {
 
 #[test]
 #[ignore = "requires the local QEMU emulator"]
-fn emulated_i8042_routes_keyboard_and_mouse_to_distinct_decoders() {
+fn emulated_i8042_and_pci_inventory_reach_separate_services() {
     let dir = std::env::temp_dir().join(std::format!("mrml-ps2-{}", std::process::id()));
     fs::create_dir(&dir).unwrap();
     let result = run(&dir);
@@ -110,6 +116,138 @@ fn emulated_i8042_routes_keyboard_and_mouse_to_distinct_decoders() {
     }
     fs::remove_dir(&dir).unwrap();
     result.unwrap();
+}
+
+fn emulated_pci_read(
+    qtest: &mut Channel,
+    device: u8,
+    function: u8,
+    register: u8,
+) -> io::Result<u32> {
+    let selector =
+        0x8000_0000 | (u32::from(device) << 11) | (u32::from(function) << 8) | u32::from(register);
+    qtest.qtest(&std::format!("outl 0xcf8 {selector:#x}"))?;
+    let reply = qtest.qtest("inl 0xcfc")?;
+    let value = reply
+        .trim()
+        .strip_prefix("OK 0x")
+        .ok_or_else(|| io::Error::other("invalid emulated PCI response"))?;
+    u32::from_str_radix(value, 16).map_err(io::Error::other)
+}
+
+struct EmulatedInventory<'a> {
+    qtest: &'a mut Channel,
+    sequence: u64,
+    saved: Vec<PciObservation>,
+}
+
+impl PciInventoryProvider for EmulatedInventory<'_> {
+    type Error = io::Error;
+
+    fn snapshot(&mut self) -> io::Result<PciSnapshot<'_>> {
+        let mut observed = Vec::new();
+        // This fixture fixes all devices on root bus zero. Refuse rather
+        // than certify a partial inventory if a PCI bridge appears.
+        for device in 0..32 {
+            let id = emulated_pci_read(self.qtest, device, 0, 0)?;
+            if id as u16 == u16::MAX {
+                continue;
+            }
+            let header = emulated_pci_read(self.qtest, device, 0, 0x0c)?;
+            let functions = if header & (1 << 23) != 0 { 8 } else { 1 };
+            for function in 0..functions {
+                let id = if function == 0 {
+                    id
+                } else {
+                    emulated_pci_read(self.qtest, device, function, 0)?
+                };
+                if id as u16 == u16::MAX {
+                    continue;
+                }
+                let class_revision = emulated_pci_read(self.qtest, device, function, 8)?;
+                if class_revision >> 16 == 0x0604 {
+                    return Err(io::Error::other("non-flat emulation fixture"));
+                }
+                observed.push(PciObservation {
+                    address: DeviceAddress::new(0, 0, device, function)
+                        .map_err(|_| io::Error::other("invalid emulated PCI address"))?,
+                    vendor: id as u16,
+                    device: (id >> 16) as u16,
+                    class_revision,
+                    // No hotplug in this private emulator lifetime.
+                    incarnation: 1,
+                });
+            }
+        }
+        self.qtest.qtest("outl 0xcf8 0")?;
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("snapshot counter exhausted"))?;
+        self.saved = observed;
+        Ok(PciSnapshot {
+            sequence: self.sequence,
+            devices: &self.saved,
+        })
+    }
+}
+
+/// Records requested launches only. This fixture never starts driver
+/// guests or grants a register/interrupt/DMA capability.
+#[derive(Default)]
+struct LaunchRecorder(Vec<XhciLaunch>);
+
+impl DriverMicrovmManager for LaunchRecorder {
+    type Instance = usize;
+    type Error = ();
+
+    fn launch_xhci(&mut self, request: XhciLaunch) -> Result<usize, ()> {
+        self.0.push(request);
+        Ok(self.0.len())
+    }
+
+    fn retire_xhci(&mut self, _: &mut usize) -> Result<(), ()> {
+        panic!("fixed QEMU fixture must retain both controllers")
+    }
+}
+
+fn verify_pci_supervisor(qtest: &mut Channel) -> io::Result<()> {
+    let mut inventory = EmulatedInventory {
+        qtest,
+        sequence: 0,
+        saved: Vec::new(),
+    };
+    let mut manager = LaunchRecorder::default();
+    let mut supervisor = HardwareSupervisor::<usize, 2>::default();
+    let first = supervisor
+        .refresh(&mut inventory, &mut manager)
+        .ok()
+        .ok_or_else(|| io::Error::other("initial emulated inventory refused"))?;
+    assert_eq!(first.started, 2);
+    for (request, expected_slot) in manager.0.iter().zip([5, 6]) {
+        let controller = request.controller();
+        assert_eq!(
+            controller.address,
+            DeviceAddress::new(0, 0, expected_slot, 0).unwrap()
+        );
+        assert_eq!(
+            (
+                controller.vendor,
+                controller.device,
+                controller.class_revision >> 8
+            ),
+            (0x1b36, 0x000d, 0x0c0330)
+        );
+    }
+    let second = supervisor
+        .refresh(&mut inventory, &mut manager)
+        .ok()
+        .ok_or_else(|| io::Error::other("second emulated inventory refused"))?;
+    assert_eq!(
+        (second.retained, second.started, manager.0.len()),
+        (2, 0, 2)
+    );
+    Ok(())
 }
 
 fn run(dir: &Path) -> io::Result<()> {
@@ -134,6 +272,12 @@ fn run(dir: &Path) -> io::Result<()> {
                 "unix:qmp,server=on,wait=off",
                 "-qtest",
                 "unix:qtest,server=on,wait=off",
+            ])
+            .args([
+                "-device",
+                "qemu-xhci,addr=05.0",
+                "-device",
+                "qemu-xhci,addr=06.0",
             ])
             .current_dir(dir)
             .stdin(Stdio::null())
@@ -204,5 +348,5 @@ fn run(dir: &Path) -> io::Result<()> {
     }
     assert_eq!(broker.next_keyboard(), None);
     assert_eq!(broker.next_mouse(), None);
-    Ok(())
+    verify_pci_supervisor(&mut qtest)
 }
