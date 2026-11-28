@@ -64,7 +64,8 @@ pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{
     PassivePciPage, PassivePciPageError, PlatformMmioError, PlatformMmioManifest,
     PlatformMmioPurpose, PlatformMmioRequirement,
-    VerifiedPlatformMmio, check_boot_mmio_cpu_policy, extend_vtd_mmio_requirement,
+    StableXhciPciHeader, VerifiedPlatformMmio, XhciHeaderSampleError, check_boot_mmio_cpu_policy,
+    extend_vtd_mmio_requirement, sample_stable_xhci_pci_header,
     Q35FixtureTopology, q35_fixture_activation_mappings, q35_fixture_bar_preflight_mappings, verify_q35_activation_mmio, q35_fixture_probe_mappings, q35_fixture_shutdown_mappings, verify_active_platform_mmio,
 };
 pub use privilege_stack::{

@@ -2,7 +2,7 @@
 //! This module does not read hardware, create mappings, or grant ownership.
 
 use super::inspect_bar0;
-use mrml_kernel::arch::x86_64::PassivePciPage;
+use mrml_kernel::arch::x86_64::{PassivePciPage, XhciHeaderSampleError, sample_stable_xhci_pci_header};
 
 pub const BOOT_XHCI_RECORD_BYTES: usize = 40;
 const RECORD_MAGIC: &[u8; 8] = b"MRMLXHCI";
@@ -220,36 +220,23 @@ impl RetainedBootXhci {
 
     fn sample_pci_words(
         self,
-        mut read: impl FnMut(u16) -> Option<u32>,
+        read: impl FnMut(u16) -> Option<u32>,
     ) -> Result<PassivePciHeader, PassiveHeaderError> {
-        let mut word = |offset| read(offset).ok_or(PassiveHeaderError::Unreadable);
-        let mut sample = || {
-            if word(0)? != self.function.vendor_device || word(8)? != self.function.class_revision {
-                return Err(PassiveHeaderError::ChangedFunction);
-            }
-            let command = word(4)? as u16;
-            let header = ((word(0x0c)? >> 16) & 0xff) as u8;
-            if command == u16::MAX || command & 2 == 0 || header & 0x7f != 0 {
-                return Err(PassiveHeaderError::InvalidHeader);
-            }
-            let low = word(0x10)?;
-            let high = match low & 7 {
-                0 => 0,
-                4 => word(0x14)?,
-                _ => return Err(PassiveHeaderError::InvalidHeader),
-            };
-            Ok((command, header, low, high))
-        };
-        let first = sample()?;
-        if first != sample()? {
-            return Err(PassiveHeaderError::Unstable);
-        }
-        let (command, _, low, high) = first;
-        let base = (u64::from(high) << 32) | u64::from(low & !15);
-        if base != self.bar_base {
+        let sample = sample_stable_xhci_pci_header(
+            self.function.vendor_device,
+            self.function.class_revision,
+            read,
+        )
+        .map_err(|error| match error {
+            XhciHeaderSampleError::Unreadable => PassiveHeaderError::Unreadable,
+            XhciHeaderSampleError::ChangedFunction => PassiveHeaderError::ChangedFunction,
+            XhciHeaderSampleError::InvalidHeader => PassiveHeaderError::InvalidHeader,
+            XhciHeaderSampleError::Unstable => PassiveHeaderError::Unstable,
+        })?;
+        if sample.bar_base() != self.bar_base {
             return Err(PassiveHeaderError::ChangedBar);
         }
-        Ok(PassivePciHeader { command })
+        Ok(PassivePciHeader { command: sample.command })
     }
 
     /// Compare copied facts only. A matching extent is not safe MMIO
@@ -540,6 +527,8 @@ mod tests {
         for (at, value, second, error) in [
             (8, Some(0x0c03_3001), true, ChangedFunction),
             (4, Some(2), true, Unstable),
+            (0x0c, Some(0x0080_0000), true, Unstable),
+            (0x14, Some(1), true, Unstable),
             (4, Some(0xffff), false, InvalidHeader),
             (0x0c, Some(0x0001_0000), false, InvalidHeader),
             (0x10, Some(BASE as u32 | 1), false, InvalidHeader),

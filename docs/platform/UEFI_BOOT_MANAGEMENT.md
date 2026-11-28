@@ -282,7 +282,11 @@ sampling. No live physical read is wired to this verifier. The sealed Q35
 regression runs the same structure check on its fixed emulated endpoint
 before the host release. It logs separate results for a verified read-only
 leaf and a writable endpoint rejected by the passive path. The writable
-shutdown fixtures still have their own independent checks and release.
+shutdown fixtures still have their own independent checks and release. The
+read-only Q35 fixture uses the same bounded double sampler as the retained
+boot record check. A changed identity, command, header type or BAR stops the
+sample before any remapper, bridge or controller register read. QMP checks the
+emulated device independently. This is not a physical ECAM test.
 
 The signed QEMU/OVMF negative control boots the same sealed test release
 from a read-only virtual disk attached directly to the sole xHCI candidate.

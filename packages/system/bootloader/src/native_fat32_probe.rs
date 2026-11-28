@@ -207,7 +207,7 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         u8,
     )>,
 ) {
-    use mrml_kernel::arch::x86_64::VtdRegisterLayout;
+    use mrml_kernel::arch::x86_64::{VtdRegisterLayout, sample_stable_xhci_pci_header};
     let [Some(drhd), Some(ecam), bridge, xhci] =
         mappings.map(|mapping| mapping.map(|page| page.virtual_start().get() as usize))
     else {
@@ -216,18 +216,48 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
     };
     // SAFETY: the caller establishes the current, exact, alias-free UC leaves
     // and release. Only fixed aligned widths inside the proven apertures.
-    let (version, cap, ecap, status, pci_id, pci_command, pci_class, header, bar0, bar1) = unsafe {
+    let ((pci_id, pci_command, pci_class, header, bar0, bar1), version, cap, ecap, status) = unsafe {
+        let pci = if shutdown {
+            // The separately authorized writable fixture retains its original
+            // sample and access widths; it never enters the passive sampler.
+            (
+                core::ptr::read_volatile(ecam as *const u32),
+                core::ptr::read_volatile((ecam + 0x04) as *const u16),
+                core::ptr::read_volatile((ecam + 0x08) as *const u32),
+                core::ptr::read_volatile((ecam + 0x0e) as *const u8),
+                core::ptr::read_volatile((ecam + 0x10) as *const u32),
+                core::ptr::read_volatile((ecam + 0x14) as *const u32),
+            )
+        } else {
+            let sample = sample_stable_xhci_pci_header(0x000d_1b36, 0x0c03_3001, |offset| {
+                match offset {
+                    0x04 => Some(u32::from(core::ptr::read_volatile((ecam + 4) as *const u16))),
+                    0x0c => Some(u32::from(core::ptr::read_volatile((ecam + 14) as *const u8)) << 16),
+                    0 | 8 | 0x10 | 0x14 => {
+                        Some(core::ptr::read_volatile((ecam + usize::from(offset)) as *const u32))
+                    }
+                    _ => None,
+                }
+            });
+            let Ok(sample) = sample else {
+                // Refuse before touching the remapper, bridge or controller BAR.
+                trace(0xdb);
+                return;
+            };
+            if sample.bar0 & 0xf != 4
+                || (bridge.is_some() && (sample.bar0 != 0x8120_0004 || sample.bar1 != 0))
+            {
+                trace(0xdb);
+                return;
+            }
+            (0x000d_1b36, sample.command, 0x0c03_3001, sample.header_type, sample.bar0, sample.bar1)
+        };
         (
-            core::ptr::read_volatile((drhd) as *const u32),
+            pci,
+            core::ptr::read_volatile(drhd as *const u32),
             core::ptr::read_volatile((drhd + 0x08) as *const u64),
             core::ptr::read_volatile((drhd + 0x10) as *const u64),
             core::ptr::read_volatile((drhd + 0x1c) as *const u32),
-            core::ptr::read_volatile(ecam as *const u32),
-            core::ptr::read_volatile((ecam + 0x04) as *const u16),
-            core::ptr::read_volatile((ecam + 0x08) as *const u32),
-            core::ptr::read_volatile((ecam + 0x0e) as *const u8),
-            core::ptr::read_volatile((ecam + 0x10) as *const u32),
-            core::ptr::read_volatile((ecam + 0x14) as *const u32),
         )
     };
     if version != 0x10

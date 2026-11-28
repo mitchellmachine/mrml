@@ -16,6 +16,66 @@ pub enum PlatformMmioError {
     CpuProtection,
 }
 
+/// A copied observation, not proof of a safe mapping or access authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StableXhciPciHeader {
+    pub command: u16,
+    pub header_type: u8,
+    pub bar0: u32,
+    pub bar1: u32,
+}
+
+impl StableXhciPciHeader {
+    pub const fn bar_base(self) -> u64 {
+        ((self.bar1 as u64) << 32) | ((self.bar0 & !15) as u64)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum XhciHeaderSampleError {
+    Unreadable,
+    ChangedFunction,
+    InvalidHeader,
+    Unstable,
+}
+
+/// Read two fixed PCI header samples from a caller-verified read-only page.
+/// Status changes are not compared; the command word and full BAR are.
+/// Mismatched vendor or class stops before reading the BAR of that sample.
+pub fn sample_stable_xhci_pci_header(
+    vendor_device: u32,
+    class_revision: u32,
+    mut read: impl FnMut(u16) -> Option<u32>,
+) -> Result<StableXhciPciHeader, XhciHeaderSampleError> {
+    use XhciHeaderSampleError::*;
+    if matches!(vendor_device as u16, 0 | u16::MAX) || class_revision >> 8 != 0x0c0330 {
+        return Err(ChangedFunction);
+    }
+    let mut word = |offset| read(offset).ok_or(Unreadable);
+    let mut sample = || {
+        if word(0)? != vendor_device || word(8)? != class_revision {
+            return Err(ChangedFunction);
+        }
+        let command = word(4)? as u16;
+        let header_type = (word(0x0c)? >> 16) as u8;
+        if command == u16::MAX || command & 2 == 0 || header_type & 0x7f != 0 {
+            return Err(InvalidHeader);
+        }
+        let bar0 = word(0x10)?;
+        let bar1 = match bar0 & 7 {
+            0 => 0,
+            4 => word(0x14)?,
+            _ => return Err(InvalidHeader),
+        };
+        Ok(StableXhciPciHeader { command, header_type, bar0, bar1 })
+    };
+    let first = sample()?;
+    if first != sample()? {
+        return Err(Unstable);
+    }
+    Ok(first)
+}
+
 /// Exact accepted layouts for the signed, emulator-only q35 fixture.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Q35FixtureTopology {
