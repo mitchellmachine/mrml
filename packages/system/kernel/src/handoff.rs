@@ -11,6 +11,7 @@ pub const MAX_HANDOFF_REGIONS: usize = 128;
 pub const MAX_HANDOFF_MADT_BYTES: usize = 8 * 1024;
 pub const MAX_HANDOFF_DMA_ACPI_TABLE_BYTES: usize = 4 * 1024;
 const DMA_ACPI_LENGTH_BYTES: usize = 4;
+pub const BOOT_USB_PCI_RECORD_BYTES: usize = 40;
 pub const HANDOFF_SERVICE_BYTES: usize = 160;
 pub const HANDOFF_APPLICATION_BYTES: usize = 160;
 pub const HANDOFF_RECOVERY_STATE_BYTES: usize = 40;
@@ -24,7 +25,8 @@ pub const MAX_HANDOFF_BYTES: usize = HANDOFF_HEADER_BYTES
     + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES
     + INSTALLED_RECOVERY_SATA_ROUTE_BYTES
     + DMA_ACPI_LENGTH_BYTES
-    + 2 * MAX_HANDOFF_DMA_ACPI_TABLE_BYTES;
+    + 2 * MAX_HANDOFF_DMA_ACPI_TABLE_BYTES
+    + BOOT_USB_PCI_RECORD_BYTES;
 
 const FLAG_SECURE_BOOT: u16 = 1;
 const FLAG_MEASURED_BOOT: u16 = 1 << 1;
@@ -39,6 +41,7 @@ const FLAG_TOTAL_MICROVM_ONCE: u16 = 1 << 9;
 const FLAG_INSTALLED_RECOVERY_IDENTITY: u16 = 1 << 10;
 const FLAG_INSTALLED_RECOVERY_SATA_ROUTE: u16 = 1 << 11;
 const FLAG_DMA_ACPI: u16 = 1 << 12;
+const FLAG_USB_PCI_DIAGNOSTIC: u16 = 1 << 13;
 const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_MEASURED_BOOT
     | FLAG_ROLLBACK_PROTECTED
@@ -51,7 +54,8 @@ const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_TOTAL_MICROVM_ONCE
     | FLAG_INSTALLED_RECOVERY_IDENTITY
     | FLAG_INSTALLED_RECOVERY_SATA_ROUTE
-    | FLAG_DMA_ACPI;
+    | FLAG_DMA_ACPI
+    | FLAG_USB_PCI_DIAGNOSTIC;
 
 /// Authority-free, nonpersistent isolation overlay requested by the trusted
 /// loader for this boot. Runtime admission must still prove that Total mode is
@@ -412,6 +416,7 @@ pub struct BootHandoff {
     madt_offset: usize,
     madt_length: usize,
     dma_acpi_lengths: Option<(usize, usize)>,
+    usb_pci_record: Option<[u8; BOOT_USB_PCI_RECORD_BYTES]>,
     ap_trampoline: Option<u64>,
     ap_stack_arena: Option<u64>,
     service: Option<ServiceLaunch>,
@@ -456,6 +461,12 @@ impl BootHandoff {
             encoded.get(start..start + dmar)?,
             encoded.get(start + dmar..start + dmar + mcfg)?,
         ))
+    }
+
+    /// Copied, syntactically checked diagnostic bytes. They do not prove boot
+    /// origin, hardware ownership, a usable mapping, or DMA containment.
+    pub const fn usb_pci_record(&self) -> Option<&[u8; BOOT_USB_PCI_RECORD_BYTES]> {
+        self.usb_pci_record.as_ref()
     }
 
     pub const fn ap_trampoline(&self) -> Option<u64> {
@@ -564,7 +575,12 @@ impl BootHandoff {
         let madt_end = madt_offset
             .checked_add(madt_length)
             .ok_or(HandoffError::NonCanonical)?;
-        let (expected_length, dma_acpi_lengths) = if flags & FLAG_DMA_ACPI == 0 {
+        let usb_bytes =
+            usize::from(flags & FLAG_USB_PCI_DIAGNOSTIC != 0) * BOOT_USB_PCI_RECORD_BYTES;
+        if usb_bytes != 0 && flags & FLAG_DMA_ACPI == 0 {
+            return Err(HandoffError::NonCanonical);
+        }
+        let (acpi_end, dma_acpi_lengths) = if flags & FLAG_DMA_ACPI == 0 {
             (madt_end, None)
         } else {
             let trailer = input.get(madt_end..).ok_or(HandoffError::NonCanonical)?;
@@ -574,7 +590,7 @@ impl BootHandoff {
             let dmar = usize::from(read_u16(counts, 0));
             let mcfg = usize::from(read_u16(counts, 2));
             let end = DMA_ACPI_LENGTH_BYTES + dmar + mcfg;
-            if trailer.len() != end {
+            if trailer.len() != end + usb_bytes {
                 return Err(HandoffError::NonCanonical);
             }
             validate_dma_acpi_tables(
@@ -583,9 +599,21 @@ impl BootHandoff {
             )?;
             (madt_end + end, Some((dmar, mcfg)))
         };
+        let expected_length = acpi_end
+            .checked_add(usb_bytes)
+            .ok_or(HandoffError::NonCanonical)?;
         if encoded_length != expected_length || input.len() != expected_length {
             return Err(HandoffError::NonCanonical);
         }
+        let usb_pci_record = if usb_bytes != 0 {
+            let record: [u8; BOOT_USB_PCI_RECORD_BYTES] = input[acpi_end..expected_length]
+                .try_into()
+                .map_err(|_| HandoffError::NonCanonical)?;
+            validate_usb_pci_record(&record)?;
+            Some(record)
+        } else {
+            None
+        };
         if madt_length != 0 {
             let madt = &input[madt_offset..madt_end];
             if &madt[..4] != b"APIC"
@@ -790,6 +818,7 @@ impl BootHandoff {
             madt_offset,
             madt_length,
             dma_acpi_lengths,
+            usb_pci_record,
             ap_trampoline,
             ap_stack_arena,
             service,
@@ -840,6 +869,49 @@ pub fn append_boot_dma_acpi(
     output[length + 2..start].copy_from_slice(&(mcfg.len() as u16).to_le_bytes());
     output[start..start + dmar.len()].copy_from_slice(dmar);
     output[start + dmar.len()..total].copy_from_slice(mcfg);
+    Ok(total)
+}
+
+fn validate_usb_pci_record(record: &[u8; BOOT_USB_PCI_RECORD_BYTES]) -> Result<(), HandoffError> {
+    let base = read_u64(record, 24);
+    let bytes = u64::from(read_u32(record, 32));
+    if &record[..8] != b"MRMLXHCI"
+        || read_u16(record, 8) != 1
+        || usize::from(read_u16(record, 10)) != BOOT_USB_PCI_RECORD_BYTES
+        || record[36..] != [0; 4]
+        || matches!(read_u16(record, 16), 0 | u16::MAX)
+        || read_u32(record, 20) >> 8 != 0x0c0330
+        || base == 0
+        || bytes < 0x20
+        || !bytes.is_power_of_two()
+        || !base.is_multiple_of(bytes)
+        || base.checked_add(bytes).is_none()
+    {
+        return Err(HandoffError::NonCanonical);
+    }
+    Ok(())
+}
+
+/// Append an opt-in USB diagnostic observation after the checked DMA ACPI
+/// pair. No normal handoff producer calls this, and failure is nonmutating.
+pub fn append_boot_usb_pci_record(
+    length: usize,
+    record: &[u8; BOOT_USB_PCI_RECORD_BYTES],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    validate_usb_pci_record(record)?;
+    let total = length
+        .checked_add(BOOT_USB_PCI_RECORD_BYTES)
+        .filter(|&size| size <= output.len() && size <= MAX_HANDOFF_BYTES)
+        .ok_or(HandoffError::NonCanonical)?;
+    let handoff = BootHandoff::decode(&output[..length], |_| {})?;
+    if handoff.dma_acpi_lengths.is_none() || handoff.usb_pci_record.is_some() {
+        return Err(HandoffError::NonCanonical);
+    }
+    let flags = read_u16(output, 22) | FLAG_USB_PCI_DIAGNOSTIC;
+    output[22..24].copy_from_slice(&flags.to_le_bytes());
+    output[16..20].copy_from_slice(&(total as u32).to_le_bytes());
+    output[length..total].copy_from_slice(record);
     Ok(total)
 }
 
@@ -2242,6 +2314,65 @@ mod tests {
             BootHandoff::decode(&output, |_| panic!("must validate before emit")).err(),
             Some(HandoffError::NonCanonical)
         );
+    }
+
+    #[test]
+    fn boot_usb_pci_record_requires_companion_tables_and_canonical_final_slot() {
+        const WIRE: &[u8; BOOT_USB_PCI_RECORD_BYTES] =
+            b"MRMLXHCI\x01\x00\x28\x00\x00\x41\x00\x00\x36\x1b\x0d\x00\x01\x30\x03\x0c\x00\x00\x20\x81\x00\x00\x00\x00\x00\x40\x00\x00\x00\x00\x00\x00";
+        const ACPI_END: usize = THREE_REGION_BYTES + DMA_ACPI_LENGTH_BYTES + 48 + 44;
+        const END: usize = ACPI_END + BOOT_USB_PCI_RECORD_BYTES;
+        let base = valid_handoff();
+        let mut output = [0; END + BOOT_USB_PCI_RECORD_BYTES];
+        output[..base.len()].copy_from_slice(&base);
+        assert_eq!(
+            append_boot_usb_pci_record(base.len(), WIRE, &mut output),
+            Err(HandoffError::NonCanonical)
+        );
+        assert_eq!(&output[..base.len()], &base);
+
+        output[HANDOFF_HEADER_BYTES + HANDOFF_REGION_BYTES + 16] = MemoryKind::BootDma as u8;
+        let (mut dmar, mut mcfg) = ([0u8; 48], [0u8; 44]);
+        for (table, sig) in [(&mut dmar[..], b"DMAR"), (&mut mcfg[..], b"MCFG")] {
+            let length = table.len() as u32;
+            table[..4].copy_from_slice(sig);
+            table[4..8].copy_from_slice(&length.to_le_bytes());
+            table[9] = 0u8.wrapping_sub(table.iter().copied().fold(0, u8::wrapping_add));
+        }
+        assert_eq!(append_boot_dma_acpi(base.len(), &dmar, &mcfg, &mut output), Ok(ACPI_END));
+        assert!(BootHandoff::decode(&output[..ACPI_END], |_| {}).unwrap().usb_pci_record().is_none());
+        assert_eq!(append_boot_usb_pci_record(ACPI_END, WIRE, &mut output), Ok(END));
+        let decoded = BootHandoff::decode(&output[..END], |_| {}).unwrap();
+        assert_eq!(decoded.usb_pci_record(), Some(WIRE));
+        assert_eq!(decoded.dma_acpi(&output), Some((&dmar[..], &mcfg[..])));
+
+        let before = output;
+        assert_eq!(append_boot_usb_pci_record(END, WIRE, &mut output), Err(HandoffError::NonCanonical));
+        assert_eq!(output, before);
+        for length in [ACPI_END, END - 1, END + 1, output.len()] {
+            assert_eq!(
+                BootHandoff::decode(&output[..length], |_| panic!("must validate before emit")).err(),
+                Some(HandoffError::NonCanonical)
+            );
+        }
+        for index in [0, 8, 10, 21, 24, 33, 39] {
+            let mut corrupted = output;
+            corrupted[ACPI_END + index] ^= if index == 33 { 1 } else { 0xff };
+            assert_eq!(
+                BootHandoff::decode(&corrupted[..END], |_| panic!("must validate before emit")).err(),
+                Some(HandoffError::NonCanonical),
+                "wire byte {index}"
+            );
+        }
+        let mut bad_vendor = output;
+        bad_vendor[ACPI_END + 16..ACPI_END + 18].fill(0);
+        assert_eq!(BootHandoff::decode(&bad_vendor[..END], |_| panic!("invalid vendor")).err(),
+            Some(HandoffError::NonCanonical));
+        let mut orphan = output;
+        let flags = read_u16(&orphan, 22) & !FLAG_DMA_ACPI;
+        orphan[22..24].copy_from_slice(&flags.to_le_bytes());
+        assert_eq!(BootHandoff::decode(&orphan[..END], |_| panic!("orphan record")).err(),
+            Some(HandoffError::NonCanonical));
     }
 
     #[test]

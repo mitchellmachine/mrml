@@ -4,7 +4,7 @@
 use super::inspect_bar0;
 use mrml_kernel::arch::x86_64::{PassivePciPage, XhciHeaderSampleError, sample_stable_xhci_pci_header};
 
-pub const BOOT_XHCI_RECORD_BYTES: usize = 40;
+pub const BOOT_XHCI_RECORD_BYTES: usize = mrml_kernel::BOOT_USB_PCI_RECORD_BYTES;
 const RECORD_MAGIC: &[u8; 8] = b"MRMLXHCI";
 const RECORD_VERSION: u16 = 1;
 

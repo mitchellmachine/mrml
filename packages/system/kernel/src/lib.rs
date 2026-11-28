@@ -140,7 +140,7 @@ pub use handoff::{
     HANDOFF_HEADER_BYTES, HANDOFF_RECOVERY_STATE_BYTES, HANDOFF_REGION_BYTES,
     HANDOFF_SERVICE_BYTES, HandoffError, MAX_HANDOFF_BYTES, MAX_HANDOFF_DMA_ACPI_TABLE_BYTES,
     MAX_HANDOFF_MADT_BYTES, MAX_HANDOFF_REGIONS, RecoveryStateMetadata, ServiceLaunch,
-    append_boot_dma_acpi, encode_handoff,
+    BOOT_USB_PCI_RECORD_BYTES, append_boot_dma_acpi, append_boot_usb_pci_record, encode_handoff,
     encode_handoff_with_application, encode_handoff_with_madt, encode_handoff_with_recovery,
     encode_handoff_with_recovery_and_isolation,
     encode_handoff_with_recovery_isolation_and_installed,

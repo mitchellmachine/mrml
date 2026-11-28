@@ -287,6 +287,11 @@ read-only Q35 fixture uses the same bounded double sampler as the retained
 boot record check. A changed identity, command, header type or BAR stops the
 sample before any remapper, bridge or controller register read. QMP checks the
 emulated device independently. This is not a physical ECAM test.
+The boot handoff codec can carry one optional, canonical 40-byte version-1
+USB observation after the validated DMAR and MCFG pair. It rejects malformed
+or duplicate records and records without the table pair. The record grants no
+access. Normal boot emits no such record, and the sealed Q35 producer and
+consumer are not yet wired to this extension.
 
 The signed QEMU/OVMF negative control boots the same sealed test release
 from a read-only virtual disk attached directly to the sole xHCI candidate.
