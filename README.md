@@ -10,6 +10,13 @@ MRML is a public-benefit project. We dedicate it to the public domain under
 [CC0](LICENSE) to help people use computers securely and to build software
 that treats disabled people with dignity as first-class users.
 
+## Support MRML
+
+Donations are welcome. They would help speed up development and fund our
+goal of running daily defensive security scans with OpenAI Daybreak.
+If you'd like to donate, contact [mitchellrenouf@mrml.ca](mailto:mitchellrenouf@mrml.ca).
+MRML remains dedicated to the public domain under CC0.
+
 ## The Gigakernel and Total MicroVM isolation
 
 MRML's only operating mode for ordinary applications and services is
