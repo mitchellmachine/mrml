@@ -4,6 +4,10 @@
 //! Discovery policy runs here. The platform retains inventory and launch
 //! capabilities; neither a PCI address nor a probe record grants access.
 
+mod admission;
+
+pub use admission::{PreparedXhciRoute, XhciAdmissionError, XhciRouteBinding, XhciRouteCatalog};
+
 use mrml_kernel::DeviceAddress;
 
 const XHCI_CLASS: u32 = 0x0c_03_30;

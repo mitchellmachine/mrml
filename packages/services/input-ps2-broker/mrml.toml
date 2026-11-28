@@ -73,6 +73,6 @@ test_only = true
 fingerprint = "fnv1a64:22f5798d3dc27e3d"
 id = "external-command.run.qemu-system-x86-64.1"
 kind = "external-command"
-line = 259
+line = 313
 path = "packages/services/input-ps2-broker/src/qemu.rs"
 reason = "Opt-in test uses synthetic PS/2 input and reads emulated PCI configuration in a fresh private QEMU guest; no physical devices are passed through."

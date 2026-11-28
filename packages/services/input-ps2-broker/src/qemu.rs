@@ -2,11 +2,14 @@
 use super::*;
 use mrml_hardware_supervisor::{
     DriverMicrovmManager, HardwareSupervisor, PciInventoryProvider, PciObservation, PciSnapshot,
-    XhciLaunch,
+    XhciLaunch, XhciRouteBinding, XhciRouteCatalog,
 };
 use mrml_input_ps2_keyboard::{KeyboardEvent, Ps2Keyboard};
 use mrml_input_ps2_mouse::Ps2Mouse;
-use mrml_kernel::DeviceAddress;
+use mrml_kernel::{
+    CapabilitySpace, DeviceAddress, IsolationAdmissionTable, IsolationMode, IsolationPlacement,
+    IsolationServiceSpec, ObjectId, Rights, TotalMicrovmClass,
+};
 use std::{
     fs,
     io::{self, BufRead, BufReader, Write},
@@ -247,6 +250,57 @@ fn verify_pci_supervisor(qtest: &mut Channel) -> io::Result<()> {
         (second.retained, second.started, manager.0.len()),
         (2, 0, 2)
     );
+    verify_prepared_routes(&manager.0)
+}
+
+fn verify_prepared_routes(requests: &[XhciLaunch]) -> io::Result<()> {
+    let mut caps = CapabilitySpace::<2>::new();
+    // Expected identities and domains come from the fixture, not discovery.
+    let entries = [5u8, 6].map(|device| {
+        let object = ObjectId(u64::from(device));
+        XhciRouteBinding {
+            controller: PciObservation {
+                address: DeviceAddress::new(0, 0, device, 0).unwrap(),
+                vendor: 0x1b36,
+                device: 0x000d,
+                class_revision: 0x0c03_3001,
+                incarnation: 1,
+            },
+            device_object: object,
+            device_control: caps.insert(object, Rights::CONTROL).unwrap(),
+            spec: IsolationServiceSpec::new(
+                ObjectId(100 + u64::from(device)),
+                ObjectId(42),
+                1,
+                1,
+                1,
+                1,
+                TotalMicrovmClass::MicrovmEligible,
+                IsolationPlacement::Microvm,
+            )
+            .unwrap(),
+        }
+    });
+    let catalog = XhciRouteCatalog::new(&entries).unwrap();
+    let mut admission =
+        IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, 1, 1).unwrap();
+    let [a, b] = requests else {
+        return Err(io::Error::other("expected two xHCI requests"));
+    };
+    let (_, a) = catalog
+        .prepare(*a, &mut admission, &caps)
+        .unwrap()
+        .into_parts();
+    let (_, b) = catalog
+        .prepare(*b, &mut admission, &caps)
+        .unwrap()
+        .into_parts();
+    assert_eq!(
+        (a.spec().domain(), b.spec().domain()),
+        (ObjectId(105), ObjectId(106))
+    );
+    a.cancel(&mut admission).unwrap();
+    b.cancel(&mut admission).unwrap();
     Ok(())
 }
 

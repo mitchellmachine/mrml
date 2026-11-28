@@ -20,7 +20,12 @@ controller's VM before reusing its address. Unrelated controllers stay put.
 An opt-in QEMU fixture enumerates two real emulated xHCI functions and
 checks that each produces one distinct launch request. A second scan
 retains both. It records requests and does not launch driver guests.
-Production inventory transport and
+A separate admission adapter now matches each request against an
+independently supplied controller binding and live control capability,
+rejects descriptor or incarnation changes, and prepares only a distinct
+Total MicroVM route in the existing kernel table. It grants no device
+mapping and starts no guest. The QEMU test verifies both requests prepare
+separate domains against a fixed test catalog. Production inventory transport and
 the platform adapter that binds each launch to independently admitted
 controller, interrupt, and DMA capabilities are not wired yet. Inventory
 data itself never grants those capabilities.
