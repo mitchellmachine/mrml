@@ -103,6 +103,8 @@ impl Case {
                 && report.lines().any(|line| line.starts_with("xhci map ECAM seg=0000 0xe0000000..0xf0000000: "))
                 && report.lines().any(|line| line.starts_with("xhci map DRHD routed 0xfed90000..0xfed91000: "))
                 && report.lines().any(|line| line.starts_with("xhci map PCI page 0xe0030000..0xe0031000: "))
+                && report.lines().filter(|line| line.starts_with("xhci DXE ECAM window=") && line.contains(" page=") && !line.contains("not-queried")).count() == 1
+                && report.lines().filter(|line| line.starts_with("xhci DXE DRHD routed 0xfed90000: ") && !line.ends_with("not-queried")).count() == 1
                 && report.lines().any(|line| {
                     (line.starts_with("xhci map ECAM ") || line.starts_with("xhci map DRHD "))
                         && matches!(line.rsplit_once(": ").map(|(_, state)| state), Some("absent" | "non-mmio" | "partial-mmio"))

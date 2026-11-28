@@ -9,6 +9,8 @@ use mrml_uefi::{
     MAX_NORMALIZED_REGIONS, Status, SystemTable,
 };
 
+use mrml_uefi::dxe_mmio::{DxeMmioError, dxe_boot_services_contains, inspect_dxe_mmio};
+
 const PAGE: usize = 4096;
 const MAP_PAGES: usize = MAX_MEMORY_MAP_BYTES.div_ceil(PAGE);
 
@@ -17,6 +19,40 @@ pub(super) struct Tables {
     dmar: Result<DmarTopology<8, 64>, TableError<DmarError>>,
     regions: [MemoryRegion; MAX_NORMALIZED_REGIONS],
     region_count: Option<usize>,
+    dxe: DxeEvidence,
+}
+
+type DxeResult = Result<(), DxeMmioError>;
+
+#[derive(Default)]
+struct DxeEvidence {
+    ecam: Option<DxeResult>,
+    page: Option<DxeResult>,
+    drhd: [Option<DxeResult>; 8],
+}
+
+fn dxe_label(value: Option<DxeResult>) -> &'static str {
+    match value {
+        Some(Ok(())) => "mmio-uc-capable",
+        Some(Err(DxeMmioError::Unavailable)) => "unavailable",
+        Some(Err(DxeMmioError::MalformedTable)) => "table-unverified",
+        Some(Err(DxeMmioError::NotUncacheableMmio)) => "not-mmio-uc-capable",
+        Some(Err(DxeMmioError::QueryFailed)) => "query-failed",
+        Some(Err(_)) => "range-unverified",
+        None => "not-queried",
+    }
+}
+
+fn ecam_page(entry: &mrml_kernel::arch::x86_64::McfgAllocation, requester: DeviceAddress) -> Option<u64> {
+    if entry.segment != requester.segment()
+        || !(entry.start_bus..=entry.end_bus).contains(&requester.bus())
+    {
+        return None;
+    }
+    let offset = (u64::from(requester.bus() - entry.start_bus) << 20)
+        | (u64::from(requester.device()) << 15)
+        | (u64::from(requester.function()) << 12);
+    entry.physical_start().checked_add(offset)
 }
 
 enum TableError<E> {
@@ -68,17 +104,15 @@ impl Tables {
             let coverage = pci_inventory_coverage(&map, start, end);
             let segment = entry.segment;
             report(format_args!("xhci map ECAM seg={segment:04x} {start:#x}..{end:#x}: {coverage}"))?;
-            if segment == requester.segment() && (entry.start_bus..=entry.end_bus).contains(&requester.bus()) {
-                let offset = (u64::from(requester.bus() - entry.start_bus) << 20)
-                    | (u64::from(requester.device()) << 15)
-                    | (u64::from(requester.function()) << 12);
-                let page = start + offset;
+            if let Some(page) = ecam_page(entry, requester) {
                 let page_end = page + PAGE as u64;
                 let coverage = pci_inventory_coverage(&map, page, page_end);
                 report(format_args!("xhci map PCI page {page:#x}..{page_end:#x}: {coverage}"))?;
+                let (window, page) = (dxe_label(self.dxe.ecam), dxe_label(self.dxe.page));
+                report(format_args!("xhci DXE ECAM window={window} page={page}"))?;
             }
         }
-        for unit in dmar.units() {
+        for (index, unit) in dmar.units().enumerate() {
             let start = unit.register_base.get();
             let Some(end) = start.checked_add(PAGE as u64) else {
                 return Ok("remapper range invalid");
@@ -86,6 +120,8 @@ impl Tables {
             let coverage = pci_inventory_coverage(&map, start, end);
             let role = if start == drhd { "routed" } else { "other" };
             report(format_args!("xhci map DRHD {role} {start:#x}..{end:#x}: {coverage}"))?;
+            let status = dxe_label(self.dxe.drhd[index]);
+            report(format_args!("xhci DXE DRHD {role} {start:#x}: {status}"))?;
         }
         let start = bar.start().get();
         let end = bar.end();
@@ -214,6 +250,7 @@ impl AcpiMemory for FirmwareMap<'_> {
 pub(super) unsafe fn read(
     system: &SystemTable,
     services: &BootServices,
+    usb_origin: Option<DeviceAddress>,
 ) -> Result<Tables, &'static str> {
     if !(1..=1024).contains(&system.table_entry_count)
         || system.configuration_table.is_null()
@@ -245,7 +282,7 @@ pub(super) unsafe fn read(
     check(unsafe { (services.allocate_pages)(0, 2, MAP_PAGES, &mut addr) })
         .map_err(|_| "could not allocate memory-map scratch")?;
     // SAFETY: successful allocation provided MAP_PAGES readable and writable scratch pages.
-    let result = unsafe { copy_tables(services, addr, root) };
+    let result = unsafe { copy_tables(system, services, addr, root, usb_origin) };
     // SAFETY: the firmware owns this allocation and it is no longer borrowed.
     check(unsafe { (services.free_pages)(addr, MAP_PAGES) })
         .map_err(|_| "could not free memory-map scratch")?;
@@ -254,9 +291,11 @@ pub(super) unsafe fn read(
 
 // SAFETY: addr points to MAP_PAGES live, firmware-allocated pages.
 unsafe fn copy_tables(
+    system: &SystemTable,
     services: &BootServices,
     addr: u64,
     root: u64,
+    usb_origin: Option<DeviceAddress>,
 ) -> Result<Tables, &'static str> {
     if addr == 0 || !addr.is_multiple_of(PAGE as u64) {
         return Err("invalid memory-map scratch address");
@@ -302,5 +341,28 @@ unsafe fn copy_tables(
     let region_count = mrml_uefi::xhci_inventory::normalize_pci_inventory_map(
         memory.bytes, stride, &mut regions,
     );
-    Ok(Tables { mcfg, dmar, regions, region_count })
+    let mut dxe = DxeEvidence::default();
+    if let (Some(requester), Some(_), Ok(mcfg), Ok(dmar)) =
+        (usb_origin, region_count, &mcfg, &dmar)
+        && let Some((entry, page)) = mcfg.allocations()
+            .find_map(|entry| ecam_page(entry, requester).map(|page| (entry, page)))
+    {
+        let observe = |base, bytes| {
+            // SAFETY: all services and the same bounded memory-map snapshot
+            // remain live. The reader validates the DXE table and entrypoint
+            // against this snapshot and calls only GetMemorySpaceDescriptor.
+            // The addresses being classified are never dereferenced.
+            unsafe {
+                inspect_dxe_mmio(system, base, bytes, |access, address, bytes| {
+                    dxe_boot_services_contains(memory.bytes, stride, access, address, bytes)
+                })
+            }
+        };
+        dxe.ecam = Some(observe(entry.physical_start(), entry.bytes() as u64));
+        dxe.page = Some(observe(page, PAGE as u64));
+        for (slot, unit) in dxe.drhd.iter_mut().zip(dmar.units()) {
+            *slot = Some(observe(unit.register_base.get(), PAGE as u64));
+        }
+    }
+    Ok(Tables { mcfg, dmar, regions, region_count, dxe })
 }

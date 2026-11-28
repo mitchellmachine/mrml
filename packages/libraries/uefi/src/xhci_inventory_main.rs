@@ -150,9 +150,6 @@ unsafe fn scan(
         records[i] = Some((requester, io));
     }
 
-    // SAFETY: the firmware mapping and services are still live here; ACPI
-    // memory reads use only an exact non-overlapping reported RAM range.
-    let tables = unsafe { acpi::read(system, services) };
     // SAFETY: these are the live image, services, and matched firmware handles.
     let origin = unsafe { source::inspect(image, services) }.and_then(|(handle, transport)| {
         let i = handles[..count].iter().position(|&entry| entry == handle)?;
@@ -165,6 +162,9 @@ unsafe fn scan(
             _ => None,
         }
     });
+    // SAFETY: firmware services are still live. ACPI reads and DXE service
+    // classification are bounded by the current map; no MMIO is read here.
+    let tables = unsafe { acpi::read(system, services, origin.flatten()) };
     let mut config = InventoryConfig(&records[..count]);
     let mut found = 0;
     let mut incomplete = 0;

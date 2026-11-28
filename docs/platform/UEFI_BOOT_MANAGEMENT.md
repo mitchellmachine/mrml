@@ -277,6 +277,14 @@ inventory but could not prove firmware coverage. The follow-up reports the
 half-open ECAM, DRHD and BAR0 ranges individually, separating missing,
 partial, and non-MMIO coverage from overlapping ACPI resources. BAR0 coverage
 is informational; the probe still does not map or access ECAM.
+The Dragonair range report from `53cfd270` showed no descriptor for the full
+ECAM window, exact PCI page, either remapper bootstrap page, or BAR0. The
+follow-up reads the firmware's separate DXE resource classification for the
+selected ECAM window, exact PCI page, and DRHD pages before leaving firmware.
+It uses only [PI GetMemorySpaceDescriptor](https://uefi.org/specs/PI/1.8/V2_Services_DXE_Services.html),
+checks the function's location in boot-services code, and reports whether
+firmware classifies the range as MMIO capable of uncacheable access. This
+is not a cache-policy measurement or a substitute for explicit UEFI coverage.
 For a future passive post-exit diagnostic, the planner derives one 4 KiB PCI
 configuration page from the exact MCFG segment, bus, device and function. It
 requires explicit coverage by a normalized firmware MMIO range and rejects

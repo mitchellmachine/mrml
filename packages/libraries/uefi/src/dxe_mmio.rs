@@ -53,6 +53,51 @@ pub enum DxeAccess {
     Entrypoint,
 }
 
+/// Locate the live DXE table or entry point in one non-overlapping,
+/// non-runtime boot-services descriptor. A raw MMIO range never qualifies.
+pub fn dxe_boot_services_contains(
+    raw: &[u8],
+    stride: usize,
+    access: DxeAccess,
+    address: usize,
+    bytes: usize,
+) -> bool {
+    if !(core::mem::size_of::<crate::MemoryDescriptor>()..=256).contains(&stride)
+        || raw.is_empty() || raw.len() > crate::MAX_MEMORY_MAP_BYTES
+        || !raw.len().is_multiple_of(stride) || address == 0 || bytes == 0
+    {
+        return false;
+    }
+    let Some(end) = address.checked_add(bytes).filter(|end| *end <= isize::MAX as usize) else {
+        return false;
+    };
+    let (address, end) = (address as u64, end as u64);
+    let mut found = false;
+    for desc in raw.chunks_exact(stride) {
+        let base = u64::from_le_bytes(desc[8..16].try_into().unwrap());
+        let pages = u64::from_le_bytes(desc[24..32].try_into().unwrap());
+        let Some(stop) = pages.checked_mul(PAGE_SIZE).and_then(|length| base.checked_add(length)) else {
+            return false;
+        };
+        if pages == 0 || !base.is_multiple_of(PAGE_SIZE) {
+            return false;
+        }
+        if address < stop && base < end {
+            let ty = u32::from_le_bytes(desc[..4].try_into().unwrap());
+            let attributes = u64::from_le_bytes(desc[32..40].try_into().unwrap());
+            let allowed = match access {
+                DxeAccess::Table => matches!(ty, 3 | 4),
+                DxeAccess::Entrypoint => ty == 3,
+            };
+            if found || !allowed || attributes >> 63 != 0 || base > address || stop < end {
+                return false;
+            }
+            found = true;
+        }
+    }
+    found
+}
+
 /// Observe positive firmware classification over an exact page range. This is
 /// not device ownership, final memory map validation, or permission to map it.
 ///
@@ -200,6 +245,32 @@ fn exact_mmio(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dxe_pointer_coverage_requires_one_live_boot_services_descriptor() {
+        let mut raw = [0u8; 96];
+        let set = |desc: &mut [u8], kind: u32, base: u64, attributes: u64| {
+            desc[..4].copy_from_slice(&kind.to_le_bytes());
+            desc[8..16].copy_from_slice(&base.to_le_bytes());
+            desc[24..32].copy_from_slice(&1u64.to_le_bytes());
+            desc[32..40].copy_from_slice(&attributes.to_le_bytes());
+        };
+        set(&mut raw[..48], 3, 0x1000, 0);
+        set(&mut raw[48..], 4, 0x2000, 0);
+        let check = |raw: &[u8], access, address, bytes| {
+            dxe_boot_services_contains(raw, 48, access, address, bytes)
+        };
+        assert!(check(&raw, DxeAccess::Entrypoint, 0x1100, 1));
+        assert!(check(&raw, DxeAccess::Table, 0x2100, 128));
+        assert!(!check(&raw, DxeAccess::Entrypoint, 0x2100, 1));
+        assert!(!check(&raw, DxeAccess::Table, 0x1ff0, 32));
+        assert!(!check(&raw, DxeAccess::Table, usize::MAX, 2));
+        assert!(!check(&raw[..95], DxeAccess::Table, 0x2100, 128));
+        set(&mut raw[48..], 11, 0x1000, 0);
+        assert!(!check(&raw, DxeAccess::Entrypoint, 0x1100, 1));
+        set(&mut raw[..48], 3, 0x3000, 1 << 63);
+        assert!(!check(&raw, DxeAccess::Entrypoint, 0x3100, 1));
+    }
 
     fn mmio(base: u64, bytes: u64) -> Descriptor {
         Descriptor {
