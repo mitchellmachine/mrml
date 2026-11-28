@@ -81,7 +81,8 @@ pub use boot_service::{
     BOOT_SUPERVISOR_SELECTION_BYTES, BootServiceImage, BootServiceImageError, BootSupervisorError,
     BootSupervisorImageTables, BootSupervisorMemoryError, BootSupervisorSelection,
     ReservedBootSupervisorImage,
-    ReservedSupervisorBootstrap, SelectedBootSupervisor, StagedBootSupervisor,
+    InactiveSupervisorMemory, ReservedSupervisorBootstrap, ReservedSupervisorMemory,
+    SelectedBootSupervisor, StagedBootSupervisor, SupervisorBackingViews,
     SupervisorBootstrapError, SupervisorLinearState,
 };
 pub use boot_recovery::{

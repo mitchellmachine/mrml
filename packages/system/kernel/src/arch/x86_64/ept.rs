@@ -218,7 +218,7 @@ fn set_access(entry: &mut u64, access: EptAccess) {
     *entry = (*entry & !EPT_ACCESS_MASK) | access.bits();
 }
 
-const BOOT_EPT_TABLE_LIMIT: usize = 80;
+pub(crate) const BOOT_EPT_TABLE_LIMIT: usize = 80;
 const EPT_WRITE_BACK: u64 = 6 << 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -241,15 +241,15 @@ impl From<super::PageTableBuildError> for BootImageEptError {
 /// caller for quarantine or teardown.
 pub(crate) fn build_boot_image_ept(
     store: &mut impl super::PageTableStore,
-    image: core::ops::Range<u64>,
+    guest_backing: &[core::ops::Range<u64>],
     host_bits: u8,
     regions: impl Iterator<Item = crate::GuestRegion>,
 ) -> Result<PhysAddr, BootImageEptError> {
     let mut tables = [None; BOOT_EPT_TABLE_LIMIT];
     let end = 1u64 << host_bits;
-    let root = allocate_boot_ept_table(store, &image, end, &mut tables)?;
+    let root = allocate_boot_ept_table(store, guest_backing, end, &mut tables)?;
     for region in regions {
-        // Read permission is implicit for a validated PE region. No large
+        // Read permission is implicit for a validated boot region. No large
         // pages, execute-only leaves, or accessed/dirty tracking.
         let leaf_flags = EPT_WRITE_BACK
             | 1
@@ -264,7 +264,7 @@ pub(crate) fn build_boot_image_ept(
                 let index = ((guest >> shift) & 0x1ff) as usize;
                 let entry = store.read(table, index)?;
                 let child = if entry == 0 {
-                    let child = allocate_boot_ept_table(store, &image, end, &mut tables)?;
+                    let child = allocate_boot_ept_table(store, guest_backing, end, &mut tables)?;
                     store.write(table, index, child.get() | EPT_ACCESS_MASK)?;
                     child
                 } else {
@@ -289,7 +289,7 @@ pub(crate) fn build_boot_image_ept(
 
 fn allocate_boot_ept_table(
     store: &mut impl super::PageTableStore,
-    image: &core::ops::Range<u64>,
+    guest_backing: &[core::ops::Range<u64>],
     end: u64,
     tables: &mut [Option<PhysAddr>; BOOT_EPT_TABLE_LIMIT],
 ) -> Result<PhysAddr, BootImageEptError> {
@@ -297,7 +297,9 @@ fn allocate_boot_ept_table(
     if table.get() == 0 || table.get() >= end {
         return Err(BootImageEptError::InvalidTable);
     }
-    if image.contains(&table.get()) || tables.contains(&Some(table)) {
+    if guest_backing.iter().any(|range| range.contains(&table.get()))
+        || tables.contains(&Some(table))
+    {
         return Err(BootImageEptError::TableAlias);
     }
     for index in 0..512 {
@@ -406,7 +408,7 @@ mod tests {
             region(0x3000, true, false),
         ];
         let build = |tables: &mut BootTables| {
-            build_boot_image_ept(tables, image.clone(), 48, mappings.into_iter())
+            build_boot_image_ept(tables, core::slice::from_ref(&image), 48, mappings.into_iter())
         };
         let mut tables = BootTables::new(0x400000);
         let root = build(&mut tables).unwrap();

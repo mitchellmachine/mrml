@@ -46,7 +46,7 @@ pub use descriptors::{
     install_fail_stop_tables, install_user_call_gate, load_task_register, task_state_descriptor,
     write_task_state_descriptor,
 };
-pub(crate) use ept::build_boot_image_ept;
+pub(crate) use ept::{BOOT_EPT_TABLE_LIMIT, build_boot_image_ept};
 pub use ept::{
     BootImageEptError,
     DmaIsolation, EptAccess, EptAdapterError, EptGranuleBinding, EptGranuleHardware,

@@ -359,9 +359,17 @@ stack and guest page tables. Its inactive linear address space starts from an
 empty guest CR3, maps only the PE regions and the writable, non-executable
 stack, and leaves the guard unmapped. Hosted tests walk the resulting entries,
 confirm that they point to guest physical addresses rather than host frames,
-and verify that the stack and unused table pages are zeroed. The image-only
-EPT is not yet combined with the table and stack backing, and no launch path
-installs either hierarchy.
+and verify that the stack and unused table pages are zeroed.
+
+The same reservation can now build one inactive EPT covering the sparse
+image, stack and guest page-table backing. The last two are writable and
+non-executable; the initial linear tables do not map their own pages. The
+guard and image gaps remain unmapped, and EPT table frames are host-only.
+Both roots are returned together only after the complete build succeeds.
+Late allocation or build failure is terminal for the one-shot bootstrap:
+no root is published, and partially reserved or initialized frames are
+not reused in that boot. Hosted tests check both translations and late
+exhaustion. Real host mappings and VM entry are still separate work.
 
 1. Connect authenticated recovery to the first admitted supervisor microVM
    on the normal boot path. Verify launch and clean retirement of one real
