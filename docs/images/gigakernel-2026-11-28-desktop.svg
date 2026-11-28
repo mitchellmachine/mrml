@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1080" viewBox="0 0 1120 1080" role="img" aria-labelledby="title description">
+  <title id="title">MRML Gigakernel architecture &#x2022; 2026-11-28 UTC snapshot</title>
+  <desc id="description">The privileged Gigakernel provides microVM launch, memory and capability enforcement. A hardware supervisor requests a separate driver microVM for every xHCI controller. USB keyboard, mouse and tablet, and PS/2 keyboard and mouse, are separate input services. QEMU demonstrated two separate xHCI admission routes without launching driver guests; input decoders and the PS/2 broker were tested outside guest VMs. Dashed lines show target wiring that is not yet verified end to end. Separately, a signed desktop microVM produced a terminal echo verified in QEMU VGA. The Chromebook candidate is display only; physical verification is pending.</desc>
+  <defs>
+    <style>
+      text { font-family: system-ui, sans-serif; fill: #f2f7ff; }
+      .heading { font-size: 33px; font-weight: 750; }
+      .label { font-size: 21px; font-weight: 700; }
+      .body { font-size: 17px; }
+      .small { font-size: 15px; }
+      .muted { fill: #bacbdd; }
+      .blue { fill: #9de4ff; }
+      .gold { fill: #ffcd86; }
+      .node { fill: #19263a; stroke: #577492; stroke-width: 2; }
+      .tested { fill: #142d40; stroke: #79d3f3; stroke-width: 2; }
+      .pending { fill: none; stroke: #e0ad68; stroke-width: 2; stroke-dasharray: 5 5; }
+      .route { fill: none; stroke: #79d3f3; stroke-width: 2; }
+    </style>
+    <marker id="open-arrow" viewBox="0 0 8 8" markerWidth="7" markerHeight="7" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#e0ad68" stroke-width="1.5"/>
+    </marker>
+    <marker id="blue-arrow" viewBox="0 0 8 8" markerWidth="7" markerHeight="7" refX="7" refY="4" orient="auto">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#79d3f3" stroke-width="1.5"/>
+    </marker>
+  </defs>
+
+  <rect width="1120" height="1080" rx="20" fill="#101927"/>
+  <text x="34" y="52" class="heading">MRML Gigakernel</text>
+  <text x="35" y="80" class="body muted">Architecture snapshot &#x2022; 2026-11-28 UTC</text>
+  <text x="35" y="106" class="small muted">Source: <tspan font-family="monospace">ec1bd7c71f3b5f2d749ba0af17e4d404da5e7ca7</tspan></text>
+  <path d="M674 54 h29" class="route"/>
+  <text x="715" y="59" class="small blue">Verified in the named fixture</text>
+  <path d="M674 83 h29" class="pending"/>
+  <text x="715" y="88" class="small gold">Target wiring, not live end to end</text>
+
+  <g>
+    <rect x="34" y="135" width="1052" height="97" rx="12" class="node"/>
+    <text x="55" y="168" class="label">Privileged core: Gigakernel + virtualization mechanisms</text>
+    <text x="55" y="196" class="body muted">Admit and supervise microVMs &#x2022; enforce memory and scoped, revocable capabilities</text>
+    <text x="55" y="217" class="small muted">Boot firmware and loader are separate from ordinary workload execution.</text>
+  </g>
+
+  <rect x="34" y="248" width="1052" height="507" rx="14" class="pending"/>
+  <text x="54" y="280" class="label">Total MicroVM isolation</text>
+  <text x="54" y="305" class="body muted">Ordinary apps and services run only in admitted microVMs. No native fallback.</text>
+
+  <g>
+    <rect x="54" y="326" width="620" height="65" rx="9" class="tested"/>
+    <text x="72" y="352" class="label">Emulated PCI inventory &#x2192; hardware supervisor</text>
+    <text x="72" y="376" class="small muted">QEMU: two controllers produced distinct admission routes. No guests started.</text>
+    <path d="M364 391 v20 H200 v15" class="route" marker-end="url(#blue-arrow)"/>
+    <path d="M364 411 H522 v15" class="route" marker-end="url(#blue-arrow)"/>
+    <rect x="54" y="427" width="292" height="64" rx="9" class="tested"/>
+    <rect x="370" y="427" width="304" height="64" rx="9" class="tested"/>
+    <text x="72" y="453" class="label">Controller A route</text>
+    <text x="72" y="476" class="small muted">Separate domain &#x2022; QEMU 00:05.0</text>
+    <text x="388" y="453" class="label">Controller B route</text>
+    <text x="388" y="476" class="small muted">Separate domain &#x2022; QEMU 00:06.0</text>
+    <path d="M200 491 v24" class="pending" marker-end="url(#open-arrow)"/>
+    <path d="M522 491 v24" class="pending" marker-end="url(#open-arrow)"/>
+    <rect x="54" y="516" width="292" height="54" rx="9" class="pending"/>
+    <rect x="370" y="516" width="304" height="54" rx="9" class="pending"/>
+    <text x="72" y="550" class="body">xHCI driver microVM A</text>
+    <text x="388" y="550" class="body">xHCI driver microVM B</text>
+    <path d="M200 570 v13 H522 v-13 M364 583 v15" class="pending"/>
+    <path d="M364 598 H146 v15" class="pending" marker-end="url(#open-arrow)"/>
+    <path d="M364 598 H564 v15" class="pending" marker-end="url(#open-arrow)"/>
+    <path d="M346 598 v15" class="pending" marker-end="url(#open-arrow)"/>
+    <text x="530" y="592" class="small gold">Scoped HID reports</text>
+    <rect x="54" y="614" width="184" height="59" rx="9" class="node"/>
+    <rect x="254" y="614" width="184" height="59" rx="9" class="node"/>
+    <rect x="454" y="614" width="220" height="59" rx="9" class="node"/>
+    <text x="69" y="638" class="body">USB keyboard</text>
+    <text x="269" y="638" class="body">USB mouse</text>
+    <text x="469" y="638" class="body">USB tablet</text>
+    <text x="69" y="658" class="small blue">Decoder tested</text>
+    <text x="269" y="658" class="small blue">Decoder tested</text>
+    <text x="469" y="658" class="small blue">Decoder tested</text>
+  </g>
+
+  <g>
+    <rect x="700" y="326" width="366" height="65" rx="9" class="tested"/>
+    <text x="718" y="352" class="label">i8042 / PS/2 broker</text>
+    <text x="718" y="376" class="small muted">QEMU: separate keyboard and mouse streams.</text>
+    <path d="M883 391 v17 H790 v18" class="pending" marker-end="url(#open-arrow)"/>
+    <path d="M883 408 H975 v18" class="pending" marker-end="url(#open-arrow)"/>
+    <rect x="700" y="427" width="173" height="64" rx="9" class="node"/>
+    <rect x="893" y="427" width="173" height="64" rx="9" class="node"/>
+    <text x="714" y="453" class="body">PS/2 keyboard</text>
+    <text x="907" y="453" class="body">PS/2 mouse</text>
+    <text x="714" y="476" class="small blue">Decoder tested</text>
+    <text x="907" y="476" class="small blue">Decoder tested</text>
+    <text x="700" y="526" class="small muted">Five independent input service components.</text>
+    <text x="700" y="550" class="small muted">Their decoders have host tests, not guest tests.</text>
+    <text x="700" y="574" class="small muted">They receive no raw port, MMIO, or DMA access.</text>
+  </g>
+
+  <g>
+    <rect x="54" y="693" width="1012" height="43" rx="9" class="pending"/>
+    <text x="72" y="720" class="body gold">Target: typed input events &#x2192; Semantic Scene Graph. Trusted prompt authority stays separate.</text>
+  </g>
+
+  <g>
+    <rect x="34" y="772" width="1052" height="88" rx="12" class="tested"/>
+    <text x="53" y="801" class="label">Separate verified USB storage fixture</text>
+    <text x="53" y="826" class="body muted">A hosted KVM guest wrote and read back a fixed test record via emulated USB 2 and USB 3.</text>
+    <text x="53" y="849" class="small muted">Not a general FAT32 writer, a live per-controller service launch, or a physical Chromebook write.</text>
+  </g>
+  <g>
+    <rect x="34" y="879" width="1052" height="172" rx="12" class="tested"/>
+    <text x="53" y="910" class="label">Signed desktop microVM: boot display diagnostic</text>
+    <text x="53" y="936" class="body muted">Bounded keyboard events &#x2192; one desktop guest &#x2192; scoped framebuffer copy by the boot display broker</text>
+    <text x="53" y="961" class="small blue">Nested KVM: terminal echoed A; all 8,400 tile pixels matched the reference on QEMU VGA.</text>
+    <text x="53" y="984" class="small muted">Separate QEMU-only keyboard profile took emulated input. The guest got no ports, MMIO, or framebuffer mapping.</text>
+    <text x="53" y="1007" class="small gold">Chromebook candidate: synthetic input, display only. Physical boot, keyboard, and USB storage are not verified by it.</text>
+    <text x="53" y="1030" class="small muted">Not a live desktop, an independent compositor microVM, or a finished driver stack.</text>
+  </g>
+</svg>

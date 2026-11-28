@@ -35,6 +35,38 @@ again. This tests firmware handoff, framebuffer and the service on one machine,
 not MRML USB drive access, installation, or a physical storage driver. The
 internal system disk is not a target.
 
+### Dragonair desktop scanout check
+
+Use the device-free persistent-desktop image for the next display-only
+check. It boots one signed desktop microVM, sends synthetic Enter and A
+while preserving the same guest, and presents its final 120 × 70 tile via
+the boot display broker. Do not use the KVM-only keyboard image on hardware.
+
+```text
+mrml usb image-vmx-desktop-persistent mrml-dragonair-desktop-display.img
+mrml usb test-vmx-desktop-persistent mrml-dragonair-desktop-display.img OVMF_CODE OVMF_VARS QEMU
+```
+
+On 2026-11-28 UTC, the image built from
+[`ec1bd7c71f3b5f2d749ba0af17e4d404da5e7ca7`](https://github.com/mitchellmachine/mrml/commit/ec1bd7c71f3b5f2d749ba0af17e4d404da5e7ca7)
+refused to enter VMX under QEMU TCG and passed under nested KVM. The VGA
+capture was 1024 × 768; all 8,400 tile pixels and the checked border matched
+the reference. Testing used copies and did not modify the candidate.
+SHA-256 of that exact image:
+`76de0ccb55fd95ea56aeceb741f0a4cd4d031e0c598138f399f96a2a28206e9b`.
+A rebuild uses fresh diagnostic signing keys and produces a different hash;
+preflight the exact file to be written.
+
+Use the same dedicated expendable stick and one-time boot procedure above.
+Record the firmware version, current Secure Boot state and a photo of the
+screen. Success is a small desktop tile at the upper left with `>A` in the
+terminal and `1` under `KEYS`, with no keys pressed. A lingering `VMX`
+startup label, blank screen, or `NOT PASSED` is not a pass. The diagnostic
+halts after the result. Power off, remove the stick and boot the existing OS.
+No physical input, USB writes by MRML, or live desktop are expected. The
+Chromebook result for this image is pending.
+
+
 ### Future Chromebook USB write check
 
 The target is a separate expendable USB data stick with a preallocated

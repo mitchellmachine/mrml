@@ -53,9 +53,9 @@ and [placement rules](docs/ISOLATION_PLACEMENT.md).
 
 ### Architecture snapshot
 
-![MRML Gigakernel architecture: separate xHCI driver microVMs and five input services, with verified test paths distinguished from planned wiring](docs/images/gigakernel-2026-11-28.svg)
+![MRML Gigakernel architecture: signed desktop microVM scanout verified in QEMU, separate controller and input service routes, and pending Chromebook checks](docs/images/gigakernel-2026-11-28-desktop.svg)
 
-**2026-11-28 UTC · source commit [9ea4887a2815864179068fa910eb3a4310ccae6b](https://github.com/mitchellmachine/mrml/commit/9ea4887a2815864179068fa910eb3a4310ccae6b).** This snapshot predates the diagram commit. QEMU verified separate admission routes for two xHCI controllers, not live driver guests. The PS/2 broker and all five input decoder components were tested outside those service guests. The USB write shown is a separate emulated test, not a Chromebook result. See the [text description and test limits](docs/gigakernel.md#hardware-discovery-and-driver-supervision).
+**2026-11-28 UTC · source commit [ec1bd7c71f3b5f2d749ba0af17e4d404da5e7ca7](https://github.com/mitchellmachine/mrml/commit/ec1bd7c71f3b5f2d749ba0af17e4d404da5e7ca7).** QEMU verified a signed desktop microVM's terminal echo on emulated VGA, including a separate test with emulated keyboard events. The [Chromebook candidate](docs/platform/UEFI_BOOT_MANAGEMENT.md#dragonair-desktop-scanout-check) uses synthetic input and has not run on the Chromebook. The two xHCI admission routes, five input decoders, and emulated USB write are separate checks; none proves physical input or storage.
 
 ## Software for Windows and Linux
 
