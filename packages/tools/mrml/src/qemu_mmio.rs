@@ -23,6 +23,13 @@ pub(super) fn fixture_acpi_table(profile: u8) -> [u8; 36] {
     table
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum ColdMode {
+    DenyActivation,
+    SeparateBoot,
+    SharedBoot,
+}
+
 #[derive(Clone, Copy)]
 enum PausedCheck {
     Resources,
@@ -53,7 +60,7 @@ pub(super) fn release_q35_fixture(
     release: u8,
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
-    cold: Option<bool>,
+    cold: Option<ColdMode>,
 ) -> Result<Option<FixtureState>, String> {
     inspect_q35(child, Some(release), isolated, post, cold, PausedCheck::Resources)
 }
@@ -63,7 +70,7 @@ fn inspect_q35(
     release: Option<u8>,
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
-    cold: Option<bool>,
+    cold: Option<ColdMode>,
     paused_check: PausedCheck,
 ) -> Result<Option<FixtureState>, String> {
     let mut stdin = child.stdin.take().ok_or("missing QMP input")?;
@@ -103,7 +110,7 @@ fn inspect_qmp(
     release: Option<u8>,
     isolated: bool,
     post: Option<(&std::path::Path, &[u8])>,
-    cold: Option<bool>,
+    cold: Option<ColdMode>,
     paused_check: PausedCheck,
 ) -> Result<Option<FixtureState>, String> {
     qmp_write(stdin, "{\"execute\":\"qmp_capabilities\",\"id\":71}\n")?;
@@ -228,7 +235,8 @@ fn inspect_qmp(
             );
         }
     }
-    let bar = if matches!(release, Some(0xa6..=0xa9)) {
+    let cold_shared = cold == Some(ColdMode::SharedBoot);
+    let bar = if matches!(release, Some(0xa6..=0xa9 | 0xbb)) {
         if isolated {
             check_isolation_properties(stdin, reader)?;
         }
@@ -236,7 +244,7 @@ fn inspect_qmp(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info pci\"},\"id\":76}\n",
         )?;
-        let bar = fixture_bar(&read_monitor(&mut *reader, 76)?, isolated)?;
+        let bar = fixture_bar_for_topology(&read_monitor(&mut *reader, 76)?, isolated, !cold_shared)?;
         qmp_write(
             stdin,
             "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info mtree -f -o\"},\"id\":77}\n",
@@ -259,6 +267,24 @@ fn inspect_qmp(
             }
         }
         let state = sample_xhci_state(stdin, reader, bar)?;
+        let state = if cold_shared {
+            verify_shared_boot(stdin, reader)?;
+            let before = sample_shutdown(stdin, reader, 90)?;
+            detach_shared_disk(stdin, reader)?;
+            qmp_write(stdin, "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info pci\"},\"id\":76}\n")?;
+            let current_bar = fixture_bar_for_topology(&read_monitor(&mut *reader, 76)?, true, false)?;
+            let after = sample_xhci_state(stdin, reader, current_bar)?;
+            if !state.matches_halted_shared_boot(after)
+                || before.boot != u32::MAX
+                || before.gsts != 0
+                || sample_shutdown(stdin, reader, 90)? != before
+            {
+                return Err("shared cold boot detachment changed guarded controller state".into());
+            }
+            after
+        } else {
+            state
+        };
         if preflight && (state.command != 0 || state.status != 1) {
             return Err("controller is not halted with interrupts off".into());
         }
@@ -266,12 +292,13 @@ fn inspect_qmp(
     } else {
         None
     };
-    let shutdown = matches!(release, Some(0xa7 | 0xa8));
+    let shutdown = matches!(release, Some(0xa7 | 0xa8 | 0xbb));
     let before = if shutdown {
         let state = bar
             .filter(|_| isolated)
             .ok_or("missing isolated controller sample")?;
-        if state.command != 0 || state.status != 1 || post.is_none() {
+        let tolerated_events = if cold_shared { 1 << 3 } else { 0 };
+        if state.command != 0 || state.status & !tolerated_events != 1 || post.is_none() {
             return Err(
                 "isolated controller is not already halted or lacks readback channel".into(),
             );
@@ -292,7 +319,7 @@ fn inspect_qmp(
             byte => byte,
         };
         validate_scratch_uart(&map)?;
-        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7 | 0xba) {
+        if !matches!(byte, 0xa6..=0xa9 | 0xad | 0xae | 0x5a | 0xb5 | 0xb7 | 0xba | 0xbb) {
             return Err("unknown q35 fixture release value".into());
         }
         qmp_write(
@@ -312,7 +339,7 @@ fn inspect_qmp(
         verify_guest_bme(stdin, reader, path, expected, before, allow, require_unproven)?;
     }
     if let (Some(before), Some((path, prefix)), Some(state)) = (before, post, bar) {
-        if let Some(allow) = cold {
+        if let Some(mode) = cold {
             inspect_cold_activation(
                 stdin,
                 reader,
@@ -320,7 +347,7 @@ fn inspect_qmp(
                 (path, prefix),
                 state,
                 before,
-                allow,
+                mode,
             )?;
             return Ok(bar);
         }
@@ -510,8 +537,9 @@ fn inspect_cold_activation(
     trace: (&std::path::Path, &[u8]),
     state: FixtureState,
     firmware: ShutdownSample,
-    allow: bool,
+    mode: ColdMode,
 ) -> Result<(), String> {
+    let allow = mode != ColdMode::DenyActivation;
     let (path, prefix) = trace;
     let (root, _) = wait_cold_trace(path, prefix, state, &[])?;
     qmp_write(stdin, "{\"execute\":\"stop\",\"id\":94}\n")?;
@@ -593,6 +621,10 @@ fn inspect_cold_activation(
         check_live_leaf(stdin, reader, root, payload, 1)?;
         qmp_write(stdin, &format!("{{\"execute\":\"human-monitor-command\",\"arguments\":{{\"command-line\":\"xp /512gx {:#x}\"}},\"id\":172}}\n", root + 4096))?;
         verify_root_page_with_context(&read_monitor(&mut *reader, 172)?, root, 1, 0, 1, false)?;
+    }
+    if mode == ColdMode::SharedBoot {
+        verify_shared_disk_retired(stdin, reader)?;
+        println!("q35-vtd-shared-boot|status=PASS|requester=0000:41:00.0|boot_source_detached=true|exact_requester_denied=true");
     }
     println!(
         "q35-vtd-cold|status=PASS|activated={allow}|root={root:#x}|aperture_installed_and_revoked={allow}|no_present_dma_leaves=true|exact_requester_denied={allow}|bme=false"
@@ -823,6 +855,26 @@ fn qmp_port_write(
     ack(reader, &format!("{{\"return\": \"\", \"id\": {id}}}"))
 }
 
+fn detach_shared_disk(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+) -> Result<(), String> {
+    qmp_write(stdin, "{\"execute\":\"device_del\",\"arguments\":{\"id\":\"mrml_shared_boot\"},\"id\":152}\n")?;
+    ack(reader, "{\"return\": {}, \"id\": 152}")?;
+    verify_shared_disk_retired(stdin, reader)
+}
+
+fn verify_shared_disk_retired(
+    stdin: &mut impl std::io::Write,
+    reader: &mut impl std::io::BufRead,
+) -> Result<(), String> {
+    qmp_write(stdin, "{\"execute\":\"human-monitor-command\",\"arguments\":{\"command-line\":\"info qtree\"},\"id\":153}\n")?;
+    if !retired_shared_boot_topology(&read_monitor(reader, 153)?) {
+        return Err("virtual boot source is not detached from its retained controller".into());
+    }
+    Ok(())
+}
+
 fn shared_boot_topology(tree: &str) -> bool {
     let mut bus = None;
     let mut buses = 0;
@@ -1007,6 +1059,20 @@ pub(super) struct FixtureState {
     cap0: u32,
     command: u32,
     status: u32,
+}
+
+impl FixtureState {
+    fn matches_halted_shared_boot(self, after: Self) -> bool {
+        // Only the xHCI Port Change Detect event can differ when unplugging
+        // the disposable boot device. No running, reset or fault is admitted.
+        const PORT_CHANGE: u32 = 1 << 3;
+        self.bar == after.bar
+            && self.cap0 == after.cap0
+            && self.command == 0
+            && after.command == 0
+            && self.status & !PORT_CHANGE == 1
+            && after.status & !PORT_CHANGE == 1
+    }
 }
 
 fn sample_xhci_state(
@@ -1508,6 +1574,23 @@ fn validate_resources(map: &str, expect_drhd: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cold_shared_detachment_accepts_only_halted_port_change() {
+        use super::{FixtureBar, FixtureState};
+        let before = FixtureState {
+            bar: FixtureBar { start: 0x8120_0000, end: 0x8120_3fff },
+            cap0: 0x0100_0040,
+            command: 0,
+            status: 1,
+        };
+        assert!(before.matches_halted_shared_boot(FixtureState { status: 9, ..before }));
+        for status in [0, 2, 3, 5, 17, 1 << 11 | 1, u32::MAX] {
+            assert!(!before.matches_halted_shared_boot(FixtureState { status, ..before }));
+        }
+        assert!(!before.matches_halted_shared_boot(FixtureState { command: 1, ..before }));
+        assert!(!before.matches_halted_shared_boot(FixtureState { cap0: 0x0100_0020, ..before }));
+    }
+
     #[test]
     fn retired_boot_topology_requires_one_empty_controller_bus() {
         let empty = "dev: qemu-xhci\n  bus: mrml_probe_xhci.0\n    type usb-bus\n    bus-prop: label\ndev: other\n";

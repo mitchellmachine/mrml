@@ -4318,13 +4318,13 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 halt();
             }
         }
-        if native_fat32_probe::dma_fixture_rendezvous(release) {
+        if let Some(accepted) = native_fat32_probe::dma_fixture_rendezvous(release) {
             // SAFETY: the exact UC/NX leaves, signed model and release all
             // matched. Only shutdown/cold modes permit PCI command writes.
             unsafe {
                 native_fat32_probe::dma_fixture_register_snapshot(
                     mappings, matches!(release, 0xa7 | 0xa8), release == 0xa9,
-                    (release == 0xa8).then_some((&active, dma, dmar)),
+                    (release == 0xa8).then_some((&active, dma, dmar, accepted)),
                 )
             };
         }

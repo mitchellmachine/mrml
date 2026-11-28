@@ -170,27 +170,27 @@ pub(super) fn fixture_scratch() -> u8 {
 }
 
 #[cfg(feature = "q35-mmio-probe")]
-pub(super) fn dma_fixture_rendezvous(expected: u8) -> bool {
+pub(super) fn dma_fixture_rendezvous(expected: u8) -> Option<u8> {
     if fixture_scratch() != 0 {
         trace(0xdf);
-        return false;
+        return None;
     }
     trace(0xdc);
     for _ in 0..100_000_000 {
         match fixture_scratch() {
             0 => core::hint::spin_loop(),
-            byte if byte == expected => {
+            byte if byte == expected || (expected == 0xa8 && byte == 0xbb) => {
                 trace(0xde);
-                return true;
+                return Some(byte);
             }
             _ => {
                 trace(0xdd);
-                return false;
+                return None;
             }
         }
     }
     trace(0xdf);
-    false
+    None
 }
 
 /// Samples fixed registers; the sealed shutdown case also clears two BME bits.
@@ -204,6 +204,7 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         &ActivePageTables,
         &mrml_kernel::arch::x86_64::InitializedBootDma,
         &[u8],
+        u8,
     )>,
 ) {
     use mrml_kernel::arch::x86_64::VtdRegisterLayout;
@@ -335,7 +336,18 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         };
         // This first shutdown test refuses a running, resetting, not-ready or
         // faulted controller. No controller register writes are admitted.
-        if xhci_command != 0 || xhci_status != 1 || pci_command != 7 || bridge_command != 7 {
+        // Only the sealed shared-boot release permits Port Change Detect.
+        // All other states, including host-controller errors, still stop.
+        let tolerated_events = if cold.is_some_and(|(_, _, _, release)| release == 0xbb) {
+            1 << 3
+        } else {
+            0
+        };
+        if xhci_command != 0
+            || xhci_status & !tolerated_events != 1
+            || pci_command != 7
+            || bridge_command != 7
+        {
             trace(0xdb);
             return;
         }
@@ -394,13 +406,14 @@ pub(super) unsafe fn dma_fixture_register_snapshot(
         }
     }
     trace(0xda);
-    if let Some((active, dma, dmar)) = cold
+    if let Some((active, dma, dmar, release)) = cold
         && !fixture_activate(
             active,
             dma,
             dmar,
             pci_id,
             bridge_buses,
+            release,
         )
     {
         trace(0xdb);
@@ -414,6 +427,7 @@ fn fixture_activate(
     dmar: &[u8],
     endpoint_id: u32,
     bridge_buses: u32,
+    initial_release: u8,
 ) -> bool {
     use mrml_kernel::arch::x86_64::{
         DmarTopology, PciConfigSpace, SINGLE_REQUESTER_VTD_TABLE_PAGES, VerifiedVtdUnit,
@@ -489,7 +503,7 @@ fn fixture_activate(
         trace(0xc2);
         for _ in 0..100_000_000 {
             match fixture_scratch() {
-                0xa8 => core::hint::spin_loop(),
+                byte if byte == initial_release => core::hint::spin_loop(),
                 0xb8 => {
                     // SAFETY: signed cold mode, checked exact live branch
                     // and cleared PCI BME bits, then independently verified

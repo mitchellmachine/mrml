@@ -307,7 +307,8 @@ containment or ownership transfer on physical hardware. A separate negative
 case on that same emulated boot controller sends the continue byte after
 retirement and bus-master shutdown, with VT-d translation independently
 observed off. The loader records the missing-proof rejection and halts.
-The positive VT-d verification below still uses a separate controller.
+The cold regression below tests the positive VT-d result without granting
+any USB access to the normal boot path.
 This diagnostic is not in the normal boot profile and does not claim
 legacy semaphore transfer or enable DMA. An independent software model
 checks the retained lease, blocked DMA, quiescent boot source, and exact
@@ -330,8 +331,15 @@ the resulting context page independently. A separate no-marker case also
 boots from a read-only disk attached directly to that same isolated
 `0000:41:00.0` requester, with no second boot controller. QEMU verifies
 firmware reads without writes and the loader refuses to release the fixture.
-This confirms the boot topology, not simultaneous boot-source retirement
-and DMA denial. Normal boot does not use this as hardware handoff authority.
+The combined marked case checks both on the same requester: after the
+kernel reaches the post-firmware checkpoint, the host proves the disk was
+read without writes, detaches it, and rechecks the exact PCI controller and
+empty USB bus. The dedicated emulator release permits only an expected
+xHCI port-change event on an otherwise halted controller. The signed guest
+clears both bus-master bits, verifies VT-d denial after the drain, and the
+host independently checks the denied context and the empty USB bus again.
+This neither transfers physical firmware ownership nor authorizes hardware
+handoff in the normal boot path.
 
 ### Diagnose a return to firmware
 

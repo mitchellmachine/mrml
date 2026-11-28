@@ -110,6 +110,7 @@ pub(super) enum Q35FixtureCase {
     ColdWrongRelease,
     ColdDenyActivation,
     ColdActivate,
+    ColdActivateSharedBoot,
     BarWrongRelease,
     BarValidRelease,
     RetiredPrivileged(u8),
@@ -128,6 +129,7 @@ impl Q35FixtureCase {
                 | Self::ColdWrongRelease
                 | Self::ColdDenyActivation
                 | Self::ColdActivate
+                | Self::ColdActivateSharedBoot
                 | Self::BarWrongRelease
                 | Self::BarValidRelease
                 | Self::RetiredPrivileged(_)
@@ -136,7 +138,7 @@ impl Q35FixtureCase {
     }
     fn profile(self) -> u8 {
         match self {
-            Self::ColdWrongRelease | Self::ColdDenyActivation | Self::ColdActivate => 3,
+            Self::ColdWrongRelease | Self::ColdDenyActivation | Self::ColdActivate | Self::ColdActivateSharedBoot => 3,
             Self::ShutdownWrongRelease | Self::ShutdownValidRelease => 2,
             Self::BarWrongRelease | Self::BarValidRelease => 4,
             Self::RetiredPrivileged(profile) => profile,
@@ -146,10 +148,12 @@ impl Q35FixtureCase {
         }
     }
 
-    fn cold(self) -> Option<bool> {
+    fn cold(self) -> Option<crate::qemu_mmio::ColdMode> {
+        use crate::qemu_mmio::ColdMode;
         match self {
-            Self::ColdDenyActivation => Some(false),
-            Self::ColdActivate => Some(true),
+            Self::ColdDenyActivation => Some(ColdMode::DenyActivation),
+            Self::ColdActivate => Some(ColdMode::SeparateBoot),
+            Self::ColdActivateSharedBoot => Some(ColdMode::SharedBoot),
             _ => None,
         }
     }
@@ -234,6 +238,7 @@ fn run_qemu_config(
             | Q35FixtureCase::ShutdownValidRelease
             | Q35FixtureCase::ColdDenyActivation
             | Q35FixtureCase::ColdActivate
+            | Q35FixtureCase::ColdActivateSharedBoot
             | Q35FixtureCase::BarValidRelease,
         ) => Some([0xdc, 0xde]),
         _ => None,
@@ -305,6 +310,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Some(
             Q35FixtureCase::SharedBootNoMarker
                 | Q35FixtureCase::IsolatedSharedBootNoMarker
+                | Q35FixtureCase::ColdActivateSharedBoot
                 | Q35FixtureCase::SharedPreloadUnmarked
                 | Q35FixtureCase::SharedPreloadDenied
                 | Q35FixtureCase::SharedPreload
@@ -457,6 +463,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
         Q35FixtureCase::ValidRelease | Q35FixtureCase::IsolatedValidRelease => Some(0xa6),
         Q35FixtureCase::ShutdownValidRelease => Some(0xa7),
         Q35FixtureCase::ColdDenyActivation | Q35FixtureCase::ColdActivate => Some(0xa8),
+        Q35FixtureCase::ColdActivateSharedBoot => Some(0xbb),
         Q35FixtureCase::BarValidRelease => Some(0xa9),
         Q35FixtureCase::SharedPreload => Some(0xad),
         Q35FixtureCase::SharedPreloadDenied => Some(0xae),
@@ -486,7 +493,7 @@ fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
                         &mut child,
                         valid,
                         isolated,
-                        matches!(valid, 0xa7 | 0xa8 | 0xb5 | 0xb7 | 0xba)
+                        matches!(valid, 0xa7 | 0xa8 | 0xb5 | 0xb7 | 0xba | 0xbb)
                             .then_some((trace, expected)),
                         cold,
                     ) {
