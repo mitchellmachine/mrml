@@ -11,6 +11,30 @@ const RETURN: &str = "xhci-inventory: returning to firmware; no controller hando
 const MENU: &str = "BdsDxe: starting Boot0000 \"BootManagerMenuApp\"";
 const GEOMETRY: &str = "xhci DMA: scratchpads=0 page-mask=0x0001";
 const START: &str = "MRML xhci-inventory: read-only";
+const BOOT_EVIDENCE: &str = "xhci boot evidence: ";
+
+fn exact_usb_boot_evidence(report: &str) -> bool {
+    if report.lines().filter(|line| line.starts_with(BOOT_EVIDENCE)).count() != 1 {
+        return false;
+    }
+    let Some((_, usb)) = report.split_once("xhci 0000:00:06.0 pci=1b36:000d rev=01 cmd=") else {
+        return false;
+    };
+    let usb = usb.split("\nxhci 0000:").next().unwrap_or(usb);
+    let Some(bar_line) = usb.lines().find_map(|line| line.strip_prefix("xhci BAR0=")) else {
+        return false;
+    };
+    let Some((bar, _)) = bar_line.split_once(" ownership=Ok(Absent)") else {
+        return false;
+    };
+    let Some((base, size)) = bar.split_once(" size=") else {
+        return false;
+    };
+    let expected = format!(
+        "{BOOT_EVIDENCE}requester=00000030 pci=000d1b36 class=0c033001 bar0={base} size={size}"
+    );
+    usb.lines().any(|line| line == expected)
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Case {
@@ -32,12 +56,18 @@ impl Case {
             return false;
         }
         let reported = |expected: &str| report.lines().any(|line| line == expected);
+        if !matches!(self, Self::UsbBoot)
+            && report.lines().any(|line| line.starts_with(BOOT_EVIDENCE))
+        {
+            return false;
+        }
         if matches!(self, Self::NoController) {
             return reported("xhci-inventory: controllers=0 incomplete=0")
                 && !report.lines().any(|line| line.starts_with("xhci 0000:"));
         }
         if matches!(self, Self::UsbBoot) {
             return reported("xhci-inventory: controllers=2 incomplete=0")
+                && exact_usb_boot_evidence(report)
                 && report.lines().filter(|line| *line == GEOMETRY).count() == 2
                 && report
                     .split("xhci 0000:00:05.0")
@@ -220,6 +250,19 @@ fn bounded(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requires_one_evidence_record_bound_to_the_actual_boot_controller() {
+        let line = "xhci boot evidence: requester=00000030 pci=000d1b36 class=0c033001 bar0=0x00000000f1000000 size=0x4000";
+        let report = format!(
+            "xhci 0000:00:05.0 pci=1b36:000d rev=01 cmd=0007\nxhci 0000:00:06.0 pci=1b36:000d rev=01 cmd=0007\nxhci BAR0=0x00000000f1000000 size=0x4000 ownership=Ok(Absent)\n{line}\n"
+        );
+        assert!(exact_usb_boot_evidence(&report));
+        assert!(!exact_usb_boot_evidence(&format!("{line}\n{report}")));
+        assert!(!exact_usb_boot_evidence(&report.replace("requester=00000030", "requester=00000028")));
+        assert!(!exact_usb_boot_evidence(&report.replace("bar0=0x00000000f1000000", "bar0=0x00000000f2000000")));
+        assert!(!exact_usb_boot_evidence(&report.replace(line, "")));
+    }
 
     #[test]
     fn requires_exact_report_then_real_return_to_firmware() {

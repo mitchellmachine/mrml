@@ -26,8 +26,8 @@
 | Measure | Current value |
 | --- | ---: |
 | Rust source files | 801 |
-| Rust source lines | 692372 |
-| Static `#[test]` annotations | 4875 |
+| Rust source lines | 692454 |
+| Static `#[test]` annotations | 4876 |
 | Largest Rust source | `packages/compiler/core/src/codegen/tests.rs` (996630 bytes) |
 | Files containing admitted unsafe boundaries | 187 |
 | Unsafe blocks | 2657 |

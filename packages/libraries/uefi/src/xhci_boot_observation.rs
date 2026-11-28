@@ -71,6 +71,11 @@ impl RetainedBootXhci {
         })
     }
 
+    /// Pointer-free fields for an observation report, not a mapping request.
+    pub fn diagnostic_fields(self) -> (XhciFunction, u64, u32) {
+        (self.function, self.bar_base, self.bar_bytes)
+    }
+
     /// Compare copied facts only. A matching extent is not safe MMIO
     /// coverage by itself, and BME off alone never implies DMA denial.
     pub fn correlate(self, post: PostExitXhci) -> Result<CorrelatedBootXhci, CorrelationError> {

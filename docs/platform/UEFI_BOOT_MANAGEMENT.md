@@ -351,7 +351,11 @@ physical diagnostic. It compares the USB boot requester, PCI identity and
 revision, enabled memory decoding, and the independently observed exact BAR
 range across firmware exit. It reports the bus-master bit without conferring
 access or inferring ownership, retirement, or DMA containment. It does not
-read hardware and is not yet wired into a physical diagnostic.
+read hardware. The standalone EFI inventory now emits a pointer-free boot
+evidence record only for the exact USB boot controller and its firmware-
+validated BAR0. The QEMU test includes a second xHCI controller and checks
+that it does not claim the evidence record. The inventory still returns to
+firmware without granting access; the post-exit consumer is not wired yet.
 
 ### Diagnose a return to firmware
 

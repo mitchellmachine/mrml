@@ -12,6 +12,7 @@ use mrml_kernel::arch::x86_64::PciConfigSpace;
 use mrml_storage_usb::xhci::inspect_legacy_ownership;
 #[path = "xhci_inventory_acpi.rs"]
 mod acpi;
+use mrml_uefi::xhci_inventory::boot_observation::{RetainedBootXhci, XhciFunction};
 use mrml_uefi::xhci_inventory::{
     BAR_RESOURCE_BYTES, BAR_RESOURCE_HEADER, inspect_bar0, inspect_dma_geometry,
 };
@@ -116,6 +117,12 @@ unsafe fn cfg(io: *const PciIo, offset: u32) -> Result<u32, Status> {
     Ok(word)
 }
 
+struct InventoryBar {
+    base: u64,
+    bytes: u32,
+    boot_evidence: Option<RetainedBootXhci>,
+}
+
 // SAFETY: services and io are live firmware interfaces. On a successful
 // GetBarAttributes call the firmware provides an ACPI descriptor allocation.
 unsafe fn bar0(
@@ -123,7 +130,9 @@ unsafe fn bar0(
     io: *const PciIo,
     command: u16,
     header: u8,
-) -> Result<(u64, u32), Status> {
+    boot_requester: Option<u32>,
+    function: XhciFunction,
+) -> Result<InventoryBar, Status> {
     if command & 2 == 0 || header & 0x7f != 0 {
         return Err(LOAD_ERROR);
     }
@@ -145,8 +154,13 @@ unsafe fn bar0(
     // SAFETY: the successful call supplies at least a descriptor header.
     let result = if unsafe { core::slice::from_raw_parts(resource, 3) } == BAR_RESOURCE_HEADER {
         // SAFETY: the QWord header declares its complete payload and the firmware supplies the End Tag.
-        inspect_bar0(command, header, lo, hi, unsafe {
-            core::slice::from_raw_parts(resource, BAR_RESOURCE_BYTES)
+        let descriptor = unsafe { core::slice::from_raw_parts(resource, BAR_RESOURCE_BYTES) };
+        inspect_bar0(command, header, lo, hi, descriptor).map(|(base, bytes)| InventoryBar {
+            base,
+            bytes,
+            boot_evidence: RetainedBootXhci::from_firmware(
+                boot_requester, function, command, header, lo, hi, descriptor,
+            ),
         })
     } else {
         None
@@ -154,6 +168,13 @@ unsafe fn bar0(
     // SAFETY: the resource is the original successful GetBarAttributes allocation.
     check(unsafe { (services.free_pool)(resource.cast()) })?;
     result.ok_or(LOAD_ERROR)
+}
+
+fn packed_requester(address: DeviceAddress) -> u32 {
+    (u32::from(address.segment()) << 16)
+        | (u32::from(address.bus()) << 8)
+        | (u32::from(address.device()) << 3)
+        | u32::from(address.function())
 }
 
 // SAFETY: services and output are the live tables of this UEFI application;
@@ -300,9 +321,15 @@ unsafe fn scan(
                 Err(reason) => line(output, format_args!("xhci ACPI unavailable: {reason}"))?,
             }
         }
+        let function = XhciFunction {
+            requester: packed_requester(requester),
+            vendor_device: id,
+            class_revision: class,
+        };
+        let boot_requester = origin.flatten().map(packed_requester);
         // SAFETY: this PCI interface and its owning services remain live.
-        match unsafe { bar0(services, io, command, header) } {
-            Ok((base, bytes)) => {
+        match unsafe { bar0(services, io, command, header, boot_requester, function) } {
+            Ok(InventoryBar { base, bytes, boot_evidence }) => {
                 let read = |offset| {
                     let mut word = 0u32;
                     // SAFETY: both callers bound aligned BAR0-relative offsets;
@@ -332,6 +359,13 @@ unsafe fn scan(
                             "xhci BAR0={base:#018x} size={bytes:#x} ownership={ownership:?}"
                         ),
                     )?;
+                    if let Some(evidence) = boot_evidence {
+                        let (identity, base, bytes) = evidence.diagnostic_fields();
+                        line(output, format_args!(
+                            "xhci boot evidence: requester={:08x} pci={:08x} class={:08x} bar0={base:#018x} size={bytes:#x}",
+                            identity.requester, identity.vendor_device, identity.class_revision,
+                        ))?;
+                    }
                     match geometry {
                         Some((count, mask)) => line(
                             output,
