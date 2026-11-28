@@ -362,7 +362,11 @@ identified PCI function, and an aligned nonoverflowing BAR span. Decoding
 untrusted bytes never proves provenance or safe read coverage. The EFI
 inventory prints the encoded bytes as two numbered, bounded hex lines;
 QEMU checks the exact contents and associates them with only the actual
-USB boot controller. The post-exit consumer is not wired yet.
+USB boot controller. The read-only firmware PCI adapter is shared as a
+separate module and keeps all protocol pointers on the firmware side. That
+lets the opt-in loader reuse the same capture code without duplicating the
+PCI ABI or retaining a firmware interface after exit. The post-exit
+consumer is not wired yet.
 
 ### Diagnose a return to firmware
 
