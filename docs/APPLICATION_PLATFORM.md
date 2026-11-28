@@ -385,8 +385,13 @@ mouse support or general keymap in this boot profile.
 The external USB boot-keyboard decoder now tracks validated report edges.
 It waits for an all-released report after attach, a gap, or a malformed
 report and suppresses repeated reports and unordered ordinary-key chords.
-A hosted desktop test routes typed events into the focused `clishell` and
-checks the submitted `echo hi` output. The USB controller transport,
+The first function profile accepts one low/full-speed, default-alternate
+boot keyboard with a HID descriptor and one interrupt-IN endpoint. It
+refuses ambiguous interfaces or aliased active endpoints and starts report
+decoding only after the owning transport reports successful HID `SET_PROTOCOL`
+for the selected interface. A hosted desktop test starts from a configuration
+descriptor, checks the control request, routes typed events into the focused
+`clishell`, and checks the submitted `echo hi` output. The USB controller transport,
 interface ownership and isolated report delivery are not part of that
 test; external keyboard support on physical hardware remains unverified.
 

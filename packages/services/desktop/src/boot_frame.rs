@@ -276,8 +276,15 @@ fn panel_routes_shell_commands_and_preserves_literal_echo() {
 #[cfg(test)]
 #[test]
 fn usb_boot_reports_drive_the_focused_clishell_without_repeating_held_keys() {
-    use mrml_input_usb_keyboard::{BootKeyStream, BootKeyboard, KeyPress};
-    let mut seat = BootKeyStream::new(BootKeyboard::bind(3, 1, 1, true).unwrap());
+    use mrml_input_usb_keyboard::{KeyPress, UsbKeyboardSpeed, find_keyboard_function};
+    let configuration = [
+        9, 2, 34, 0, 1, 1, 0, 0x80, 50, 9, 4, 0, 0, 1, 3, 1, 1, 0, 9, 0x21, 0x11, 1, 0, 1, 0x22,
+        63, 0, 7, 5, 0x81, 3, 8, 0, 10,
+    ];
+    let function = find_keyboard_function(&configuration, UsbKeyboardSpeed::Full).unwrap();
+    let mut seat = function
+        .select_boot(|setup| setup == [0x21, 0x0b, 0, 0, 0, 0, 0, 0])
+        .unwrap();
     let mut app = BootPanelDesktop::new().unwrap();
     let mut deliver = |usage: u8| {
         assert_eq!(seat.ingest(&[0; 8]).unwrap(), None);

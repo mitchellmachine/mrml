@@ -6,6 +6,9 @@
 //! protocol before forwarding complete interrupt-IN reports. This decoder
 //! exposes key usages, not characters, and grants no input routing authority.
 
+mod function;
+pub use function::{DescriptorError, KeyboardFunction, UsbKeyboardSpeed, find_keyboard_function};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KeyboardError {
     UnsupportedInterface,
